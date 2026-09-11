@@ -129,18 +129,21 @@ enum GatewayLaunchAgentManager {
         return nil
     }
 
-    static func reusableLoadedGatewayPID(port: Int) async -> Int32? {
-        await self.loadedGatewayState(port: port).reusablePID
+    static func reusableLoadedGatewayPID(port: Int, allowUnconfigured: Bool = false) async -> Int32? {
+        await self.loadedGatewayState(port: port, allowUnconfigured: allowUnconfigured).reusablePID
     }
 
-    static func loadedGatewayState(port: Int) async -> LoadedGatewayState {
+    static func loadedGatewayState(port: Int, allowUnconfigured: Bool = false) async -> LoadedGatewayState {
         guard let service = await self.readDaemonService() else {
             return LoadedGatewayState(runningPID: nil, reusablePID: nil)
         }
         let runningPID = self.runningGatewayPID(from: service)
         let configAudit = service["configAudit"] as? [String: Any]
+        let command = service["command"] as? [String: Any]
+        let arguments = command?["programArguments"] as? [String] ?? []
         let reusablePID: Int32? = if self.configAuditAllowsReuse(configAudit),
-                                     self.gatewayPort(from: service) == port
+                                     self.gatewayPort(from: service) == port,
+                                     arguments.contains("--allow-unconfigured") == allowUnconfigured
         {
             runningPID
         } else {
@@ -164,9 +167,14 @@ enum GatewayLaunchAgentManager {
         return self.runningGatewayPID(from: service)
     }
 
-    static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
+    static func set(
+        enabled: Bool,
+        bundlePath: String,
+        port: Int,
+        allowUnconfigured: Bool = false) async -> String?
+    {
         _ = bundlePath
-        if enabled, CommandResolver.connectionModeIsRemote() {
+        if enabled, CommandResolver.connectionModeIsRemote(), !allowUnconfigured {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
@@ -177,14 +185,16 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
+            var arguments = [
                 "install",
                 "--force",
                 "--port",
                 "\(port)",
                 "--runtime",
                 "node",
-            ])
+            ]
+            if allowUnconfigured { arguments.append("--allow-unconfigured") }
+            return await self.runDaemonCommand(arguments)
         }
 
         self.logger.info("launchd disable requested via CLI")

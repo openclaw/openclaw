@@ -46,6 +46,7 @@ function createGatewayParentLikeCommand(program?: Command) {
   gateway.option("--token <token>", "Gateway token");
   gateway.option("--password <password>", "Gateway password");
   gateway.option("--force", "Gateway run --force", false);
+  gateway.option("--allow-unconfigured", "Gateway run without local mode", false);
   addGatewayServiceCommands(gateway);
   return gateway;
 }
@@ -115,6 +116,20 @@ describe("addGatewayServiceCommands", () => {
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
         expect(opts.runtime).toBe("bun");
+      },
+    },
+    {
+      name: "forwards an explicit service start-mode override",
+      argv: ["install", "--allow-unconfigured"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
+      },
+    },
+    {
+      name: "inherits the parent service start-mode override",
+      argv: ["--allow-unconfigured", "install"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
       },
     },
     {

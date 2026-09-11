@@ -76,7 +76,15 @@ final class RemotePortTunnel: @unchecked Sendable {
         await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
-    static func configuration(remotePort: Int) throws -> Configuration {
+    static func localPort(root: [String: Any]) -> Int {
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              let host = url.host, LoopbackHost.isLoopbackHost(host),
+              let port = GatewayRemoteConfig.defaultPort(for: url), (1...65535).contains(port)
+        else { return 18789 }
+        return port
+    }
+
+    static func configuration(remotePort: Int = 18789) throws -> Configuration {
         let root = OpenClawConfigFile.loadDict()
         let settings = CommandResolver.connectionSettings(configRoot: root)
         guard settings.mode == .remote,
@@ -93,22 +101,12 @@ final class RemotePortTunnel: @unchecked Sendable {
             defaultRemotePort: remotePort,
             for: sshHost,
             root: root) ?? remotePort
-        // Named profiles reserve their startup port; an explicit config preference can still change live.
-        let preferredLocalPort = OpenClawConfigFile.gatewayPort(root: root)
-            .flatMap(UInt16.init(exactly:))
-            .map { port in
-                UInt16(GatewayEnvironment.resolvedGatewayPort(
-                    environment: ProcessInfo.processInfo.environment,
-                    configPort: Int(port),
-                    storedPort: 0,
-                    profile: .current))
-            }
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePort: resolvedRemotePort,
             hostKeyPolicy: settings.sshHostKeyPolicy,
-            preferredLocalPort: preferredLocalPort)
+            preferredLocalPort: UInt16(Self.localPort(root: root)))
     }
 
     static func create(
@@ -453,10 +451,6 @@ final class RemotePortTunnel: @unchecked Sendable {
     #if SWIFT_PACKAGE
     static func _testPortIsFree(_ port: UInt16) -> Bool {
         self.portIsFree(port)
-    }
-
-    static func _testResolveRemotePortOverride(defaultRemotePort: Int, sshHost: String) -> Int? {
-        self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
     }
 
     static func _testSSHOptions(

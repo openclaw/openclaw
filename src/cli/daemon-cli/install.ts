@@ -336,6 +336,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded && !opts.force) {
     autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage({
+      allowUnconfigured: Boolean(opts.allowUnconfigured),
       currentCommand: existingServiceCommand,
       env: process.env,
       installEnv,
@@ -422,6 +423,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
+      allowUnconfigured: Boolean(opts.allowUnconfigured),
       env: installEnv,
       port,
       runtime: runtimeRaw,
@@ -455,6 +457,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 }
 
 async function getGatewayServiceAutoRefreshMessage(params: {
+  allowUnconfigured?: boolean;
   currentCommand: GatewayServiceCommandConfig | null;
   env: Record<string, string | undefined>;
   installEnv: NodeJS.ProcessEnv;
@@ -470,8 +473,15 @@ async function getGatewayServiceAutoRefreshMessage(params: {
     if (!currentCommand) {
       return undefined;
     }
+    if (
+      currentCommand.programArguments.includes("--allow-unconfigured") !==
+      Boolean(params.allowUnconfigured)
+    ) {
+      return "Gateway service start-mode argument differs from the current install plan; refreshing the install.";
+    }
     const getPlannedInstall = createLazyPromise(() =>
       buildGatewayInstallPlan({
+        allowUnconfigured: params.allowUnconfigured,
         env: params.installEnv,
         port: params.port,
         runtime: params.runtime,

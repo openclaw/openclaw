@@ -83,7 +83,7 @@ struct PrimaryGatewayControlConfigurationTests {
         let replacement = try selection.replacingRoot(self.previous, effectiveLocalPort: 23000)
         let gateway = try #require(replacement.root["gateway"] as? [String: Any])
         let remote = try #require(gateway["remote"] as? [String: Any])
-        #expect(gateway["port"] as? Int == 23000)
+        #expect(gateway["port"] as? Int == 19000)
         #expect(remote["url"] as? String == "ws://127.0.0.1:23000")
         #expect(remote["remotePort"] as? Int == 22000)
         #expect(remote["sshIdentity"] as? String == "/example/new-key")
@@ -92,7 +92,7 @@ struct PrimaryGatewayControlConfigurationTests {
     }
 
     @Test
-    func `fresh SSH selection uses the prepared named profile port`() throws {
+    func `fresh SSH selection uses the prepared tunnel port`() throws {
         let selection = PrimaryGatewayControlConfiguration.ssh(
             target: "operator@new.example", remotePort: nil, localPort: nil,
             identity: nil, hostKeyPolicy: nil, token: nil, password: nil)
@@ -105,20 +105,42 @@ struct PrimaryGatewayControlConfigurationTests {
     }
 
     @Test
-    func `SSH URL follows environment precedence while preserving the requested config port`() throws {
+    func `SSH URL uses the requested tunnel port without adding a local gateway port`() throws {
         let selection = PrimaryGatewayControlConfiguration.ssh(
             target: "operator@new.example", remotePort: nil, localPort: 23000,
             identity: nil, hostKeyPolicy: nil, token: nil, password: nil)
-        let effectiveLocalPort = GatewayEnvironment.resolvedGatewayPort(
-            environment: ["OPENCLAW_GATEWAY_PORT": "23456"],
-            configPort: selection.requestedLocalPort,
-            storedPort: 19789,
-            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "control-test"]))
-        let replacement = try selection.replacingRoot([:], effectiveLocalPort: effectiveLocalPort)
+        let replacement = try selection.replacingRoot([:], effectiveLocalPort: 18789)
         let gateway = try #require(replacement.root["gateway"] as? [String: Any])
         let remote = try #require(gateway["remote"] as? [String: Any])
-        #expect(remote["url"] as? String == "ws://127.0.0.1:23456")
-        #expect(gateway["port"] as? Int == 23000)
+        #expect(remote["url"] as? String == "ws://127.0.0.1:23000")
+        #expect(gateway["port"] == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `hosting repair removes only the colliding local port`(hasRemotePort: Bool) throws {
+        var root = self.previous
+        var gateway = try #require(root["gateway"] as? [String: Any])
+        var remote = try #require(gateway["remote"] as? [String: Any])
+        if !hasRemotePort { remote.removeValue(forKey: "remotePort") }
+        gateway["remote"] = remote
+        root["gateway"] = gateway
+        let repaired = PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(root)
+        let updated = try #require(repaired.root["gateway"] as? [String: Any])
+        #expect(updated["port"] == nil)
+        #expect(updated["auth"] as? [String: String] == gateway["auth"] as? [String: String])
+        #expect(try NSDictionary(dictionary: #require(updated["remote"] as? [String: Any])) ==
+            NSDictionary(dictionary: remote))
+        #expect(RemotePortTunnel.resolveRemotePortOverride(
+            defaultRemotePort: 18789, for: "old.example", root: repaired.root) ==
+            (hasRemotePort ? 19100 : 19000))
+        #expect(NSDictionary(dictionary: PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(repaired.root)
+                .root) ==
+            NSDictionary(dictionary: repaired.root))
+
+        gateway["port"] = 20000
+        root["gateway"] = gateway
+        #expect(NSDictionary(dictionary: PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(root).root) ==
+            NSDictionary(dictionary: root))
     }
 
     @Test

@@ -222,6 +222,7 @@ async function resolveCliProgramArguments(params: {
 
 export async function resolveGatewayProgramArguments(params: {
   port: number;
+  allowUnconfigured?: boolean;
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
@@ -229,6 +230,9 @@ export async function resolveGatewayProgramArguments(params: {
   existingCommand?: GatewayServiceCommandConfig | null;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
+  if (params.allowUnconfigured) {
+    gatewayArgs.push("--allow-unconfigured");
+  }
   const result = await resolveCliProgramArguments({
     args: gatewayArgs,
     dev: params.dev,

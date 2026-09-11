@@ -15,16 +15,6 @@ enum DashboardRouteProbePurpose: Sendable {
 @MainActor
 @Observable
 final class DashboardManager {
-    private struct AuxiliaryWindowInstance {
-        var target: DashboardGatewayTarget
-        var controller: DashboardWindowController
-    }
-
-    private struct NavigationIntent {
-        let id = UUID()
-        let windowID: ObjectIdentifier?
-    }
-
     @ObservationIgnored private var controller: DashboardWindowController?
     @ObservationIgnored let alertPresenter = DashboardAlertPresenter()
     @ObservationIgnored private var mainTarget: DashboardGatewayTarget
@@ -623,6 +613,19 @@ final class DashboardManager {
     }
 
     func refreshGatewaySnapshots() async {
+        let state = AppStateStore.shared
+        if state.connectionMode != .remote || !state.hostsLocalGatewayWithRemotePrimary {
+            for instance in self.dashboardControllers() where instance.target == .local {
+                self.retireNavigation(for: .local, from: instance.controller)
+                instance.controller.invalidateBrowserSession()
+                instance.controller.closeDashboard()
+            }
+            if self.mainTarget == .local {
+                self.retirePresentation()
+                self.controller = nil
+                self.mainTarget = .primary
+            }
+        }
         synchronizeProfileObservations()
         self.gatewaySnapshotGeneration &+= 1
         let generation = self.gatewaySnapshotGeneration
@@ -817,7 +820,7 @@ extension DashboardManager {
         return Task { @MainActor in
             guard !Task.isCancelled, self.windowLifetime == lifetime else { return }
             if reuseExisting, let controller = self.dashboardController(for: target) {
-                if target == .primary || self.canFocusWithoutReload(controller, userGesture: true) {
+                if target == .primary || target == .local || self.canFocusWithoutReload(controller, userGesture: true) {
                     controller.show()
                 } else {
                     await self.switchTarget(target, in: controller, forceReload: true, present: true)?.value
@@ -1143,6 +1146,18 @@ extension DashboardManager {
                     throw error
                 }
             }
+        case .local:
+            let state = AppStateStore.shared
+            guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+                  state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+            let generation = state.gatewayRoutingGeneration
+            let endpoint = try GatewayEndpointStore.localEndpoint()
+            let configuration = try await dashboardConfiguration(
+                endpoint: endpoint, mode: .local, target: target, token: endpoint.config.token)
+            guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+                  state.gatewayRoutingGeneration == generation,
+                  state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+            return (configuration, endpoint)
         case let .profile(profileID):
             while true {
                 try Task.checkCancellation()
@@ -1310,6 +1325,12 @@ extension DashboardManager {
     }
 
     private func showResolvedDashboard(userGesture: Bool) async throws {
+        if self.mainTarget == .local {
+            let state = AppStateStore.shared
+            if state.connectionMode != .remote || !state.hostsLocalGatewayWithRemotePrimary {
+                await self.refreshGatewaySnapshots()
+            }
+        }
         if let profileID = self.pendingInitialSelection {
             let lifetime = self.windowLifetime
             let profiles = try await MacGatewayProfileStore.shared.profiles()
@@ -1336,7 +1357,9 @@ extension DashboardManager {
             self.installMainController(existing.value.controller)
         }
         if let controller, mainTarget != .primary {
-            if controller.isWindowOpen, self.canFocusWithoutReload(controller, userGesture: userGesture) {
+            if controller.isWindowOpen,
+               self.mainTarget == .local || self.canFocusWithoutReload(controller, userGesture: userGesture)
+            {
                 controller.show()
                 await self.refreshGatewaySnapshots()
                 return
@@ -1397,6 +1420,7 @@ extension DashboardManager {
         }
         switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
+        case .local: return .local
         case .manage:
             AppNavigationActions.openConnection(tab: .gateways)
             return nil

@@ -3,6 +3,37 @@ import OpenClawKit
 import WebKit
 
 extension DashboardManager {
+    struct AuxiliaryWindowInstance {
+        var target: DashboardGatewayTarget
+        var controller: DashboardWindowController
+    }
+
+    struct WindowConfiguration {
+        let url: URL
+        let auth: DashboardWindowAuth
+        let tlsParams: GatewayTLSParams?
+        let mode: AppState.ConnectionMode
+        let displayName: String
+        var browserSession: GatewayBrowserSession?
+        var signedOut: DashboardFailurePage.SignedOut?
+        var autoStartSignIn = false
+    }
+
+    struct SupersededDashboardPresentation: Error {}
+
+    struct NavigationIntent {
+        let id = UUID()
+        let windowID: ObjectIdentifier?
+    }
+
+    final class ProfileObservation {
+        let id = UUID()
+        var task: Task<Void, Never>?
+        var snapshot: GatewayConnection.PushDelivery?
+        var revision: UInt64 = 0
+        var needsRefresh = false
+    }
+
     static let shared: DashboardManager = {
         #if DEBUG
         // UI fixtures instantiate shared views; their notifications must not start
@@ -67,17 +98,6 @@ extension DashboardManager {
 
 extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
-
-    struct WindowConfiguration {
-        let url: URL
-        let auth: DashboardWindowAuth
-        let tlsParams: GatewayTLSParams?
-        let mode: AppState.ConnectionMode
-        let displayName: String
-        var browserSession: GatewayBrowserSession?
-        var signedOut: DashboardFailurePage.SignedOut?
-        var autoStartSignIn = false
-    }
 
     nonisolated static let browserSessionRenewalLeadTime: TimeInterval = 15 * 60
 
@@ -145,24 +165,14 @@ extension DashboardManager.WindowConfiguration {
 }
 
 extension DashboardManager {
-    struct SupersededDashboardPresentation: Error {}
-
     func autosaveName(for target: DashboardGatewayTarget) -> String {
         switch target {
         case .primary:
             self.mainWindowAutosaveName
+        case .local:
+            "\(self.mainWindowAutosaveName)-local"
         case let .profile(profileID):
             "\(self.mainWindowAutosaveName)-\(profileID)"
         }
-    }
-}
-
-extension DashboardManager {
-    final class ProfileObservation {
-        let id = UUID()
-        var task: Task<Void, Never>?
-        var snapshot: GatewayConnection.PushDelivery?
-        var revision: UInt64 = 0
-        var needsRefresh = false
     }
 }

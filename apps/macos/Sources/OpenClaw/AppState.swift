@@ -289,6 +289,9 @@ final class AppState {
         }
     }
 
+    private(set) var hostsLocalGatewayWithRemotePrimary: Bool
+    private(set) var localGatewayHostingNotice: String?
+
     var remoteTransport: RemoteTransport {
         didSet {
             if oldValue != self.remoteTransport {
@@ -545,6 +548,8 @@ final class AppState {
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
+        self.hostsLocalGatewayWithRemotePrimary = AppDefaults.standard
+            .bool(forKey: hostsLocalGatewayWithRemotePrimaryKey)
 
         let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
@@ -1325,12 +1330,52 @@ extension AppState {
         guard self.conflictedGatewayConfigFields.isEmpty else {
             throw PrimaryGatewayControlError.conflictingEdits
         }
-        let effectiveLocalPort = GatewayEnvironment.resolvedGatewayPort(
-            environment: ProcessInfo.processInfo.environment,
-            configPort: configuration.requestedLocalPort ?? OpenClawConfigFile.gatewayPort(root: currentRoot),
-            storedPort: GatewayEnvironment.gatewayPort(),
-            profile: .current)
-        let replacement = try configuration.replacingRoot(currentRoot, effectiveLocalPort: effectiveLocalPort)
+        let replacement = try configuration.replacingRoot(
+            currentRoot,
+            effectiveLocalPort: RemotePortTunnel.localPort(root: currentRoot))
+        try self.persistGatewayReplacement(replacement, currentRoot: currentRoot, previousSyncState: previousSyncState)
+    }
+
+    func setHostsLocalGatewayWithRemotePrimary(_ enabled: Bool) throws {
+        guard enabled != self.hostsLocalGatewayWithRemotePrimary else { return }
+        self.localGatewayHostingNotice = nil
+        if enabled {
+            guard self.connectionMode == .remote,
+                  self.gatewayConfigSyncIsEnabled, !self.isInitializing
+            else { throw PrimaryGatewayControlError.unavailable }
+            guard self.syncGatewayConfigNow() else { throw PrimaryGatewayControlError.conflictingEdits }
+            let currentRoot = OpenClawConfigFile.loadDict()
+            let replacement = PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(currentRoot)
+            let repairsConfig = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
+            let repairsLegacyPort = OpenClawConfigFile.gatewayPort(root: currentRoot) == nil &&
+                GatewayRemoteConfig.resolveTransport(root: currentRoot) == .ssh &&
+                AppDefaults.standard.integer(forKey: "gatewayPort") == RemotePortTunnel.localPort(root: currentRoot)
+            if repairsConfig || repairsLegacyPort {
+                try self.persistGatewayReplacement(
+                    replacement, currentRoot: currentRoot, previousSyncState: self.gatewayConfigSyncState)
+                self.ifNotPreview { AppDefaults.standard.removeObject(forKey: "gatewayPort") }
+                let port = GatewayEnvironment.gatewayPort()
+                Self.logger.info("Removed colliding local port settings for hosting; local port=\(port)")
+                self.localGatewayHostingNotice = String(
+                    format: String(
+                        localized: """
+                        Removed the old shared port setting. This Mac now uses port %lld; the SSH tunnel is unchanged.
+                        """),
+                    port)
+            }
+        }
+        self.hostsLocalGatewayWithRemotePrimary = enabled
+        self.ifNotPreview {
+            AppDefaults.standard.set(enabled, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            Task { await DashboardManager.shared.refreshGatewaySnapshots() }
+        }
+    }
+
+    private func persistGatewayReplacement(
+        _ replacement: PrimaryGatewayControlConfiguration.Replacement,
+        currentRoot: [String: Any],
+        previousSyncState: GatewayConfigSyncState) throws
+    {
         let changed = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
         self.gatewayConfigSyncTask?.cancel()
         self.setGatewayConfigSyncState(.pending)

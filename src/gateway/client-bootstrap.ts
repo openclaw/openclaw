@@ -293,7 +293,7 @@ export async function resolveGatewayClientBootstrap(params: {
       env,
       urlOverride: urlOverrideSource ? connection.url : undefined,
       urlOverrideSource,
-      modeOverride: params.modeOverride,
+      modeOverride: surface,
     });
   }
   const deviceAuthScope =

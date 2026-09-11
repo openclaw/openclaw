@@ -91,7 +91,7 @@ enum MacChatTranscriptCache {
         let sshTarget = CommandResolver.connectionSettings(configRoot: root).target
         // Mirror the tunnel's remote-port resolution (RemotePortTunnel.create)
         // so the identity matches the gateway the forward actually reaches.
-        let defaultRemotePort = GatewayEnvironment.gatewayPort(root: root)
+        let defaultRemotePort = 18789
         let sshHost = CommandResolver.parseSSHTarget(sshTarget)?.host ?? ""
         let sshRemotePort = RemotePortTunnel.resolveRemotePortOverride(
             defaultRemotePort: defaultRemotePort,

@@ -28,6 +28,35 @@ struct RemotePortTunnelTests {
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
     }
 
+    @Test(arguments: ["ws://127.0.0.1:19089", "ws://localhost:19089", "ws://[::1]:19089"])
+    func `tunnel local port comes from the remote URL independently of the local gateway`(url: String) {
+        let root: [String: Any] = ["gateway": ["port": 18789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root) == 19089)
+    }
+
+    @Test(arguments: ["", "ws://localhost", "wss://gateway.example:19089"])
+    func `tunnel local port defaults without borrowing the local gateway port`(url: String) {
+        let root: [String: Any] = ["gateway": ["port": 19789, "remote": ["url": url]]]
+        #expect(RemotePortTunnel.localPort(root: root) == 18789)
+    }
+
+    @Test(arguments: [false, true])
+    func `remote port survives removal of the local bind port`(explicitRemotePort: Bool) {
+        var remote: [String: Any] = ["url": "ws://127.0.0.1:19089"]
+        if explicitRemotePort { remote["remotePort"] = 18789 }
+        var gateway: [String: Any] = ["port": 19089, "remote": remote]
+        for hasLocalPort in [true, false] {
+            if !hasLocalPort { gateway.removeValue(forKey: "port") }
+            let root: [String: Any] = ["gateway": gateway]
+            let resolved = RemotePortTunnel.resolveRemotePortOverride(
+                defaultRemotePort: 18789, for: "gateway.example", root: root) ?? 18789
+            #expect(resolved == (explicitRemotePort ? 18789 : 19089))
+            #expect(RemotePortTunnel.localPort(root: root) == 19089)
+        }
+    }
+}
+
+struct RemotePortTunnelSocketTests {
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -82,41 +111,6 @@ struct RemotePortTunnelTests {
             usleep(10000) // 10ms
         }
         #expect(free == true)
-    }
-
-    @Test @MainActor func `remote port override prefers explicit remote port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:19089",
-                        "remotePort": 18789,
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
-    }
-
-    @Test @MainActor func `remote port override can read loopback url port`() async {
-        let configPath = TestIsolation.tempConfigPath()
-        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://127.0.0.1:18789",
-                    ],
-                ],
-            ])
-
-            #expect(RemotePortTunnel._testResolveRemotePortOverride(
-                defaultRemotePort: 19089,
-                sshHost: "gateway.example") == 18789)
-        }
     }
 }
 

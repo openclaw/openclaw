@@ -101,7 +101,7 @@ enum OnboardingSystemAgentResumeStore {
         state: AppState = AppStateStore.shared,
         preferredGatewayID: String? = GatewayDiscoveryPreferences.preferredStableID()) -> String?
     {
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
+        let defaultRemotePort = 18789
         let sshRemotePort: Int = if state.connectionMode == .remote,
                                     state.remoteTransport == .ssh
         {
@@ -128,7 +128,7 @@ enum OnboardingSystemAgentResumeStore {
         remoteURL: String,
         remoteTarget: String,
         localStateDir: URL = OpenClawConfigFile.stateDirURL(),
-        sshRemotePort: Int = GatewayEnvironment.gatewayPort()) -> String?
+        sshRemotePort: Int = 18789) -> String?
     {
         switch connectionMode {
         case .unconfigured:

@@ -228,25 +228,33 @@ describe("runDaemonInstall", () => {
     expectFirstInstallPlanCallOmitsToken();
   });
 
-  it("auto-mints and persists token when no source exists", async () => {
-    randomTokenMock.mockReturnValue("minted-token");
-    readConfigFileSnapshotMock.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: { gateway: { auth: { mode: "token" } } },
-      sourceConfig: { gateway: { mode: "local", auth: { mode: "token" } } },
-    });
+  it.each(["local", "remote"])(
+    "auto-mints a local auth token with %s primary mode",
+    async (mode) => {
+      randomTokenMock.mockReturnValue("minted-token");
+      readConfigFileSnapshotMock.mockResolvedValue({
+        exists: true,
+        valid: true,
+        config: { gateway: { mode, auth: { mode: "token" } } },
+        sourceConfig: { gateway: { mode, auth: { mode: "token" } } },
+      });
 
-    await runDaemonInstall({ json: true });
+      await runDaemonInstall({ json: true, allowUnconfigured: mode === "remote" });
 
-    expect(actionState.failed).toStrictEqual([]);
-    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    expect(readFirstConfigWriteParams().sourceConfig?.gateway?.auth?.token).toBe("minted-token");
-    expectFields(readFirstInstallPlanArg(), { port: 18789 });
-    expectFirstInstallPlanCallOmitsToken();
-    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expect(actionState.warnings.join("\n")).toContain("Auto-generated");
-  });
+      expect(actionState.failed).toStrictEqual([]);
+      expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+      const writeParams = readFirstConfigWriteParams();
+      expect(writeParams.sourceConfig?.gateway?.auth?.token).toBe("minted-token");
+      expect(writeParams.sourceConfig?.gateway?.mode).toBe(mode);
+      expectFields(readFirstInstallPlanArg(), {
+        port: 18789,
+        allowUnconfigured: mode === "remote",
+      });
+      expectFirstInstallPlanCallOmitsToken();
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+      expect(actionState.warnings.join("\n")).toContain("Auto-generated");
+    },
+  );
 
   it("persists local gateway mode when installing from config missing gateway.mode", async () => {
     readConfigFileSnapshotMock

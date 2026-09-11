@@ -46,13 +46,6 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         let removesGatewayMode: Bool
     }
 
-    var requestedLocalPort: Int? {
-        switch self {
-        case let .ssh(_, _, localPort, _, _, _, _): localPort
-        case .local, .clear, .direct: nil
-        }
-    }
-
     func replacingRoot(_ current: [String: Any], effectiveLocalPort: Int) throws -> Replacement {
         var root = current
         var gateway = root["gateway"] as? [String: Any] ?? [:]
@@ -94,16 +87,17 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             clearsTargetDefaults = GatewayRemoteConfig.resolveTransport(root: current) != .ssh ||
                 (previousRemote["sshTarget"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) != target
             var remote = Self.replacingRemoteRoute(previousRemote)
-            guard (1...65535).contains(effectiveLocalPort) else { throw PrimaryGatewayControlError.invalidPort }
+            let tunnelPort = localPort ?? effectiveLocalPort
+            guard (1...65535).contains(tunnelPort) else { throw PrimaryGatewayControlError.invalidPort }
             let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: effectiveLocalPort,
+                defaultRemotePort: tunnelPort,
                 for: parsedTarget.host,
-                root: current) ?? effectiveLocalPort
+                root: current) ?? tunnelPort
             let resolvedRemotePort = remotePort ?? previousRemotePort ?? 18789
             let previousPolicy = (previousRemote["sshHostKeyPolicy"] as? String)
                 .flatMap(CommandResolver.SSHHostKeyPolicy.init(rawValue:))
             remote["transport"] = "ssh"
-            remote["url"] = "ws://127.0.0.1:\(effectiveLocalPort)"
+            remote["url"] = "ws://127.0.0.1:\(tunnelPort)"
             remote["remotePort"] = resolvedRemotePort
             remote["sshTarget"] = target
             remote["sshIdentity"] = identity.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ??
@@ -113,7 +107,6 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             remote["token"] = Self.nonempty(token)
             remote["password"] = Self.nonempty(password)
             gateway["mode"] = "remote"
-            if let localPort { gateway["port"] = localPort }
             gateway["remote"] = remote
         }
         if gateway.isEmpty {
@@ -125,6 +118,18 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             root: root,
             clearsTargetDefaults: clearsTargetDefaults,
             removesGatewayMode: removesGatewayMode)
+    }
+
+    static func separatingLocalGatewayPort(_ current: [String: Any]) -> Replacement {
+        var root = current
+        if GatewayRemoteConfig.resolveTransportResolution(root: root).transport == .ssh,
+           OpenClawConfigFile.gatewayPort(root: root) == RemotePortTunnel.localPort(root: root),
+           var gateway = root["gateway"] as? [String: Any]
+        {
+            gateway.removeValue(forKey: "port")
+            root["gateway"] = gateway
+        }
+        return Replacement(root: root, clearsTargetDefaults: false, removesGatewayMode: false)
     }
 
     private static func replacingRemoteRoute(_ previous: [String: Any]) -> [String: Any] {
