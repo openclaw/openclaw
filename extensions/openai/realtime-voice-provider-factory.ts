@@ -19,7 +19,7 @@ import type { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-qui
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
-  isSupportedOpenAIGptLiveModel,
+  isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
@@ -513,7 +513,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             { configuredApiKey: config.apiKey, cfg, agentId },
             context,
           ) ||
-            (isSupportedOpenAIGptLiveModel(model) &&
+            (isOpenAIGptLiveSubscriptionModel(model) &&
               hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
         );
       }
@@ -573,7 +573,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           { configuredApiKey: config.apiKey, cfg, agentId },
           context,
         ) ||
-        (isSupportedOpenAIGptLiveModel(config.model) &&
+        (isOpenAIGptLiveSubscriptionModel(config.model) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },

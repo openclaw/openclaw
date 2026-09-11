@@ -236,6 +236,7 @@ export function createTalkClientGatewayControlOwner(params: {
   const lifetime = new AbortController();
   const { signal } = lifetime;
   let transcriptSequence = 0;
+  let acceptingProviderTranscripts = true;
   const entryPrefix = `gateway-${randomUUID()}`;
   const consultQueue = createRealtimeControlQueue();
   const consultControllers = new Map<
@@ -507,24 +508,26 @@ export function createTalkClientGatewayControlOwner(params: {
   };
 
   const handleTranscript = (role: "user" | "assistant", text: string, final: boolean): void => {
-    if (signal.aborted || !text.trim()) {
+    if (!acceptingProviderTranscripts || !text.trim() || (signal.aborted && !final)) {
       return;
     }
-    const turnId = harness.ensureTurn();
-    harness.emit({
-      type:
-        role === "assistant"
-          ? final
-            ? "output.text.done"
-            : "output.text.delta"
-          : final
-            ? "transcript.done"
-            : "transcript.delta",
-      turnId,
-      payload: role === "assistant" ? { text } : { role, text },
-      final,
-    });
-    if (!final) {
+    if (!signal.aborted) {
+      const turnId = harness.ensureTurn();
+      harness.emit({
+        type:
+          role === "assistant"
+            ? final
+              ? "output.text.done"
+              : "output.text.delta"
+            : final
+              ? "transcript.done"
+              : "transcript.delta",
+        turnId,
+        payload: role === "assistant" ? { text } : { role, text },
+        final,
+      });
+    }
+    if (!final || !acceptingProviderTranscripts) {
       return;
     }
     transcriptSequence += 1;
@@ -532,7 +535,7 @@ export function createTalkClientGatewayControlOwner(params: {
     void params.appendTranscript({ entryId, role, text }).catch((error: unknown) => {
       warn(`talk Gateway control transcript failed: ${formatError(error)}`);
     });
-    if (role === "user") {
+    if (role === "user" && !signal.aborted) {
       runControl.handleSpoken(text, params.flushTranscript);
     }
   };
@@ -649,6 +652,7 @@ export function createTalkClientGatewayControlOwner(params: {
       if (closing) {
         return closing;
       }
+      acceptingProviderTranscripts = !options?.skipProvider && closeProvider !== undefined;
       // Fence admission synchronously, then defer teardown so provider callbacks
       // can re-enter close after the closing promise has been assigned.
       closing = Promise.resolve().then(async () => {
@@ -665,20 +669,23 @@ export function createTalkClientGatewayControlOwner(params: {
           }
         }
         consultQueue.seal();
-        const providerClose = options?.skipProvider
-          ? Promise.resolve()
-          : Promise.resolve().then(() => closeProvider?.());
-        const [providerResult] = await Promise.allSettled([
-          providerClose,
-          params.flushTranscript(),
-          runControl.close(),
-          consultQueue.flush(),
-        ]);
+        const providerClose = Promise.resolve()
+          .then(() => (options?.skipProvider ? undefined : closeProvider?.()))
+          .finally(() => {
+            acceptingProviderTranscripts = false;
+          });
+        const controlCleanup = Promise.allSettled([runControl.close(), consultQueue.flush()]);
+        const [providerResult] = await Promise.allSettled([providerClose, controlCleanup]);
+        // Provider shutdown can append final speech; its complete write prefix owns this barrier.
+        const [transcriptResult] = await Promise.allSettled([params.flushTranscript()]);
         if (!options?.preserveLogicalSession) {
           await params.closeLogicalSession();
         }
         if (providerResult?.status === "rejected") {
           throw providerResult.reason;
+        }
+        if (transcriptResult?.status === "rejected") {
+          throw transcriptResult.reason;
         }
       });
       // preserveRuns keeps accepted work alive, not a retired transport's presentation authority.

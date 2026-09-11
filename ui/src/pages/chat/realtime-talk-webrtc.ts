@@ -301,6 +301,23 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     }
     switch (event.type) {
+      case "session.input_transcript.delta":
+        this.emitFramelessTranscript("user", event.delta, false);
+        return;
+      case "session.output_transcript.delta":
+        this.emitFramelessTranscript("assistant", event.delta, false);
+        return;
+      case "session.closed":
+        if (event.reason === "content" || event.reason === "connection_lost") {
+          this.failConnection("Realtime connection closed");
+          return;
+        }
+        try {
+          this.ctx.callbacks.onStatus?.("idle");
+        } finally {
+          this.stop();
+        }
+        return;
       case "input_transcript.added":
         this.emitFramelessTranscript("user", event.item?.text, false, event.item?.id);
         return;

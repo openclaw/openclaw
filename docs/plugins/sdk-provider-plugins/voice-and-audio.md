@@ -201,6 +201,16 @@ Register each capability inside `register(api)` alongside your existing
     bridge can expose. Gateway relay sessions wait for that promise before
     confirming a final result or clearing the linked run; reject it when
     submission fails.
+    `close` may return `void` for synchronous disposal or a `Promise<void>`
+    that settles after provider finalization and resource cleanup. Stop audio,
+    tool, and delegation admission immediately. Final transcript callbacks may
+    drain until completion; consumers must await it before sealing transcript
+    queues or reporting logical session closure. Report the provider's terminal
+    reason through `onClose`, and reject the promise on cleanup failure. The
+    session facade preserves synchronous disposal. Once the provider returns
+    a promise, repeated closes return the same pending completion. Reentrant
+    close calls during the provider invocation are no-ops; terminal callbacks
+    must not wait for their own disposal.
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
     internal forced-consult and cancellation results, and rejects direct

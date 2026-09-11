@@ -591,7 +591,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
+        await stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
       } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
         stopTalkTranscriptionRelaySession({

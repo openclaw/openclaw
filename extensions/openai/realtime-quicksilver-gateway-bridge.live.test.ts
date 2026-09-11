@@ -129,8 +129,8 @@ describeLive("OpenAI private realtime gateway direct transport", () => {
         expect(errors).toStrictEqual([]);
 
         closed = true;
-        bridge.close();
-        bridge.close();
+        await bridge.close();
+        await bridge.close();
         await new Promise((resolve) => {
           setTimeout(resolve, 250);
         });
@@ -150,7 +150,7 @@ describeLive("OpenAI private realtime gateway direct transport", () => {
           }),
         );
       } finally {
-        bridge.close();
+        await bridge.close();
       }
     },
     LIVE_TIMEOUT_MS,

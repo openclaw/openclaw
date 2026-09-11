@@ -216,6 +216,7 @@ export type RelaySession = {
   voiceTranscriptSeq: number;
   voiceTranscriptQueue: BoundedSerialQueue;
   voiceSessionClose?: Promise<void>;
+  closing?: { reason: "completed" | "error"; completion?: Promise<void> };
   failSession: (message: string) => void;
 };
 
@@ -248,9 +249,8 @@ export type TalkRealtimeRelaySessionResult = {
 };
 
 export const relaySessions = new Map<string, RelaySession>();
-// Closed relays leave the active map immediately so late provider/client events
-// are ignored, but their accepted transcript prefix still owns bounded memory
-// until durable close settles. Session limits count both maps.
+// Closing relays reject new work but retain bounded final transcripts until
+// provider finalization and durable close settle. Session limits count both sets.
 export const drainingRelaySessions = new Set<RelaySession>();
 
 export function adoptRelayProviderToolCallId(

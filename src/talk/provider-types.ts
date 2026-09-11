@@ -372,7 +372,8 @@ export type RealtimeVoiceBridge = {
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
   acknowledgeMark(markName?: string): void;
-  close(options?: RealtimeVoiceCloseOptions): void;
+  /** Stops admission immediately; an optional promise completes after final transcripts and cleanup. */
+  close(options?: RealtimeVoiceCloseOptions): void | Promise<void>;
   isConnected(): boolean;
 };
 
