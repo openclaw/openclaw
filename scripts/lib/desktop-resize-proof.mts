@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, stat as fsStat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -141,6 +141,53 @@ export async function readDesktopProofTestReport(file: string) {
     throw new Error("Desktop test report must be a bounded regular file");
   }
   return desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
+}
+
+export async function inspectDesktopSshdRuntimeDirectory(directory: string) {
+  let symlink: boolean | null = null;
+  try {
+    symlink = (await lstat(directory)).isSymbolicLink();
+    const target = await fsStat(directory);
+    return {
+      status: "present",
+      symlink,
+      directory: target.isDirectory(),
+      rootOwned: target.uid === 0,
+      groupOrWorldWritable: (target.mode & 0o022) !== 0,
+    };
+  } catch (error) {
+    return {
+      status:
+        error instanceof Error && "code" in error && error.code === "ENOENT"
+          ? "missing"
+          : "unavailable",
+      symlink,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    };
+  }
+}
+
+export function desktopProofSshdFailure(stderr: string) {
+  if (stderr.length > 64 * 1024) {
+    return "output-too-large";
+  }
+  const message = stripVTControlCharacters(stderr);
+  // These are OpenSSH's fixed pre-test failures, never copied paths or error text.
+  if (/^Missing privilege separation directory: /mu.test(message)) {
+    return "privsep-directory-missing";
+  }
+  if (/^.+ must be owned by root and not group or world-writable\.\r?$/mu.test(message)) {
+    return "privsep-directory-permissions";
+  }
+  if (/^Privilege separation user \S+ does not exist\r?$/mu.test(message)) {
+    return "privsep-user-missing";
+  }
+  if (/^sshd: no hostkeys available -- exiting\.\r?$/mu.test(message)) {
+    return "host-key-unavailable";
+  }
+  return "unclassified";
 }
 
 /** Preserve child ownership before fallible logging or evidence export can replace its error. */

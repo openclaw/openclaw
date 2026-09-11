@@ -1,14 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   desktopProofAssets,
   desktopProofCommit,
   desktopProofSource,
+  desktopProofSshdFailure,
   desktopProofTestReport,
   desktopResizeStages,
   exportDesktopResizeProof,
+  inspectDesktopSshdRuntimeDirectory,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
@@ -67,6 +69,89 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("records sshd runtime directory facts without modifying missing or unsafe paths", async () => {
+    const root = dirs.make("desktop-sshd-runtime-");
+    const directory = path.join(root, "runtime");
+    expect(await inspectDesktopSshdRuntimeDirectory(directory)).toEqual({
+      status: "missing",
+      symlink: null,
+      directory: null,
+      rootOwned: null,
+      groupOrWorldWritable: null,
+    });
+    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    await mkdir(directory, { mode: 0o700 });
+    expect(await inspectDesktopSshdRuntimeDirectory(directory)).toMatchObject({
+      status: "present",
+      symlink: false,
+      directory: true,
+      rootOwned: (await stat(directory)).uid === 0,
+      groupOrWorldWritable: process.platform === "win32" ? expect.any(Boolean) : false,
+    });
+    const link = path.join(root, "runtime-link");
+    await symlink(directory, link, "dir");
+    expect(await inspectDesktopSshdRuntimeDirectory(link)).toMatchObject({
+      symlink: true,
+      directory: true,
+    });
+    if (process.platform !== "win32") {
+      await chmod(directory, 0o770);
+      expect(await inspectDesktopSshdRuntimeDirectory(directory)).toMatchObject({
+        groupOrWorldWritable: true,
+      });
+      expect((await stat(directory)).mode & 0o777).toBe(0o770);
+    }
+    const file = path.join(root, "not-a-directory");
+    await writeFile(file, "private contents");
+    expect(await inspectDesktopSshdRuntimeDirectory(file)).toMatchObject({ directory: false });
+  });
+
+  it.each([
+    ["Missing privilege separation directory: /private/runtime\r\n", "privsep-directory-missing"],
+    [
+      "/private/runtime must be owned by root and not group or world-writable.\r\n",
+      "privsep-directory-permissions",
+    ],
+    ["Privilege separation user private-user does not exist\r\n", "privsep-user-missing"],
+    ["sshd: no hostkeys available -- exiting.\n", "host-key-unavailable"],
+    ["private config failed at private path", "unclassified"],
+    ["x".repeat(64 * 1024 + 1), "output-too-large"],
+  ])("exports only a fixed sshd failure category (%#)", (stderr, category) => {
+    expect(desktopProofSshdFailure(stderr)).toBe(category);
+    expect(desktopProofSshdFailure(stderr)).not.toMatch(/private|runtime|user$/u);
+  });
+
+  it("preserves the sshd command failure and private log write when projection fails", async () => {
+    const child = new Error("sshd-config failed");
+    const projection = new Error("projection failed");
+    const recorded: unknown[] = [];
+    const record = (error: unknown) => {
+      recorded.push(error);
+    };
+    let privateLogSaved = false;
+    const failure = await withDesktopProofCleanup(
+      async () => {
+        throw child;
+      },
+      () =>
+        withDesktopProofCleanup(
+          async () => {
+            expect(recorded[0]).toBe(child);
+            throw projection;
+          },
+          async () => {
+            privateLogSaved = true;
+          },
+          record,
+        ),
+      record,
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors[0]).toBe(child);
+    expect((failure as AggregateError).errors[1].errors[0]).toBe(projection);
+    expect(privateLogSaved).toBe(true);
+  });
+
   it("publishes fixed phases and known failure locations, not raw reporter content", () => {
     const result = desktopProofTestReport(
       rawTestReport(

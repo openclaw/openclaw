@@ -10,7 +10,9 @@ import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuil
 import {
   desktopProofCommit,
   desktopProofSource,
+  desktopProofSshdFailure,
   exportDesktopResizeProof,
+  inspectDesktopSshdRuntimeDirectory,
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
@@ -47,7 +49,12 @@ const receipt = {
   architecture: process.arch,
   initialFreeBytes: 0,
   prebuiltGeneration: "",
-  preinstalledSsh: { serverVersion: "", serverBinarySha256: "" },
+  preinstalledSsh: {
+    serverVersion: "",
+    serverBinarySha256: "",
+    runtimeDirectory: null as Awaited<ReturnType<typeof inspectDesktopSshdRuntimeDirectory>> | null,
+    configFailure: null as ReturnType<typeof desktopProofSshdFailure> | null,
+  },
   provenance: {
     kind: "upstream-os" as const,
     osRelease: "",
@@ -114,6 +121,7 @@ async function run(
   console.log(`[desktop-resize-proof] ${label}`);
   const cap = new AbortController();
   const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
   const log: Buffer[] = [];
   let bytes = 0;
   let exitCode: number | null = null;
@@ -146,7 +154,7 @@ async function run(
             }
           };
           child.stdout!.on("data", (data: Buffer) => append(data, stdout));
-          child.stderr!.on("data", (data: Buffer) => append(data));
+          child.stderr!.on("data", (data: Buffer) => append(data, stderr));
           child.stdin?.end(options.input);
         },
       });
@@ -155,12 +163,24 @@ async function run(
     },
     async () => {
       receipt.commands.push({ label, exitCode, elapsedMs: Date.now() - started });
-      if (privateRoot) {
-        await writeFile(path.join(privateRoot, `${label}.log`), Buffer.concat(log), {
-          mode: 0o600,
-        });
-      }
-      await saveReceipt();
+      await withDesktopProofCleanup(
+        async () => {
+          if (label === "sshd-config" && exitCode !== 0) {
+            receipt.preinstalledSsh.configFailure = desktopProofSshdFailure(
+              Buffer.concat(stderr).toString(),
+            );
+          }
+        },
+        async () => {
+          if (privateRoot) {
+            await writeFile(path.join(privateRoot, `${label}.log`), Buffer.concat(log), {
+              mode: 0o600,
+            });
+          }
+          await saveReceipt();
+        },
+        recordFailure,
+      );
     },
     recordFailure,
   );
@@ -487,6 +507,9 @@ async function main() {
       ].join("\n"),
       { mode: 0o600 },
     );
+    // Ubuntu compiles this privsep path; direct sshd does not create the service runtime directory.
+    receipt.preinstalledSsh.runtimeDirectory =
+      await inspectDesktopSshdRuntimeDirectory("/run/sshd");
     await run("sshd-config", "sudo", ["-n", "/usr/sbin/sshd", "-t", "-f", config]);
     const stop = daemon("sshd", "sudo", ["-n", "/usr/sbin/sshd", "-D", "-e", "-f", config]);
     // Register teardown before readiness: a failed bootstrap still owns its child.
