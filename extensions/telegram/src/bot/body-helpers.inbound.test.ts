@@ -1,7 +1,7 @@
 import type { Message, MessageEntity } from "grammy/types";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it } from "vitest";
-import { getTelegramTextParts, joinTelegramTextParts } from "./body-helpers.js";
+import { getTelegramTextParts, hasBotMention, joinTelegramTextParts } from "./body-helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 function asTelegramMessage(message: unknown): Message {
@@ -9,6 +9,33 @@ function asTelegramMessage(message: unknown): Message {
 }
 
 describe("getTelegramTextParts", () => {
+  it("does not treat shared contact names as bot mentions", () => {
+    expect(
+      hasBotMention(
+        asTelegramMessage({ contact: { first_name: "@examplebot", phone_number: "+15555550123" } }),
+        "examplebot",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      { first_name: " Alex ", last_name: " Example ", phone_number: " +15555550123 " },
+      "Alex Example, +15555550123",
+    ],
+    [{ first_name: "Alex", phone_number: "+15555550123" }, "Alex, +15555550123"],
+    [{ first_name: " ", phone_number: " " }, "no details"],
+  ])("preserves shared contact details %j", (contact, details) => {
+    const message = asTelegramMessage({ contact });
+    expect(getTelegramTextParts(message)).toEqual({
+      text: `[Shared contact] ${details}`,
+      entities: [],
+    });
+    expect(joinTelegramTextParts([message, asTelegramMessage({ text: "Thanks" })], "\n").text).toBe(
+      `[Shared contact] ${details}\nThanks`,
+    );
+  });
+
   it("projects native Telegram polls into bounded, accurate inbound text", () => {
     const result = getTelegramTextParts(
       asTelegramMessage({

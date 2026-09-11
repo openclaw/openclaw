@@ -221,6 +221,33 @@ function transcribeCallContext(): Record<string, unknown> {
 
 describe("resolveTelegramInboundBody", () => {
   privateBodyTest(
+    "preserves shared contact details in private inbound bodies",
+    { contact: { first_name: "Alex", phone_number: "+15555550123" } },
+    (result) => expect(result?.rawBody).toBe("[Shared contact] Alex, +15555550123"),
+  );
+
+  it.each([
+    { name: "@bot", patterns: undefined },
+    { name: "Alex", patterns: ["Alex"] },
+    { name: "Alex", patterns: ["15555550123"] },
+  ])("does not activate groups from shared contact fields %j", async ({ name, patterns }) => {
+    const result = await resolveGroup({
+      message: { contact: { first_name: name, phone_number: "+15555550123" } },
+      logger: createLogger(),
+      patterns,
+    });
+    expect(result).toBeNull();
+  });
+
+  it.each(["text", "caption"])("preserves group mentions in original %s", async (field) => {
+    const result = await resolveGroup({
+      message: { [field]: "@bot hello" },
+      logger: createLogger(),
+    });
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  privateBodyTest(
     "delivers native poll questions, options, voter totals, and state",
     {
       poll: {
