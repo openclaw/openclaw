@@ -54,6 +54,10 @@ export function hasCompletedPluginRuntimeRegistration(record: ArtifactBoundRecor
   );
 }
 
+export function getPluginRuntimeEntrySource(record: ArtifactBoundRecord): string | undefined {
+  return record[RUNTIME_ARTIFACT_SELECTION]?.runtimeEntry.source;
+}
+
 export function matchesPluginRuntimeArtifactSelection(
   record: ArtifactBoundRecord,
   params: RuntimeArtifactSelectionInput & { rootDir: string; source: string },
