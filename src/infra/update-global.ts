@@ -1320,6 +1320,18 @@ export async function detectGlobalInstallManagerForRoot(
     return "npm";
   }
 
+  // A custom npm prefix can own the CLI without containing its own npm executable.
+  const npmPrefix = inferNpmPrefixFromPackageRoot(pkgRoot);
+  if (npmPrefix && process.platform !== "win32") {
+    const [launcher, packageEntry] = await Promise.all([
+      fs.realpath(path.join(npmPrefix, "bin", "openclaw")).catch(() => null),
+      fs.realpath(path.join(pkgRoot, "openclaw.mjs")).catch(() => null),
+    ]);
+    if (launcher && launcher === packageEntry) {
+      return "npm";
+    }
+  }
+
   return null;
 }
 

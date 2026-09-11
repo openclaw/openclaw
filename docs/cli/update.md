@@ -16,6 +16,16 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+An installation without a detected package-manager owner records a **skipped**
+update, exits successfully, and leaves the Gateway running. For Docker/container
+images, pull or build the new image and recreate the container with the same
+state/config mounts. For a standalone or extracted tarball installation, reinstall
+using the original method; Yarn global installations must be updated with Yarn.
+The CLI, JSON run record, and update history include this next action. These
+non-outcomes do not run rollback verification or offer an update failure report.
+Custom npm prefixes, including symlinked prefixes, are recognized when their
+installed `bin/openclaw` launcher points to the package being updated.
+
 ## Usage
 
 ```bash

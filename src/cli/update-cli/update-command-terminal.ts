@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readPackageVersion } from "../../infra/package-json.js";
 import {
   resolveManagedServiceUpdateFailureExitCode,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -180,10 +181,11 @@ export async function recordVerifiedUpdatePackageCleanup(
   return undefined;
 }
 
-export async function reportPreMutationUpdateFailure(params: {
+export async function reportPreMutationUpdateResult(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
+  status?: "error" | "skipped";
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
@@ -200,11 +202,11 @@ export async function reportPreMutationUpdateFailure(params: {
   }
   const result = completeUpdateCommandRun(
     {
-      status: "error",
+      status: params.status ?? "error",
       mode: params.installKind === "git" ? "git" : "unknown",
       root: params.root,
       reason: params.reason,
-      ...(params.opts.dryRun !== true
+      ...(params.opts.dryRun !== true && params.status !== "skipped"
         ? {
             recovery: await (params.installKind === "git"
               ? readCurrentGitUpdateRecovery(params.root)
@@ -212,6 +214,9 @@ export async function reportPreMutationUpdateFailure(params: {
           }
         : {}),
       steps: [],
+      ...(params.status === "skipped"
+        ? { before: { version: await readPackageVersion(params.root) } }
+        : {}),
       durationMs: 0,
     },
     params.opts.run,
@@ -223,13 +228,13 @@ export async function reportPreMutationUpdateFailure(params: {
       jsonMode: Boolean(params.opts.json),
     });
   }
-  if (params.opts.json && params.message) {
+  if (params.opts.json && params.message && params.status !== "skipped") {
     defaultRuntime.error(params.message);
   }
   printResult(result, params.opts, { nextAction: params.message });
   throw new UpdateCommandFailure(
     result,
-    resolveManagedServiceUpdateFailureExitCode(result),
+    params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
     params.message,
   );
 }

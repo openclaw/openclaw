@@ -45,6 +45,7 @@ import {
   resolveTargetVersion,
   tryResolveInvocationCwd,
   type UpdateCommandOptions,
+  UpdatePreMutationError,
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
@@ -78,7 +79,7 @@ import {
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import {
-  reportPreMutationUpdateFailure,
+  reportPreMutationUpdateResult,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -182,7 +183,7 @@ async function updateCommandInternal(
   let root = discoveredRoot;
   let updateInstallKind = installKind;
   const refuseUpdate = (reason: string, message?: string) =>
-    reportPreMutationUpdateFailure({
+    reportPreMutationUpdateResult({
       root,
       installKind: updateInstallKind,
       reason,
@@ -287,17 +288,6 @@ async function updateCommandInternal(
     packageUpdateNodeRunner = managedServiceNodeRunner;
   }
 
-  // Read-only native/root admission is complete. Own interruption settlement
-  // before metadata can block, but defer mutable housekeeping until target admission.
-  if (updateInstallKind === "package" && !opts.dryRun) {
-    assertUpdatePackageActivationAdmission(root);
-    run.executorFence = await executor.enter(root, { preflight: true });
-    run.executorFence.assertCurrent();
-    assertUpdatePackageActivationAdmission(
-      captureUpdateCommandExecutorAuthority(run.executorFence).installKey,
-    );
-  }
-
   if (updateInstallKind !== "git") {
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
@@ -308,7 +298,30 @@ async function updateCommandInternal(
         root,
         installKind,
         timeoutMs: updateStepTimeoutMs,
+      }).catch(async (error: unknown) => {
+        if (!(error instanceof UpdatePreMutationError)) {
+          throw error;
+        }
+        return await reportPreMutationUpdateResult({
+          root,
+          installKind,
+          status: "skipped",
+          reason: error.reason,
+          message: error.message,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        });
       });
+      // Unsupported layouts stop before ownership; supported targets are
+      // resolved under the same executor that will stage their replacement.
+      if (!opts.dryRun) {
+        assertUpdatePackageActivationAdmission(root);
+        run.executorFence = await executor.enter(root, { preflight: true });
+        run.executorFence.assertCurrent();
+        assertUpdatePackageActivationAdmission(
+          captureUpdateCommandExecutorAuthority(run.executorFence).installKey,
+        );
+      }
       packageInstallTarget = await resolveGlobalInstallTarget({
         manager,
         runCommand: runCommandWithTimeout,
