@@ -20,6 +20,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -64,9 +65,24 @@ async function finalizeMigratedUpdate(): Promise<void> {
       async (fence) => finalizeInput(input, fence),
     );
   } else {
-    // v2026.9.3 had no executor transport. The candidate must acquire an
-    // exclusive owner before adopting the run or making effects. Omission of
-    // a newer grant cannot bypass an incumbent original/descendant lease.
+    // The shipped v2026.9.3 producer overrides these selectors for worker
+    // scratch, but retains its pre-override environment in the private input.
+    // Restore only this one-shot worker's selectors before resolving the normal
+    // installation lease domain; scratch-local ownership cannot exclude updates.
+    const admissionEnv = input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env;
+    if (!admissionEnv) {
+      throw new Error("Grantless finalization requires its captured update environment.");
+    }
+    for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
+      const value = resolveEnvironmentValue(admissionEnv, name);
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+    // Acquire before adopting the run or making effects. Missing newer grants
+    // still cannot bypass a live original or descendant in that same domain.
     await withUpdateCommandExecutor(input.params.opts.run?.runId ?? "", async (executor) => {
       const fence = await executor.enter(input.params.result.root ?? input.params.root);
       await finalizeInput(input, fence);

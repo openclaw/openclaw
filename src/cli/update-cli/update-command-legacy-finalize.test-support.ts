@@ -20,7 +20,12 @@ const overrides = new Map<string, string>([
   ],
   [
     source("../../infra/tmp-openclaw-dir.ts"),
-    `export function resolvePreferredOpenClawTmpDir() {return ${JSON.stringify(scratch)};}`,
+    process.env.OPENCLAW_TEST_LEGACY_TEMP_FALLBACK === "1"
+      ? `import {resolvePreferredOpenClawTmpDir as actual} from ${JSON.stringify(source("../../infra/tmp-openclaw-dir.ts") + "?fixture-original")};
+         export function resolvePreferredOpenClawTmpDir() {
+           return actual({preferredDir:${JSON.stringify(scratch + "/unavailable-preferred")}});
+         }`
+      : `export function resolvePreferredOpenClawTmpDir() {return ${JSON.stringify(scratch)};}`,
   ],
   [
     source("./update-command-convergence.ts"),

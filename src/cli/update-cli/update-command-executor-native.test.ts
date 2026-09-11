@@ -364,7 +364,17 @@ it
       fs.writeFileSync(file("release"), "go");
       const settled = await outcome;
       if (fault === "healthy-upgrade") {
-        expect(settled).toMatchObject({ value: { code: 0, cleanup: "normal" } });
+        expect(settled).toMatchObject({ value: { code: 0 } });
+        if (!("value" in settled)) {
+          throw settled.error;
+        }
+        // A zero-exit root may still need graceful cleanup of its source-loader
+        // helpers. Require joined extinction, not one platform's cleanup label.
+        expect(["normal", "cooperative"]).toContain(settled.value.cleanup);
+        expect(processTree.isChildProcessTreeAlive({ pid: grant.spawner.executor.pid })).toBe(
+          false,
+        );
+        expect(pidAlive.isPidDefinitelyDead(leaf!)).toBe(true);
         expect(store.read(root)).toEqual({ kind: "absent" });
         expect(store.read(target)).toEqual({ kind: "absent" });
         // Recovery uses a fresh original owner after all native work joined.

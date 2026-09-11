@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -19,12 +20,29 @@ it.each([
   "retargeted",
   "grantless",
   "grantless-incumbent",
+  "grantless-scratch",
+  "grantless-scratch-incumbent",
+  "grantless-scratch-owned",
+  "grantless-scratch-owned-incumbent",
 ] as const)(
   "shipped legacy grant completes migrated finalization and native restart: %s",
   async (scenario) => {
     const scratch = fs.realpathSync(dirs.make("legacy-native-finalize-"));
     const root = fs.realpathSync(process.cwd());
     const configPath = path.join(scratch, "openclaw.json");
+    const scratchEnvironment = scenario.includes("-scratch");
+    const ownedEnvironment = scenario.includes("-owned");
+    const incumbent = scenario.endsWith("-incumbent");
+    const normalTemp = path.join(scratch, "normal-temp");
+    const workerTemp = path.join(scratch, "worker-temp");
+    const unsafePreferred = path.join(scratch, "unavailable-preferred");
+    if (scratchEnvironment) {
+      fs.mkdirSync(normalTemp);
+      fs.mkdirSync(workerTemp);
+      // Force the real POSIX fallback without touching /tmp/openclaw. Windows
+      // already skips preferredDir. Keep os.tmpdir and secure filesystem checks real.
+      fs.writeFileSync(unsafePreferred, "not a directory");
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: scratch,
@@ -34,6 +52,14 @@ it.each([
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(scratchEnvironment
+        ? {
+            TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
+            TMP: ownedEnvironment ? workerTemp : normalTemp,
+            TEMP: ownedEnvironment ? workerTemp : normalTemp,
+            OPENCLAW_TEST_LEGACY_TEMP_FALLBACK: "1",
+          }
+        : {}),
     };
     for (const name of [
       "OPENCLAW_SERVICE_KIND",
@@ -44,7 +70,13 @@ it.each([
     }
     fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
     const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-    const databasePath = path.join(scratch, "managed-update-handoffs.sqlite");
+    const originalEnvironment = ownedEnvironment
+      ? { ...env, TMPDIR: normalTemp, TMP: normalTemp, TEMP: normalTemp }
+      : env;
+    const leaseDirectory = scratchEnvironment
+      ? resolvePreferredOpenClawTmpDir({ preferredDir: unsafePreferred, tmpdir: () => normalTemp })
+      : scratch;
+    const databasePath = path.join(leaseDirectory, "managed-update-handoffs.sqlite");
     const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: env });
     const acquired = store.acquire(root, randomUUID(), { kind: "update" });
     if (acquired.kind !== "acquired") {
@@ -110,7 +142,7 @@ it.each([
       legacyIssues: [],
     };
     const grantless = scenario.startsWith("grantless");
-    if (scenario === "grantless") {
+    if (grantless && !incumbent) {
       expect(store.release(bound)).toBe(true);
       expect(store.release(acquired.lease)).toBe(true);
     }
@@ -120,6 +152,7 @@ it.each([
       resultPath: path.join(scratch, "result.json"),
       params: {
         root,
+        ...(ownedEnvironment ? { ownedManagedUpdateEnv: originalEnvironment } : {}),
         mutationStarted: true,
         installKindChanged: false,
         configSnapshot: snapshot,
@@ -151,7 +184,9 @@ it.each([
         ],
         {
           input: JSON.stringify(input),
-          env,
+          env: scratchEnvironment
+            ? { ...originalEnvironment, TMPDIR: workerTemp, TMP: workerTemp, TEMP: workerTemp }
+            : env,
           baseEnv: {},
           cwd: root,
           timeoutMs: 60000,
@@ -170,10 +205,11 @@ it.each([
         },
       );
       const details = result.stderr + "\n" + result.stdout;
-      if (scenario === "grantless-incumbent") {
+      if (incumbent) {
         expect(result.code, details).not.toBe(0);
         expect(fs.existsSync(path.join(scratch, "receiver-pid"))).toBe(false);
         expect(store.current(acquired.lease)).toBe(true);
+        expect(fs.existsSync(path.join(scratch, "native-effect"))).toBe(false);
       } else if (scenario === "revoked" || scenario === "retargeted") {
         expect(fs.existsSync(path.join(scratch, "receiver-pid")), details).toBe(true);
         expect(fs.existsSync(path.join(scratch, "native-effect")), details).toBe(false);
@@ -197,6 +233,16 @@ it.each([
           expect(store.release(acquired.lease)).toBe(true);
         }
         expect(store.read(root).kind).toBe("absent");
+      }
+      if (scratchEnvironment) {
+        // Neither healthy completion nor refusal may create a worker-private
+        // competing lease database. This is the shipped producer's temp override.
+        const workerLeasePath = path.join(
+          workerTemp,
+          typeof process.getuid === "function" ? `openclaw-${process.getuid()}` : "openclaw",
+          "managed-update-handoffs.sqlite",
+        );
+        expect(fs.existsSync(workerLeasePath), details).toBe(false);
       }
     } finally {
       store.release(bound);
