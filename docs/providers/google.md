@@ -153,10 +153,33 @@ the Gateway already runs inside a managed Google Cloud environment.
         ```
       </Step>
       <Step title="Set the project and location environment variables">
+        The Gateway reads `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`
+        from its own process environment, so put them where the Gateway can
+        see them.
+
+        For a Gateway you launch from the current shell:
+
         ```bash
         export GOOGLE_CLOUD_PROJECT="your-project-id"
         export GOOGLE_CLOUD_LOCATION="us-central1"
         ```
+
+        For a service-managed Gateway (systemd/launchd), exports from an
+        interactive shell never reach the running process. Persist them to the
+        global env file and restart the Gateway instead:
+
+        ```bash
+        mkdir -p ~/.openclaw
+        cat >> ~/.openclaw/.env <<'EOF'
+        GOOGLE_CLOUD_PROJECT=your-project-id
+        GOOGLE_CLOUD_LOCATION=us-central1
+        EOF
+        openclaw gateway restart
+        ```
+
+        See [Environment variables](/help/environment) for the full env
+        loading precedence (process environment, `~/.openclaw/.env`,
+        systemd/launchd).
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -178,6 +201,7 @@ the Gateway already runs inside a managed Google Cloud environment.
     literal marker `gcp-vertex-credentials`; any other value is treated as an
     API key, and Vertex rejects requests that use one.
     </Tip>
+
   </Tab>
 </Tabs>
 
