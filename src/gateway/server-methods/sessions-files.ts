@@ -431,7 +431,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = await loadSessionFiles({ ...params, agentId, context });
-    const maxPreviewBytes = resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
+    // Remote repository workers keep the default cap; only local workspace and
+    // stored artifact reads honor the configured one, and errors must report
+    // the cap the backend actually enforced.
+    const remoteRepository = Boolean(loaded.repository) && loaded.repository?.kind !== "stored";
+    const maxPreviewBytes = remoteRepository
+      ? resolveWorkspacePreviewMaxBytes(undefined)
+      : resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
     const request = { files: loaded.files, path: params.path };
     const result =
       loaded.repository?.kind === "stored"
@@ -476,7 +482,11 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       throw new Error("Start this cloud session before editing its repository files.");
     }
     const authorize = () => sessionMutationAuthorization?.assertCurrent();
-    const maxPreviewBytes = resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
+    // Remote repository workers keep the default cap (stored was rejected
+    // above); report the cap the backend actually enforced in too-large errors.
+    const maxPreviewBytes = repository
+      ? resolveWorkspacePreviewMaxBytes(undefined)
+      : resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
     const update = repository
       ? await repository.inspect(
           "set",

@@ -775,6 +775,52 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
+  it("round-trips files above the default cap through get, set, and reopen when workspacePreviewMaxBytes is raised", async () => {
+    const original = `${"x".repeat(260 * 1024 - 1)}\n`;
+    const replacement = `${"y".repeat(260 * 1024 - 1)}\n`;
+    writeWorkspaceFile(workspaceRoot, "raised-save.log", original);
+    mockVisibleMessages([assistantToolCall("read", { path: "raised-save.log" })]);
+    const raisedCapContext = {
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: { workspacePreviewMaxBytes: 1024 * 1024 },
+      }),
+    };
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised-save.log" },
+        raisedCapContext,
+      ),
+    );
+    expect(preview.file.content).toBe(original);
+    expect(preview.file.hash).toBe(hashContent(original));
+
+    const saved = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.set",
+        {
+          sessionKey: "agent:main:main",
+          path: "raised-save.log",
+          content: replacement,
+          expectedHash: hashContent(original),
+        },
+        raisedCapContext,
+      ),
+    );
+    expect(saved.file.hash).toBe(hashContent(replacement));
+
+    const reopened = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised-save.log" },
+        raisedCapContext,
+      ),
+    );
+    expect(reopened.file.content).toBe(replacement);
+  });
+
   it.each([
     {
       name: "SQLite",

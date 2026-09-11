@@ -118,9 +118,11 @@ export const GatewayConfigSchema = z
       .number()
       .int()
       .min(1)
-      // Inline preview content rides Gateway WS frames; bound the cap at the
-      // frame limit (MAX_PAYLOAD_BYTES) so configured previews always arrive.
-      .max(25 * 1024 * 1024)
+      // Inline preview content rides Gateway WS frames after base64/JSON
+      // encoding (~4/3x raw bytes plus envelope). Budget against the 25 MiB
+      // frame limit (MAX_PAYLOAD_BYTES): 16 MiB raw stays ≈21.3 MiB encoded,
+      // so a near-limit preview still fits a bounded client frame.
+      .max(16 * 1024 * 1024)
       .optional(),
     auth: z
       .strictObject({

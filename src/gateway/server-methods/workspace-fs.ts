@@ -160,6 +160,7 @@ export async function updateWorkspaceFile(
   content: string,
   expectedHash: string,
   assertCurrent?: () => void,
+  opts?: { maxBytes?: number },
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -173,7 +174,7 @@ export async function updateWorkspaceFile(
     try {
       current = await workspaceRoot.read(browserPath, {
         hardlinks: "reject",
-        maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        maxBytes: opts?.maxBytes ?? WORKSPACE_PREVIEW_MAX_BYTES,
         nonBlockingRead: true,
         symlinks: "reject",
       });

@@ -576,6 +576,7 @@ export async function setSessionWorkspaceFile(params: {
       params.content,
       params.expectedHash,
       params.assertCurrent,
+      { maxBytes: params.maxPreviewBytes },
     );
   } catch (error) {
     if (!(error instanceof FsSafeError)) {
