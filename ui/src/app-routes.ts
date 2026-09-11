@@ -36,6 +36,7 @@ import {
   type RouteId,
 } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { startSessionRouteRecovery } from "./app/session-route-recovery.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
@@ -302,6 +303,7 @@ export async function startApplicationRouter(
     replace: (next) => history.replace(next),
     listen: (listener) => {
       let listening = true;
+      const stopSessionRecovery = startSessionRouteRecovery(router, context);
       let lastHello = context.gateway.snapshot.hello;
       const stopGateway = context.gateway.subscribe((snapshot) => {
         if (lastHello === snapshot.hello) {
@@ -358,6 +360,7 @@ export async function startApplicationRouter(
       });
       return () => {
         listening = false;
+        stopSessionRecovery();
         stopGateway();
         stopHistory();
       };
