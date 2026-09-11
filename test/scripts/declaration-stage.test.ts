@@ -61,7 +61,7 @@ describe("canonical declaration stage", () => {
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
   });
 
-  it.each(["success", "exit", "diagnostic"])(
+  it.each(["success", "exit", "dual-exit", "diagnostic"])(
     "joins both private compiler stages before %s publication",
     async (outcome) => {
       const { staging, dist, invocation } = fixture();
@@ -85,7 +85,7 @@ describe("canonical declaration stage", () => {
             clearInterval(wait);
             { ${child.args[1]} }
             if (index === 0) {
-              if (${JSON.stringify(outcome)} === 'exit') process.exitCode = 17;
+              if (['exit', 'dual-exit'].includes(${JSON.stringify(outcome)})) process.exitCode = 17;
               if (${JSON.stringify(outcome)} === 'diagnostic') console.error('[INEFFECTIVE_DYNAMIC_IMPORT]');
               fs.writeFileSync(path.join(root, 'first.finished'), 'finished');
             } else {
@@ -96,6 +96,7 @@ describe("canonical declaration stage", () => {
                 }
                 clearInterval(drain);
                 fs.writeFileSync(path.join(root, 'second.finished'), 'finished');
+                if (${JSON.stringify(outcome)} === 'dual-exit') process.exitCode = 23;
               }, 10);
             }
           }, 10);
@@ -123,12 +124,31 @@ describe("canonical declaration stage", () => {
           expect(fs.readFileSync(path.join(dist, source.required[0]!), "utf8")).toBe("export {};");
         }
       } else {
-        await expect(publication).rejects.toThrow(
-          `Declaration build failed with exit ${outcome === "exit" ? 17 : 1}`,
-        );
+        if (outcome === "dual-exit") {
+          const result = await publication.catch((error: unknown) => error);
+          expect(result).toBeInstanceOf(AggregateError);
+          expect(result).toMatchObject({
+            errors: expect.arrayContaining([
+              expect.objectContaining({
+                message: "tsdown invocation 1 failed with exit 17",
+                exitCode: 17,
+              }),
+              expect.objectContaining({
+                message: "tsdown invocation 2 failed with exit 23",
+                exitCode: 23,
+              }),
+            ]),
+          });
+        } else {
+          await expect(publication).rejects.toThrow(
+            `Declaration build failed with exit ${outcome === "exit" ? 17 : 1}`,
+          );
+        }
         expect(seal).not.toHaveBeenCalled();
         expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
-        expect(fs.existsSync(path.join(dist, "plugin-sdk/public.d.ts"))).toBe(false);
+        for (const source of sources) {
+          expect(fs.existsSync(path.join(dist, source.required[0]!))).toBe(false);
+        }
       }
       expect(fs.readFileSync(path.join(root, "second.finished"), "utf8")).toBe("finished");
     },

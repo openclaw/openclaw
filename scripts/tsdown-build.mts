@@ -1946,7 +1946,7 @@ export async function executeTsdownBuildPlan(
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
-  if (failures.length) {
+  if (failures.length || failedExits.length > 1) {
     failures.push(
       ...failedExits.map(({ index, code }) =>
         Object.assign(new Error(`tsdown invocation ${index + 1} failed with exit ${code}`), {
