@@ -505,8 +505,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       });
 
       expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
-        { role: "user", text: "Check the weather", final: false },
-        { role: "assistant", text: "I'll check", final: false },
+        { role: "user", text: "Check the weather", final: false, textMode: "verbatim" },
+        { role: "assistant", text: "I'll check", final: false, textMode: "verbatim" },
       ]);
       expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
         "transcript.delta",
