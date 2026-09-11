@@ -10,10 +10,18 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
 import { renderActivityGroup } from "./chat-message-group.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 const hosts: HTMLElement[] = [];
+
+function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
+  return groupMessages(
+    messages.map((message) => ({ kind: "message", key: message.toolCallId, message })),
+  ).flatMap((item) => (item.kind === "group" ? item.messages : []));
+}
+
 afterEach(() => {
   for (const host of hosts.splice(0)) {
     host.remove();
@@ -182,7 +190,7 @@ describe("browser tab card", () => {
         visibleContent: "text",
         isStreaming: false,
         timestamp: 1,
-        messages: messages.map((result) => ({ key: result.toolCallId, message: result })),
+        messages: messageEntries(messages),
       };
       render(
         renderActivityGroup([group], {
@@ -247,7 +255,7 @@ describe("browser tab card", () => {
         visibleContent: "text",
         isStreaming: false,
         timestamp: 1,
-        messages: messages.map((result) => ({ key: result.toolCallId, message: result })),
+        messages: messageEntries(messages),
       };
       render(
         renderActivityGroup([group], {

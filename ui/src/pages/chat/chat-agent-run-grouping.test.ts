@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
@@ -13,22 +14,22 @@ function group(
   runId: string | undefined,
   overrides: Record<string, unknown> = {},
 ): MessageGroup {
+  const message = {
+    role: role === "tool" ? "toolResult" : role,
+    content: key,
+    timestamp: 1,
+    ...overrides,
+  };
+  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  if (prepared?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
   return {
     kind: "group",
     key: `group:${key}`,
     role,
     visibleContent: "text",
-    messages: [
-      {
-        key,
-        message: {
-          role: role === "tool" ? "toolResult" : role,
-          content: key,
-          timestamp: 1,
-          ...overrides,
-        },
-      },
-    ],
+    messages: prepared.messages,
     timestamp: 1,
     isStreaming: false,
     ...(runId ? { runId } : {}),

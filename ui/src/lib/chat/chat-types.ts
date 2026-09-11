@@ -254,7 +254,13 @@ export type MessageGroup = {
   senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
-  messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  messages: Array<{
+    message: unknown;
+    key: string;
+    duplicateCount?: number;
+    /** Rendered reply content, excluding assistant thinking tags. */
+    hasVisibleContent: boolean;
+  }>;
   visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;

@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -6,9 +5,6 @@ import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
-import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
 // The new-session preview shares text presentation without loading transcript actions or tools.
@@ -70,23 +66,6 @@ export function renderMessageJson(
     </summary>
     <pre class="chat-json-content"><code>${result.text}</code></pre>
   </details>`;
-}
-
-/** Keep internal oversized-history markers out of every user-visible text surface. */
-export function resolveMessageDisplayMarkdown(
-  message: unknown,
-  normalizedMessage: NormalizedMessage,
-): string {
-  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
-  if (metadata?.truncated === true && metadata.reason === "oversized") {
-    return t("chat.messages.tooLargeToDisplay");
-  }
-  const markdown = normalizedMessage.content
-    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
-    .join("\n");
-  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-    ? stripThinkingTags(markdown)
-    : markdown;
 }
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.

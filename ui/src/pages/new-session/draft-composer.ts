@@ -8,6 +8,7 @@ import { resolveIdentityAvatarView } from "../../components/identity-avatar-view
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -31,7 +32,6 @@ import {
   detectJson,
   renderMessageJson,
   renderMessageMarkdown,
-  resolveMessageDisplayMarkdown,
 } from "../chat/components/chat-message-text.ts";
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";

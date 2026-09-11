@@ -97,6 +97,10 @@ beforeEach(() => {
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 type TestMessage = Record<string, unknown>;
+type TestMessageEntry = Omit<MessageGroup["messages"][number], "hasVisibleContent">;
+type TestMessageGroupOverrides = Omit<Partial<MessageGroup>, "messages"> & {
+  messages?: TestMessageEntry[];
+};
 
 function messageTimestamp(message: unknown): number {
   return typeof message === "object" &&
@@ -269,7 +273,7 @@ function renderAssistantMessages(
 
 function renderAssistantMessageEntries(
   container: HTMLElement,
-  entries: MessageGroup["messages"],
+  entries: TestMessageEntry[],
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
   const group = createMessageGroup(entries[0]?.message, "assistant", {
@@ -296,13 +300,15 @@ function renderGroupedMessage(
 function createMessageGroup(
   message: unknown,
   role: string,
-  overrides: Partial<MessageGroup> = {},
+  overrides: TestMessageGroupOverrides = {},
 ): MessageGroup {
   const timestamp = overrides.timestamp ?? messageTimestamp(message);
-  const messages = overrides.messages ?? [{ key: `${role}:${timestamp}:message`, message }];
-  const groups = groupMessages(messages.map((entry) => ({ kind: "message", ...entry }))).filter(
-    (item) => item.kind === "group",
-  );
+  const {
+    messages: sourceMessages = [{ key: `${role}:${timestamp}:message`, message }],
+    ...groupOverrides
+  } = overrides;
+  const groups = sourceMessages.map(prepareMessageGroup);
+  const messages = groups.flatMap((group) => group.messages);
   const visibleContent = groups.some((group) => group.visibleContent === "non-text")
     ? "non-text"
     : groups.some((group) => group.visibleContent === "text")
@@ -316,18 +322,26 @@ function createMessageGroup(
     visibleContent,
     timestamp,
     isStreaming: false,
-    ...overrides,
+    ...groupOverrides,
   };
 }
 
+function prepareMessageGroup(entry: TestMessageEntry): MessageGroup {
+  const [group] = groupMessages([{ kind: "message", ...entry }]);
+  if (group?.kind !== "group" || !group.messages[0]) {
+    throw new Error("expected a prepared message entry");
+  }
+  return group;
+}
+
 function createMessageEntry(key: string, message: unknown): MessageGroup["messages"][number] {
-  return { key, message };
+  return prepareMessageGroup({ key, message }).messages[0]!;
 }
 
 function createToolGroup(
   key: string,
-  messages: MessageGroup["messages"],
-  overrides: Partial<MessageGroup> = {},
+  messages: TestMessageEntry[],
+  overrides: TestMessageGroupOverrides = {},
 ): MessageGroup {
   return createMessageGroup(messages[0]?.message, "tool", { key, messages, ...overrides });
 }

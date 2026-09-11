@@ -29,6 +29,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { renderChat } from "./chat-view.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
@@ -522,6 +526,7 @@ describe("history descriptor observation order", () => {
 it.each([false, true])(
   "publishes Retry history through the page owner (startup: %s)",
   async (startup) => {
+    installTranscriptDomMocks();
     const h = await fixture();
     const pane = createRenderTestChatPane();
     const state = pane.initialize(h.context);
@@ -548,6 +553,7 @@ it.each([false, true])(
       container.remove();
       retireChatMetadataRequests(state);
       await vi.dynamicImportSettled();
+      resetTranscriptTestDom();
     });
 
     const failed = h.begin(state, startup);

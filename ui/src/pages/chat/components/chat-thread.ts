@@ -146,7 +146,7 @@ function renderTranscriptShell(
         >${transcript.liveAnnouncementText}</span
       >
       ${renderChatPositionRail({
-        messages: projection.positionMessages,
+        positions: projection.positionIndex,
         transcript,
         requestUpdate: props.onRequestUpdate ?? (() => {}),
       })}

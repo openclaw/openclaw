@@ -5,11 +5,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
-import { renderMessageMarkdown, resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
+import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 

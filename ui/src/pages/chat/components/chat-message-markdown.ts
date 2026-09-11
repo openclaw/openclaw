@@ -5,6 +5,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
@@ -12,7 +13,6 @@ import {
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
-import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 
 export type MessageReplyTarget = {
   messageId: string;
