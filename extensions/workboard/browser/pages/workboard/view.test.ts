@@ -2116,6 +2116,7 @@ describe("renderWorkboard", () => {
         },
         scopeAgentId,
       });
+      state.cards = [createWorkboardCard({ status: "ready", agentId: scopeAgentId })];
       state.statusFilter = new Set(["ready"]);
       renderView();
       const add = container.querySelector<HTMLButtonElement>(".workboard-column__add");
