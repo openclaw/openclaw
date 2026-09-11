@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 @testable import OpenClawChatUI
@@ -74,7 +75,7 @@ struct WebChatSwiftUISmokeTests {
         #expect(owners.setVisible(
             true,
             owner: ObjectIdentifier(secondWindow),
-            connection: sharedConnectionID) == nil)
+            connection: sharedConnectionID) == true)
         #expect(owners.setVisible(
             true,
             owner: ObjectIdentifier(independentWindow),
@@ -82,7 +83,7 @@ struct WebChatSwiftUISmokeTests {
         #expect(owners.setVisible(
             false,
             owner: ObjectIdentifier(firstWindow),
-            connection: sharedConnectionID) == nil)
+            connection: sharedConnectionID) == true)
         #expect(owners.isVisible(connection: sharedConnectionID))
         #expect(owners.isVisible(connection: independentConnectionID))
         #expect(owners.setVisible(
@@ -169,18 +170,25 @@ struct WebChatSwiftUISmokeTests {
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
         try await withIsolatedWebChatProfile { manager, profile in
+            manager.recordActiveSessionKey("primary-session")
             try await manager.show(profile: profile)
             try await manager.show(profile: profile)
             let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
             #expect(manager._testSessionObserverVisible(connection: connection))
+            let context = try #require(manager.approvalContext(connection: connection))
+            #expect(context.mode == .remote)
+            #expect(context.sessionKey == "main")
+            #expect(context.windowID != nil)
+            #expect(manager.activeSessionKey == "primary-session")
             manager.resetPrimaryConnections()
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
             #expect(manager._testSessionObserverVisible(connection: connection))
             manager.closeGatewayWindows(profileID: profile.id)
             #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
             #expect(!manager._testSessionObserverVisible(connection: connection))
+            #expect(manager.approvalContext(connection: connection) == nil)
         }
     }
 
@@ -229,6 +237,69 @@ struct WebChatSwiftUISmokeTests {
         controller.applyDraftIfEmpty("replacement")
         #expect(controller._testDraft == "Wake up, my friend!")
         controller.close()
+    }
+
+    @Test(arguments: ["same text", " \n", ""])
+    func `native compose preserves draft bytes and reply selection`(_ input: String) async throws {
+        try await self.withNativeController { session, controller in
+            controller.viewModel.input = input
+            let reply = OpenClawChatReplyTarget(messageID: UUID(), text: "quoted text", senderLabel: "User")
+            controller.viewModel.replyTarget = reply
+
+            #expect(throws: OpenClawNativeActionError.self) {
+                try controller.presentNative(.compose(session, draft: "same text"))
+            }
+            #expect(controller.viewModel.input.utf8.elementsEqual(input.utf8))
+            #expect(controller.viewModel.replyTarget == reply)
+            #expect(!controller.hasPresentedNative(.compose(session, draft: "same text")))
+        }
+    }
+
+    @Test func `native inspection opens its selected chat without a sheet or composer mutation`() async throws {
+        try await self.withNativeController { session, controller in
+            let run = OpenClawNativeRunRef(session: session, runID: "selected-run")
+            controller.viewModel.input = "preserved"
+            let request = OpenClawNativeOpenRequest.inspect(run)
+            try controller.presentNative(request)
+            #expect(controller.hasPresentedNative(request))
+            #expect(controller._testWindow?.attachedSheet == nil)
+            #expect(controller.viewModel.input == "preserved")
+            try controller.presentNative(.session(session))
+            #expect(controller.hasPresentedNative(.session(session)))
+            #expect(controller.viewModel.input == "preserved")
+            controller.gatewayTransport?.reportNativeRouteUnavailable()
+            let lossDeadline = ContinuousClock.now + .seconds(3)
+            while controller.viewModel.errorText == nil, ContinuousClock.now < lossDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(controller.viewModel.errorText?.isEmpty == false)
+            #expect(!controller.viewModel.healthOK)
+            #expect(!controller.hasPresentedNative(request))
+            #expect(controller.viewModel.input == "preserved")
+            controller.close()
+            #expect(!controller.hasPresentedNative(request))
+            #expect(controller._testWindow == nil)
+        }
+    }
+
+    private func withNativeController(
+        _ body: (OpenClawNativeSessionRef, WebChatSwiftUIWindowController) async throws -> Void) async throws
+    {
+        let fixture = try MacNativeActionFixture()
+        do {
+            let lease = try await fixture.gateway.acquireServerLease()
+            let controller = WebChatSwiftUIWindowController(
+                nativeSession: fixture.target,
+                connection: fixture.gateway,
+                lease: lease,
+                windowTitle: "Native fixture")
+            defer { controller.close() }
+            try await body(fixture.target, controller)
+        } catch {
+            await fixture.gateway.shutdown()
+            throw error
+        }
+        await fixture.gateway.shutdown()
     }
 
     @Test func `controller explicit agent wins and nil falls back to cached default`() {

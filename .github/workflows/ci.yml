@@ -4619,13 +4619,13 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    # Debug/coverage tests remain required; full validation adds an independent
-    # optimized build whose products are not inputs to the test graph.
+    # Metadata qualification and native Gateway proof need independent build
+    # budgets from the full test suite. Frozen targets retain their phase contract.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target != 'true' && '["release","tests","native-actions"]' || (github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]')) }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
@@ -4740,7 +4740,7 @@ jobs:
 
       - name: Restore Swift build directory cache
         id: swift-build-cache
-        if: needs.preflight.outputs.cache_mode != 'off'
+        if: (matrix.phase == 'tests' || matrix.phase == 'native-actions' || env.HISTORICAL_TARGET == 'true') && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
@@ -4752,6 +4752,7 @@ jobs:
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
+        if: matrix.phase == 'tests' || matrix.phase == 'native-actions' || env.HISTORICAL_TARGET == 'true'
         run: |
           set -euo pipefail
           cache_valid=true
@@ -4764,7 +4765,7 @@ jobs:
           echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
 
       - name: Restore Swift build input timestamps
-        if: steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
+        if: (matrix.phase == 'tests' || matrix.phase == 'native-actions' || env.HISTORICAL_TARGET == 'true') && steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py restore
 
       - name: Show toolchain
@@ -4801,7 +4802,7 @@ jobs:
           fi
 
       - name: Swift build (release)
-        if: matrix.phase == 'release'
+        if: matrix.phase == 'release' && env.HISTORICAL_TARGET == 'true'
         run: |
           set -euo pipefail
           # The macOS lane validates the desktop app build; the CLI product is
@@ -4892,6 +4893,33 @@ jobs:
             exit 1
           fi
 
+      - name: Build macOS native action tests
+        if: matrix.phase == 'native-actions' && env.HISTORICAL_TARGET != 'true'
+        run: swift build --package-path apps/macos --build-system native --enable-code-coverage --build-tests
+
+      - name: Verify macOS native actions against Gateway
+        id: macos-native-action-gateway
+        if: matrix.phase == 'native-actions' && env.HISTORICAL_TARGET != 'true'
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: |
+          pnpm build qaRuntime
+          node --import ./scripts/tsx.mjs scripts/test-native-action-gateway.mts macos
+
+      - name: Verify macOS App Intents metadata
+        id: macos-app-intents
+        if: matrix.phase == 'release' && env.HISTORICAL_TARGET != 'true'
+        run: /bin/bash scripts/test-macos-app-intents.sh "$RUNNER_TEMP/macos-app-intents.json"
+
+      - name: Upload macOS App Intents metadata
+        if: ${{ !cancelled() && steps.macos-app-intents.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-app-intents-metadata
+          path: ${{ runner.temp }}/macos-app-intents.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Render isolated macOS health fixtures
         id: health-render
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
@@ -4918,14 +4946,14 @@ jobs:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
-      # Each phase leaves its source inputs unchanged. Record
-      # their actual metadata with the successful products immediately before save.
+      # Record unchanged test inputs with the successful products immediately
+      # before save; the isolated metadata release build has no reusable products.
       - name: Record Swift build input timestamps
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'
+        if: (matrix.phase == 'tests' || matrix.phase == 'native-actions' || env.HISTORICAL_TARGET == 'true') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py record
 
       - name: Save Swift build directory cache
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
+        if: (matrix.phase == 'tests' || matrix.phase == 'native-actions' || env.HISTORICAL_TARGET == 'true') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build

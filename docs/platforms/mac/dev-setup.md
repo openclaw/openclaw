@@ -51,6 +51,18 @@ then replaces the previous app. `scripts/restart-mac.sh` uses
 the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
 
+Native App Intents packaging requires full Xcode, including
+`appintentsmetadataprocessor`. The Swift build emits constant-value metadata and
+captures the shared Kit archive while it still owns the architecture build.
+Packaging extracts the shared package metadata, then the app metadata into
+`Contents/Resources/Metadata.appintents` before signing. Missing or empty
+metadata fails packaging.
+
+A successful Swift compile is not proof of Shortcuts or Spotlight discovery.
+The native action integration still requires full-Xcode extraction validation
+and discovery checks with a signed, installed app, including cold launch and
+macOS 26 Spotlight. Command Line Tools alone cannot provide that proof.
+
 Each worker keeps native binaries that support its architecture and omits
 incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
 dependencies from triggering macOS compatibility warnings in Apple silicon

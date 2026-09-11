@@ -157,7 +157,7 @@ function evaluateWorkflowExpression(
     runId?: number;
     runNumber?: number;
     sha?: string;
-    steps?: Record<string, { outputs: Record<string, string> }>;
+    steps?: Record<string, { outputs: Record<string, string>; outcome?: string }>;
     targetContextRef?: string;
     targetRef?: string;
     useGithubHostedRunners?: boolean;
@@ -2555,7 +2555,7 @@ NODE
   });
 
   it.each([
-    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
+    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests", "native-actions"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -2590,20 +2590,24 @@ NODE
       expect(job.strategy["max-parallel"]).toBe(2);
       expect(job["continue-on-error"]).not.toBe(true);
       expect(job.needs).toEqual(["preflight"]);
-      const workloads =
+      const workloads: Record<string, string[]> =
         jobName === "macos-swift"
           ? {
               smoke: [],
               release: [
                 "Native state schema version contract",
                 "Swift lint",
-                "Swift build (release)",
+                "Verify macOS App Intents metadata",
               ],
               tests: [
                 "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
                 "OpenClawKit tests",
                 "Swabble tests",
                 "Swift test",
+              ],
+              "native-actions": [
+                "Build macOS native action tests",
+                "Verify macOS native actions against Gateway",
               ],
             }
           : {
@@ -2674,6 +2678,7 @@ NODE
     { eventName: "push", releaseGate: false, full: false },
     { eventName: "workflow_dispatch", releaseGate: true, full: false },
     { eventName: "workflow_dispatch", releaseGate: false, full: true },
+    { eventName: "workflow_dispatch", releaseGate: true, full: false, historical: true },
     { eventName: "workflow_dispatch", releaseGate: false, full: true, historical: true },
   ] as const)(
     "retains macOS tests and one guard/cache owner for %j",
@@ -2697,6 +2702,7 @@ NODE
         runAttempt: 1,
         preflightOutputs: {
           ...manifest.outputs,
+          cache_mode: "read-write",
           cache_write_allowed: "true",
         },
         fileHashes: { "scripts/test-macos-health-render.sh": "present" },
@@ -2704,7 +2710,13 @@ NODE
       const phases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
-      expect(phases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      expect(phases).toEqual(
+        historical
+          ? full
+            ? ["release", "tests"]
+            : ["tests"]
+          : ["release", "tests", "native-actions"],
+      );
       const env = Object.fromEntries(
         Object.entries(job.env).map(([key, value]) => [
           key,
@@ -2729,6 +2741,12 @@ NODE
                   outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
                 },
                 "swiftpm-cache": { outputs: { "cache-hit": "false" } },
+                "swift-build-cache": { outputs: { "cache-hit": "false" } },
+                "validate-swift-build-cache": { outputs: { "cache-valid": "true" } },
+                "macos-app-intents": {
+                  outputs: {},
+                  outcome: !historical && phase === "release" ? "success" : "skipped",
+                },
               },
               ...overrides,
             },
@@ -2751,7 +2769,90 @@ NODE
         expect(selectedPhases(name), name).toEqual(["tests"]);
       }
       expect(selectedPhases("Swabble tests")).toEqual(historical ? [] : ["tests"]);
-      expect(selectedPhases("Swift build (release)")).toEqual(full ? ["release"] : []);
+      for (const name of [
+        "Build macOS native action tests",
+        "Verify macOS native actions against Gateway",
+      ]) {
+        expect(selectedPhases(name), name).toEqual(historical ? [] : ["native-actions"]);
+      }
+      const nativeBuildIndex = job.steps.findIndex(
+        (step: WorkflowStep) => step.name === "Build macOS native action tests",
+      );
+      const nativeGatewayIndex = job.steps.findIndex(
+        (step: WorkflowStep) => step.id === "macos-native-action-gateway",
+      );
+      expect(nativeGatewayIndex).toBe(nativeBuildIndex + 1);
+      expect(job.steps[nativeBuildIndex].run).toBe(
+        "swift build --package-path apps/macos --build-system native --enable-code-coverage --build-tests",
+      );
+      expect(job.steps[nativeGatewayIndex].env).toEqual({ OPENCLAW_BUILD_PRIVATE_QA: "1" });
+      expect(job.steps[nativeGatewayIndex].run.trim().split("\n")).toEqual([
+        "pnpm build qaRuntime",
+        "node --import ./scripts/tsx.mjs scripts/test-native-action-gateway.mts macos",
+      ]);
+      expect(selectedPhases("Swift build (release)")).toEqual(
+        historical && full ? ["release"] : [],
+      );
+      expect(selectedPhases("Verify macOS App Intents metadata")).toEqual(
+        historical ? [] : ["release"],
+      );
+      expect(selectedPhases("Upload macOS App Intents metadata")).toEqual(
+        historical ? [] : ["release"],
+      );
+      for (const outcome of ["failure", "cancelled", "skipped"]) {
+        expect(
+          selectedPhases("Upload macOS App Intents metadata", {
+            steps: { "macos-app-intents": { outputs: {}, outcome } },
+          }),
+        ).toEqual([]);
+      }
+      expect(selectedPhases("Upload macOS App Intents metadata", { cancelled: true })).toEqual([]);
+      expect(selectedPhases("Restore SwiftPM cache")).toEqual(phases);
+      for (const name of [
+        "Restore Swift build directory cache",
+        "Validate Swift build cache",
+        "Save Swift build directory cache",
+      ]) {
+        expect(selectedPhases(name), name).toEqual(
+          historical ? phases : ["tests", "native-actions"],
+        );
+      }
+      for (const name of [
+        "Restore Swift build input timestamps",
+        "Record Swift build input timestamps",
+      ]) {
+        expect(selectedPhases(name), name).toEqual(historical ? [] : ["tests", "native-actions"]);
+      }
+      for (const name of ["Restore SwiftPM cache", "Restore Swift build directory cache"]) {
+        expect(
+          selectedPhases(name, {
+            preflightOutputs: { ...context.preflightOutputs, cache_mode: "off" },
+          }),
+          name,
+        ).toEqual([]);
+      }
+      for (const name of [
+        "Save Swift build directory cache",
+        "Record Swift build input timestamps",
+      ]) {
+        expect(
+          selectedPhases(name, {
+            preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" },
+          }),
+          name,
+        ).toEqual([]);
+        expect(
+          selectedPhases(name, {
+            steps: { "swift-build-cache": { outputs: { "cache-hit": "true" } } },
+          }),
+          name,
+        ).toEqual([]);
+      }
+      expect(
+        selectedPhases("Restore Swift build input timestamps", {
+          steps: { "validate-swift-build-cache": { outputs: { "cache-valid": "false" } } },
+        }),
+      ).toEqual([]);
       expect(selectedPhases("Render isolated macOS health fixtures")).toEqual(
         full ? ["tests"] : [],
       );
@@ -10525,9 +10626,6 @@ exit 1
     );
     const saveBuildCache = macosSwift.steps.find(
       (step: WorkflowStep) => step.name === "Save Swift build directory cache",
-    );
-    expect(restoreMetadata.if).toBe(
-      "steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'",
     );
     expect(restoreMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py restore");
     expect(recordMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py record");

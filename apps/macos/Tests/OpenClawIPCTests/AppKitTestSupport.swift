@@ -8,7 +8,9 @@ enum AppKitTestSupport {
     static let application: NSApplication = {
         let application = NSApplication.shared
         #expect(application.setActivationPolicy(.accessory))
-        application.finishLaunching()
+        if !application.isRunning {
+            application.finishLaunching()
+        }
         return application
     }()
 

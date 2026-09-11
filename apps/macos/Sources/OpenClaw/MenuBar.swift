@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import Darwin
 import Dispatch
@@ -227,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_: Notification) {
         // URL/reopen callbacks can create the dashboard before didFinishLaunching.
         DashboardManager.shared.configure(updater: self.updaterController)
+        if AppLaunchRuntimePlan.current.allowsInteractiveServices {
+            OpenClawNativeActionServices.install(host: NativeActionRouter())
+            OpenClawShortcuts.updateAppShortcutParameters()
+        }
     }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {

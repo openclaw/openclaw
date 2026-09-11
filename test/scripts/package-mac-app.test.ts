@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -23,6 +24,187 @@ import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
+
+describe.skipIf(process.platform === "win32")("App Intents metadata inputs", () => {
+  it("includes enum constants for native session operation parameters", () => {
+    const protocols = path.join(tempDirs.make("openclaw-intents-"), "protocols.json");
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; write_app_intents_protocols "$2"',
+        "metadata",
+        path.resolve(swiftScriptPath),
+        protocols,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(protocols, "utf8"))).toContain("AppEnum");
+  });
+
+  function fixture() {
+    const root = tempDirs.make("openclaw-intents-");
+    const products = path.join(root, "products");
+    const results = path.join(root, "results with \"double\" and 'single' quotes");
+    const captured = path.join(results, "arm64/app-intents");
+    const tools = path.join(root, "tools");
+    const app = path.join(root, "OpenClaw.app");
+    const toolchain = path.join(root, "toolchain");
+    mkdirSync(products);
+    mkdirSync(tools);
+    mkdirSync(path.join(toolchain, "usr/share/swift"), { recursive: true });
+    mkdirSync(path.join(app, "Contents/MacOS"), { recursive: true });
+    writeFileSync(path.join(app, "Contents/MacOS/OpenClaw"), "app binary");
+    writeFileSync(
+      path.join(toolchain, "usr/share/swift/features.json"),
+      JSON.stringify({ features: [{ name: "const-extract-complete-metadata" }] }),
+    );
+    const sources: [string, string, string, string] = [
+      path.join(root, "Plain.swift"),
+      path.join(root, "With spaces.swift"),
+      path.join(root, 'With "quotes".swift'),
+      path.join(root, "With 'quotes'.swift"),
+    ];
+    for (const source of sources) {
+      writeFileSync(source, "// source\n");
+    }
+    const commands = Object.fromEntries(
+      ["OpenClawKit", "OpenClaw"].map((moduleName) => {
+        const object = path.join(products, `${moduleName}.o`);
+        const constants = path.join(products, `${moduleName}.swiftconstvalues`);
+        const outputFileMapPath = path.join(products, `${moduleName}.json`);
+        writeFileSync(object, `${moduleName} original object`);
+        writeFileSync(constants, "[]");
+        writeFileSync(
+          outputFileMapPath,
+          JSON.stringify(Object.fromEntries(sources.map((source) => [source, { object }]))),
+        );
+        return [
+          moduleName,
+          {
+            moduleName,
+            executable: path.join(toolchain, "usr/bin/swiftc"),
+            otherArguments: [
+              "-emit-const-values",
+              "-sdk",
+              "/fixture/sdk",
+              "-target",
+              "arm64-apple-macos14.0",
+            ],
+            outputFileMapPath,
+            sources,
+            objects: [object],
+            wholeModuleOptimization: false,
+          },
+        ];
+      }),
+    );
+    writeFileSync(
+      path.join(products, "description.json"),
+      JSON.stringify({ swiftCommands: commands }),
+    );
+    const extractor = path.join(tools, "appintentsmetadataprocessor");
+    const executables = {
+      xcrun: `const args = process.argv.slice(2);
+if (args[0] === "--find") {
+  console.log(${JSON.stringify(extractor)});
+} else if (args[0] === "libtool") {
+  const objects = fs.readFileSync(args[args.indexOf("-filelist") + 1], "utf8").trimEnd().split("\\n");
+  fs.writeFileSync(args[args.indexOf("-o") + 1], Buffer.concat(objects.map(file => fs.readFileSync(file))));
+} else { throw new Error("unexpected tool"); }`,
+      xcodebuild: 'console.log("Xcode 26.5\\nBuild version 17F1");',
+      appintentsmetadataprocessor: `const args = process.argv.slice(2);
+const arg = name => args[args.indexOf(name) + 1];
+const readList = flag => fs.readFileSync(arg(flag), "utf8").split("\\n").filter(Boolean);
+// Source/constants remove escapes; dependency lists preserve raw path bytes.
+const sourceInputs = ["--source-file-list", "--swift-const-vals-list"]
+  .flatMap(flag => readList(flag).map(file => file.replaceAll("\\\\", "")));
+const dependencies = ["--metadata-file-list", "--static-metadata-file-list"].flatMap(readList);
+const inputs = [...sourceInputs, ...dependencies];
+for (const input of inputs) fs.accessSync(input);
+const binary = fs.readFileSync(arg("--binary-file"), "utf8");
+const output = path.join(arg("--output"), "Metadata.appintents");
+fs.mkdirSync(output, { recursive: true });
+fs.writeFileSync(path.join(output, "extract.actionsdata"), JSON.stringify({ binary, inputs }));`,
+    };
+    for (const [name, body] of Object.entries(executables)) {
+      const file = path.join(tools, name);
+      writeFileSync(
+        file,
+        `#!${process.execPath}\nconst fs = require("node:fs");\nconst path = require("node:path");\n${body}\n`,
+      );
+      chmodSync(file, 0o755);
+    }
+    const run = (operation: string, ...args: string[]) =>
+      spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          'set -euo pipefail; source "$1"; shift; "$@"',
+          "metadata",
+          path.resolve(swiftScriptPath),
+          operation,
+          ...args,
+        ],
+        {
+          encoding: "utf8",
+          env: { HOME: root, PATH: `${tools}:${path.dirname(process.execPath)}:/usr/bin:/bin` },
+        },
+      );
+    const capture = run(
+      "capture_app_intents_inputs",
+      products,
+      captured,
+      "OpenClawKit",
+      "OpenClaw",
+    );
+    expect(capture.status, capture.stderr).toBe(0);
+    return {
+      products,
+      captured,
+      sources,
+      extract: () => run("extract_app_intents_metadata", results, app, "ai.openclaw.test", "arm64"),
+    };
+  }
+
+  it("escapes source lists but preserves raw dependency paths with spaces and quotes", () => {
+    const { captured, sources, extract } = fixture();
+    const result = extract();
+    expect(result.status, result.stderr).toBe(0);
+    const encoded = readFileSync(path.join(captured, "OpenClawKit/sources"), "utf8").split("\n");
+    expect(encoded.slice(0, -1)).toEqual([
+      sources[0],
+      sources[1].replaceAll(" ", "\\ "),
+      sources[2].replaceAll(" ", "\\ ").replaceAll('"', '\\"'),
+      sources[3].replaceAll(" ", "\\ ").replaceAll("'", "\\'"),
+    ]);
+    expect(readFileSync(path.join(captured, "OpenClaw/static-metadata"), "utf8")).toBe(
+      path.join(captured, "OpenClawKit.appintents/Metadata.appintents/extract.actionsdata") + "\n",
+    );
+  });
+
+  it("retains the captured static archive after products are replaced and cleaned", () => {
+    const { products, captured, extract } = fixture();
+    const input = JSON.parse(
+      readFileSync(path.join(captured, "OpenClawKit/inputs.json"), "utf8"),
+    ) as { archive?: string };
+    expect(input.archive).toBeTypeOf("string");
+    const original = readFileSync(input.archive!);
+    writeFileSync(path.join(products, "OpenClawKit.o"), "replacement build object");
+    rmSync(products, { recursive: true });
+    const result = extract();
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(input.archive!)).toEqual(original);
+    const metadata = JSON.parse(
+      readFileSync(
+        path.join(captured, "OpenClawKit.appintents/Metadata.appintents/extract.actionsdata"),
+        "utf8",
+      ),
+    ) as { binary: string };
+    expect(metadata.binary).toBe("OpenClawKit original object");
+  });
+});
 
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
@@ -752,7 +934,7 @@ function runRealCompiledPeekabooHarness(
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
-  const end = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
+  const end = script.indexOf('echo "Extracting native Shortcuts and Spotlight metadata"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);

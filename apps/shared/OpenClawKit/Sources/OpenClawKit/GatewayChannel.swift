@@ -162,7 +162,7 @@ public actor GatewayChannelActor {
         return self.lastAuthBinding?.binding
     }
 
-    func admittedHTTPContext(
+    public func admittedHTTPContext(
         ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayAdmittedHTTPContext?
     {
         guard self.isConnected(connectionGeneration: expectedGeneration),

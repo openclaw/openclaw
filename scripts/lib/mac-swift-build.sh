@@ -24,6 +24,135 @@ helper_bin_for_arch() {
   echo "$(helper_products_for_arch "$1")/$MLX_TTS_HELPER_PRODUCT"
 }
 
+write_app_intents_protocols() {
+  printf '%s\n' '["AppIntent","OpenIntent","AppEntity","AppEnum","AppIntentsPackage","AppShortcutsProvider","EntityQuery","EntityStringQuery"]' > "$1"
+}
+
+capture_app_intents_inputs() {
+  local products="$1" output="$2"
+  shift 2
+  node - "$products" "$output" "$@" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const [products, output, ...modules] = process.argv.slice(2);
+const description = JSON.parse(fs.readFileSync(path.join(products, "description.json"), "utf8"));
+for (const name of modules) {
+  const command = Object.values(description.swiftCommands).find((value) => value.moduleName === name);
+  if (!command || !command.otherArguments.includes("-emit-const-values")) {
+    throw new Error(`Missing constant-value compilation for ${name}`);
+  }
+  const fileMap = JSON.parse(fs.readFileSync(command.outputFileMapPath, "utf8"));
+  const replaceExtension = (file) => file.slice(0, -path.extname(file).length) + ".swiftconstvalues";
+  // Swift's driver emits sidecars beside each primary object without requiring
+  // SwiftPM to know the supplemental output type. WMO has one module sidecar.
+  const constants = command.wholeModuleOptimization
+    ? [fileMap[""]?.["const-values"] ?? replaceExtension(fileMap[""].object)]
+    : command.sources.map((source) => fileMap[source]["const-values"] ?? replaceExtension(fileMap[source].object));
+  const directory = path.join(output, name);
+  fs.mkdirSync(directory, { recursive: true });
+  const copied = constants.map((file, index) => {
+    const data = fs.readFileSync(file);
+    JSON.parse(data.toString("utf8"));
+    const target = path.join(directory, `${index}.swiftconstvalues`);
+    fs.writeFileSync(target, data);
+    return target;
+  });
+  const argument = (flag) => {
+    const index = command.otherArguments.indexOf(flag);
+    if (index < 0) throw new Error(`Missing ${flag} in ${name} compilation`);
+    return command.otherArguments[index + 1];
+  };
+  let archive;
+  if (name === "OpenClawKit") {
+    // The architecture lock ends before metadata extraction. Archive now so a
+    // later build or cleanup cannot replace the binary paired with these constants.
+    archive = path.join(directory, `${name}.a`);
+    const objects = path.join(directory, "objects");
+    if (command.objects.some((file) => /[\r\n]/.test(file))) throw new Error("An object path contains a newline");
+    fs.writeFileSync(objects, command.objects.join("\n") + "\n");
+    execFileSync("xcrun", ["libtool", "-static", "-o", archive, "-filelist", objects], { stdio: "inherit" });
+    fs.unlinkSync(objects);
+    if (!fs.statSync(archive).size) throw new Error(`Empty App Intents archive for ${name}`);
+  }
+  fs.writeFileSync(path.join(directory, "inputs.json"), JSON.stringify({
+    module: name,
+    compiler: command.executable,
+    sdk: argument("-sdk"),
+    triple: argument("-target"),
+    // The isolated package symlinks are removed after the build. The source
+    // owner and generated resource accessors remain available for extraction.
+    sources: command.sources.map((file) => fs.realpathSync(file)),
+    archive,
+    constants: copied,
+  }));
+}
+NODE
+}
+
+extract_app_intents_metadata() {
+  local results="$1" app="$2" bundle_id="$3"
+  shift 3
+  node - "$results" "$app" "$bundle_id" "$@" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const [results, app, bundleID, ...architectures] = process.argv.slice(2);
+const arch = [...architectures].sort()[0];
+const root = path.join(results, arch, "app-intents");
+const read = (name, architecture = arch) => JSON.parse(fs.readFileSync(
+  path.join(results, architecture, "app-intents", name, "inputs.json"), "utf8"));
+const kit = read("OpenClawKit");
+const main = read("OpenClaw");
+const extractor = execFileSync("xcrun", ["--find", "appintentsmetadataprocessor"], { encoding: "utf8" }).trim();
+const xcode = execFileSync("xcodebuild", ["-version"], { encoding: "utf8" });
+const buildVersion = /^Build version (\S+)$/m.exec(xcode)?.[1];
+if (!buildVersion) throw new Error("Full Xcode is required for App Intents metadata extraction");
+const toolchain = path.dirname(path.dirname(path.dirname(main.compiler)));
+const features = JSON.parse(fs.readFileSync(path.join(toolchain, "usr/share/swift/features.json"), "utf8"));
+if (!features.features.some((feature) => feature.name === "const-extract-complete-metadata")) {
+  throw new Error("The selected Swift toolchain cannot extract complete App Intents metadata");
+}
+const list = (file, entries, escaped = false) => {
+  if (entries.some((entry) => /[\r\n]/.test(entry))) throw new Error("A metadata input path contains a newline");
+  // Dependency lists contain raw paths. Only source/constants lists use
+  // SWBUtil.String.quotedStringListRepresentation and lose backslash escapes.
+  const lines = escaped
+    ? entries.map((entry) => entry.length ? entry.replace(/[ \t\\\"']/g, "\\$&") : '""')
+    : entries;
+  fs.writeFileSync(file, lines.map((entry) => entry + "\n").join(""));
+  return file;
+};
+const empty = list(path.join(root, "empty-file-list"), []);
+const staticOutput = path.join(root, "OpenClawKit.appintents");
+const run = (input, output, binary, dependencies, isStatic) => {
+  if (input.compiler !== main.compiler || input.sdk !== main.sdk) throw new Error("Metadata toolchain inputs differ");
+  const deployment = /-apple-macosx?([0-9.]+)$/.exec(input.triple)?.[1];
+  if (!deployment) throw new Error(`Unsupported metadata target triple: ${input.triple}`);
+  const directory = path.join(root, input.module);
+  const triples = isStatic ? [input.triple] : architectures.map((value) => read(input.module, value).triple);
+  const args = [
+    "--module-name", input.module, "--toolchain-dir", toolchain, "--sdk-root", input.sdk,
+    "--xcode-version", buildVersion, "--platform-family", "macOS", "--deployment-target", deployment,
+    "--output", output, "--binary-file", binary,
+    "--source-file-list", list(path.join(directory, "sources"), input.sources, true),
+    "--swift-const-vals-list", list(path.join(directory, "constants"), input.constants, true),
+    "--metadata-file-list", empty,
+    "--static-metadata-file-list", list(path.join(directory, "static-metadata"), dependencies),
+    "--compile-time-extraction", "--deployment-aware-processing", "--no-app-shortcuts-localization",
+    ...triples.flatMap((triple) => ["--target-triple", triple]),
+    ...(isStatic ? ["--force"] : ["--bundle-identifier", bundleID]),
+  ];
+  execFileSync(extractor, args, { stdio: "inherit" });
+  const metadata = path.join(output, "Metadata.appintents", "extract.actionsdata");
+  if (!fs.statSync(metadata).size) throw new Error(`Empty App Intents metadata for ${input.module}`);
+  return metadata;
+};
+const kitMetadata = run(kit, staticOutput, kit.archive, [], true);
+run(main, path.join(app, "Contents/Resources"), path.join(app, "Contents/MacOS/OpenClaw"), [kitMetadata], false);
+NODE
+}
+
 build_mlx_tts_helper() {
   local arch="$1"
   shift
@@ -474,10 +603,14 @@ build_swift_architecture() {
   patch_swiftpm_resource_lookups "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   verify_snapshot_swift_lock
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  local protocols="$SWIFT_WORK_ROOT/app-intents-protocols.json"
+  write_app_intents_protocols "$protocols"
+  local metadata_flags=(-Xswiftc -emit-const-values -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-file -Xswiftc -Xfrontend -Xswiftc "$protocols")
+  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks "${metadata_flags[@]}"
+  capture_app_intents_inputs "$BUILD_PATH/$BUILD_CONFIG" "$SWIFT_WORK_ROOT/app-intents" OpenClawKit OpenClaw
   verify_snapshot_swift_lock
   echo "🔨 Building openclaw-mac ($BUILD_CONFIG) [$arch]"
-  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build -c "$BUILD_CONFIG" --jobs "$SWIFT_BUILD_JOBS" --product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks "${metadata_flags[@]}"
   verify_snapshot_swift_lock
   arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   printf '%s\n' "$arch_peekaboo_commit" > "$SWIFT_WORK_ROOT/peekaboo-commit"

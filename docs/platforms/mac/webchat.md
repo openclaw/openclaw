@@ -3,6 +3,7 @@ summary: "How the mac app embeds the gateway WebChat and how to debug it"
 read_when:
   - Debugging mac WebChat view or loopback port
   - Choosing colors for native chat sessions
+  - Using native session actions in Shortcuts or checking Spotlight availability
 title: "WebChat (macOS)"
 ---
 
@@ -160,6 +161,54 @@ Disable the feature entirely under **Dashboard → Settings → This Mac → App
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: uses the configured direct `ws://`/`wss://` route or the app-managed SSH tunnel as the data plane.
+
+## Native session actions
+
+Mac integration is in progress. The shared actions below are the intended
+Shortcuts surface; macOS 26 Spotlight is an intended target, not verified or
+shipped availability. Signed, installed-app discovery and both running-app
+and cold-launch Spotlight behavior still need validation.
+
+Shortcuts discovery requires a packaged app containing App Intents metadata.
+A successful Swift build alone does not establish discovery; packaging requires
+full Xcode, not only Command Line Tools.
+
+In a build with the Mac integration and packaged metadata, open OpenClaw,
+connect the intended Gateway and account, then choose an action in
+**Shortcuts > Apps > OpenClaw**:
+
+- **Open Session** opens the selected Gateway, account, agent, and session.
+- **Compose Message** opens the selected chat with an optional unsent draft.
+- **Send Message** confirms the destination before sending supplied text and
+  returns a **Run** with a continuation to that exact chat.
+- **Inspect Run** reads matching Gateway facts for that run and opens its chat.
+
+The saved selection carries the canonical account ID, not authorization.
+Unlock when prompted and allow OpenClaw to come to the foreground for chat
+presentation and send confirmation. Actions use existing authentication, chat
+settings, and approvals; confirming a send does not bypass agent-command
+approvals. Quick Chat retains its separate behavior described above.
+
+**Accepted** is not completion. Follow a long-running task in the returned
+run's chat. Inspection only reports active or terminal status backed by facts
+for the exact run; a receipt or reply alone does not prove completion. Bounded
+history can leave an older run unobserved or its status unknown.
+
+Native sends do **not** use the durable offline outbox and never automatically
+repeat an uncertain send. The same in-flight submission is one-shot. An
+intentional rerun is a new send, even with identical text; there is no
+cross-launch deduplication guarantee.
+
+### Troubleshoot native actions
+
+- **Actions missing:** verify that the app build includes the Mac integration
+  and packaged metadata. Spotlight discovery remains unproven.
+- **Unconfigured or disconnected:** open the existing connection controls and
+  connect the intended Gateway. Nothing is queued for later delivery.
+- **Account changed or selection invalid:** select the session again under
+  the intended account; a saved action must not switch to another account.
+- **Delivery unconfirmed or run unknown:** inspect the exact chat before
+  deciding whether to send again; do not wrap the action in automatic retries.
 
 ## Launch and debugging
 

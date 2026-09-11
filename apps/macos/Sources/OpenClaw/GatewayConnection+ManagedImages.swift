@@ -10,8 +10,16 @@ extension GatewayConnection {
         artifactId: String,
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?,
-        ifCurrentServerLease lease: ServerLease) async throws -> OpenClawChatLoadedMedia?
+        ifCurrentServerLease lease: ServerLease,
+        expectedProfileId: String? = nil,
+        isCurrent: @escaping @Sendable () -> Bool = { true }) async throws -> OpenClawChatLoadedMedia?
     {
+        let authorityIsCurrent: @Sendable () -> Bool = { [weak self] in
+            isCurrent() && self?.serverLeaseMatchesCurrentState(lease) == true
+        }
+        guard expectedProfileId == nil || authorityIsCurrent() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         guard kind.acceptsManagedArtifactID(artifactId) else { return nil }
         let request = OpenClawChatGatewayRequests.artifactDownload(
             sessionKey: sessionKey,
@@ -21,7 +29,9 @@ extension GatewayConnection {
             method: request.method,
             params: request.params,
             timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: lease)
+            ifCurrentServerLease: lease,
+            expectedProfileId: expectedProfileId)
+        guard authorityIsCurrent() else { throw OpenClawChatTransportSendError.notDispatched }
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
         let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
         let declaredMIME = response.artifact.mimetype?.lowercased()
@@ -35,25 +45,36 @@ extension GatewayConnection {
                   let data = Data(base64Encoded: encoded),
                   data.count <= maximumBytes
             else { return nil }
-            guard await self.isCurrentServerLease(lease) else {
+            guard await self.isCurrentServerLease(lease), authorityIsCurrent() else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
             return .data(OpenClawChatMediaData(data: data, mimeType: declaredMIME))
         }
+        let httpContext: GatewayAdmittedHTTPContext?
+        if expectedProfileId != nil {
+            guard let admitted = await self.admittedHTTPContext(ifCurrentServerLease: lease),
+                  authorityIsCurrent()
+            else { throw OpenClawChatTransportSendError.notDispatched }
+            httpContext = admitted
+        } else {
+            httpContext = nil
+        }
         guard let ticketedPath = response.url?.trimmingCharacters(in: .whitespacesAndNewlines),
               let url = OpenClawChatMediaURL.resolve(
-                  gatewayURL: lease.route.url,
+                  gatewayURL: httpContext?.gatewayURL ?? lease.route.url,
                   ticketedPath: ticketedPath,
                   playback: playback)
         else { return nil }
 
-        let canStreamDirectly = kind == .video &&
+        // Native playback must remain inside the bounded, authority-checked
+        // transfer; handing AVPlayer a URL would escape its HTTP controls.
+        let canStreamDirectly = expectedProfileId == nil && kind == .video &&
             url.scheme?.lowercased() == "https" &&
             lease.route.browserSession == nil &&
             lease.route.tls == nil &&
             declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
-            guard await self.isCurrentServerLease(lease) else {
+            guard await self.isCurrentServerLease(lease), authorityIsCurrent() else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
             return .stream(OpenClawChatMediaStream(
@@ -70,27 +91,21 @@ extension GatewayConnection {
         }
         // Artifact tickets do not bypass the ingress issuer. Reuse the socket's
         // exact session and reject redirects before any credential can leave its authority.
-        for (name, value) in try lease.route.browserSession?.headers(for: url) ?? [:] {
+        let (headers, tls) = try Self.managedMediaHTTPPolicy(url: url, lease: lease, context: httpContext)
+        for (name, value) in headers {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }
-        let tls = lease.route.tls?.params ?? GatewayTLSParams(
-            required: lease.route.browserSession != nil,
-            expectedFingerprint: nil,
-            allowTOFU: false,
-            storeKey: nil)
         let session = GatewayTLSPinningSession(
             params: tls,
-            allowsRedirects: lease.route.browserSession == nil,
-            allowsStoredCredentials: lease.route.browserSession == nil)
+            allowsRedirects: expectedProfileId == nil && lease.route.browserSession == nil,
+            allowsStoredCredentials: expectedProfileId == nil && lease.route.browserSession == nil)
         defer { session.finishTasksAndInvalidate() }
-        guard await self.isCurrentServerLease(lease) else {
+        guard await self.isCurrentServerLease(lease), authorityIsCurrent() else {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let transferID = UUID()
         let transfer = Task { [urlRequest] in
-            try await session.data(for: urlRequest, maximumBytes: maximumBytes) { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
-            }
+            try await session.data(for: urlRequest, maximumBytes: maximumBytes, isCurrent: authorityIsCurrent)
         }
         self.managedMediaTransfers[transferID] = transfer
         defer { self.managedMediaTransfers[transferID] = nil }
@@ -99,7 +114,7 @@ extension GatewayConnection {
         } onCancel: {
             transfer.cancel()
         }
-        guard await self.isCurrentServerLease(lease) else {
+        guard await self.isCurrentServerLease(lease), authorityIsCurrent() else {
             throw OpenClawChatTransportSendError.notDispatched
         }
         guard let http = urlResponse as? HTTPURLResponse else { return nil }
@@ -124,5 +139,32 @@ extension GatewayConnection {
         case .image: 12 * 1024 * 1024
         case .audio, .video: 16 * 1024 * 1024
         }
+    }
+
+    private static func managedMediaHTTPPolicy(
+        url: URL,
+        lease: ServerLease,
+        context: GatewayAdmittedHTTPContext?) throws -> (headers: [String: String], tls: GatewayTLSParams)
+    {
+        if let context {
+            try lease.route.browserSession?.validate(for: url)
+            guard let target = GatewayTLSAuthority(url: url),
+                  let owner = GatewayTLSAuthority(url: context.gatewayURL),
+                  target.host == owner.host, target.port == owner.port,
+                  context.customHeaders.isEmpty || target.scheme == "https"
+            else { throw GatewayBrowserSessionError.wrongOrigin }
+            return (context.customHeaders, GatewayTLSParams(
+                required: target.scheme == "https",
+                expectedFingerprint: context.tlsFingerprintSHA256,
+                allowTOFU: false,
+                storeKey: nil))
+        }
+        return try (
+            lease.route.browserSession?.headers(for: url) ?? [:],
+            lease.route.tls?.params ?? GatewayTLSParams(
+                required: lease.route.browserSession != nil,
+                expectedFingerprint: nil,
+                allowTOFU: false,
+                storeKey: nil))
     }
 }

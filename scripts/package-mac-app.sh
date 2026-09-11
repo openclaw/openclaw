@@ -252,6 +252,10 @@ PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
 PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
 
 require_swift_toolchain
+xcrun --find appintentsmetadataprocessor >/dev/null || {
+  echo "ERROR: Full Xcode is required to package native Shortcuts and Spotlight metadata." >&2
+  exit 1
+}
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
@@ -581,6 +585,9 @@ stop_packaged_app_if_running() {
   echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
   return 1
 }
+
+echo "Extracting native Shortcuts and Spotlight metadata"
+extract_app_intents_metadata "$SWIFT_BUILD_RESULTS" "$APP_ROOT" "$BUNDLE_ID" "${BUILD_ARCHS[@]}"
 
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
   echo "🔏 Signing bundle with explicit SIGN_IDENTITY"

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -65,6 +66,8 @@ const IOS_WIDGET_CASES = {
   controlProfile: { allowed: true, requests: 1 },
 } as const;
 type IOSWidgetCaseID = keyof typeof IOS_WIDGET_CASES;
+const WIDGET_CASES = { allowed: true, profile: false, controlProfile: true } as const;
+type WidgetCaseID = keyof typeof WIDGET_CASES;
 const SIGN_IN_SCOPES = [...SKILL_LIBRARY_WRITER_SCOPES, "operator.admin"];
 const SIGN_IN_METHODS = [
   "models.authStatus",
@@ -104,6 +107,12 @@ const SIGN_IN_CHECKPOINTS = {
   },
 } as const;
 type SignInCheckpoint = keyof typeof SIGN_IN_CHECKPOINTS;
+const APPROVAL_CASES = ["allowed", "visible", "queued", "control"] as const;
+type ApprovalCaseID = (typeof APPROVAL_CASES)[number];
+type ApprovalFixture = {
+  gatewayURL: string;
+  requests: Record<ApprovalCaseID, { id: string; sessionKey: string; command: string }>;
+};
 const CONTROL_ACTIONS = [
   "pair",
   "revoke-acl",
@@ -115,11 +124,15 @@ const CONTROL_ACTIONS = [
   "release-response",
   "media-start",
   "media-complete",
+  "pair-approval",
   "pair-signin",
   "signin-config",
   "signin-checkpoint",
   "widget-start",
   "widget-complete",
+  "approval-allowed",
+  "approval-retired",
+  "approval-complete",
 ] as const;
 type ControlProgress = {
   action: (typeof CONTROL_ACTIONS)[number] | "unknown";
@@ -151,6 +164,7 @@ export type NativeActionFixtureDescriptor = {
     sha256: string;
     sessions: Record<MediaSession, WireMedia>;
   };
+  approvals?: ApprovalFixture;
 };
 
 async function readBody(request: AsyncIterable<Buffer | string>) {
@@ -307,6 +321,7 @@ export async function withNativeActionGateway(
   let completedCases: CaseID[] = [];
   let completedMedia: MediaCaseID[] = [];
   let completedWidgets: IOSWidgetCaseID[] = [];
+  let completedApprovals = false;
   let signInSnapshot: (() => { entered: number; settled: number }) | undefined;
   let signInVerified = false;
   await runProfileWireProof(
@@ -347,16 +362,49 @@ export async function withNativeActionGateway(
         sha256: createHash("sha256").update(png).digest("hex"),
         sessions: {} as Record<MediaSession, WireMedia>,
       };
+      let approvalProxy: Awaited<ReturnType<typeof startQaGatewayRpcProxy>> | undefined;
       let signInProxy: Awaited<ReturnType<typeof startQaGatewayRpcProxy>> | undefined;
       const signInCheckpoints: SignInCheckpoint[] = [];
       let signInEventIndex = 0;
       let signInConnection: number | undefined;
+      let approvals: ApprovalFixture | undefined;
+      let approvalPhase: "pending" | "allowed" | "retired" | "complete" = "pending";
+      let approvalRetirementStart = 0;
+      const joinApprovalResponses = async (count: number) => {
+        assert(approvalProxy);
+        const deadline = performance.now() + 10_000;
+        while (performance.now() < deadline) {
+          const events = approvalProxy.snapshot().events;
+          const requests = events.filter(
+            (event: { kind: string; method?: string }) =>
+              event.kind === "rpc-request" && event.method === "exec.approval.resolve",
+          );
+          const completedRequests = requests.filter(
+            (request: { connection: number; requestId: string }) =>
+              events.some(
+                (event: { kind: string; connection?: number; requestId?: string }) =>
+                  event.kind === "rpc-response" &&
+                  event.connection === request.connection &&
+                  event.requestId === request.requestId,
+              ),
+          );
+          if (completedRequests.length >= count) {
+            return;
+          }
+          await delay(Math.max(0, Math.min(50, deadline - performance.now())));
+        }
+        assert.fail("native approval response observation timed out");
+      };
       const pairedDevices = new Set<string>();
       const pending = new Set<Promise<void>>();
       let firstControlFailure: Error | undefined;
       const cases = {} as Record<CaseID, WireCase>;
       const commands = new Map<CaseID, { sentinel: string; command: string }>();
       const caseKeys = Object.keys(CASES) as CaseID[];
+      const mediaCaseKeys: MediaCaseID[] =
+        platform === "ios"
+          ? (Object.keys(MEDIA_CASES) as MediaCaseID[])
+          : ["aclAllowed", "acl", "controlACL", "profileAllowed", "profile", "controlProfile"];
       const groups = new Map<string, string>();
       const journal = async (): Promise<MockOpenAiRequestSnapshot[]> => {
         const response = await fetch(`${provider.baseUrl}/debug/requests?after=0`, {
@@ -497,35 +545,60 @@ export async function withNativeActionGateway(
             return { completed: id };
           }
           case "widget-start": {
-            assert(platform === "ios");
-            assert(typeof input.case === "string" && Object.hasOwn(IOS_WIDGET_CASES, input.case));
+            const widgetCases = platform === "ios" ? IOS_WIDGET_CASES : WIDGET_CASES;
+            assert(typeof input.case === "string" && Object.hasOwn(widgetCases, input.case));
             const id = input.case as IOSWidgetCaseID;
             assert(
               !widgetAttempt && !widgetsCompleted.has(id),
               "overlapping or repeated widget case",
             );
             const before = proxy.snapshot();
-            const admission = before.events.findLast(
-              (event: { kind: string }) => event.kind === "connect-success",
-            );
-            assert(
-              typeof admission?.canvasOrigin === "string",
-              "native hello omitted canvas authority",
-            );
+            if (platform === "ios") {
+              const admission = before.events.findLast(
+                (event: { kind: string }) => event.kind === "connect-success",
+              );
+              assert(
+                typeof admission?.canvasOrigin === "string",
+                "native hello omitted canvas authority",
+              );
+              widgetAttempt = { id, before };
+              return { started: id, canvasOrigin: admission.canvasOrigin };
+            }
             widgetAttempt = { id, before };
-            return { started: id, canvasOrigin: admission.canvasOrigin };
+            return { started: id, canvasOrigin: `http://127.0.0.1:${instance.port}` };
           }
           case "widget-complete": {
             assert(widgetAttempt && widgetAttempt.id === input.case, "widget case was not started");
             const { id, before } = widgetAttempt;
-            assert.equal(input.outcome, IOS_WIDGET_CASES[id].allowed ? "allowed" : "rejected");
-            widgetsCompleted.set(id, proxy.snapshot().events.slice(before.events.length));
+            const events = proxy.snapshot().events.slice(before.events.length);
+            if (platform === "ios") {
+              assert.equal(input.outcome, IOS_WIDGET_CASES[id].allowed ? "allowed" : "rejected");
+            } else {
+              const responses = events.filter(
+                (event: { kind: string; method?: string }) =>
+                  event.kind === "rpc-response" && event.method === "plugin.surface.refresh",
+              );
+              const allowed = WIDGET_CASES[id as WidgetCaseID];
+              if (allowed) {
+                assert.equal(responses.length, 1, "fresh widget surface was not requested");
+                assert.equal(responses[0].ok, true);
+              } else {
+                // A sibling bound request can already have retired this window.
+                // Either local refusal or one fresh denial must yield no replacement.
+                assert(
+                  responses.length <= 1 && responses.every((event: { ok: boolean }) => !event.ok),
+                );
+              }
+              assert.equal(input.outcome, allowed ? "allowed" : "rejected");
+            }
+            widgetsCompleted.set(id, events);
             widgetAttempt = undefined;
             return { completed: id };
           }
           case "media-start": {
             assert(typeof input.case === "string" && Object.hasOwn(MEDIA_CASES, input.case));
             const id = input.case as MediaCaseID;
+            assert(mediaCaseKeys.includes(id), "unexpected platform media case");
             assert(!mediaAttempt && !mediaCompleted.has(id), "overlapping or repeated media case");
             mediaAttempt = { id, before: proxy.snapshot() };
             return { started: id };
@@ -549,8 +622,32 @@ export async function withNativeActionGateway(
                 (event: { kind: string; method?: string }) =>
                   event.kind === "rpc-response" && event.method === "artifacts.download",
               );
-            assert.equal(responses.length, 1, `${id}: fresh artifact authorization response`);
-            assert.equal(responses[0].ok, expected === 1, `${id}: artifact authorization`);
+            const locallyRetired = input.locallyRetired === "true";
+            assert(
+              input.locallyRetired === undefined ||
+                (platform === "macos" && id === "profile" && locallyRetired),
+              "local media refusal is only valid for the retired Mac profile route",
+            );
+            // Mac copies share terminal route retirement. The native test must
+            // observe that owner state and notDispatched before reporting it.
+            assert.equal(
+              responses.length,
+              locallyRetired ? 0 : 1,
+              `${id}: fresh artifact authorization response`,
+            );
+            if (locallyRetired) {
+              assert(
+                !after.events
+                  .slice(before.events.length)
+                  .some(
+                    (event: { kind: string; method?: string }) =>
+                      event.kind === "rpc-request" && event.method === "artifacts.download",
+                  ),
+                "locally retired media route dispatched authorization",
+              );
+            } else {
+              assert.equal(responses[0].ok, expected === 1, `${id}: artifact authorization`);
+            }
             if (id === "retiredResult") {
               const held = after.events
                 .slice(before.events.length)
@@ -577,10 +674,94 @@ export async function withNativeActionGateway(
             mediaAttempt = undefined;
             return { completed: id };
           }
+          case "approval-allowed": {
+            assert(approvalProxy && approvalPhase === "pending");
+            // The requester can observe the decision before the presenter's ACK arrives.
+            // Join observed completions, including errors; the assertions still own success.
+            await joinApprovalResponses(1);
+            const events = approvalProxy.snapshot().events;
+            const resolved = events.filter(
+              (event: { kind: string; method?: string }) =>
+                event.kind === "rpc-response" && event.method === "exec.approval.resolve",
+            );
+            assert.equal(resolved.length, 1);
+            assert.equal(resolved[0].ok, true);
+            approvalRetirementStart = events.length;
+            approvalPhase = "allowed";
+            return { completed: "allowed" };
+          }
+          case "approval-retired": {
+            assert(approvalProxy && approvals && approvalPhase === "allowed");
+            assert(
+              !approvalProxy
+                .snapshot()
+                .events.slice(approvalRetirementStart)
+                .some(
+                  (event: { kind: string; method?: string }) =>
+                    event.kind === "rpc-request" && event.method === "exec.approval.resolve",
+                ),
+              "retargeted approval attempted resolution",
+            );
+            const pendingApprovals = await admin.request<Array<{ id: string }>>(
+              "exec.approval.list",
+              {},
+            );
+            for (const id of ["visible", "queued", "control"] as const) {
+              assert(pendingApprovals.some((entry) => entry.id === approvals!.requests[id].id));
+            }
+            // Explicit cleanup is outside the observed native sockets and only
+            // follows proof that both retired requests remain unresolved.
+            for (const id of ["visible", "queued"] as const) {
+              await admin.request("exec.approval.resolve", {
+                id: approvals.requests[id].id,
+                decision: "deny",
+              });
+            }
+            approvalPhase = "retired";
+            return { completed: "retired" };
+          }
+          case "approval-complete": {
+            assert(approvalProxy && approvals && approvalPhase === "retired");
+            await joinApprovalResponses(2);
+            const events = approvalProxy.snapshot().events;
+            for (const [method, count] of [
+              ["exec.approval.request", 4],
+              ["exec.approval.waitDecision", 4],
+              ["exec.approval.resolve", 2],
+            ] as const) {
+              for (const kind of ["rpc-request", "rpc-response"]) {
+                const matching = events.filter(
+                  (event: { kind: string; method?: string }) =>
+                    event.kind === kind && event.method === method,
+                );
+                assert.equal(matching.length, count);
+                if (kind === "rpc-response") {
+                  assert(matching.every((event: { ok: boolean }) => event.ok));
+                }
+              }
+            }
+            const pendingApprovals = await admin.request<Array<{ id: string }>>(
+              "exec.approval.list",
+              {},
+            );
+            assert(
+              !pendingApprovals.some((entry) =>
+                Object.values(approvals!.requests).some((spec) => spec.id === entry.id),
+              ),
+            );
+            approvalPhase = "complete";
+            return { completed: "approvals" };
+          }
           case "pair":
+          case "pair-approval":
           case "pair-signin": {
             progress.phase = "connect-record";
-            const pairingProxy = input.action === "pair" ? proxy : signInProxy;
+            const pairingProxy =
+              input.action === "pair"
+                ? proxy
+                : input.action === "pair-signin"
+                  ? signInProxy
+                  : approvalProxy;
             assert(pairingProxy);
             const connection = pairingProxy
               .snapshot()
@@ -752,6 +933,42 @@ export async function withNativeActionGateway(
             mediaPaths.add(new URL(download.url, "http://127.0.0.1").pathname);
             media.sessions[session] = { sessionKey, artifactID: artifact.id };
           }
+          if (platform === "macos") {
+            approvalProxy = await startQaGatewayRpcProxy({
+              backendPort: instance.port,
+              repoRoot: process.cwd(),
+              token: controlToken,
+              recordPath: undefined,
+              observedMethods: [
+                "exec.approval.request",
+                "exec.approval.waitDecision",
+                "exec.approval.resolve",
+              ],
+              upstreamHeaders: {
+                "x-forwarded-user": SKILL_LIBRARY_ALICE,
+                "x-forwarded-for": "198.51.100.40",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": `127.0.0.1:${instance.port}`,
+                "x-openclaw-scopes": [...SKILL_LIBRARY_WRITER_SCOPES, "operator.approvals"].join(
+                  ",",
+                ),
+              },
+            });
+            approvals = {
+              gatewayURL: approvalProxy.url,
+              requests: Object.fromEntries(
+                APPROVAL_CASES.map((id) => [
+                  id,
+                  {
+                    id: randomUUID(),
+                    sessionKey:
+                      cases[id === "control" ? "controlACL" : "controlProfile"].sessionKey,
+                    command: `printf native-approval-${id}`,
+                  },
+                ]),
+              ) as ApprovalFixture["requests"],
+            };
+          }
           if (platform === "ios") {
             assert(provider.signIn);
             signInSnapshot = provider.signIn.snapshot;
@@ -787,6 +1004,7 @@ export async function withNativeActionGateway(
               bobProfileID: bobId,
               cases,
               media,
+              approvals,
             });
           } catch (error) {
             console.error(
@@ -806,6 +1024,8 @@ export async function withNativeActionGateway(
             [...caseKeys].toSorted(),
             "missing native wire cases",
           );
+          assert.deepEqual([...mediaCompleted].toSorted(), mediaCaseKeys.toSorted());
+          assert(!mediaAttempt, "unfinished native media case");
           if (platform === "ios") {
             assert(signInProxy);
             assert.deepEqual(signInCheckpoints, Object.keys(SIGN_IN_CHECKPOINTS));
@@ -839,8 +1059,6 @@ export async function withNativeActionGateway(
             signInVerified = true;
           }
           if (platform === "ios") {
-            assert.deepEqual([...mediaCompleted].toSorted(), Object.keys(MEDIA_CASES).toSorted());
-            assert(!mediaAttempt, "unfinished native media case");
             assert.deepEqual(
               [...widgetsCompleted.keys()].toSorted(),
               Object.keys(IOS_WIDGET_CASES).toSorted(),
@@ -901,6 +1119,44 @@ export async function withNativeActionGateway(
               }
             }
           }
+          if (platform === "macos") {
+            assert.deepEqual(
+              [...widgetsCompleted.keys()].toSorted(),
+              Object.keys(WIDGET_CASES).toSorted(),
+            );
+            assert(!widgetAttempt);
+            assert.equal(approvalPhase, "complete");
+            assert(approvalProxy);
+            const writer = proxy
+              .snapshot()
+              .events.find((event: { kind: string }) => event.kind === "connect-request");
+            assert(writer?.deviceId);
+            const approvalEvents = approvalProxy.snapshot().events;
+            const approvalConnections = approvalEvents.filter(
+              (event: { kind: string }) => event.kind === "connect-request",
+            );
+            assert(approvalConnections.length >= 2);
+            for (const connection of approvalConnections) {
+              assert.equal(connection.clientId, "openclaw-macos");
+              assert.equal(
+                connection.deviceId,
+                writer.deviceId,
+                "approval sockets changed native identity",
+              );
+              assert(pairedDevices.has(connection.deviceId));
+            }
+            const admissions = approvalEvents.filter(
+              (event: { kind: string }) => event.kind === "connect-success",
+            );
+            assert(admissions.length >= 2);
+            for (const admission of admissions) {
+              assert.deepEqual(
+                admission.scopes.toSorted(),
+                [...SKILL_LIBRARY_WRITER_SCOPES, "operator.approvals"].toSorted(),
+              );
+            }
+            completedApprovals = true;
+          }
           assert(pairedDevices.size > 0, "no real native device pairing was approved");
           for (const request of proxy
             .snapshot()
@@ -927,6 +1183,7 @@ export async function withNativeActionGateway(
           }
         },
         () => signInProxy?.stop(),
+        () => approvalProxy?.stop(),
         () => proxy.stop(),
         async () => {
           control.closeAllConnections();
@@ -963,6 +1220,7 @@ export async function withNativeActionGateway(
       cases: completedCases,
       mediaCases: completedMedia,
       widgetCases: completedWidgets,
+      approvalsVerified: completedApprovals,
       ...(platform === "ios"
         ? { signInCases: ["admittedCleanup", "retiredProfile", "retiredRoute"] }
         : {}),
