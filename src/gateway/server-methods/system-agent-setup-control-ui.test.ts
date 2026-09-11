@@ -52,10 +52,10 @@ vi.mock("../../plugins/provider-install-catalog.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../plugins/provider-install-catalog.js")>()),
   resolveProviderInstallCatalogEntries: () => [],
 }));
-vi.mock("../../system-agent/setup-inference-detection.js", () => ({
+vi.mock("../../system-agent/setup-inference.js", () => ({
   // Replace worker/process discovery only. Actual handler parameters, authored
   // config interpretation, consent decision, RPC client and UI all compose here.
-  detectSetupInferenceIsolated: async (params: { agentId?: string }) => {
+  detectSetupInference: async (_deps: unknown, agentId?: string) => {
     const { detectSetupInference } = await import("../../system-agent/setup-inference-detect.js");
     return detectSetupInference(
       {
@@ -63,7 +63,7 @@ vi.mock("../../system-agent/setup-inference-detection.js", () => ({
         detectInferenceBackends: async () => [],
         probeLocalCommand: async (command) => ({ command, found: false }),
       },
-      params.agentId,
+      agentId,
     );
   },
 }));

@@ -156,6 +156,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     accountId,
     ctx,
     isInternalTextSlashCommandTurn,
+    managedMediaApplyMode,
     pluginBoundMediaPromise,
     queuedFollowupOwnerKey,
     replyOptionImages,
@@ -324,7 +325,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           }
           const pluginBoundMedia = await pluginBoundMediaPromise;
           assertWorkspaceRunOwnership?.();
-          applyChatSendManagedMedia(ctx, pluginBoundMedia);
+          applyChatSendManagedMedia(ctx, pluginBoundMedia, managedMediaApplyMode);
           const dispatchInbound = () => {
             assertWorkspaceRunOwnership?.();
             return dispatchInboundMessageWithProjectedDispatcher({
@@ -379,6 +380,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
                 media: replyOptionMedia,
+                ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,

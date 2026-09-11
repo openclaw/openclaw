@@ -39,7 +39,7 @@ export function signFeishuPayload(params: {
   timestamp?: string;
   nonce?: string;
 }): Record<string, string> {
-  const timestamp = params.timestamp ?? "1711111111";
+  const timestamp = params.timestamp ?? Math.floor(Date.now() / 1000).toString();
   const nonce = params.nonce ?? "nonce-test";
   const signature = crypto
     .createHash("sha256")

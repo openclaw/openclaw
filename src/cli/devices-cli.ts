@@ -1,23 +1,12 @@
 // Commander registration for device pairing and auth-token commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { runDevicesListCommand } from "./devices-cli.runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type DevicesRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
-  latest?: boolean;
-  yes?: boolean;
-  pending?: boolean;
-  device?: string;
-  role?: string;
-  scope?: string[];
-};
+type DevicesRpcOpts = Omit<Parameters<typeof runDevicesListCommand>[0], "name">;
 
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
@@ -37,7 +26,11 @@ const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     .option("--json", "Output JSON", false);
 
 export function registerDevicesCli(program: Command) {
-  const devices = program.command("devices").description("Device pairing and auth tokens");
+  const devices = program
+    .command("devices")
+    .description(
+      "Device pairing and auth tokens (for mobile app setup codes, use `openclaw qr` instead)",
+    );
 
   devicesCallOpts(
     devices
@@ -52,7 +45,9 @@ export function registerDevicesCli(program: Command) {
   devicesCallOpts(
     devices
       .command("join-code")
-      .description("Mint a single-use node onboarding URL")
+      .description(
+        "Mint a single-use node onboarding URL (not a mobile app setup code; use `openclaw qr` for that)",
+      )
       .action(async (opts: DevicesRpcOpts) => {
         const { runDevicesJoinCodeCommand } = await loadDevicesRuntime();
         await runDevicesJoinCodeCommand(opts);
@@ -124,6 +119,7 @@ export function registerDevicesCli(program: Command) {
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--role <role>", "Role name")
       .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
+      .addOption(new Option("--no-scopes", "Rotate with an empty scope set").conflicts("scope"))
       .action(async (opts: DevicesRpcOpts) => {
         const { runDevicesRotateCommand } = await loadDevicesRuntime();
         await runDevicesRotateCommand(opts);

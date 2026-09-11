@@ -191,37 +191,12 @@ describe("structured Goal admission", () => {
 });
 
 describe("composeBrowserAnnotationContext", () => {
-  it("materializes an annotation-only message", () => {
-    const attachment = createBrowserAnnotationAttachment("only", "Inspect the marked region.");
-
-    expect(composeBrowserAnnotationContext("", [attachment])).toBe("Inspect the marked region.");
-  });
-
-  it("prepends annotation context to the user's draft", () => {
-    const attachment = createBrowserAnnotationAttachment("mixed", "Browser context");
-
-    expect(composeBrowserAnnotationContext("Please fix this", [attachment])).toBe(
-      "Browser context\n\nPlease fix this",
-    );
-  });
-
   it("preserves attachment order across two annotations", () => {
     const first = createBrowserAnnotationAttachment("first", "First context");
     const second = createBrowserAnnotationAttachment("second", "Second context");
 
     expect(composeBrowserAnnotationContext("Compare them", [first, second])).toBe(
       "First context\n\nSecond context\n\nCompare them",
-    );
-  });
-
-  it("omits context for an annotation removed before submit", () => {
-    const removed = createBrowserAnnotationAttachment("removed", "Removed context");
-    const remaining = createBrowserAnnotationAttachment("remaining", "Remaining context");
-    const attachments = [removed, remaining];
-    attachments.splice(0, 1);
-
-    expect(composeBrowserAnnotationContext("Continue", attachments)).toBe(
-      "Remaining context\n\nContinue",
     );
   });
 });

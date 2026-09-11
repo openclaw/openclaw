@@ -49,6 +49,7 @@ export type DiscordModelPickerState = {
   provider?: string;
   runtime?: string;
   runtimeIndex?: number;
+  runtimeToken?: string;
   page: number;
   providerPage?: number;
   modelIndex?: number;
@@ -73,13 +74,17 @@ const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIO
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
-const DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
 
 export function createDiscordModelPickerModelToken(provider: string, model: string): string {
   return createHash("sha256")
     .update(JSON.stringify([normalizeProviderId(provider), model]), "utf8")
     .digest("base64url")
     .slice(0, 8);
+}
+
+export function createDiscordModelPickerRuntimeToken(runtime: string): string {
+  return createHash("sha256").update(runtime, "utf8").digest("base64url").slice(0, 8);
 }
 
 export type DiscordModelPickerBucket = {
@@ -194,9 +199,14 @@ function paginateItems<T>(params: {
 export async function loadDiscordModelPickerData(
   cfg: OpenClawConfig,
   agentId?: string,
-): Promise<ModelsProviderData> {
+  options?: Parameters<
+    typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+  >[2],
+): ReturnType<
+  typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+> {
   const { buildPreparedModelsProviderData } = await loadModelsProviderRuntime();
-  return buildPreparedModelsProviderData(cfg, agentId);
+  return buildPreparedModelsProviderData(cfg, agentId, options);
 }
 
 export function buildDiscordModelPickerCustomId(params: {
@@ -207,6 +217,7 @@ export function buildDiscordModelPickerCustomId(params: {
   provider?: string;
   runtime?: string;
   runtimeIndex?: number;
+  runtimeToken?: string;
   page?: number;
   providerPage?: number;
   modelIndex?: number;
@@ -226,7 +237,7 @@ export function buildDiscordModelPickerCustomId(params: {
   const modelIndex = normalizeOptionalModelPickerIndex(params.modelIndex);
   const recentSlot = normalizeOptionalModelPickerIndex(params.recentSlot);
   const modelToken = params.modelToken?.trim();
-  if (modelToken && !DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelToken)) {
+  if (modelToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(modelToken)) {
     throw new Error("Discord model picker model token is invalid");
   }
 
@@ -243,6 +254,13 @@ export function buildDiscordModelPickerCustomId(params: {
   const runtime = params.runtime?.trim();
   if (runtime) {
     parts.push(`r=${encodeCustomIdComponent(runtime)}`);
+  }
+  const runtimeToken = params.runtimeToken?.trim();
+  if (runtimeToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeToken)) {
+    throw new Error("Discord model picker runtime token is invalid");
+  }
+  if (runtimeToken) {
+    parts.push(`rt=${runtimeToken}`);
   }
   const runtimeIndex = normalizeOptionalModelPickerIndex(params.runtimeIndex);
   if (runtimeIndex) {
@@ -272,6 +290,20 @@ export function buildDiscordModelPickerCustomId(params: {
     parts.push(`mb=${encodeCustomIdComponent(modelBucket)}`);
   }
 
+  // Page one is already the parser default. A model token also identifies its provider.
+  if (parts.join(";").length > DISCORD_CUSTOM_ID_MAX_CHARS) {
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      if (parts[index] === "g=1" || parts[index] === "pp=1") {
+        parts.splice(index, 1);
+      }
+    }
+  }
+  if (modelToken && parts.join(";").length > DISCORD_CUSTOM_ID_MAX_CHARS) {
+    const providerPart = parts.findIndex((part) => part.startsWith("p="));
+    if (providerPart >= 0) {
+      parts.splice(providerPart, 1);
+    }
+  }
   const customId = parts.join(";");
   if (customId.length > DISCORD_CUSTOM_ID_MAX_CHARS) {
     throw new Error(
@@ -293,11 +325,18 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const providerRaw = decodeCustomIdComponent(coerceString(data.p));
   const runtimeRaw = decodeCustomIdComponent(coerceString(data.r));
   const runtimeIndex = parseStrictPositiveInteger(data.ri);
+  const runtimeTokenRaw = coerceString(data.rt).trim();
+  if (runtimeTokenRaw && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeTokenRaw)) {
+    return null;
+  }
+  if ([runtimeRaw.trim(), runtimeTokenRaw, runtimeIndex].filter(Boolean).length > 1) {
+    return null;
+  }
   const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseStrictPositiveInteger(data.pp);
   const modelIndex = parseStrictPositiveInteger(data.mi);
   const modelTokenRaw = coerceString(data.m).trim();
-  const modelToken = DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelTokenRaw)
+  const modelToken = DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(modelTokenRaw)
     ? modelTokenRaw
     : undefined;
   const recentSlot = parseStrictPositiveInteger(data.rs);
@@ -323,6 +362,7 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     userId: trimmedUserId,
     provider,
     runtime,
+    ...(runtimeTokenRaw ? { runtimeToken: runtimeTokenRaw } : {}),
     ...(typeof runtimeIndex === "number" ? { runtimeIndex } : {}),
     page,
     ...(typeof providerPage === "number" ? { providerPage } : {}),

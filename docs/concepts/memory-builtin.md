@@ -33,6 +33,23 @@ partial-result warning. Session transcript hits require fresh visibility checks
 and are excluded from timeout recovery. A partial response does not put the
 entire memory corpus into the timeout cooldown.
 
+## When to use
+
+The builtin engine is the right choice for most users:
+
+- Works out of the box with no extra dependencies.
+- Handles keyword and vector search well.
+- Supports all embedding providers.
+- Hybrid search combines the best of both retrieval approaches.
+
+The builtin engine can index directories outside the workspace with
+`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
+conversational recall, but it does not provide a learned or model-based relevance
+reranking stage. Its MMR pass is deterministic and local.
+
+Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
+with automatic user modeling.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -53,8 +70,9 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install and configure the official llama.cpp
-provider, then point `local.modelPath` at a GGUF file:
+To force local GGUF embeddings, install and configure the official
+[llama.cpp provider](/plugins/llama-cpp), then point `local.modelPath` at a
+GGUF file:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -209,30 +227,14 @@ install the [llama.cpp provider](/plugins/llama-cpp) and set
 `memory.search.provider: "local"`; without an embedding provider, builtin uses
 BM25 keyword search only.
 
-## When to use
-
-The builtin engine is the right choice for most users:
-
-- Works out of the box with no extra dependencies.
-- Handles keyword and vector search well.
-- Supports all embedding providers.
-- Hybrid search combines the best of both retrieval approaches.
-
-The builtin engine can index directories outside the workspace with
-`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
-conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
-
-Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
-with automatic user modeling.
-
 ## Troubleshooting
 
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Local provider not detected?** Run interactive llama.cpp setup once, confirm
-the local path exists, and run:
+**Local provider not detected?** Run the interactive
+[llama.cpp](/plugins/llama-cpp) setup once with `openclaw onboard`, confirm the
+local path exists, and run:
 
 ```bash
 openclaw memory status --deep --agent main

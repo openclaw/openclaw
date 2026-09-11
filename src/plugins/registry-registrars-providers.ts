@@ -5,17 +5,13 @@ import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type { PluginRecord, PluginTextTransformsRegistration } from "./registry-types.js";
+import type {
+  PluginOwnedProviderRegistration,
+  PluginRecord,
+  PluginTextTransformsRegistration,
+} from "./registry-types.js";
 import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
-
-type PluginOwnedProviderRegistration<T extends { id: string }> = {
-  pluginId: string;
-  pluginName?: string;
-  provider: T;
-  source: string;
-  rootDir?: string;
-};
 
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
@@ -48,7 +44,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registry.providers.push({
       pluginId: record.id,
       pluginName: record.name,
-      provider: normalizedProvider,
+      provider: { ...normalizedProvider, pluginRoot: record.rootDir },
       source: record.source,
       rootDir: record.rootDir,
     });

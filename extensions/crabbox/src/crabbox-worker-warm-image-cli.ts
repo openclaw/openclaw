@@ -1,7 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   crabboxWarmImageRecoveryHint,
-  isCrabboxWarmImageCapturePaused,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
+  isCrabboxWarmImageCaptureUncertain,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -67,10 +68,17 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
             `${image.profileKey}: ${image.checkpointId ?? "no checkpoint"} (${image.state})`,
           );
           if (image.capture) {
-            const paused = isCrabboxWarmImageCapturePaused(image.capture);
-            lines.push(`  Capture ${paused ? "paused" : "in progress"}: ${image.capture.selector}`);
-            if (paused) {
+            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
+            const label = uncertain
+              ? "paused"
+              : image.capture.stale
+                ? "still pending"
+                : "in progress";
+            lines.push(`  Capture ${label}: ${image.capture.selector}`);
+            if (uncertain) {
               lines.push(`  ${crabboxWarmImageRecoveryHint(image.capture.selector)}`);
+            } else if (image.capture.stale) {
+              lines.push(`  ${CRABBOX_WARM_IMAGE_WAIT_HINT}`);
             }
           }
           if (image.retirement) {

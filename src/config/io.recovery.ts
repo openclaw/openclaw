@@ -7,6 +7,7 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -64,6 +65,9 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   context: ConfigIoContext,
   snapshot: ConfigFileSnapshot,
 ): Promise<boolean> {
+  if (resolveIsConfigReadOnly(context.deps.env)) {
+    return false;
+  }
   if (!snapshot.exists || snapshot.valid || typeof snapshot.raw !== "string") {
     return false;
   }

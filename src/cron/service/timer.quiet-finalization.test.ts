@@ -46,8 +46,8 @@ afterEach(() => {
 
 describe("cron quiet task finalization", () => {
   it.each(
-    ["timer", "retired-timer", "manual", "retired-manual"].flatMap((mode) =>
-      [false, true].map((failWrite) => ({ mode, failWrite })),
+    ["timer", "retired-timer", "manual", "retired-manual", "manual-force"].flatMap((mode) =>
+      (mode === "manual-force" ? [false] : [false, true]).map((failWrite) => ({ mode, failWrite })),
     ),
   )(
     "finalizes quiet trigger tasks only after cron state persists ($mode, failWrite=$failWrite)",
@@ -58,6 +58,17 @@ describe("cron quiet task finalization", () => {
         ...createDueIsolatedAgentJob({ now }),
         trigger: { script: "json({ fire: false })" },
       };
+      const force = mode === "manual-force";
+      const pendingSlot = now + 30 * 60_000;
+      if (force) {
+        job.pacing = { min: "15m", max: "4h" };
+        job.state = {
+          ...job.state,
+          nextRunAtMs: pendingSlot,
+          pacedNextRunAtMs: pendingSlot,
+          startupCatchupAtMs: pendingSlot,
+        };
+      }
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const finalizedAfterPersist: boolean[] = [];
       const database = openOpenClawStateDatabase().db;
@@ -109,7 +120,14 @@ describe("cron quiet task finalization", () => {
       `);
       }
       try {
-        const execution = mode.endsWith("manual") ? run(state, job.id, "due") : onTimer(state);
+        const execution = mode.includes("manual")
+          ? run(
+              state,
+              job.id,
+              force ? "force" : "due",
+              force ? { evaluateTrigger: true } : undefined,
+            )
+          : onTimer(state);
         if (failWrite) {
           await expect(execution).rejects.toThrow("quiet row unavailable");
           expect(finalizedAfterPersist).toEqual([]);
@@ -121,6 +139,14 @@ describe("cron quiet task finalization", () => {
         }
         await execution;
         expect(finalizedAfterPersist).toEqual([true]);
+        if (force) {
+          expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+            nextRunAtMs: pendingSlot,
+            pacedNextRunAtMs: pendingSlot,
+            startupCatchupAtMs: pendingSlot,
+            forcePreservedNextRunAtMs: pendingSlot,
+          });
+        }
         const task = findCronTaskByBaseRunId(`cron:${job.id}:${now}`);
         expect(task).toMatchObject({ status: "succeeded" });
         expect(task?.detail).toEqual({

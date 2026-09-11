@@ -1,5 +1,9 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import {
+  isSessionRouteId,
+  pluginSlugCandidate,
+  pluginTabSlugFromPath,
+} from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import {
@@ -84,6 +88,25 @@ export class ShellNavigationOwner {
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
+  }
+
+  recoverNotFoundRoute(): boolean {
+    const context = this.host.context;
+    const location = this.host.routeState.location ?? window.location;
+    if (context && pluginSlugCandidate(location.pathname, context.basePath)) {
+      if (context.gateway.snapshot.phase !== "connected") {
+        return false;
+      }
+      if (pluginTabSlugFromPath(location.pathname, context.basePath)) {
+        context.replace("plugin", {
+          pathname: location.pathname,
+          search: location.search,
+          hash: location.hash,
+        });
+        return true;
+      }
+    }
+    return this.replaceChatWithCurrentSession();
   }
 
   replaceChatWithCurrentSession(): boolean {

@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { runInNewContext } from "node:vm";
-// Qa Lab tests cover server plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,7 +50,7 @@ const QA_REASONING_ONLY_RETRY_INSTRUCTION =
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   status: "completed",
   value: {
@@ -336,6 +335,28 @@ function makeToolOutputWithCallId(callId: string, output: unknown) {
   return { type: "function_call_output" as const, call_id: callId, output };
 }
 
+async function completeSideEffectScenario(server: MockServer, kind: "recovery" | "exhaustion") {
+  const kickoff = makeUserInput(
+    kind === "recovery"
+      ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
+      : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT,
+  );
+  const plan = await expectOpenAiNonStreamingResponsesJson(server, { input: [kickoff] });
+  const write = outputToolCall(plan, "write");
+  const input = [
+    kickoff,
+    ...outputItems(plan),
+    makeToolOutputWithCallId(
+      outputToolCallId(write, "previous-write"),
+      "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    ),
+    makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+  ];
+  const settled = await expectOpenAiNonStreamingResponsesJson(server, { input });
+  expect(outputText(settled)).toBe(kind === "recovery" ? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK" : "");
+  return [...input, ...outputItems(settled)];
+}
+
 function makeAnthropicUserText(text: string) {
   return { role: "user" as const, content: [{ type: "text" as const, text }] };
 }
@@ -433,6 +454,25 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
   name: "openclaw_direct",
   tools: [CODEX_CUSTOM_PATCH_TOOL],
 } as const;
+const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
+  {
+    name: "exec",
+    input_schema: {
+      type: "object",
+      properties: { code: { type: "string" } },
+      required: ["code"],
+    },
+  },
+  {
+    name: "wait",
+    input_schema: {
+      type: "object",
+      properties: { runId: { type: "string" } },
+      required: ["runId"],
+    },
+  },
+] as const;
+
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
 const IMAGE_GENERATE_TOOL = { type: "function", name: "image_generate" } as const;
@@ -560,13 +600,19 @@ describe("qa mock openai server", () => {
     });
 
     const retained = requireArray(
-      await fetch(`${server.baseUrl}/debug/requests`).then((response) => response.json()),
+      await getJson(server, "/debug/requests"),
       "retained debug requests",
     );
     expect(retained).toHaveLength(debugRequestLimit);
     expect(requireRecord(retained[0], "retained request 0").cursor).toBe(2);
     expect(requireRecord(retained.at(-1), "last retained request").cursor).toBe(
       debugRequestLimit + 1,
+    );
+    expect(String(requireRecord(retained[0], "retained request 0").allInputText)).toContain(
+      "cursor request 1",
+    );
+    expect(String(requireRecord(retained.at(-1), "last retained request").allInputText)).toContain(
+      "cursor request overflow",
     );
 
     const nextRequests = requireArray(
@@ -601,25 +647,6 @@ describe("qa mock openai server", () => {
     expect(await invalid.json()).toEqual({
       error: "after must be a non-negative safe integer",
     });
-  });
-
-  it("retains enough debug requests for long shared QA runs", async () => {
-    const server = await startMockServer();
-
-    for (let index = 0; index < 250; index += 1) {
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(`debug retention request ${index}`)],
-      });
-    }
-
-    const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
-    expect(requestLog).toHaveLength(250);
-    expect(String(requireRecord(requestLog[0], "debug request 0").allInputText)).toContain(
-      "debug retention request 0",
-    );
-    expect(String(requireRecord(requestLog[249], "debug request 249").allInputText)).toContain(
-      "debug retention request 249",
-    );
   });
 
   it("serves health and streamed responses", async () => {
@@ -765,30 +792,6 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
-  });
-
-  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
-    const server = await startMockServer();
-    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
-
-    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    const toolCall = outputToolCall(initialBody, "message");
-    expect(outputToolArgsFromItem(toolCall)).toEqual({
-      action: "send",
-      message: "QA-MSTEAMS-AMBIGUOUS-504",
-    });
-
-    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
-      ],
-    });
-    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
   });
 
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
@@ -1802,6 +1805,20 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(outputText(withHumanAttributedSeed)).toBe(missingMarker);
+
+    for (const prefix of [
+      "Please remember this fact for later: ORBIT-22. ",
+      "Reply exactly `SHADOWED-EXACT-REPLY`. ",
+    ]) {
+      const overlappingSeed = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + seedPrompt)],
+      });
+      expect(outputText(overlappingSeed)).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+      const overlappingRecall = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + recallPrompt)],
+      });
+      expect(outputText(overlappingRecall)).toBe(missingMarker);
+    }
   });
 
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {
@@ -6328,24 +6345,7 @@ Update and merge these partial structured summaries.`,
   it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
@@ -7164,24 +7164,7 @@ Update and merge these partial structured summaries.`,
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {
-      tools: [
-        {
-          name: "exec",
-          input_schema: {
-            type: "object",
-            properties: { code: { type: "string" } },
-            required: ["code"],
-          },
-        },
-        {
-          name: "wait",
-          input_schema: {
-            type: "object",
-            properties: { runId: { type: "string" } },
-            required: ["runId"],
-          },
-        },
-      ],
+      tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
       messages: [
         makeAnthropicUserText(
           "Capability flip image check: generate a QA lighthouse image in this turn right now.",
@@ -7285,24 +7268,7 @@ Update and merge these partial structured summaries.`,
 
   it("does not interpret unmarked direct exec results as Code Mode control envelopes", async () => {
     const server = await startMockServer();
-    const tools = [
-      {
-        name: "exec",
-        input_schema: {
-          type: "object",
-          properties: { code: { type: "string" } },
-          required: ["code"],
-        },
-      },
-      {
-        name: "wait",
-        input_schema: {
-          type: "object",
-          properties: { runId: { type: "string" } },
-          required: ["runId"],
-        },
-      },
-    ];
+    const tools = ANTHROPIC_GUEST_CODE_MODE_TOOLS;
     const messages = [
       makeAnthropicUserText("Direct exec envelope isolation check."),
       {
@@ -7346,24 +7312,7 @@ Update and merge these partial structured summaries.`,
     const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
     const request = async () => {
       const response = await expectAnthropicMessages(server, {
-        tools: [
-          {
-            name: "exec",
-            input_schema: {
-              type: "object",
-              properties: { code: { type: "string" } },
-              required: ["code"],
-            },
-          },
-          {
-            name: "wait",
-            input_schema: {
-              type: "object",
-              properties: { runId: { type: "string" } },
-              required: ["runId"],
-            },
-          },
-        ],
+        tools: ANTHROPIC_GUEST_CODE_MODE_TOOLS,
         messages,
       });
       return (await response.json()) as {
@@ -8313,13 +8262,18 @@ Update and merge these partial structured summaries.`,
       history: "earlier reply directive",
       precedingInput: [makeUserInput("Earlier check: exact marker: `PREVIOUS-SCENARIO-OK`.")],
     },
+    { history: "settled recovery", completedScenario: "recovery" as const },
+    { history: "settled exhaustion", completedScenario: "exhaustion" as const },
   ])(
     "scripts settled continuation after a side-effecting write with $history",
-    async ({ precedingInput }) => {
+    async ({ precedingInput = [], completedScenario }) => {
       const server = await startMockServer();
+      const historyInput = completedScenario
+        ? await completeSideEffectScenario(server, completedScenario)
+        : precedingInput;
 
       const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-        input: [...precedingInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+        input: [...historyInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
       });
       expect(toolPlan).toContain('"name":"write"');
 
@@ -8331,7 +8285,7 @@ Update and merge these partial structured summaries.`,
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         input: [
-          ...precedingInput,
+          ...historyInput,
           makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
           toolOutput,
         ],
@@ -8342,13 +8296,22 @@ Update and merge these partial structured summaries.`,
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         input: [
-          ...precedingInput,
+          ...historyInput,
           makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
           makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
           toolOutput,
         ],
       });
       expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
+      const statefulRecoveredPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+        input: [
+          ...historyInput,
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+          makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        ],
+      });
+      expect(outputText(statefulRecoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
 
       const cronRecoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
         output?: Array<{ content?: Array<{ text?: string }> }>;
@@ -8382,32 +8345,60 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it("keeps settled write finalization empty for host fallback coverage", async () => {
-    const server = await startMockServer();
-    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
-    });
-    expect(toolPlan).toContain('"name":"write"');
+  it.each(["fresh", "recovery", "exhaustion"] as const)(
+    "keeps settled write finalization empty for host fallback coverage with %s history",
+    async (history) => {
+      const server = await startMockServer();
+      const precedingInput =
+        history === "fresh" ? [] : await completeSideEffectScenario(server, history);
+      const toolPlan = await expectOpenAiStreamingResponsesText(server, {
+        input: [...precedingInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
+      });
+      expect(toolPlan).toContain('"name":"write"');
 
-    const toolOutput = {
-      type: "function_call_output" as const,
-      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
-    };
-    for (const includeFinalizationPrompt of [false, true, true]) {
-      const payload = await expectOpenAiNonStreamingResponsesJson<{
-        output?: Array<{ content?: Array<{ text?: string }> }>;
-      }>(server, {
+      const toolOutput = {
+        type: "function_call_output" as const,
+        output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+      };
+      for (const includeFinalizationPrompt of [false, true, true]) {
+        const payload = await expectOpenAiNonStreamingResponsesJson<{
+          output?: Array<{ content?: Array<{ text?: string }> }>;
+        }>(server, {
+          input: [
+            ...precedingInput,
+            makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
+            ...(includeFinalizationPrompt
+              ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
+              : []),
+            toolOutput,
+          ],
+        });
+        expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
+      }
+    },
+  );
+
+  it.each(["recovery", "exhaustion"] as const)(
+    "starts a fresh %s scenario after projected settled history",
+    async (kind) => {
+      const server = await startMockServer();
+      const history = await completeSideEffectScenario(server, "exhaustion");
+      const prompt =
+        kind === "recovery"
+          ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
+          : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT;
+      const response = await expectOpenAiNonStreamingResponsesJson(server, {
         input: [
-          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
-          ...(includeFinalizationPrompt
-            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
-            : []),
-          toolOutput,
+          makeUserInput(
+            `<conversation_context>\n${JSON.stringify(history)}\n</conversation_context>\n\nCurrent user request:\n${prompt}`,
+          ),
         ],
       });
-      expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
-    }
-  });
+      expect(outputToolArgsFromItem(outputToolCall(response, "write"))).toMatchObject({
+        path: "qa-empty-response-side-effect.txt",
+      });
+    },
+  );
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();

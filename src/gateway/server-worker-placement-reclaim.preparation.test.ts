@@ -267,7 +267,7 @@ it("a pending dispatch retains its producer while preparation fences new ingress
 });
 
 async function cancellationLoadFixture(
-  options: NonNullable<Parameters<typeof createHarness>[1]> = {},
+  options: NonNullable<Parameters<typeof createHarness>[2]> = {},
   beforeCancellation?: () => Promise<void>,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-advance-"));
@@ -338,7 +338,7 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(placements, {
+  const harness = createHarness(database, placements, {
     workspacePath: root,
     runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,
@@ -580,22 +580,11 @@ it.each([false, true])(
     const active = await f.coordinated.dispatch(REQUEST);
     if (abandonSource) {
       f.harness.markEnvironmentNodeDeviceId("device-1");
+      f.database.db
+        .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
+        .run("device:device-1", active.environmentId);
     }
-    f.database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json,
-      provision_operation_id, lease_id, state, owner_epoch, node_device_id,
-      attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, ?, ?, '{}', ?, 'lease-move', 'attached', ?, ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        abandonSource ? "device" : "test",
-        abandonSource ? "device:device-1" : REQUEST.profileId,
-        `provision:${active.environmentId}`,
-        active.activeOwnerEpoch,
-        abandonSource ? "device-1" : null,
-        JSON.stringify([active.sessionId]),
-      );
+
     const transitions: string[] = [];
     let transitionsAtFirstYield: string[] | undefined;
     const beginPlacementMove = f.placements.beginPlacementMove.bind(f.placements);
@@ -901,20 +890,7 @@ it.each([
       revokeSessionAuthority: vi.fn(),
     });
     const active = await f.coordinated.dispatch(REQUEST);
-    // Move validates the durable environment owner as well as the provider projection.
-    f.database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json,
-      provision_operation_id, lease_id, state, owner_epoch,
-      attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, 'test', ?, '{}', ?, 'lease-move', 'attached', ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        REQUEST.profileId,
-        `provision:${active.environmentId}`,
-        active.activeOwnerEpoch,
-        JSON.stringify([active.sessionId]),
-      );
+
     const localGenerations = new Set<number>();
     const moving = f.coordinated
       .move(

@@ -6,37 +6,6 @@ import type {
   SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
 
-export type SkillWorkshopHistoryScanResult = {
-  schema: "openclaw.skill-workshop.history-scan.v1";
-  hasScanned: boolean;
-  reviewedSessions: number;
-  ideasFound: number;
-  hasMore: boolean;
-  lastScanReviewed: number;
-  lastScanIdeas: number;
-  lastScanAt?: string;
-  oldestReviewedAt?: string;
-  newestReviewedAt?: string;
-};
-
-export type SkillWorkshopHistoryScanState = {
-  loading: boolean;
-  loaded: boolean;
-  running: boolean;
-  error: string | null;
-  result: SkillWorkshopHistoryScanResult | null;
-};
-
-export function createSkillWorkshopHistoryScanState(): SkillWorkshopHistoryScanState {
-  return {
-    loading: false,
-    loaded: false,
-    running: false,
-    error: null,
-    result: null,
-  };
-}
-
 export type SkillWorkshopState = {
   skillWorkshopAgentId: string | null;
   skillWorkshopLoading: boolean;
@@ -57,7 +26,6 @@ export type SkillWorkshopState = {
   skillWorkshopFilePreviewQuery: string;
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
-  skillWorkshopHistoryScan: SkillWorkshopHistoryScanState;
 };
 
 export type SkillWorkshopRouteData = Pick<
@@ -75,7 +43,6 @@ export type SkillWorkshopRouteData = Pick<
   | "skillWorkshopActionNotice"
   | "skillWorkshopRevisionKey"
   | "skillWorkshopRevisionDraft"
-  | "skillWorkshopHistoryScan"
 >;
 
 export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWorkshopState {
@@ -99,8 +66,6 @@ export function createSkillWorkshopState(data?: SkillWorkshopRouteData): SkillWo
     skillWorkshopFilePreviewQuery: "",
     skillWorkshopQueueWidth: 360,
     skillWorkshopMode: "skills",
-    skillWorkshopHistoryScan:
-      data?.skillWorkshopHistoryScan ?? createSkillWorkshopHistoryScanState(),
   };
 }
 
@@ -119,6 +84,5 @@ export function skillWorkshopRouteData(state: SkillWorkshopState): SkillWorkshop
     skillWorkshopActionNotice: state.skillWorkshopActionNotice,
     skillWorkshopRevisionKey: state.skillWorkshopRevisionKey,
     skillWorkshopRevisionDraft: state.skillWorkshopRevisionDraft,
-    skillWorkshopHistoryScan: state.skillWorkshopHistoryScan,
   };
 }

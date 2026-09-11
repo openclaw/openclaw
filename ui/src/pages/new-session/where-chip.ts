@@ -5,6 +5,7 @@ import { t } from "../../i18n/index.ts";
 import {
   renderCloudProfileMenuItems,
   renderCloudMachineMenuItems,
+  renderCloudOsMenuItems,
   renderConnectMachineMenuItem,
   renderSessionMenuItem,
 } from "./cloud-target.ts";
@@ -14,7 +15,14 @@ import {
   type DevicePlacementOption,
   type DevicePlacementRequirement,
 } from "./device-placement.ts";
-import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
+import {
+  cloudMachinesForOs,
+  defaultCloudOs,
+  type DraftCloudProfile,
+  type DraftEnvironment,
+  type DraftMachineOption,
+  type DraftOperatingSystem,
+} from "./discovery.ts";
 
 type WhereChipState = Readonly<{
   kind: "local" | "device" | "auto-device" | "cloud";
@@ -23,6 +31,8 @@ type WhereChipState = Readonly<{
   cloudProfiles: readonly DraftCloudProfile[];
   cloudMachines: readonly DraftMachineOption[];
   selectedMachineId: string;
+  operatingSystems: readonly DraftOperatingSystem[];
+  selectedOsId: string;
   autoDeviceDisabledReason?: string;
 }>;
 
@@ -31,6 +41,7 @@ export function resolveWhereChip(params: {
   cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
   machineClass?: string;
+  os?: string;
   deviceId: string;
   autoDevice?: boolean;
   devicePlacement?: DevicePlacementRequirement;
@@ -49,19 +60,39 @@ export function resolveWhereChip(params: {
   const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
   const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
   if (params.cloudProfileId) {
-    const cloudMachines = profile?.machines ?? [];
+    const defaultOs = profile ? defaultCloudOs(profile) : "";
+    const selectedOsId = params.os || defaultOs;
+    const operatingSystems = profile?.operatingSystems ?? [];
+    const osLabel =
+      params.os && params.os !== defaultOs
+        ? (operatingSystems.find((os) => os.id === params.os)?.label ?? params.os)
+        : "";
+    const cloudMachines = profile ? cloudMachinesForOs(profile, selectedOsId) : [];
     const defaultMachine = cloudMachines.find((machine) => machine.default === true);
     const selectedMachine = params.machineClass
       ? cloudMachines.find((machine) => machine.id === params.machineClass)
       : defaultMachine;
     return {
       kind: "cloud",
-      label: params.machineClass
-        ? t("newSession.cloudWorkerMachine", {
-            profile: profile?.id ?? params.cloudProfileId,
-            machine: selectedMachine?.label ?? params.machineClass,
-          })
-        : (profile?.id ?? params.cloudProfileId),
+      label: osLabel
+        ? params.machineClass
+          ? t("newSession.cloudWorkerOsMachine", {
+              profile: profile?.id ?? params.cloudProfileId,
+              os: osLabel,
+              machine: selectedMachine?.label ?? params.machineClass,
+            })
+          : t("newSession.cloudWorkerOs", {
+              profile: profile?.id ?? params.cloudProfileId,
+              os: osLabel,
+            })
+        : params.machineClass
+          ? t("newSession.cloudWorkerMachine", {
+              profile: profile?.id ?? params.cloudProfileId,
+              machine: selectedMachine?.label ?? params.machineClass,
+            })
+          : (profile?.id ?? params.cloudProfileId),
+      operatingSystems,
+      selectedOsId,
       cloudMachines,
       selectedMachineId: selectedMachine?.id ?? "",
       devices,
@@ -75,6 +106,8 @@ export function resolveWhereChip(params: {
       label: device?.label ?? params.deviceId,
       cloudMachines: [],
       selectedMachineId: "",
+      operatingSystems: [],
+      selectedOsId: "",
       devices,
       cloudProfiles: params.cloudProfiles,
       autoDeviceDisabledReason,
@@ -86,6 +119,8 @@ export function resolveWhereChip(params: {
       label: t("newSession.autoDevice"),
       cloudMachines: [],
       selectedMachineId: "",
+      operatingSystems: [],
+      selectedOsId: "",
       devices,
       cloudProfiles: params.cloudProfiles,
       autoDeviceDisabledReason,
@@ -96,6 +131,8 @@ export function resolveWhereChip(params: {
     label: t("newSession.local"),
     cloudMachines: [],
     selectedMachineId: "",
+    operatingSystems: [],
+    selectedOsId: "",
     devices,
     cloudProfiles: params.cloudProfiles,
     autoDeviceDisabledReason,
@@ -108,6 +145,7 @@ export function renderWhereChip(params: {
   gatewayName: string;
   cloudProfileId: string;
   machineClass?: string;
+  os?: string;
   deviceId: string;
   autoDevice?: boolean;
   worktreeAvailable: boolean;
@@ -125,6 +163,7 @@ export function renderWhereChip(params: {
   onSelectDevice: (deviceId: string) => void;
   onSelectAutoDevice: () => void;
   onSelectCloudProfile: (profileId: string) => void;
+  onSelectCloudOs?: (osId: string) => void;
   onSelectCloudMachine?: (machineId: string) => void;
   onConnectMachine: () => void;
 }) {
@@ -144,6 +183,7 @@ export function renderWhereChip(params: {
         aria-label="${t("newSession.where")}: ${params.state.label}"
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
+        data-os=${params.os || nothing}
         data-device-id=${params.deviceId || nothing}
         data-auto-device=${params.autoDevice ? "true" : nothing}
         aria-haspopup="dialog"
@@ -273,6 +313,19 @@ export function renderWhereChip(params: {
                       )
                     : nothing
                 }
+              `
+            : nothing
+        }
+        ${
+          params.state.kind === "cloud" && params.state.operatingSystems.length >= 2
+            ? html`
+                <div class="new-session-page__menu-title">${t("newSession.operatingSystem")}</div>
+                ${renderCloudOsMenuItems({
+                  operatingSystems: params.state.operatingSystems,
+                  selectedId: params.state.selectedOsId,
+                  submitting: params.submitting,
+                  onSelect: params.onSelectCloudOs ?? (() => undefined),
+                })}
               `
             : nothing
         }

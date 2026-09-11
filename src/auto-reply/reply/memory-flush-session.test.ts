@@ -1,5 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -48,11 +50,7 @@ async function withAdmittedInput(
         stopReason: "stop",
       }),
     );
-    const retained = source.appendMessage({
-      role: "user",
-      content: "Keep the Cedar project receipt.",
-      timestamp: 3,
-    });
+    const retained = source.appendMessage(makeUserMessage("Keep the Cedar project receipt.", 3));
     source.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Cedar receipt is maple-17." }],
@@ -123,22 +121,89 @@ it.each([false, true])(
       expect(checkpoint.sessionPersistence).toBe("detached");
       const first = checkpoint.sessionManager.getBranch()[0];
       if (first) {
+        if (first.type === "message" && first.message.role === "user") {
+          first.message.content = "Checkpoint-only edit";
+        }
         checkpoint.sessionManager.branch(first.id);
       }
-      checkpoint.sessionManager.appendMessage({
-        role: "user",
-        content: "Checkpoint instruction",
-        timestamp: 5,
-      });
+      const instruction = checkpoint.sessionManager.appendMessage(
+        makeUserMessage("Checkpoint instruction", 5),
+      );
       checkpoint.sessionManager.appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "NO_REPLY" }],
           stopReason: "stop",
         }),
       );
+      checkpoint.sessionManager.appendCompaction("Checkpoint-only summary", instruction, 100);
       expect(loadTranscriptEventsSync(scope)).toEqual(before);
       expect(readActiveTranscriptEntryAnchor(admission)).toEqual(anchor);
       expect(SessionManager.open(scope).getBranch().at(-1)?.id).toBe(admission.entryId);
+    });
+  },
+);
+
+it.each(["compaction", "reset"] as const)(
+  "detaches the forward %s cut across an opaque parent with retained tool pairs",
+  async (boundaryType) => {
+    await withOpenClawTestState({ label: `memory-opaque-${boundaryType}` }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "opaque-checkpoint",
+        sessionKey: "agent:main:opaque-checkpoint",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope, state.workspaceDir);
+      source.appendMessage({ role: "user", content: "Summarized away", timestamp: 1 });
+      const opaqueCut = source.appendMessage({
+        role: "custom",
+        customType: "display-test",
+        content: "Display only",
+        display: true,
+        excludeFromContext: true,
+        timestamp: 2,
+      });
+      const retained = source.appendMessage({ role: "user", content: "Retained", timestamp: 3 });
+      source.appendMessage(
+        makeAgentAssistantMessage({
+          content: [
+            { type: "toolCall", id: "read-call", name: "read", arguments: { path: "note" } },
+          ],
+          stopReason: "toolUse",
+        }),
+      );
+      source.appendMessage(makeTextToolResult("read-call", "read", "Paired result", false, 4));
+      const boundary =
+        boundaryType === "compaction"
+          ? source.appendCompaction("Summary", opaqueCut, 100)
+          : source.appendResetBoundary("reset", opaqueCut);
+      source.appendMessage({ role: "user", content: "Tail", timestamp: 5 });
+      const before = loadTranscriptEventsSync(scope);
+      const memory = await prepareMemoryFlushSession({
+        source: scope,
+        runId: "opaque-memory-helper",
+        workspaceDir: state.workspaceDir,
+      });
+      expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
+      expect(memory.sessionManager.getEntry(opaqueCut)).toBeUndefined();
+      expect(memory.sessionManager.getEntry(boundary)).toMatchObject({
+        firstKeptEntryId: retained,
+      });
+      const messages = memory.sessionManager.buildSessionContext().messages;
+      expect(messages.map((message) => message.role)).toEqual([
+        ...(boundaryType === "compaction" ? ["compactionSummary"] : []),
+        "user",
+        "assistant",
+        "toolResult",
+        "user",
+      ]);
+      expect(
+        messages.filter((message) => message.role === "user").map((message) => message.content),
+      ).toEqual(["Retained", "Tail"]);
+      memory.sessionManager.appendResetBoundary("reset");
+      expect(memory.sessionManager.buildSessionContext().messages).toEqual([]);
+      expect(loadTranscriptEventsSync(scope)).toEqual(before);
     });
   },
 );
@@ -257,6 +322,43 @@ it("does not acquire a checkpoint after caller cancellation", async () => {
     expect(loadTranscriptEventsSync(scope)).toEqual(before);
   });
 });
+
+it.each(["empty", "missing", "legacy"] as const)(
+  "preserves %s transcript header handling during detached acquisition",
+  async (headerState) => {
+    await withOpenClawTestState({ label: `memory-header-${headerState}` }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "header-checkpoint",
+        sessionKey: "agent:main:header-checkpoint",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      if (headerState !== "empty") {
+        await replaceTranscriptEvents(scope, [
+          headerState === "legacy"
+            ? { ...createSessionTranscriptHeader({ sessionId: scope.sessionId }), version: 1 }
+            : { type: "future-metadata", id: "opaque", parentId: null },
+        ]);
+      }
+      const before = loadTranscriptEventsSync(scope);
+      const pending = prepareMemoryFlushSession({
+        source: scope,
+        runId: "header-memory-helper",
+        workspaceDir: state.workspaceDir,
+      });
+      if (headerState === "empty") {
+        const memory = await pending;
+        expect(memory.sessionManager.getSessionTarget()).toBeUndefined();
+        expect(memory.sessionManager.getHeader()).toMatchObject({ id: scope.sessionId });
+        expect(memory.sessionManager.buildSessionContext().messages).toEqual([]);
+      } else {
+        await expect(pending).rejects.toThrow("doctor/import migration");
+      }
+      expect(loadTranscriptEventsSync(scope)).toEqual(before);
+    });
+  },
+);
 
 it("does not expose a processed recorder as a pending checkpoint admission", async () => {
   await withAdmittedInput(false, async ({ recorder }) => {

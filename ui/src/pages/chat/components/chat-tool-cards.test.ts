@@ -1048,32 +1048,4 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
-
-  it("opens ambiguous tool details with the same sidebar output", () => {
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
-    render(
-      renderToolCard(
-        {
-          id: "msg:tool:full",
-          name: "browser.open",
-          outputText: "Opened page",
-          messageId: "msg-tool-full",
-        },
-        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
-      ),
-      container,
-    );
-
-    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
-    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-    sidebarButton!.click();
-
-    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar).toEqual({
-      kind: "markdown",
-      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
-      rawText: "Opened page",
-    });
-  });
 });

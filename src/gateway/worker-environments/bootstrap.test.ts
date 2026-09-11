@@ -164,6 +164,58 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toHaveLength(0);
   });
 
+  it.each(["identity", "preflight", "transfer"] as const)(
+    "stops bootstrap after ownership changes during %s and cleans only its own upload",
+    async (boundary) => {
+      let current = true;
+      let commands = 0;
+      const runner = fakeRunner(
+        boundary === "identity"
+          ? []
+          : [result({ stdout: tagged("install", REMOTE_TARBALL) }), result(), result()],
+        () => {
+          commands += 1;
+          if (
+            (boundary === "preflight" && commands === 1) ||
+            (boundary === "transfer" && commands === 2)
+          ) {
+            current = false;
+          }
+        },
+      );
+      await expect(
+        bootstrapWorker(
+          { ssh: SSH, artifact: BUNDLE },
+          {
+            resolveIdentity: async () => {
+              if (boundary === "identity") {
+                current = false;
+              }
+              return resolveIdentity();
+            },
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("worker owner changed");
+              }
+            },
+            runCommand: runner.runCommand,
+          },
+        ),
+      ).rejects.toThrow("worker owner changed");
+      expect(runner.calls.map((call) => call.argv[0])).toEqual(
+        boundary === "identity"
+          ? []
+          : boundary === "preflight"
+            ? ["ssh", "ssh"]
+            : ["ssh", "scp", "ssh"],
+      );
+      if (boundary !== "identity") {
+        expect(runner.calls.at(-1)?.argv.at(-1)).toContain(OPERATION_TOKEN);
+        expect(runner.calls.at(-1)?.argv.at(-1)).toContain(BUNDLE_HASH);
+      }
+    },
+  );
+
   it("transfers and installs a fresh bundle despite terminal cleanup failure", async () => {
     const runner = fakeRunner([
       result({ stdout: tagged("install", REMOTE_TARBALL) }),
@@ -389,7 +441,7 @@ describe("bootstrapWorker", () => {
         { ssh: SSH, artifact: BUNDLE },
         { resolveIdentity, runCommand: runner.runCommand },
       ),
-    ).rejects.toThrow("Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite");
+    ).rejects.toThrow("Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite");
     expect(runner.calls).toHaveLength(2);
     expect(runner.calls[0]?.options.input).toContain(
       `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,

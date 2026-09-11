@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
+import type {
+  MigrationApplyResult,
+  MigrationPlan,
+  MigrationProviderPlugin,
+} from "../plugins/types.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -71,9 +75,10 @@ vi.mock("./migrate/skill-selection-prompt.js", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProvider: () => mocks.provider,
-  resolvePluginMigrationProviders: () => [mocks.provider],
+  withPluginMigrationProviders: async (
+    params: { providerId?: string },
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run([{ ...mocks.provider, id: params.providerId ?? mocks.provider.id }]),
 }));
 
 vi.mock("./backup.js", () => ({

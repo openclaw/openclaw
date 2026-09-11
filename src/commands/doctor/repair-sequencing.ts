@@ -18,6 +18,7 @@ import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profil
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairLegacyAuthProfileStores,
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
@@ -185,15 +186,11 @@ export async function runDoctorRepairSequence(params: {
   });
   // Auth JSON is archived below; retain its exact collision-aware profile map
   // so durable session selections can follow the same account after import.
-  const openAICodexAuthProfileIdMap = collectOpenAICodexAuthProfileStoreIdMap({
-    cfg: state.candidate,
-    env,
-  });
-  applyMutation(
-    maybeRepairOpenAICodexAuthConfig(state.candidate, {
-      profileIdMap: openAICodexAuthProfileIdMap,
-    }),
-  );
+  let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> =
+    collectOpenAICodexAuthProfileStoreIdMap({
+      cfg: state.candidate,
+      env,
+    });
   applyMutation(
     await runWithCurrentPluginMetadata(() =>
       maybeRepairContextEngineHostCompatibility({
@@ -294,16 +291,6 @@ export async function runDoctorRepairSequence(params: {
   const packageSwapInProgress = isUpdatePackageSwapInProgress(env);
   const pluginInstallRepairConverged =
     !packageSwapInProgress && failedPluginIds.length === 0 && !hasUnscopedInstallRepairWarnings;
-  if (pluginInstallRepairConverged) {
-    // Provider availability is authoritative only after configured plugin repair
-    // converges. Preserve model refs while package installation still needs a retry.
-    const modelRepair = repairStaleAgentModelRefs(state.candidate, {
-      env,
-      pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
-    });
-    retiredModelRefConfig = modelRepair.retiredModelRefConfig;
-    applyMutation(modelRepair);
-  }
   if (!packageSwapInProgress && !hasUnscopedInstallRepairWarnings) {
     applyMutation(
       runWithCurrentPluginMetadata(() =>
@@ -348,32 +335,56 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(staleOAuthShadowRepair);
+  const authConfigRepair = maybeRepairOpenAICodexAuthConfig(state.candidate, {
+    profileIdMap: openAICodexAuthProfileIdMap,
+  });
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
-    cfg: state.candidate,
+    cfg: authConfigRepair.config,
     prompter: { confirmAutoFix: async () => true },
     env,
     openAICodexAuthProfileIdMap,
   });
-  if (authProfileSqliteMigration.configChanged) {
-    state = applyDoctorConfigMutation({
-      state,
-      mutation: {
-        config: state.candidate,
-        changes: ["Auth profile SQLite migration updated auth.profiles."],
-      },
-      shouldRepair: true,
-    });
-  }
   appendRepairNotes(authProfileSqliteMigration);
+  const authAliasMigration = maybeRepairLegacyAuthProfileStores({
+    cfg: authConfigRepair.config,
+    env,
+    profileIdMap: openAICodexAuthProfileIdMap,
+  });
+  appendRepairNotes(authAliasMigration);
+  openAICodexAuthProfileIdMap = authAliasMigration.profileIdMap;
+  if (openAICodexAuthProfileIdMap.size > 0 || authConfigRepair.changes.length === 0) {
+    applyMutation({
+      ...authConfigRepair,
+      changes: [
+        ...authConfigRepair.changes,
+        ...(authProfileSqliteMigration.configChanged
+          ? ["Auth profile SQLite migration updated auth.profiles."]
+          : []),
+      ],
+    });
+  } else {
+    appendNotes(warningNotes, authConfigRepair.warnings);
+  }
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
   });
   applyMutation(staleAuthOrderRepair);
+  if (pluginInstallRepairConverged) {
+    // Route retirement reads canonical credentials. Finish auth migration first,
+    // and preserve model refs while configured plugin installation needs a retry.
+    const modelRepair = repairStaleAgentModelRefs(state.candidate, {
+      env,
+      pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
+    });
+    retiredModelRefConfig = modelRepair.retiredModelRefConfig;
+    applyMutation(modelRepair);
+  }
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
-    authProfileSqliteMigration.changes.length > 0;
+    authProfileSqliteMigration.changes.length > 0 ||
+    authAliasMigration.changes.length > 0;
 
   return {
     state,

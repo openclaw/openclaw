@@ -109,7 +109,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
         if (argv[2] === "create") {
           const checkpointId = refreshing ? replacementId : CHECKPOINT_ID;
           providerCheckpoints.add(checkpointId);
-          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "pending");
+          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "completed");
         }
         if (argv[2] === "delete") {
           const checkpointId = argv[3];
@@ -248,37 +248,50 @@ describe("Crabbox warm-image lifecycle ownership", () => {
   });
 
   it.each([
-    { action: "inspect", missing: false },
-    { action: "inspect", missing: true },
-    { action: "fork", missing: false },
+    { action: "inspect", missing: false, keepPrevious: 0 as const },
+    { action: "inspect", missing: true, keepPrevious: 0 as const },
+    { action: "fork", missing: false, keepPrevious: 0 as const },
+    { action: "fork", missing: false, keepPrevious: 1 as const },
   ])(
-    "preserves a refreshed image when an older $action finishes afterward (missing=$missing)",
-    async ({ action, missing }) => {
+    "preserves a refreshed image when an older $action finishes afterward (missing=$missing, keepPrevious=$keepPrevious)",
+    async ({ action, missing, keepPrevious }) => {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
       const commandBlocked = createDeferred<void>();
       const started = createDeferred<void>();
       let blockNext = false;
       let refreshing = false;
       const replacementId = "chk_profile_refreshed";
-      const { provider, calls } = createWarmProvider(async ({ argv }) => {
-        if (blockNext && argv[2] === action) {
-          blockNext = false;
-          started.resolve();
-          await commandBlocked.promise;
-          if (missing) {
-            return commandResult({
-              stdout: JSON.stringify({
-                localState: "available",
-                providerState: "missing",
-                nextAction: "delete",
-              }),
-            });
+      const { provider, calls } = createWarmProvider(
+        async ({ argv }) => {
+          if (blockNext && argv[2] === action) {
+            blockNext = false;
+            started.resolve();
+            await commandBlocked.promise;
+            if (missing) {
+              return commandResult({
+                stdout: JSON.stringify({
+                  localState: "available",
+                  providerState: "missing",
+                  nextAction: "delete",
+                }),
+              });
+            }
           }
-        }
-        if (refreshing && argv[2] === "create") {
-          return checkpointResult(replacementId, LEASE_ID, "available");
-        }
-        return undefined;
-      });
+          if (refreshing && argv[2] === "create") {
+            return checkpointResult(replacementId, LEASE_ID, "available");
+          }
+          return undefined;
+        },
+        undefined,
+        {
+          warmImagePolicy: {
+            refreshAfterMs: 86_400_000,
+            retainUnusedMs: 14 * 86_400_000,
+            keepPrevious,
+          },
+        },
+      );
       await captureWarmImage(provider);
       const lease = await provisionWarmProfile(provider);
       const store = openWarmImageStore();
@@ -292,6 +305,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
           ...image.value.image!,
           state: action === "inspect" ? "pending" : "available",
           createdAtMs: Date.now() - 24 * 60 * 60 * 1_000,
+          lastDemandAtMs: now - 1_000,
         },
       });
       blockNext = true;
@@ -310,6 +324,9 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       await provisioning;
 
       expect(store.lookup(image.key)?.image?.checkpointId).toBe(replacementId);
+      expect(store.lookup(image.key)?.previous?.lastDemandAtMs).toBe(
+        keepPrevious ? now : undefined,
+      );
       calls.length = 0;
       await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
       expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(replacementId);
@@ -352,14 +369,17 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     const now = Date.now();
     for (let index = 0; index < 128; index += 1) {
       store.register(`image-${index}`, {
-        version: 2,
+        version: 3,
         allocations: {},
         image: {
           checkpointId: `chk_image_${index}`,
           kind: "aws-ebs-snapshot",
           state: "available",
           createdAtMs: now,
-          lastUsedAtMs: now - (index === 42 ? 1_000 : 0),
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: now - (index === 42 ? 1_000 : 0),
         },
       });
     }
@@ -384,7 +404,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       throw new Error("Expected a captured warm image");
     }
     store.register(image.key, {
-      version: 2,
+      version: 3,
       allocations: {},
       operation: {
         type: "capture",

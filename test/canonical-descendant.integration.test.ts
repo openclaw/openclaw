@@ -1,14 +1,13 @@
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import codexPlugin from "../extensions/codex/index.js";
 import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
-import openaiPlugin from "../extensions/openai/index.js";
 import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
@@ -35,14 +34,21 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "../src/gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
+import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+  resolvePluginRuntimeExecutionArtifact,
+} from "../src/plugins/plugin-runtime-artifact-selection.js";
 import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
@@ -52,7 +58,10 @@ import { setPluginRuntimeLoadContext } from "../src/plugins/runtime/load-context
 import { resolvePluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.resolve.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
-import type { OpenClawPluginMcpServerConnectionResolver } from "../src/plugins/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConnectionResolver,
+} from "../src/plugins/types.js";
 import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
@@ -65,6 +74,7 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../src/sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 afterEach(() => {
@@ -121,7 +131,11 @@ async function withFixture(
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
   } = {},
 ) {
-  await withOpenClawTestState({ label: "canonical-descendant" }, async (state) => {
+  // The native fixture owns source-module transport mocks, so discovery must use that graph.
+  const env = {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../extensions", import.meta.url)),
+  };
+  await withOpenClawTestState({ label: "canonical-descendant", env }, async (state) => {
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -194,6 +208,11 @@ async function withFixture(
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
         let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
         if (placements) {
+          seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+            environmentId: "policy-worker",
+            sessionId,
+            ownerEpoch: 7,
+          });
           let placement = placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
@@ -327,21 +346,43 @@ async function withFixture(
           workspaceDir: state.workspaceDir,
           preferPersisted: false,
         });
-        for (const plugin of [codexPlugin, openaiPlugin]) {
-          const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
+        for (const pluginId of ["codex", "openai"]) {
+          const manifest = expectDefined(
+            metadataSnapshot.byPluginId.get(pluginId),
+            "plugin manifest",
+          );
+          const artifact = resolvePluginRuntimeExecutionArtifact(
+            resolvePluginRuntimeArtifactSelection({
+              ...manifest,
+              entryKind: "runtime",
+              preferBuiltPluginArtifacts: false,
+            }),
+          );
+          const plugin: OpenClawPluginDefinition = (
+            await import(pathToFileURL(artifact.source).href)
+          ).default;
+          expect(plugin.id).toBe(pluginId);
           const record = createPluginRecord({
-            id: plugin.id,
-            contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
-              .contracts,
-            origin: "bundled",
-            rootDir,
-            source: `${rootDir}index.ts`,
+            id: manifest.id,
+            contracts: manifest.contracts,
+            origin: manifest.origin,
+            ...artifact,
+          });
+          // Register the selected artifact itself so retained tool ownership agrees
+          // with both source-only and built metadata discovery.
+          bindPluginRuntimeArtifactSelection(record, {
+            ...manifest,
+            preferBuiltPluginArtifacts: false,
+            runtimeEntry: artifact,
           });
           registry.plugins.push(record);
-          plugin.register(
+          expectDefined(
+            plugin.register,
+            "fixture plugin registration",
+          )(
             createApi(record, {
               config,
-              pluginConfig: config.plugins.entries?.[plugin.id]?.config,
+              pluginConfig: config.plugins.entries?.[pluginId]?.config,
             }),
           );
         }
@@ -351,6 +392,12 @@ async function withFixture(
           createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
         }
         expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        const fixtureOwners = createRuntimePluginManifestLookup(registry, metadataSnapshot.plugins);
+        expect(
+          registry.plugins
+            .filter((record) => record.id === "codex" || record.id === "openai")
+            .map((record) => fixtureOwners(record.id) === record),
+        ).toEqual([true, true]);
         markPluginRegistryActive(registry);
         setPluginRuntimeLoadContext(
           registry,
@@ -1119,6 +1166,20 @@ describe("canonical descendant lifecycle through real owners", () => {
             "canonical native thread",
           );
           const currentBefore = structuredClone(current);
+          if (!Array.isArray(current.dynamicTools)) {
+            throw new Error("Expected the canonical native dynamic tool catalog");
+          }
+          expect(
+            current.dynamicTools.flatMap((spec) =>
+              isRecord(spec) && spec.type === "namespace" && Array.isArray(spec.tools)
+                ? spec.tools
+                : [spec],
+            ),
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "function", name: "codex_threads" }),
+            ]),
+          );
           const entries = await fixture.readEntries(source.sessionKey);
           const users = entries.filter((entry) => entry.role === "user");
           expect(users).toHaveLength(4);

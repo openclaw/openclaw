@@ -25,6 +25,78 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
   } satisfies ProviderPlugin;
 }
 
+describe("manifest auth choice dispatch", () => {
+  const manifestChoice = {
+    pluginId: "moonshot",
+    providerId: "moonshot",
+    methodId: "api-key-cn",
+    choiceId: "moonshot-api-key-cn",
+  };
+  const provider = makeProvider({
+    id: "moonshot",
+    pluginId: "moonshot",
+    label: "Moonshot",
+    auth: [
+      { id: "api-key", label: "Global", kind: "api_key", run: vi.fn() },
+      {
+        id: "api-key-cn",
+        label: "China",
+        kind: "api_key",
+        wizard: { groupLabel: "Moonshot", modelSelection: { allowKeepCurrent: false } },
+        run: vi.fn(),
+      },
+    ],
+  });
+
+  it("resolves the declared method without a duplicate runtime choice ID", () => {
+    expect(
+      resolveProviderPluginChoiceCore({
+        providers: [{ ...provider, pluginId: "other-plugin" }, provider],
+        choice: manifestChoice.choiceId,
+        manifestChoice,
+      }),
+    ).toEqual({ provider, method: provider.auth[1], wizard: provider.auth[1]?.wizard });
+  });
+
+  it("preserves explicit provider-method targets over a conflicting manifest choice", () => {
+    const choice = buildProviderPluginMethodChoice(provider.id, "api-key");
+    expect(
+      resolveProviderPluginChoiceCore({
+        providers: [{ ...provider, id: "other-provider", pluginId: "other-plugin" }, provider],
+        choice,
+        manifestChoice: {
+          ...manifestChoice,
+          pluginId: "other-plugin",
+          providerId: "other-provider",
+          choiceId: choice,
+        },
+      }),
+    ).toEqual({ provider, method: provider.auth[0] });
+  });
+
+  it.each([
+    { pluginId: "other-plugin" },
+    { providerId: "other-provider" },
+    { methodId: "missing" },
+    { methodId: "" },
+    { choiceId: "other-choice" },
+  ])("rejects an unmatched manifest identity: %j", (override) => {
+    const conflictingRuntime = {
+      ...provider,
+      auth: provider.auth.map((method) =>
+        Object.assign({}, method, { wizard: { choiceId: manifestChoice.choiceId } }),
+      ),
+    };
+    expect(
+      resolveProviderPluginChoiceCore({
+        providers: [conflictingRuntime],
+        choice: manifestChoice.choiceId,
+        manifestChoice: { ...manifestChoice, ...override },
+      }),
+    ).toBeNull();
+  });
+});
+
 function createSglangWizardProvider(params?: {
   includeSetup?: boolean;
   includeModelPicker?: boolean;

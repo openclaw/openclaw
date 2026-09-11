@@ -47,7 +47,6 @@ function pickPackageInstallCommonParams(
 ): InternalPackageInstallCommonParams {
   return copyPluginInstallTransactionRequest(params, {
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
@@ -164,7 +163,6 @@ async function installBundleFromSourceDir(
     sourceFamily: sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "archive"),
     scan: async () =>
       await runtime.scanBundleInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         sourceDir: params.sourceDir,
@@ -296,7 +294,6 @@ async function installPluginFromPackageDir(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
@@ -392,7 +389,6 @@ export async function installPluginFromArchive(
         sourceDir,
         ...pickPackageInstallCommonParams(
           copyPluginInstallTransactionRequest(params, {
-            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
             onInstallPolicyWarning: params.onInstallPolicyWarning,
             extensionsDir: params.extensionsDir,
             timeoutMs,

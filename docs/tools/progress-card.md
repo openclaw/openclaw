@@ -15,11 +15,13 @@ The card is durable session state. A reconnect or page reload reads the latest c
 
 ## Adoption
 
+Create a card only for substantial work with at least two meaningful sequential steps. Skip greetings, quick questions, and single-step requests; do not invent steps to justify a card. The checklist remains optional: eligible work can use Markdown, a plan, or both. Existing cards can still be updated when progress meaningfully changes or cleared when requested.
+
 OpenClaw adds a short progress-card reminder only for non-main, non-sub-agent sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
 
 The reminder says:
 
-> During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.
+> Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.
 
 The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
 
@@ -49,7 +51,7 @@ The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done
 
 ## Format the note
 
-Choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
+For eligible multi-step work, choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
 
 ```md
 <progress aria-label="Tests · 3/7" value="3" max="7"></progress>
@@ -83,15 +85,13 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
+A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
+
 ## Where the card appears
 
 Channels with progress drafts show the latest checklist in active `partial`, `block`, and `progress` previews, subject to their preview settings and line limits. Card updates supply a completion count, or `Progress updated` for a note without steps; they do not copy the note's Markdown or HTML into tool summaries. Telegram uses native checkboxes with `channels.telegram.richMessages: true` and readable HTML checklists otherwise. See [Streaming and chunking](/concepts/streaming#progress-draft-rendering).
 
-The current chat keeps exactly one live card in the main conversation:
-
-- The card appears in the collapsible surface inside the composer at every width.
-
-Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm a removal with a read or clear response for that session and agent.
+The current chat keeps exactly one live card, in the collapsible surface inside the composer, at every width. Opening a side panel does not move it out of the conversation. The dashboard widget and the session hovercard are separate read-only placements: hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm a removal with a read or clear response for that session and agent.
 
 Transient refresh failures retain the last loaded card. The dashboard widget shows a retry notice until a refresh succeeds. If the Gateway reports that the connection no longer participates in the session, clients hide the card until access is restored and a refresh succeeds.
 
@@ -122,3 +122,9 @@ Use the `dashboard` tool to keep the live card on the current session's dashboar
 ```
 
 Omit `props.sessionKey` to follow the dashboard's session. To show another session's card, add `"props": { "sessionKey": "agent:main:release" }`. The current connection must participate in that session; otherwise select an accessible session or change its sharing.
+
+## Related
+
+- [Tools overview](/tools)
+- [`openclaw dashboard`](/cli/dashboard) — open the Control UI from the CLI
+- [Control UI URLs](/web/urls) — reaching the Control UI in a browser

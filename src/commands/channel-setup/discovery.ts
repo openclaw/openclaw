@@ -144,28 +144,9 @@ export function resolveChannelSetupEntries(params: {
       }),
     );
   }
-  for (const entry of installedCatalogEntries) {
+  for (const entry of [...installedCatalogEntries, ...installableCatalogEntries]) {
     if (!metaById.has(entry.id)) {
-      metaById.set(
-        entry.id,
-        normalizeChannelMeta({
-          id: entry.id as ChannelChoice,
-          meta: entry.meta,
-          existing: metaById.get(entry.id),
-        }),
-      );
-    }
-  }
-  for (const entry of installableCatalogEntries) {
-    if (!metaById.has(entry.id)) {
-      metaById.set(
-        entry.id,
-        normalizeChannelMeta({
-          id: entry.id as ChannelChoice,
-          meta: entry.meta,
-          existing: metaById.get(entry.id),
-        }),
-      );
+      metaById.set(entry.id, entry.meta);
     }
   }
 

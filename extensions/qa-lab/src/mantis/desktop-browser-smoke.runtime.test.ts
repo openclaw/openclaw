@@ -1,9 +1,21 @@
-// Qa Lab tests cover desktop browser smoke plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ensureManagedCrabboxBinary } from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
+
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
+  return {
+    ...actual,
+    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
+      binary,
+      version: "0.55.0",
+    })),
+  };
+});
 
 describe("mantis desktop browser smoke runtime", () => {
   let repoRoot: string;
@@ -16,13 +28,32 @@ describe("mantis desktop browser smoke runtime", () => {
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
 
-  it("leases a desktop box, runs a visible browser, copies artifacts, and stops on pass", async () => {
+  it("stops before leasing when the managed binary cannot be prepared", async () => {
+    const runner = vi.fn();
+    vi.mocked(ensureManagedCrabboxBinary).mockRejectedValueOnce(new Error("release unavailable"));
+
+    await expect(
+      runMantisDesktopBrowserSmoke({
+        commandRunner: runner,
+        crabboxBin: "/tmp/outdated-crabbox",
+        repoRoot,
+      }),
+    ).rejects.toThrow("release unavailable");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("uses the managed binary to lease a desktop, run a browser, copy artifacts, and stop", async () => {
+    vi.mocked(ensureManagedCrabboxBinary).mockResolvedValueOnce({
+      binary: "/tmp/crabbox",
+      version: "0.55.0",
+    });
     await fs.mkdir(path.join(repoRoot, "qa-artifacts"), { recursive: true });
     await fs.writeFile(path.join(repoRoot, "qa-artifacts", "timeline.html"), "<h1>Mantis</h1>");
     const commands: { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv }[] = [];
     const runtimeEnv = {
       PATH: process.env.PATH,
       CRABBOX_COORDINATOR_TOKEN: "runtime-token",
+      OPENCLAW_MANTIS_CRABBOX_BIN: "/tmp/environment-crabbox",
       OPENCLAW_MANTIS_CRABBOX_PROVIDER: "hetzner",
     };
     const runner = vi.fn(
@@ -64,7 +95,7 @@ describe("mantis desktop browser smoke runtime", () => {
     const result = await runMantisDesktopBrowserSmoke({
       browserUrl: "https://openclaw.ai/docs",
       commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
+      crabboxBin: "/tmp/outdated-crabbox",
       env: runtimeEnv,
       htmlFile: "qa-artifacts/timeline.html",
       now: () => new Date("2026-05-04T12:00:00.000Z"),
@@ -73,6 +104,11 @@ describe("mantis desktop browser smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
+    expect(ensureManagedCrabboxBinary).toHaveBeenCalledWith({
+      binary: "/tmp/outdated-crabbox",
+      cwd: repoRoot,
+      env: runtimeEnv,
+    });
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],
       ["/tmp/crabbox", "inspect"],

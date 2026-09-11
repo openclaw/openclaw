@@ -109,7 +109,7 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
           expect(repair.installRecords).toEqual({});
         });
         // A completed lifecycle changes the next generation, not the invoking snapshot.
-        const persisted = await withPluginCache(createPluginCache(), () =>
+        const persisted = withPluginCache(createPluginCache(), () =>
           readPersistedInstalledPluginIndexInstallRecords({ env }),
         );
         expect(persisted).toEqual({});
