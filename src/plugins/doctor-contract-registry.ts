@@ -1,7 +1,7 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
@@ -450,12 +450,9 @@ export async function collectPluginDoctorMigrationBackupResources(params: {
 
 function isMigrationBackupResource(value: unknown): value is PluginDoctorMigrationBackupResource {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "path" in value &&
+    isRecord(value) &&
     typeof value.path === "string" &&
     path.isAbsolute(value.path) &&
-    "kind" in value &&
     (value.kind === "sqlite" || value.kind === "file" || value.kind === "directory")
   );
 }

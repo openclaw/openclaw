@@ -544,8 +544,6 @@ export async function executeMutableUpdate(
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, {
         env: opts.run.env,
       });
-    }
-    if (opts.run) {
       await preflightUpdateCommandBackup({ opts, root: params.root, env });
     }
     await stopManagedServiceBeforeMutableUpdate(roots);

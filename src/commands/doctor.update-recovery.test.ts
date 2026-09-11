@@ -477,6 +477,46 @@ describe("update Doctor state recovery", () => {
     );
   });
 
+  it.each(["repair", "bootstrap"])(
+    "restores the claimed capture again after subsequent %s fails",
+    async (phase) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+      await fs.writeFile(backupPath, "original config");
+      await fs.writeFile(configPath, "partially migrated config");
+      mocks.pending.mockResolvedValue(ref);
+      let terminalBeforeRepair = false;
+      const mutateAndFail = async () => {
+        expect(await fs.readFile(configPath, "utf8")).toBe("original config");
+        terminalBeforeRepair = mocks.outcome.mock.calls.length > 0;
+        await fs.writeFile(configPath, "second partial migration");
+        throw new Error("continued repair failed");
+      };
+      mocks.flow.mockImplementation(mutateAndFail);
+      const operation =
+        phase === "repair"
+          ? doctorCommand(runtime, { repair: true })
+          : withDoctorUpdateRecovery(runtime, async () => {
+              await prepareDoctorUpdateRecovery({ repair: true });
+              await mutateAndFail();
+            });
+
+      await expect(operation).rejects.toThrow("continued repair failed");
+      expect(await fs.readFile(configPath, "utf8")).toBe("original config");
+      expect(terminalBeforeRepair).toBe(false);
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.restore).toHaveBeenCalledTimes(2);
+      expect(mocks.closeStores).toHaveBeenCalledTimes(2);
+      expect(mocks.closeStores.mock.invocationCallOrder[1]).toBeLessThan(
+        mocks.restore.mock.invocationCallOrder[1],
+      );
+      expect(mocks.outcome).toHaveBeenCalledExactlyOnceWith(
+        ref,
+        { status: "restored" },
+        { assertOwned: expect.any(Function) },
+      );
+    },
+  );
+
   it.each(["alive", "unknown"])(
     "refuses a retained backup with a %s original owner",
     async (liveness) => {

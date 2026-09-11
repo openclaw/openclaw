@@ -629,7 +629,6 @@ export async function rollbackFailedUpdate(params: {
         preManagedServiceStop: stopped,
       });
     }
-    assertCurrent();
     result.recovery = {
       serviceRestartSafe: true,
       packageRollbackVerified: true,

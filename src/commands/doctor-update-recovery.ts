@@ -85,7 +85,7 @@ export async function withDoctorUpdateRecovery<T>(
             });
           } catch (error) {
             if (scope.backup) {
-              await restoreDoctorBackup(scope, scope.backup, error);
+              await restoreDoctorBackup(scope, scope.backup, { failure: error });
             }
             throw new AggregateError(
               [error],
@@ -102,17 +102,14 @@ export async function withDoctorUpdateRecovery<T>(
               await scope.maintenance?.closeStores();
               scope.storesClosed = true;
             } catch (error) {
-              await restoreDoctorBackup(scope, scope.backup, error);
+              await restoreDoctorBackup(scope, scope.backup, { failure: error });
               throw error;
             }
             try {
               const { recordUpdateRunRecoveryCapture } =
                 await import("../infra/update-run-ledger.js");
-              if (!scope.backupRunId) {
-                throw new Error("Doctor capture run identity is missing");
-              }
               recordUpdateRunRecoveryCapture(
-                scope.backupRunId,
+                doctorBackupRunId(scope),
                 {
                   manifestSha256: scope.backup.manifestSha256,
                   doctorCompleted: true,
@@ -124,6 +121,9 @@ export async function withDoctorUpdateRecovery<T>(
               scope.runtime.error(
                 `Warning: Doctor completed, but its capture outcome could not be recorded at ${scope.backup.manifestPath}: ${String(error)}. Inspect with openclaw update status --json; run npx openclaw@latest doctor --fix.`,
               );
+            }
+            if (scope.resolved) {
+              await reportDoctorBackupRestored(scope, scope.backup);
             }
           }
         }
@@ -175,23 +175,25 @@ function assertDoctorRecoveryCurrent(scope: DoctorRecoveryScope): void {
   scope.assertRecoveryClaim?.();
 }
 
+function doctorBackupRunId(scope: DoctorRecoveryScope): string {
+  if (!scope.backupRunId) {
+    throw new Error("Doctor recovery lost its verified capture run identity.");
+  }
+  return scope.backupRunId;
+}
+
 async function restoreDoctorBackup(
   scope: DoctorRecoveryScope,
   backup: UpdateRecoveryBackupRef,
-  failure?: unknown,
+  options: { failure?: unknown; resumeRepair?: boolean } = {},
 ) {
   const { restoreUpdateRecoveryBackup, writeUpdateRecoveryBackupOutcome } =
     await import("../infra/update-recovery-backup.js");
-  const { recordUpdateRunRecoveryCapture, recordUpdateRunStep } =
-    await import("../infra/update-run-ledger.js");
   const maintenance = scope.maintenance;
   if (!maintenance) {
     throw new Error("Doctor recovery lost maintenance ownership.");
   }
-  const runId = scope.backupRunId;
-  if (!runId) {
-    throw new Error("Doctor recovery lost its verified capture run identity.");
-  }
+  doctorBackupRunId(scope);
   const authority = { assertOwned: () => assertDoctorRecoveryCurrent(scope) };
   if (scope.revalidatePendingRecovery) {
     await maintenance.closeStores();
@@ -207,7 +209,7 @@ async function restoreDoctorBackup(
     scope.storesClosed = true;
     await restoreUpdateRecoveryBackup(backup, authority);
   } catch (error) {
-    const errors = failure === undefined ? [error] : [failure, error];
+    const errors = options.failure === undefined ? [error] : [options.failure, error];
     try {
       await writeUpdateRecoveryBackupOutcome(
         backup,
@@ -226,6 +228,20 @@ async function restoreDoctorBackup(
       { cause: error },
     );
   }
+  if (!options.resumeRepair) {
+    await reportDoctorBackupRestored(scope, backup);
+  }
+}
+
+async function reportDoctorBackupRestored(
+  scope: DoctorRecoveryScope,
+  backup: UpdateRecoveryBackupRef,
+): Promise<void> {
+  const { writeUpdateRecoveryBackupOutcome } = await import("../infra/update-recovery-backup.js");
+  const { recordUpdateRunRecoveryCapture, recordUpdateRunStep } =
+    await import("../infra/update-run-ledger.js");
+  const runId = doctorBackupRunId(scope);
+  const authority = { assertOwned: () => assertDoctorRecoveryCurrent(scope) };
   try {
     recordUpdateRunRecoveryCapture(
       runId,
@@ -486,9 +502,14 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
       await assertPendingRecoveryOffline();
       assertDoctorRecoveryCurrent(scope);
     };
-    await restoreDoctorBackup(scope, pending);
+    await restoreDoctorBackup(scope, pending, { resumeRepair: true });
     scope.resolved = pending;
-    // Normal repair owns the restored state; only successful explicit repair permits retirement.
+    scope.backup = pending;
+    scope.reference = pending;
+    scope.protected = true;
+    scope.storesClosed = false;
+    // The claimed capture protects all remaining writes; terminal publication waits for settlement.
+    scope.revalidatePendingRecovery = undefined;
     return;
   }
   let reference: UpdateRecoveryBackupRef;

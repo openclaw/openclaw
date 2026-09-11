@@ -57,7 +57,7 @@ describe("container update recovery reporting", () => {
     ["npm", true, false],
   ] as const)(
     "publishes consistent %s recovery (json=%s, container=%s)",
-    (mode, json, container) => {
+    async (mode, json, container) => {
       vi.mocked(isContainerEnvironment).mockReturnValue(container);
       const state = dirs.make("container-update-report-");
       const env = {
@@ -67,7 +67,7 @@ describe("container update recovery reporting", () => {
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const result = publishUpdateCommandTerminalResult(
+      const result = await publishUpdateCommandTerminalResult(
         { opts: { json, run }, coreAlreadyCurrent: false },
         failure({ mode }),
         { rolledBack: false },
