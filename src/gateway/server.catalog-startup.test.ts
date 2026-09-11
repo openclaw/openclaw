@@ -6,9 +6,9 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerCore } from "./server-start.js";
 import * as bootstrap from "./server-startup-bootstrap.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 describe("Gateway startup catalog", () => {
   it.each([false, true])("captures metadata before bootstrap awaits, absent=%s", async (absent) => {
@@ -79,26 +79,27 @@ it("starts with provider settings without model rows when a channel is auto-enab
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
   });
-  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
   try {
-    state.applyEnv();
-    gateway = await startGatewayWithClient({
-      configPath: state.configPath,
-      token,
-      cfg: {
-        agents: { entries: { main: { default: true } } },
-        models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
-        channels: { telegram: { botToken: "123456:synthetic-test-token" } },
-        gateway: { auth: { mode: "token", token } },
-      },
+    const port = await getFreePort();
+    await state.writeConfig({
+      agents: { entries: { main: { default: true } } },
+      models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
+      channels: { telegram: { botToken: "123456:synthetic-test-token" } },
+      gateway: { auth: { mode: "token", token } },
     });
-    await gateway.server.startupSettled;
-    await expect(gateway.client.request("health", {})).resolves.toMatchObject({ ok: true });
+    state.applyEnv();
+    server = await startGatewayServerCore(port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
+    });
+    await server.startupSettled;
+    const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(readiness.status).toBe(200);
+    await expect(readiness.json()).resolves.toMatchObject({ ready: true });
   } finally {
-    if (gateway) {
-      await disconnectGatewayClient(gateway.client);
-      await gateway.server.close({ reason: "provider overlay startup test complete" });
-    }
+    await server?.close({ reason: "provider overlay startup test complete" });
     await state.cleanup();
   }
 }, 90_000);
