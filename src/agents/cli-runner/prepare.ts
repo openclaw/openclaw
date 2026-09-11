@@ -2073,16 +2073,15 @@ async function prepareCliRunContextWithinReadFence(
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
+        const mediaTaskContext = await buildMediaTaskRuntimeContext({
+          capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+        });
         const appendContext = [
           hookResult?.appendContext,
           authorizedPromptBuildResult?.appendContext,
-          buildRuntimeContextCustomMessage(
-            buildMediaTaskRuntimeContext({
-              capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
-              sessionKey: params.sessionKey,
-              agentId: sessionAgentId,
-            }),
-          )?.content,
+          buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
         ]
           .filter((value): value is string => Boolean(value?.trim()))
           .join("\n\n");
@@ -2113,6 +2112,8 @@ async function prepareCliRunContextWithinReadFence(
       } catch (error) {
         cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       }
+      params.assertCurrent?.();
+      params.abortSignal?.throwIfAborted();
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {

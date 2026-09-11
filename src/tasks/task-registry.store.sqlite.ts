@@ -407,7 +407,9 @@ export function loadTaskRegistryStateFromSqliteReadOnlyResult(): TaskRegistryRea
   );
 }
 
-export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {
+export async function listTaskRegistryRecordsByOwnerKeyFromSqlite(
+  ownerKey: string,
+): Promise<TaskRecord[]> {
   const key = ownerKey.trim();
   if (!key) {
     return [];

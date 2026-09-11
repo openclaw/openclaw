@@ -19,7 +19,7 @@ function tagAsAbortableWrapper(err: Error): Error {
   return err;
 }
 
-function makeAbortError(signal: AbortSignal): Error {
+export function createAbortableError(signal: AbortSignal): Error {
   const reason = getAbortReason(signal);
   if (reason instanceof Error) {
     const err = new Error(reason.message, { cause: reason });
@@ -92,12 +92,12 @@ export function joinWithRunLivenessDeadline(input: {
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
-    return Promise.reject(makeAbortError(signal));
+    return Promise.reject(createAbortableError(signal));
   }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      reject(makeAbortError(signal));
+      reject(createAbortableError(signal));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(
