@@ -611,9 +611,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
         ]
       : [];
   });
-  if (targets.length === 0) {
-    return { ...emptyRepairSummary(), warnings };
-  }
   if (!shouldRepair) {
     const stale = targets.flatMap((target) => {
       const sessionKeys = new Set(target.staleSqliteSessionKeys);
@@ -734,15 +731,5 @@ export async function maybeRepairCodexSessionRoutes(params: {
               : `Repaired legacy bindings or retired model routes in ${repairedScope} while preserving auth-profile pins.`,
           ]
         : [],
-  };
-}
-
-function emptyRepairSummary(): CodexSessionRouteRepairSummary {
-  return {
-    scannedStores: 0,
-    repairedStores: 0,
-    repairedSessions: 0,
-    warnings: [],
-    changes: [],
   };
 }
