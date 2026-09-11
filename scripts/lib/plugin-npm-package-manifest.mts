@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { parse as parseYaml } from "yaml";
-import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.ts";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/categories.ts";
 import {
   generateNpmPackageLock,
   packageJsonForNpmLock,
