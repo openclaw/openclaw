@@ -150,27 +150,48 @@ async function assertPaths(
       `Config write ${unexpected} is outside the update backup inventory. Backup retained at ${ref.manifestPath}; run npx openclaw@latest doctor --fix after resolving ownership.`,
     );
   }
+  const rejectChangedConfig = (pathname: string): never => {
+    throw new Error(
+      `Configuration ${pathname} changed outside the recorded update writes; recovery was refused to preserve those bytes. Backup retained at ${ref.manifestPath}; after resolving the edit, run npx openclaw@latest doctor --fix.`,
+    );
+  };
   for (const pathname of manifest.configPaths) {
     let ownerPath = pathname;
     const original = manifest.entries.find((entry) => entry.sourcePath === pathname);
+    const actual = await statOrMissing(pathname);
+    let replacedLink = false;
     if (original?.kind === "symlink" && original.contentPath) {
-      const actual = await statOrMissing(pathname);
-      if (actual?.isSymbolicLink() && (await fs.readlink(pathname)) === original.target) {
+      if (actual?.isSymbolicLink()) {
+        if (
+          (await fs.readlink(pathname)) !== original.target ||
+          (await fs.realpath(pathname)) !== original.contentPath
+        ) {
+          rejectChangedConfig(pathname);
+        }
         ownerPath = original.contentPath;
+      } else {
+        replacedLink = true;
       }
+    } else if (actual?.isSymbolicLink()) {
+      rejectChangedConfig(pathname);
     }
     const before = originalHash(manifest, ownerPath);
     const write = writes.get(ownerPath);
     const expected = write ? write.afterHash : before;
     const observed = await currentHash(pathname);
     authority.assertOwned();
+    // Atomic config writes can replace a link; restore also records its temporary unlink.
+    if (
+      replacedLink &&
+      (!write || !write.contiguous || write.beforeHash !== before || observed !== write.afterHash)
+    ) {
+      rejectChangedConfig(pathname);
+    }
     if (observed === before) {
       continue;
     }
     if ((write && (!write.contiguous || write.beforeHash !== before)) || observed !== expected) {
-      throw new Error(
-        `Configuration ${pathname} changed outside the recorded update writes; recovery was refused to preserve those bytes. Backup retained at ${ref.manifestPath}; after resolving the edit, run npx openclaw@latest doctor --fix.`,
-      );
+      rejectChangedConfig(pathname);
     }
   }
 }

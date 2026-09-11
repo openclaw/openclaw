@@ -72,10 +72,7 @@ import {
   prepareWorkshopWorkspaceRelocation,
 } from "./doctor-skill-workshop-workspaces.js";
 
-export {
-  inspectLegacySkillWorkshopMigration,
-  type LegacyWorkshopMigrationInspection,
-} from "./doctor-skill-workshop-readonly.js";
+export { inspectLegacySkillWorkshopMigration } from "./doctor-skill-workshop-readonly.js";
 
 // Legacy rollback JSON can expand control characters sixfold across 1 MiB of
 // SKILL.md plus 64 existing 256 KiB support targets.

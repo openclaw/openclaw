@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { retireVerifiedUpdateCommandCapture } from "../cli/update-cli/update-command-backup-lifecycle.js";
 import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { retireVerifiedUpdateCommandCapture } from "../cli/update-cli/update-command-backup-lifecycle.js";
 import type { UpdateCaptureRetirementInput } from "../cli/update-cli/update-command-migrated-types.js";
 import type {
   MigratedUpdateFinalizationInput,
@@ -23,9 +23,9 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveEnvironmentValue } from "./process-env.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";

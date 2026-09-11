@@ -527,6 +527,81 @@ describe("update recovery backup", () => {
     },
   );
 
+  it.each([
+    "unchanged",
+    "owned replacement",
+    "retargeted",
+    "parent retargeted",
+    "unowned replacement",
+  ] as const)("preserves config symlink ownership when %s", async (change) => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state, false);
+      const originalDir = state.path("original-config");
+      const alternateDir = state.path("alternate-config");
+      const route = state.path("config-route");
+      const originalTarget = path.join(originalDir, "openclaw.json");
+      const alternateTarget = path.join(alternateDir, "openclaw.json");
+      await fs.mkdir(originalDir);
+      await fs.mkdir(alternateDir);
+      const original = await fs.readFile(state.configPath);
+      await fs.rename(state.configPath, originalTarget);
+      await fs.symlink(originalDir, route, "junction");
+      const originalLink = path.join(route, "openclaw.json");
+      await fs.symlink(originalLink, state.configPath);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        await fs.writeFile(alternateTarget, original);
+        database.exec("UPDATE workshop SET workspace_dir='migrated-workspace'");
+        await withUpdateRecoveryConfigWrites(ref, authority, async () => {
+          if (change === "parent retargeted") {
+            await fs.unlink(route);
+            await fs.symlink(alternateDir, route, "junction");
+          } else if (change !== "unchanged") {
+            await fs.unlink(state.configPath);
+            if (change === "retargeted") {
+              await fs.symlink(alternateTarget, state.configPath);
+            } else {
+              const contents =
+                change === "owned replacement"
+                  ? Buffer.concat([original, Buffer.from("\n")])
+                  : original;
+              await fs.writeFile(state.configPath, contents);
+              if (change === "owned replacement") {
+                recordConfigFileWrite(
+                  state.configPath,
+                  createHash("sha256").update(original).digest("hex"),
+                  createHash("sha256").update(contents).digest("hex"),
+                );
+              }
+            }
+          }
+          const link = await fs.readlink(state.configPath).catch(() => null);
+          const routeTarget = await fs.readlink(route);
+          if (change === "unchanged" || change === "owned replacement") {
+            await restoreUpdateRecoveryBackup(ref, authority);
+            expect(await fs.readlink(state.configPath)).toBe(originalLink);
+            expect(database.prepare("SELECT workspace_dir FROM workshop").get()).toEqual({
+              workspace_dir: "original-workspace",
+            });
+          } else {
+            await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+              /changed outside the recorded update writes/,
+            );
+            expect(await fs.readlink(state.configPath).catch(() => null)).toBe(link);
+            expect(await fs.readlink(route)).toBe(routeTarget);
+            expect(database.prepare("SELECT workspace_dir FROM workshop").get()).toEqual({
+              workspace_dir: "migrated-workspace",
+            });
+          }
+          expect(await fs.readFile(originalTarget)).toEqual(original);
+          expect(await fs.readFile(alternateTarget)).toEqual(original);
+        });
+      } finally {
+        database.close();
+      }
+    });
+  });
+
   it("does not mistake an operator-created empty config for a missing original", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "empty" }, async (state) => {
       const coordinatorDir = state.path("coordinator");

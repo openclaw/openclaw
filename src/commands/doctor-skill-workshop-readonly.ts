@@ -28,7 +28,7 @@ export const MANIFEST_PATH = `${WORKSHOP_DIR}/proposals.json`;
 const RECOVERY_DIR = `${WORKSHOP_DIR}/recovery`;
 export const RECOVERY_PROPOSALS_DIR = `${RECOVERY_DIR}/proposals`;
 
-export type LegacyWorkshopMigrationInspection = {
+type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
   externalProposalDetails?: string[];

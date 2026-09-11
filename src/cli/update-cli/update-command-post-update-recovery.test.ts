@@ -274,6 +274,7 @@ describe("failed update recovery restart", () => {
       );
 
       expect(mocks.restart).toHaveBeenCalledOnce();
+      expect(mocks.restart.mock.lastCall?.[0].updateRun).toBe(run);
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
       expect(mocks.printResult).toHaveBeenCalledOnce();

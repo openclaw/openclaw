@@ -169,6 +169,7 @@ export async function executeMutableUpdate(
       : verifyPackageUpdateRecovery(params.root);
   const recoverStoppedService = async () =>
     maybeRestartServiceAfterFailedMutableUpdate({
+      updateRun: opts.run,
       recovery: await originalRecovery(),
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),
