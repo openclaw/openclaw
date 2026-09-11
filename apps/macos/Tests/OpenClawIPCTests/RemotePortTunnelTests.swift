@@ -34,10 +34,40 @@ struct RemotePortTunnelTests {
         #expect(RemotePortTunnel.localPort(root: root) == 19089)
     }
 
-    @Test(arguments: ["", "ws://localhost", "wss://gateway.example:19089"])
-    func `tunnel local port defaults without borrowing the local gateway port`(url: String) {
+    @Test(arguments: [("", 19789), ("ws://localhost", 18789), ("wss://gateway.example:19089", 19789)])
+    func `legacy fallback preserves explicit loopback URL defaults`(scenario: (String, Int)) {
+        let (url, expectedPort) = scenario
         let root: [String: Any] = ["gateway": ["port": 19789, "remote": ["url": url]]]
-        #expect(RemotePortTunnel.localPort(root: root) == 18789)
+        #expect(RemotePortTunnel.localPort(root: root, legacyPort: 19789, environment: [:]) == expectedPort)
+    }
+
+    @Test(arguments: [18789, 19789])
+    func `legacy SSH primary keeps both ports before hosting is enabled`(legacyPort: Int) {
+        var remote: [String: Any] = ["transport": "ssh", "sshTarget": "operator@gateway.example"]
+        let root: [String: Any] = ["gateway": ["mode": "remote", "port": legacyPort, "remote": remote]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(ports.local == legacyPort)
+        #expect(ports.remote == legacyPort)
+        remote["remotePort"] = 18800
+        let explicit = RemotePortTunnel.ports(
+            root: ["gateway": ["remote": remote]], sshHost: "gateway.example", legacyPort: legacyPort, environment: [:])
+        #expect(explicit.local == legacyPort)
+        #expect(explicit.remote == 18800)
+    }
+
+    @Test(arguments: [(nil as String?, 19889), ("19989", 19989)])
+    func `legacy SSH keeps a live configured listener separate from the reserved default`(scenario: (String?, Int)) {
+        let (override, expectedLocalPort) = scenario
+        let root: [String: Any] = ["gateway": [
+            "mode": "remote", "port": 19889,
+            "remote": ["transport": "ssh", "sshTarget": "operator@gateway.example"],
+        ]]
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: "gateway.example", legacyPort: 19789,
+            environment: override.map { ["OPENCLAW_GATEWAY_PORT": $0] } ?? [:])
+        #expect(ports.local == expectedLocalPort)
+        #expect(ports.remote == 19789)
     }
 
     @Test(arguments: [false, true])

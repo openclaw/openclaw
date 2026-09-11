@@ -1345,21 +1345,33 @@ extension AppState {
             else { throw PrimaryGatewayControlError.unavailable }
             guard self.syncGatewayConfigNow() else { throw PrimaryGatewayControlError.conflictingEdits }
             let currentRoot = OpenClawConfigFile.loadDict()
-            let replacement = PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(currentRoot)
+            let replacement = try PrimaryGatewayControlConfiguration.separatingLocalGatewayPort(
+                currentRoot,
+                preferredLocalPort: AppProfile.current.defaultGatewayPort,
+                legacyPort: GatewayEnvironment.gatewayPort(root: currentRoot),
+                sshHost: CommandResolver.parseSSHTarget(self.remoteTarget)?.host)
             let repairsConfig = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
-            let repairsLegacyPort = OpenClawConfigFile.gatewayPort(root: currentRoot) == nil &&
-                GatewayRemoteConfig.resolveTransport(root: currentRoot) == .ssh &&
+            let repairsLegacyPort = GatewayRemoteConfig.resolveTransport(root: currentRoot) == .ssh &&
                 AppDefaults.standard.integer(forKey: "gatewayPort") == RemotePortTunnel.localPort(root: currentRoot)
-            if repairsConfig || repairsLegacyPort {
+            let repairedLocalPort = repairsConfig || repairsLegacyPort
+            if repairedLocalPort {
                 try self.persistGatewayReplacement(
                     replacement, currentRoot: currentRoot, previousSyncState: self.gatewayConfigSyncState)
-                self.ifNotPreview { AppDefaults.standard.removeObject(forKey: "gatewayPort") }
+                if repairsLegacyPort {
+                    self.ifNotPreview { AppDefaults.standard.removeObject(forKey: "gatewayPort") }
+                }
+            }
+            guard !GatewayEnvironment.gatewayPortRequiresRestart else {
+                throw PrimaryGatewayControlError.localHostingRequiresRestart
+            }
+            _ = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
+            if repairedLocalPort {
                 let port = GatewayEnvironment.gatewayPort()
-                Self.logger.info("Removed colliding local port settings for hosting; local port=\(port)")
+                Self.logger.info("Separated local port settings for hosting; local port=\(port)")
                 self.localGatewayHostingNotice = String(
                     format: String(
                         localized: """
-                        Removed the old shared port setting. This Mac now uses port %lld; the SSH tunnel is unchanged.
+                        Separated the old shared port setting. This Mac now uses port %lld; the SSH tunnel is unchanged.
                         """),
                     port)
             }

@@ -121,11 +121,15 @@ the toggle is a device-local preference and adds no `openclaw.json` keys.
 `gateway.port` is the local Gateway's bind port. The loopback port in
 `gateway.remote.url` is the SSH tunnel's local port, and
 `gateway.remote.remotePort` selects the destination port on the remote host.
-When hosting is enabled, the app removes an old `gateway.port` that matches the
-tunnel port and clears its legacy local port preference. The Connection window
-reports this one-time repair. The tunnel URL and destination stay unchanged;
-the local Gateway uses the default 18789 or its reserved profile port. If that
-port conflicts with the tunnel or another listener, resolve the displayed
+Older SSH configurations without explicit remote port settings retain their
+shared-port defaults until hosting is enabled. The hosting repair first records
+the tunnel and destination ports in the remote settings, then separates a
+colliding local bind port and clears a colliding legacy port preference. It uses
+the default local port (18789 or the profile default), or the adjacent port when
+that default is also the tunnel port. The Connection window reports this
+one-time repair; the remote connection keeps its existing ports. A named profile
+that already reserved the old port must restart before hosting can be enabled.
+If the selected local port is occupied by another listener, resolve the displayed
 conflict; the app does not select a random local Gateway port.
 
 The `openclaw` CLI, including commands in shells started by the hosted Gateway,

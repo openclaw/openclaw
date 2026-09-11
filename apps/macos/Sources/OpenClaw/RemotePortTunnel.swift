@@ -76,15 +76,38 @@ final class RemotePortTunnel: @unchecked Sendable {
         await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
-    static func localPort(root: [String: Any]) -> Int {
+    static func localPort(
+        root: [String: Any],
+        legacyPort: Int? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> Int
+    {
         guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
               let host = url.host, LoopbackHost.isLoopbackHost(host),
               let port = GatewayRemoteConfig.defaultPort(for: url), (1...65535).contains(port)
-        else { return 18789 }
+        else {
+            return GatewayEnvironment.resolvedGatewayPort(
+                environment: environment,
+                configPort: OpenClawConfigFile.gatewayPort(root: root),
+                storedPort: legacyPort ?? GatewayEnvironment.gatewayPort(root: root),
+                profile: .current)
+        }
         return port
     }
 
-    static func configuration(remotePort: Int = 18789) throws -> Configuration {
+    static func ports(
+        root: [String: Any],
+        sshHost: String,
+        legacyPort: Int,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> (local: Int, remote: Int)
+    {
+        // Shipped SSH profiles without a URL use the shared port until hosting repair
+        // materializes their route. Explicit remote fields own the split configuration.
+        (
+            self.localPort(root: root, legacyPort: legacyPort, environment: environment),
+            self.resolveRemotePortOverride(defaultRemotePort: legacyPort, for: sshHost, root: root) ?? legacyPort)
+    }
+
+    static func configuration() throws -> Configuration {
         let root = OpenClawConfigFile.loadDict()
         let settings = CommandResolver.connectionSettings(configRoot: root)
         guard settings.mode == .remote,
@@ -97,16 +120,13 @@ final class RemotePortTunnel: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
         let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedRemotePort = Self.resolveRemotePortOverride(
-            defaultRemotePort: remotePort,
-            for: sshHost,
-            root: root) ?? remotePort
+        let ports = Self.ports(root: root, sshHost: sshHost, legacyPort: GatewayEnvironment.gatewayPort(root: root))
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
-            remotePort: resolvedRemotePort,
+            remotePort: ports.remote,
             hostKeyPolicy: settings.sshHostKeyPolicy,
-            preferredLocalPort: UInt16(Self.localPort(root: root)))
+            preferredLocalPort: UInt16(ports.local))
     }
 
     static func create(
