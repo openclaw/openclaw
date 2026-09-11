@@ -30,11 +30,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import {
-  applyMergePatch,
-  createMergePatch,
-  mergePatchConflicts,
-} from "../../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -44,6 +39,10 @@ import {
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
+import {
+  createProviderAuthConfigPatch,
+  writeProviderAuthConfig,
+} from "../../plugins/provider-auth-config.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
@@ -413,13 +412,10 @@ async function persistProviderAuthResult(params: {
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
   const persistedProfiles: ProviderAuthResult["profiles"] = [];
-  const patchOptions = { mergeObjectArraysById: true };
   // Match source and runtime rows using the config owner's canonical model identities.
   const loginConfig = applyProviderAuthConfigPatch(params.config, {});
-  const sourceConfig = applyProviderAuthConfigPatch(params.configSnapshot.sourceConfig, {});
-  const runtimeConfig = applyProviderAuthConfigPatch(params.configSnapshot.runtimeConfig, {});
   const configPatch = params.result.configPatch
-    ? createMergePatch(
+    ? createProviderAuthConfigPatch(
         loginConfig,
         restorePriorAgentsDefaultsModelUnlessOptIn({
           cfg: applyProviderAuthConfigPatch(
@@ -434,7 +430,6 @@ async function persistProviderAuthResult(params: {
           priorAgentsDefaultsModel: loginConfig.agents?.defaults?.model,
           setDefault: params.setDefault,
         }),
-        patchOptions,
       )
     : undefined;
   const shouldUpdateConfig =
@@ -467,44 +462,26 @@ async function persistProviderAuthResult(params: {
 
     // Replay only the login's changes; the writer may have newer unrelated settings.
     if (shouldUpdateConfig) {
-      const updated = await updateConfig(
-        (cfg) => {
-          params.assertCurrent?.();
+      const updated = await writeProviderAuthConfig({
+        config: params.config,
+        configSnapshot: params.configSnapshot,
+        configPatch,
+        credentialsSaved: persistedProfiles.length > 0,
+        beforeCommit: params.assertCurrent,
+        finalizeConfig: (replayed, cfg) => {
           const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
-          let next = applyProviderAuthConfigPatch(cfg, {});
-          if (configPatch) {
-            if (
-              (mergePatchConflicts(loginConfig, runtimeConfig, configPatch, patchOptions) &&
-                mergePatchConflicts(loginConfig, sourceConfig, configPatch, patchOptions)) ||
-              mergePatchConflicts(sourceConfig, next, configPatch, patchOptions)
-            ) {
-              throw new Error(
-                "Provider settings changed during sign-in. Review the current settings and retry.",
-              );
-            }
-            // SAFETY: The patch derives from typed config; updateConfig validates the merged value before writing.
-            next = applyMergePatch(next, configPatch, patchOptions) as OpenClawConfig;
-          }
-          next = restorePriorAgentsDefaultsModelUnlessOptIn({
-            cfg: next,
+          const next = restorePriorAgentsDefaultsModelUnlessOptIn({
+            cfg: replayed,
             priorAgentsDefaultsModel,
             setDefault: params.setDefault,
           });
           if (params.setDefault && defaultModel) {
-            next =
-              profiles.length > 0
-                ? applyProviderLoginDefaultModel(next, defaultModel)
-                : applyDefaultModel(next, defaultModel);
+            return profiles.length > 0
+              ? applyProviderLoginDefaultModel(next, defaultModel)
+              : applyDefaultModel(next, defaultModel);
           }
           return next;
         },
-        undefined,
-        params.assertCurrent,
-      ).catch((error: unknown) => {
-        if (persistedProfiles.length === 0) {
-          throw error;
-        }
-        throw new ProviderAuthConfigApplyError(error);
       });
       if (defaultModel) {
         const repaired = await repairCodexRuntimePluginInstallForModelSelection({

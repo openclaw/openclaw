@@ -178,6 +178,24 @@ vi.mock("./shared.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../plugins/install-record-commit.js", () => ({
+  transformConfigWithPendingPluginInstalls: async (params: {
+    transform: (
+      current: OpenClawConfig,
+      context: { snapshot: { valid: boolean } },
+    ) => { nextConfig: OpenClawConfig };
+    writeOptions?: { beforeCommit?: () => void };
+  }) => {
+    const next = await mocks.updateConfig(
+      (current: OpenClawConfig) =>
+        params.transform(current, { snapshot: { valid: true } }).nextConfig,
+      undefined,
+      params.writeOptions?.beforeCommit,
+    );
+    return { nextConfig: next, result: next };
+  },
+}));
+
 vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
