@@ -9,7 +9,8 @@ export function resolveSkillWorkshopAttemptParams(
     | "skillWorkshopProposalEnv"
     | "skillWorkshopProposalMutationBudget"
     | "skillWorkshopProposalOnly"
-    | "skillWorkshopProposalReviewCompletion"
+    | "skillWorkshopProposalRevision"
+    | "skillLibraryAuthoring"
   >,
 ) {
   return {
@@ -19,6 +20,7 @@ export function resolveSkillWorkshopAttemptParams(
     skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
     skillWorkshopOrigin: params.skillWorkshopOrigin,
     skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
-    skillWorkshopProposalReviewCompletion: params.skillWorkshopProposalReviewCompletion,
+    skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
   };
 }

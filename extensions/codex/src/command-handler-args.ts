@@ -46,6 +46,7 @@ export function buildCodexSubcommandPickerReply(): PluginCommandResult {
     { label: "fast", command: "/codex fast menu" },
     { label: "computer-use", command: "/codex computer-use menu" },
     { label: "account", command: "/codex account" },
+    { label: "refresh hosted apps", command: "/codex plugins refresh" },
     { label: "help", command: "/codex help" },
   ];
   const fallbackTextLines = [

@@ -8,6 +8,12 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import { MemoryManagerReloadError } from "./lifecycle.js";
+import {
+  createMissingLocalMemoryEmbeddingProviderError,
+  LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
+} from "./local-embedding-provider.js";
+import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -24,25 +30,15 @@ export type EmbeddingProviderResult = {
   runtime?: EmbeddingProviderRuntime;
 };
 
-type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
+type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  outputDimensionality?: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  createProvider?: MemoryManagerProviderFactory;
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
-const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
-
-function createMissingLlamaCppProviderError(): Error {
-  return new Error(
-    [
-      "Unknown memory embedding provider: local.",
-      "Local GGUF embeddings are provided by the official llama.cpp provider plugin.",
-      "Install it with: openclaw plugins install @openclaw/llama-cpp-provider",
-      "Then restart OpenClaw and retry: openclaw memory status --deep",
-    ].join("\n"),
-  );
-}
 
 function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
@@ -56,21 +52,27 @@ function getAdapter(
   if (adapter) {
     return adapter;
   }
-  if (id === LOCAL_LLAMA_CPP_PROVIDER_ID) {
-    throw createMissingLlamaCppProviderError();
+  if (id === LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
+    throw createMissingLocalMemoryEmbeddingProviderError();
   }
   throw new Error(`Unknown memory embedding provider: ${id}`);
 }
 
-function resolveProviderModel(
+function resolveAdapterCreateOptions(
   adapter: MemoryEmbeddingProviderAdapter,
-  requestedModel: string,
-): string {
-  const trimmed = requestedModel.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  return adapter.defaultModel ?? "";
+  options: CreateEmbeddingProviderOptions,
+): MemoryEmbeddingProviderCreateOptions {
+  const { outputDimensionality, createProvider: _createProvider, ...base } = options;
+  const createOptions = {
+    ...base,
+    fallback: "none",
+    model: options.model.trim() || adapter.defaultModel || "",
+    ...(typeof outputDimensionality === "number" ? { dimensions: outputDimensionality } : {}),
+  };
+  return {
+    ...createOptions,
+    model: adapter.normalizeModel?.(createOptions) ?? createOptions.model,
+  };
 }
 
 export function resolveEmbeddingProviderFallbackModel(
@@ -93,17 +95,6 @@ export function resolveEmbeddingProviderFallbackRemote(
   return Object.keys(sharedRemote).length > 0 ? sharedRemote : undefined;
 }
 
-export function resolveEmbeddingProviderAdapterId(
-  providerId: string,
-  config?: MemoryEmbeddingProviderCreateOptions["config"],
-): string | undefined {
-  try {
-    return getAdapter(providerId, config).id;
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveEmbeddingProviderAdapterTransport(
   providerId: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -120,19 +111,13 @@ export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingPr
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
   try {
     const adapter = getAdapter(provider, options.config);
-    const model = resolveProviderModel(adapter, options.model);
-    const identity = adapter.resolveIndexIdentity?.({
-      ...options,
-      provider,
-      model,
-    });
-    return identity
-      ? {
-          provider: { id: adapter.id, model: identity.model },
-          cacheKeyData: identity.cacheKeyData,
-          aliases: identity.aliases,
-        }
-      : undefined;
+    const createOptions = resolveAdapterCreateOptions(adapter, { ...options, provider });
+    const identity = adapter.resolveIndexIdentity?.(createOptions);
+    return {
+      provider: { id: adapter.id, model: identity?.model ?? createOptions.model },
+      cacheKeyData: identity?.cacheKeyData,
+      aliases: identity?.aliases,
+    };
   } catch {
     return undefined;
   }
@@ -142,11 +127,11 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const createOptions = {
-    ...options,
-    model: resolveProviderModel(adapter, options.model),
-  };
-  const result = await adapter.create(createOptions);
+  const createOptions = resolveAdapterCreateOptions(adapter, options);
+  const create = () => adapter.create(createOptions);
+  const result = await (options.createProvider
+    ? options.createProvider(adapter, create)
+    : create());
   return {
     provider: result.provider,
     requestedProvider: options.provider,
@@ -166,6 +151,9 @@ export async function createEmbeddingProvider(
       provider,
     });
   } catch (primaryErr) {
+    if (primaryErr instanceof MemoryManagerReloadError) {
+      throw primaryErr;
+    }
     const reason = formatProviderError(primaryAdapter, primaryErr);
     if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
       const fallbackAdapter = getAdapter(options.fallback, options.config);
@@ -173,6 +161,12 @@ export async function createEmbeddingProvider(
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
           ...options,
           provider: options.fallback,
+          // The configured model names the primary provider; the fallback serves its own.
+          model: resolveEmbeddingProviderFallbackModel(
+            options.fallback,
+            options.model,
+            options.config,
+          ),
           remote: resolveEmbeddingProviderFallbackRemote(options.remote),
         });
         return {
@@ -182,6 +176,9 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
+        if (fallbackErr instanceof MemoryManagerReloadError) {
+          throw fallbackErr;
+        }
         const fallbackReason = formatProviderError(fallbackAdapter, fallbackErr);
         const wrapped = new Error(
           `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`,

@@ -1,3 +1,4 @@
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -14,8 +15,17 @@ type PendingHandoff = {
 
 export type ChatPaneElement = HTMLElement & {
   active?: boolean;
+  conversationPresented?: boolean;
+  discardStagedAttachments?: () => void;
   paneId?: string;
+  prepareForEviction?: () => void;
+  presented?: boolean;
+  routeFace?: BoardFace;
   sessionKey?: string;
+  transcriptLoading?: boolean;
+  transcriptReady?: boolean;
+  updateComplete?: Promise<unknown>;
+  visuallyPresented?: boolean;
 };
 
 let pendingHandoff: PendingHandoff | undefined;
@@ -57,7 +67,12 @@ export class RouteDraftComposerFocus {
       pendingHandoff = undefined;
       this.maintain(data.sessionKey);
     }
-    return Boolean(data?.draft && consumedData !== data && matchesActivePane);
+    return Boolean(
+      data &&
+      consumedData !== data &&
+      matchesActivePane &&
+      (data.draft !== undefined || data.focusComposer),
+    );
   }
 
   shouldFocusPane(

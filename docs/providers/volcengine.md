@@ -58,7 +58,7 @@ The Volcengine provider gives access to Doubao models and third-party models hos
 For non-interactive setup (CI, scripting), pass the key directly:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice volcengine-api-key \
   --volcengine-api-key "$VOLCANO_ENGINE_API_KEY"
@@ -108,7 +108,7 @@ Both catalogs are static (no `/models` discovery call) and support OpenAI-compat
 Volcengine TTS uses the BytePlus Seed Speech HTTP API (`voice.ap-southeast-1.bytepluses.com`) and is configured separately from the OpenAI-compatible Doubao model API key. In the BytePlus console, open Seed Speech > Settings > API Keys, copy the API key, then set:
 
 ```bash
-export VOLCENGINE_TTS_API_KEY="byteplus_seed_speech_api_key"
+export VOLCENGINE_TTS_API_KEY="<seed-speech-api-key>"
 export VOLCENGINE_TTS_RESOURCE_ID="seed-tts-1.0"
 ```
 
@@ -121,7 +121,7 @@ Then enable it in `openclaw.json`:
     provider: "volcengine",
     providers: {
       volcengine: {
-        apiKey: "byteplus_seed_speech_api_key",
+        apiKey: "${VOLCENGINE_TTS_API_KEY}",
         voice: "en_female_anna_mars_bigtts",
         speedRatio: 1.0,
       },

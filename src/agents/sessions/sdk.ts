@@ -6,14 +6,14 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import {
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../auto-reply/thinking.js";
+import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDir } from "../config.js";
+import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import {
   Agent,
   type AgentMessage,
@@ -26,7 +26,7 @@ import {
   type InternalBeforeToolBatchHook,
 } from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
-import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
+import { AgentSession, type AgentSessionWriteSettlementRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
@@ -44,35 +44,7 @@ import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  type ToolName,
-} from "./tools/index.js";
-
-type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
-
-function projectThinkingCatalogCompat(compat: Model["compat"]) {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const projected: ThinkingCatalogCompat = {};
-  if (typeof record.thinkingFormat === "string") {
-    projected.thinkingFormat = record.thinkingFormat;
-  }
-  if (record.supportedReasoningEfforts === null) {
-    projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
-    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
-  }
-  return Object.keys(projected).length > 0 ? projected : undefined;
-}
+import type { ToolName } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -123,13 +95,13 @@ export interface CreateAgentSessionOptions {
   settingsManager?: SettingsManager;
   /** Session start event metadata for extension runtime startup. */
   sessionStartEvent?: SessionStartEvent;
-  /** Optional lock used before session-file writes or write-capable extension hooks. */
-  withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Optional settlement boundary for session writes and write-capable extension hooks. */
+  withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
 }
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "contextOverflowRecoveryOwner"
+  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -150,8 +122,6 @@ export type {
   ExtensionFactory,
   ToolDefinition,
 } from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 
@@ -292,17 +262,18 @@ export async function createAgentSession(
   return await createAgentSessionImpl(options);
 }
 
-/** Internal embedded-runner seam; keep recovery ownership out of the public session SDK. */
+/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
 export async function createAgentSessionForEmbeddedRunner(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions,
 ): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options, internalOptions);
+  return await createAgentSessionImpl(options, internalOptions, false);
 }
 
 async function createAgentSessionImpl(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions = {},
+  cleanupProviderSessionResourcesOnDispose = true,
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const agentDir = options.agentDir ?? getDefaultAgentDir();
@@ -310,7 +281,7 @@ async function createAgentSessionImpl(
 
   // Use provided or create AuthStorage and ModelRegistry
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, getRuntimeConfig());
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
@@ -371,7 +342,7 @@ async function createAgentSessionImpl(
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
   const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const modelThinkingCompat = model ? projectModelThinkingCompat(model.compat) : undefined;
   const resolvedProviderDefault =
     model && modelThinkingProvider
       ? resolveThinkingDefaultForModel({
@@ -463,8 +434,10 @@ async function createAgentSessionImpl(
   };
 
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
-  const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
-    options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
+  const runWithSessionWriteSettlement = async <T>(run: () => Promise<T> | T): Promise<T> =>
+    options.withSessionWriteSettlement
+      ? await options.withSessionWriteSettlement(run)
+      : await run();
 
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
@@ -486,7 +459,6 @@ async function createAgentSessionImpl(
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetries: optionsLocal?.maxRetries ?? providerRetrySettings.maxRetries,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
         headers:
           attributionHeaders || auth.headers || optionsLocal?.headers
@@ -500,7 +472,7 @@ async function createAgentSessionImpl(
       if (!runner?.hasHandlers("before_provider_request")) {
         return payload;
       }
-      return await runWithSessionWriteLock(
+      return await runWithSessionWriteSettlement(
         async () => await runner.emitBeforeProviderRequest(payload),
       );
     },
@@ -510,7 +482,7 @@ async function createAgentSessionImpl(
       if (!runner?.hasHandlers("after_provider_response")) {
         return;
       }
-      await runWithSessionWriteLock(
+      await runWithSessionWriteSettlement(
         async () =>
           await runner.emit({
             type: "after_provider_response",
@@ -542,7 +514,7 @@ async function createAgentSessionImpl(
 
   // Restore messages if session has existing data
   if (hasExistingSession) {
-    agent.state.messages = existingSession.messages;
+    agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     if (!hasThinkingEntry) {
       sessionManager.appendThinkingLevelChange(thinkingLevel);
     }
@@ -568,8 +540,9 @@ async function createAgentSessionImpl(
     disableBuiltInTools,
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
-    withSessionWriteLock: options.withSessionWriteLock,
+    withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

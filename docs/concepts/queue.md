@@ -1,8 +1,9 @@
 ---
-summary: "Auto-reply queue modes, defaults, and per-session overrides"
+summary: "Auto-reply queue modes, shared background capacity, and per-session overrides"
 read_when:
   - Changing auto-reply execution or concurrency
   - Explaining /queue modes or message steering behavior
+  - Inspecting background work and command-lane diagnostics
 title: "Command queue"
 ---
 
@@ -16,8 +17,9 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 ## How it works
 
 - A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; `main` uses `min(16, max(8, available CPU parallelism))`, and `subagent` defaults to 8).
-- `runEmbeddedAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
+- CLI, embedded, and Codex runs share the same **session-key lane** (`session:<key>`). Each turn waits there before acquiring the session's execution claim, so changing runtimes cannot start a competing turn.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agents.defaults.maxConcurrent`.
+- Embedded attempt preparation starts one stage per event-loop turn so concurrent starts leave room for Gateway requests. Asynchronous stage work can still overlap; this does not lower the run concurrency limit or change session serialization.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while the run waits its turn.
 
@@ -26,7 +28,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
-- `debounceMs: 500`
+- a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
@@ -50,10 +52,10 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
-      debounceMs: 500,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect" },
+      debounceMsByChannel: { discord: 1000 },
     },
   },
 }
@@ -61,15 +63,15 @@ Configure globally or per channel via `messages.queue`:
 
 ## Queue options
 
-Options apply to queued delivery. `debounceMs` also sets the Codex steering quiet window in `steer` mode:
+Per-session `/queue` options apply to queued delivery. The `debounce` option also sets the Codex steering quiet window in `steer` mode:
 
-- `debounceMs`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted by `/queue` options.
+- `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
 - `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
-Defaults: `debounceMs: 500`, `cap: 20`, `drop: summarize`.
+The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
 ## Steer and streaming
 
@@ -81,6 +83,19 @@ When channel streaming is `partial` or `block`, steering can look like several s
 
 `steer` does not abort in-flight tools. Skipped OpenClaw tool calls receive synthetic paired error results so the transcript remains valid. Use `/queue interrupt` when the newest message should abort the current run.
 
+## Answering a pending question
+
+A plain-text answer to a pending agent question goes to that question before
+ordinary queue handling, including when a native CLI cannot accept steering.
+OpenClaw checks the answer against the question creator's permissions and active
+run, not the model selected for your next turn. Changed permissions or a closed
+creator produce an explicit refusal rather than starting another turn.
+
+If the answer may have committed but confirmation is lost, OpenClaw reports that
+uncertainty and does not resend it as steering or a followup. Check the conversation
+before retrying. A later delivery or source-cleanup failure does not make the
+answer replayable, and uncertainty alone does not cancel the original agent run.
+
 ## Precedence
 
 For mode selection, OpenClaw resolves:
@@ -90,7 +105,7 @@ For mode selection, OpenClaw resolves:
 3. `messages.queue.mode`.
 4. Default `steer`.
 
-For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, global `messages.queue` options, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
+For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
 
 ## Per-session overrides
 
@@ -127,13 +142,42 @@ runtime accepts steering and otherwise becomes a followup; `followup` and
 before starting the newest message. The explicit `/steer <message>` command is
 not a local-mode command.
 
-## Scope and guarantees
+<a id="scope-and-guarantees" />
+
+## Input durability
+
+Ordinary Control UI input sent to an existing session is stored in the per-agent database
+before the Gateway acknowledges it. In `collect` mode, appending the combined
+turn and marking its source inputs consumed happen in one transaction. A browser
+reconnect can reconcile those source inputs even if it missed their final events.
+
+This preserves input, not execution permissions. If the Gateway stops before a
+queued input reaches the transcript, it appears as interrupted input after
+restart and requires an explicit resend. The in-memory queue is not replayed.
+Host sleep that preserves the process can continue the existing queue normally.
+
+Channel messages retained by durable ingress remain retryable when a queued
+attempt is abandoned before agent-turn adoption. Abandonment releases that
+attempt's inbound and queue dedupe entries before ingress retries it. Messages
+already adopted or consumed keep duplicate suppression, so transport redelivery
+does not repeat their effects.
+
+## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
-- Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.
 - Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
+
+## Background work
+
+Skill Workshop reviews and plugin background completions, including [dreaming](/concepts/dreaming), share a separate budget of **three concurrent runs**. Workshop reviews use at most one slot; each plugin can use up to three available slots. This keeps maintenance work out of foreground reply capacity while bounding its total concurrency. These limits are built in and need no configuration.
+
+Schedulers that await background work do not occupy this budget themselves. Only the dispatched work holds a slot, through completion or cancellation cleanup, so a scheduler cannot block the child it is waiting for. Cancelled queued work is removed before it starts; Gateway restart or runtime retirement prevents stale completions from starting or returning results.
+
+The Control UI **System busyness** overlay and `diagnostics.lanes` report this work in one `background` row. Its active and queued counts include every owner; owner lanes are not counted again in the dynamic session-lane totals.
 
 ## Troubleshooting
 
@@ -148,6 +192,7 @@ not a local-mode command.
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop)
 - [Session management](/concepts/session)
 - [Steering queue](/concepts/queue-steering)
 - [Steer](/tools/steer)

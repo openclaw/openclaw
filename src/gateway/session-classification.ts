@@ -55,6 +55,9 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("hook:")) {
     return "hook";
   }
+  if (normalized.startsWith("node-") || normalized.startsWith("node:")) {
+    return "node";
+  }
   if (normalized.startsWith("harness:")) {
     return "harness";
   }
@@ -66,7 +69,7 @@ function classifyRest(rest: string): SessionClassification {
   }
   if (
     normalized === "boot" ||
-    normalized.startsWith("commitments:") ||
+    normalized.startsWith("boot:") ||
     normalized.startsWith("internal-session-effects:")
   ) {
     return "system";
@@ -112,10 +115,6 @@ export function sessionClassificationForRow(
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
-  } else if (entry?.spawnedBy) {
-    // Spawn ownership survives delivery-shaped keys; classify the child before
-    // route parsing so clients do not present background work as a chat.
-    classification = "subagent";
   } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
   } else if (isAcpSessionKey(canonicalKey)) {

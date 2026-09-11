@@ -9,6 +9,7 @@ import {
   extractAgentEventPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type ReplyMock = ReturnType<typeof vi.fn>;
 type ReplyPayload = { text?: string };
@@ -88,7 +89,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     // With enforceFinalTag, content is emitted via streaming (text_delta path),
-    // NOT recovered from message_end fallback. extractAssistantText strips
+    // NOT recovered from message_end fallback. extractEmbeddedAssistantText strips
     // <final> tags, so message_end would see plain text with no <final> markers
     // and correctly suppress it (treated as reasoning leak).
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -494,10 +495,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();
 
-    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "Answer ends with",
-      "<fi",
-    ]);
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual(["Answer ends with <fi"]);
   });
 
   it("preserves literal trailing tag-prefix text from message end fallback", () => {
@@ -544,10 +542,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       blockReplyBreak: "message_end",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();

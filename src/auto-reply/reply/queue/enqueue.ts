@@ -1,9 +1,12 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
-import { createDeferred } from "../../../shared/deferred.js";
+import { defaultRuntime } from "../../../runtime.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -12,10 +15,10 @@ import {
 import {
   clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
+  dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
   resolveFollowupDeliveryContextKey,
-  resolveFollowupReplyAnchor,
 } from "./drain.js";
 import {
   peekRecentQueueMessageId,
@@ -32,25 +35,12 @@ import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
 } from "./types.js";
-
-function followupRouteIdentityKey(run: FollowupRun): string {
-  return JSON.stringify([
-    channelRouteDedupeKey({
-      channel: run.originatingChannel,
-      to: run.originatingTo,
-      accountId: run.originatingAccountId,
-      threadId: run.originatingThreadId,
-    }),
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
-  ]);
-}
 
 function followupMessageRouteIdentityKey(run: FollowupRun): string {
   return JSON.stringify([
@@ -74,11 +64,7 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   return JSON.stringify(["queue", queueKey, followupMessageRouteIdentityKey(run), messageId]);
 }
 
-function isRunAlreadyQueued(
-  run: FollowupRun,
-  items: FollowupRun[],
-  allowPromptFallback = false,
-): boolean {
+function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
   const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
     const messageRouteKey = followupMessageRouteIdentityKey(run);
@@ -88,13 +74,7 @@ function isRunAlreadyQueued(
         followupMessageRouteIdentityKey(item) === messageRouteKey,
     );
   }
-  if (!allowPromptFallback) {
-    return false;
-  }
-  const routeKey = followupRouteIdentityKey(run);
-  return items.some(
-    (item) => item.prompt === run.prompt && followupRouteIdentityKey(item) === routeKey,
-  );
+  return false;
 }
 
 function appendQueueItem(params: {
@@ -113,8 +93,31 @@ function appendQueueItem(params: {
   if (params.recentMessageIdKey) {
     recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
   }
-  if (params.runFollowup) {
-    rememberFollowupDrainCallback(params.key, params.runFollowup);
+  const runFollowup = params.runFollowup;
+  if (runFollowup) {
+    rememberFollowupDrainCallback(params.key, runFollowup);
+  }
+  const signal = params.run.abortSignal;
+  const lifecycle = params.run.turnAdoptionLifecycle;
+  if (signal && lifecycle && runFollowup) {
+    const onAbort = () => {
+      const queue = getExistingFollowupQueue(params.key);
+      if (queue) {
+        // Cancellation must release pending ownership even while normal draining is dormant.
+        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
+          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
+        });
+      }
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      signal.removeEventListener("abort", onAbort);
+      onSettled?.();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
   }
   if (params.restartIfIdle && !params.queue.draining) {
     kickFollowupDrainIfIdle(params.key);
@@ -139,17 +142,16 @@ export function enqueueFollowupRun(
   if (options.steerCandidate) {
     run.steerAnchor = true;
   }
-  const queue = getFollowupQueue(key, settings);
+  // Peek before getFollowupQueue: rejecting a redelivery after the original
+  // queue drained and self-deleted must not recreate an empty registry entry,
+  // which nothing would ever delete again.
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && peekRecentQueueMessageId(recentMessageIdKey)) {
     return false;
   }
+  const queue = getFollowupQueue(key, settings);
 
-  const dedupe =
-    dedupeMode === "none"
-      ? undefined
-      : (item: FollowupRun, items: FollowupRun[]) =>
-          isRunAlreadyQueued(item, items, dedupeMode === "prompt");
+  const dedupe = dedupeMode === "none" ? undefined : isRunAlreadyQueued;
 
   // Deduplicate: skip if the same message is already queued.
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
@@ -159,8 +161,8 @@ export function enqueueFollowupRun(
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    const { promise: acceptance, resolve: settle } = createDeferred<boolean>();
-    run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
+    const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
+    run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     appendQueueItem({
       key,
@@ -212,7 +214,16 @@ export function enqueueFollowupRun(
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     inFlight: queue.inFlight,
-    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    summarize: (item) => {
+      const approved = item.userTurnTranscriptRecorder?.getPendingInputMessage?.();
+      // Capture the approved body before overflow stores its bounded preview.
+      return approved
+        ? (extractTextFromChatContent(approved.content, {
+            normalizeText: (text) => text,
+            joinWith: "\n",
+          }) ?? "")
+        : normalizeOptionalString(item.summaryLine) || item.prompt.trim();
+    },
     onSummaryElide: (lines) => elidedSummaryLines.push(...lines),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
@@ -333,7 +344,11 @@ function reapplyDeferredOverflow(key: string): void {
 }
 
 /** Remove an exactly committed steer while preserving every sibling's FIFO position. */
-function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
+function consumeParkedFollowupRun(
+  key: string,
+  run: FollowupRun,
+  disposition?: "consumed",
+): boolean {
   const queue = getExistingFollowupQueue(key);
   const index = queue?.items.indexOf(run) ?? -1;
   if (!queue || index < 0) {
@@ -345,7 +360,7 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
   delete run.protectFromQueueOverflow;
   delete run.steerAnchor;
   reapplyDeferredOverflow(key);
-  completeFollowupRunLifecycle(run);
+  completeFollowupRunLifecycle(run, disposition);
   if (
     !queue.draining &&
     queue.items.length === 0 &&
@@ -365,7 +380,7 @@ type ParkedSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
   fallback: () => void;
-  consume: () => void;
+  consume: (disposition?: "consumed") => void;
 };
 
 export function parkSteerCandidate(
@@ -392,15 +407,29 @@ export function parkSteerCandidate(
   );
   return {
     async admit() {
-      const predecessorAccepted = (await run.steerPending?.predecessor) ?? true;
+      const pending = run.steerPending;
+      const predecessorAccepted = await racePromiseWithAbortSignal(
+        pending?.predecessor ?? Promise.resolve(true),
+        resolveFollowupAbortSignal(run),
+      ).catch((error: unknown) => {
+        if (isFollowupRunAborted(run)) {
+          return false;
+        }
+        throw error;
+      });
       if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
         return "cancelled";
       }
-      return predecessorAccepted ? "steer" : "fallback";
+      if (!predecessorAccepted || !pending || run.steerPending !== pending) {
+        return "fallback";
+      }
+      // The injection owner now decides whether this input can safely be replayed.
+      pending.phase = "injecting";
+      return "steer";
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
     fallback: () => settleParkedSteerAcceptance(key, run, false),
-    consume: () => consumeParkedFollowupRun(key, run),
+    consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
   };
 }
 

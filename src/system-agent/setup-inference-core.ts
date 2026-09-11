@@ -1,44 +1,50 @@
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import {
-  loadAuthProfileStoreForRuntime,
-  updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store.js";
-import { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import type {
+  SetupInferenceActivationRejection,
+  SetupInferenceFailureStatus,
+} from "../../packages/gateway-protocol/src/schema/setup-inference.js";
+import type { AgentRunResultView } from "../agents/agent-run-result.js";
+import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import {
+import type { FailoverReason } from "../agents/failover/signal.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import type {
   detectInferenceBackends,
-  type InferenceBackendKind,
+  InferenceBackendKind,
 } from "../commands/onboard-inference.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  type ProviderAuthChoiceMetadata,
+import type { enablePluginInConfig } from "../plugins/enable.js";
+import type {
+  ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { probeLocalCommand } from "./probes.js";
+import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
-import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
-import {
+import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
+import type {
   captureSystemAgentOwnerPluginArtifacts,
-  type createSystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
+  createSystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
-export const log = createSubsystemLogger("system-agent/setup-inference");
+export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
 /**
  * Inference is the one required onboarding step (docs/cli/setup.md
@@ -52,13 +58,15 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
-
-export const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
-  "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
+const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
 
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
+export type SavedAuthSetupInferenceKind = `saved-auth:${string}`;
 
-export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferenceKind;
+export type SetupInferenceKind =
+  | InferenceBackendKind
+  | ProviderAutoSetupInferenceKind
+  | SavedAuthSetupInferenceKind;
 
 export type SetupInferenceCandidate = {
   kind: SetupInferenceKind;
@@ -101,6 +109,10 @@ export type SetupInferenceDetection = {
   prepareOptions?: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
+  /** Native conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs?: SetupNativeSessionCatalogOption[];
+  /** True only while the Gateway still needs its first inference route. */
+  nativeSessionCatalogPreferenceRequired?: boolean;
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -108,21 +120,23 @@ export type SetupInferenceDetection = {
   setupComplete: boolean;
 };
 
-export type SetupInferenceStatus =
-  | "ok"
-  | "auth"
-  | "rate_limit"
-  | "billing"
-  | "timeout"
-  | "format"
-  | "unavailable"
-  | "unknown";
-
-export type SetupInferenceFailureStatus = Exclude<SetupInferenceStatus, "ok">;
+export type { SetupInferenceFailureStatus };
+export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      lines: string[];
+      gatewayRestartRequired?: true;
+    }
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      disposition?: SetupInferenceActivationRejection["disposition"];
+    };
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -150,13 +164,11 @@ export type VerifySetupInferenceResult =
       ok: true;
       modelRef: string;
       latencyMs: number;
-      authProfiles?: ProviderAuthResult["profiles"];
     }
   | {
       ok: false;
       status: SetupInferenceFailureStatus;
       error: string;
-      authProfiles?: ProviderAuthResult["profiles"];
     };
 
 export type CompleteSetupInferenceResult =
@@ -174,6 +186,8 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Configured agent that owns the route being tested and persisted. */
+  agentId?: string;
   /** Exact explicit model to probe and persist instead of the route's starter model. */
   modelRef?: string;
   /** Manual step only: provider-auth choice returned by detection. */
@@ -182,17 +196,35 @@ export type ActivateSetupInferenceParams = {
   apiKey?: string;
   workspace?: string;
   surface: "cli" | "gateway";
+  /** Whether interactive provider secrets would be entered away from the Gateway host. */
+  isRemoteProviderAuth?: boolean;
+  /** Fresh-install opt-in for discovering existing native provider conversations. */
+  nativeSessionCatalogsEnabled?: boolean;
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
+  /** Explicit consent from the CLI command that tests and activates a saved sign-in. */
+  activationConfirmed?: true;
   /** Interactive provider login transport, required for `provider-auth`. */
   prompter?: WizardPrompter;
   /** Cancels provider-owned browser callbacks and device-code polling. */
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Lock the caller's cancellation boundary before the first durable setup effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
+  /** Preparation effects are complete; the selected route is ready for its live test. */
+  onPreparationComplete?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
+  /** Gateway callers await application only after releasing the setup queue and lane. */
+  onRuntimeApplication?: (
+    application: ReturnType<
+      typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
+    >,
+  ) => void;
+  /** Run credential promotion only after the Gateway applied the verified config. */
+  onCredentialActivation?: (activate: () => Promise<void>) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -247,46 +279,66 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
-  resolvePluginProviders?: typeof resolvePluginProviders;
+  resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
+  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   enablePluginInConfig?: typeof enablePluginInConfig;
-  updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
-  loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
   readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
   createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  readPersistedInstalledPluginIndexInstallRecords?: typeof import("../plugins/installed-plugin-index-records.js").readPersistedInstalledPluginIndexInstallRecords;
   markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
-  clearLoadInstalledPluginIndexInstallRecordsCache?: typeof import("../plugins/installed-plugin-index-records.js").clearLoadInstalledPluginIndexInstallRecordsCache;
-  clearPluginMetadataLifecycleCaches?: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-  invalidatePluginRuntimeDiscoveryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").invalidatePluginRuntimeDiscoveryAfterConfigMutation;
-  disposeOpenClawAgentDatabaseByPath?: typeof import("../state/openclaw-agent-db.js").disposeOpenClawAgentDatabaseByPath;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
 };
 
 export type DetectSetupInferenceDeps = {
+  /** Supplies prepared setup choices before native or provider discovery starts. */
+  onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProviders;
+  resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
   return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
+}
+
+export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInferenceKind {
+  return `${SAVED_AUTH_SETUP_KIND_PREFIX}${encodeURIComponent(profileId)}`;
+}
+
+export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
+  if (!kind.startsWith(SAVED_AUTH_SETUP_KIND_PREFIX)) {
+    return undefined;
+  }
+  const encoded = kind.slice(SAVED_AUTH_SETUP_KIND_PREFIX.length);
+  if (!encoded) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(encoded) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
+  const slash = modelRef.indexOf("/");
+  return slash === -1
+    ? { provider: modelRef, model: "" }
+    : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
 }
 
 export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
@@ -313,6 +365,23 @@ export function invalidSetupConfigError(snapshot: {
   return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
 }
 
+export async function redactSetupInferenceError(
+  message: unknown,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
+  const secrets = new Set(
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let redacted = coerceErrorMessage(message);
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
+}
+
 export function resolveCandidatePresentation(
   candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],
@@ -330,16 +399,210 @@ export function resolveCandidatePresentation(
   };
 }
 
-export async function resolveSetupInferenceWorkspace(params: {
-  configExists: boolean;
-  configValid: boolean;
-}): Promise<{ workspace: string; hasAuthoredSetup: boolean }> {
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig(params);
-  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  return {
-    workspace: resolveUserPath(
-      authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
-    ),
-    hasAuthoredSetup,
-  };
+export function resolveSetupInferenceWorkspace(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "config">,
+): string {
+  const config =
+    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : undefined;
+  return resolveUserPath(
+    config?.agents?.defaults?.workspace?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
+}
+
+const SETUP_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
+
+export function mapFailoverReasonToSetupStatus(
+  reason?: FailoverReason | null,
+): SetupInferenceFailureStatus {
+  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
+}
+
+export function validateSetupInferenceOwnerEvidence(params: {
+  runner: "cli" | "embedded";
+  configuredHarnessId?: string;
+  auth: AgentExecutionAuthBinding;
+}): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  if (
+    !params.auth.authFingerprint &&
+    (!params.auth.runtimeOwnerFingerprint ||
+      !params.auth.runtimeOwnerKind ||
+      !params.auth.runtimeOwnerId?.trim())
+  ) {
+    return {
+      ok: false,
+      status: "unknown",
+      error:
+        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse. No default model was changed.",
+    };
+  }
+  if (
+    params.runner === "cli" &&
+    (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim())
+  ) {
+    return {
+      ok: false,
+      status: "unknown",
+      error:
+        "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No default model was changed.",
+    };
+  }
+  if (params.runner === "embedded") {
+    const successfulHarnessId = params.auth.agentHarnessId?.trim();
+    const configuredHarnessId = params.configuredHarnessId?.trim();
+    if (
+      !successfulHarnessId ||
+      (configuredHarnessId !== undefined &&
+        configuredHarnessId !== "auto" &&
+        successfulHarnessId !== configuredHarnessId)
+    ) {
+      return {
+        ok: false,
+        status: "unknown",
+        error:
+          "Inference succeeded, but its exact agent harness could not be safely reused. No default model was changed.",
+      };
+    }
+    if (
+      successfulHarnessId !== "openclaw" &&
+      (params.auth.runtimeOwnerKind !== "plugin-harness" ||
+        params.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
+        !params.auth.runtimeArtifactFingerprint ||
+        !params.auth.runtimeArtifactId?.trim())
+    ) {
+      return {
+        ok: false,
+        status: "unknown",
+        error:
+          "Inference succeeded, but its agent harness artifact could not be safely reused. No default model was changed.",
+      };
+    }
+  }
+  return undefined;
+}
+
+function resolveSetupInferenceCandidateBrandId(
+  candidate: { kind: string; modelRef: string },
+  providerId?: string,
+): string | undefined {
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  if (candidate.kind === "claude-cli") {
+    return "claude";
+  }
+  if (candidate.kind === "codex-cli") {
+    return "openai";
+  }
+  return providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
+}
+
+/** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
+export async function resolveToolFreeCliSetupError(
+  route: SystemAgentConfiguredRoute,
+): Promise<string | undefined> {
+  if (route.runner !== "cli") {
+    return undefined;
+  }
+  const [{ resolveCliBackendConfig }, { GEMINI_CLI_DEFAULT_MODEL_REF }] = await Promise.all([
+    import("../agents/cli-backends.js"),
+    import("../commands/onboard-inference-ambient.js"),
+  ]);
+  const backend = resolveCliBackendConfig(route.provider, route.runConfig, {
+    agentId: route.agentId,
+  });
+  if (backend?.sideQuestionToolMode === "disabled") {
+    return undefined;
+  }
+  const geminiCliProvider = parseInferenceRef(GEMINI_CLI_DEFAULT_MODEL_REF).provider;
+  if (backend?.nativeToolMode === "none" && route.provider !== geminiCliProvider) {
+    return undefined;
+  }
+  return route.provider === geminiCliProvider
+    ? "Gemini CLI cannot be used for inference-gated setup because it has no hard tool-free mode. Choose Claude Code, Codex, or an API-key provider; normal Gemini CLI agent runs remain available after setup."
+    : `CLI backend ${backend?.id ?? route.provider} cannot be used for inference-gated setup because it has no hard tool-free mode. Choose another inference provider.`;
+}
+
+export async function resolveSetupInferenceWinnerError(
+  route: SystemAgentConfiguredRoute,
+  result: AgentRunResultView,
+): Promise<string | undefined> {
+  const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
+  const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();
+  if (!winnerProvider || !winnerModel) {
+    return "The inference run did not report which provider and model produced its reply.";
+  }
+  if (winnerProvider === route.provider) {
+    if (winnerModel === route.model) {
+      return undefined;
+    }
+    const { resolveDirectBundledProviderPolicySurface } =
+      await import("../plugins/provider-policy-surface.js");
+    const equivalent = resolveDirectBundledProviderPolicySurface(
+      route.provider,
+    )?.isResponseModelEquivalent?.({
+      provider: route.provider,
+      requestedModelId: route.model,
+      responseModelId: winnerModel,
+    });
+    if (equivalent === true) {
+      return undefined;
+    }
+  }
+  return `The inference run answered through ${winnerProvider}/${winnerModel} instead of the requested ${route.provider}/${route.model}. Disable model-routing overrides or choose the working route directly, then retry.`;
+}
+
+export type StagedCandidate = {
+  modelRef: string;
+  agentRuntimeId?: string;
+  authProfileId?: string;
+  pluginId?: string;
+  config: OpenClawConfig;
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
+};
+export type StageFailure = { error: string };
+export type StageContext = {
+  params: ActivateSetupInferenceParams;
+  deps: ActivateSetupInferenceDeps;
+  snapshot: ConfigFileSnapshot;
+  cfg: OpenClawConfig;
+  routeAgentId: string;
+  agentDir: string;
+  workspace: string;
+  credentialsSaved: boolean;
+  beforePersistentEffect: (effect?: "credential") => Promise<void>;
+};
+
+export function resolveSetupModel(params: {
+  label: string;
+  providerId: string;
+  defaultModel?: string;
+  modelRef?: string;
+}): string | StageFailure {
+  const selected = params.modelRef?.trim() || params.defaultModel;
+  const modelRef = selected ? normalizeAgentModelRefForConfig(selected) : "";
+  if (!modelRef || !parseInferenceRef(modelRef).model) {
+    return { error: `${params.label} does not expose a starter model for app-guided setup.` };
+  }
+  const provider = params.defaultModel
+    ? parseInferenceRef(normalizeAgentModelRefForConfig(params.defaultModel)).provider
+    : params.providerId;
+  if (normalizeProviderId(parseInferenceRef(modelRef).provider) !== normalizeProviderId(provider)) {
+    return { error: `${modelRef} is not compatible with the ${params.label} inference route.` };
+  }
+  return modelRef;
 }

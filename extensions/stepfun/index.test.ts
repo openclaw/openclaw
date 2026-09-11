@@ -7,7 +7,8 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
 import {
   STEPFUN_DEFAULT_MODEL_REF,
@@ -159,4 +160,59 @@ describe("stepfun provider registration", () => {
       },
     ]);
   });
+
+  it.each([
+    { providerId: "stepfun", methodId: "standard-api-key-cn" },
+    { providerId: "stepfun", methodId: "standard-api-key-intl" },
+    { providerId: "stepfun-plan", methodId: "plan-api-key-cn" },
+    { providerId: "stepfun-plan", methodId: "plan-api-key-intl" },
+  ])(
+    "preserves an existing primary when repeating $methodId onboarding",
+    async ({ providerId, methodId }) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: stepfunPlugin,
+        id: "stepfun",
+        name: "StepFun",
+      });
+      const provider = requireRegisteredProvider(providers, providerId);
+      const method = provider.auth.find((entry) => entry.id === methodId);
+      if (!method?.runNonInteractive || !method.wizard?.choiceId) {
+        throw new Error(`expected StepFun non-interactive auth method ${methodId}`);
+      }
+
+      const config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["openai/gpt-5.6-luna"],
+            },
+            models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
+          },
+        },
+      };
+
+      const result = await method.runNonInteractive({
+        authChoice: method.wizard.choiceId,
+        config,
+        baseConfig: config,
+        opts: {},
+        runtime: createRuntimeSpies(),
+        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
+        toApiKeyCredential: vi.fn(() => null),
+      });
+
+      expect(result?.agents?.defaults?.model).toEqual({
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["openai/gpt-5.6-luna"],
+      });
+      expect(result?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({
+        alias: "Existing",
+      });
+      expect(result?.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]).toEqual(
+        expect.objectContaining({ alias: expect.any(String) }),
+      );
+      expect(result?.models?.providers?.[providerId]).toBeDefined();
+    },
+  );
 });

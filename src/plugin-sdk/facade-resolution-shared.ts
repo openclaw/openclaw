@@ -1,35 +1,165 @@
 /**
  * Shared resolver for bundled plugin facade module paths and registry fallbacks.
  */
-import fs from "node:fs";
 import path from "node:path";
-import { areBundledPluginsDisabled } from "../plugins/bundled-dir.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
+  resolvePluginRootPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+
+export type BundledPluginPublicSurfaceParams = {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+};
 
 /** Resolved facade module path plus the package/plugin root that bounds imports. */
 export type FacadeModuleLocationLike = {
   modulePath: string;
   boundaryRoot: string;
+  pluginId?: string;
+  origin?: PluginManifestRecord["origin"];
 };
 
+/** An executing instance wins over metadata and bundled fallbacks, including a missing surface. */
+export function resolveRuntimeFacadeModuleLocation(
+  params: BundledPluginPublicSurfaceParams,
+): FacadeModuleLocationLike | null | undefined {
+  if (params.env !== undefined && params.env !== process.env) {
+    return undefined;
+  }
+  const records =
+    getPluginRegistryForContext()?.plugins.filter(
+      (record) => record.status === "loaded" && record.rootDir,
+    ) ?? [];
+  const candidates = [
+    records.filter((record) => record.id === params.dirName),
+    records.filter((record) => path.basename(record.rootDir!) === params.dirName),
+    records.filter((record) => record.channelIds.includes(params.dirName)),
+  ].find((matches) => matches.length);
+  if (!candidates) {
+    return undefined;
+  }
+  if (candidates.length !== 1) {
+    throw new Error(
+      `Plugin public surface ${params.dirName} has ambiguous runtime ownership; use its plugin id.`,
+    );
+  }
+  const owner = candidates[0]!;
+  const modulePath = resolvePluginRootPublicSurfacePath({
+    pluginRoot: owner.rootDir!,
+    pluginId: owner.id,
+    artifactBasename: params.artifactBasename,
+  });
+  return modulePath
+    ? { modulePath, boundaryRoot: owner.rootDir!, pluginId: owner.id, origin: owner.origin }
+    : null;
+}
+
 type FacadeRegistryRecordLike = {
+  origin?: PluginManifestRecord["origin"];
   id: string;
   rootDir: string;
   channels: readonly string[];
 };
 
+/** Minimal manifest shape shared by facade identity tracking and activation checks. */
+export type FacadePluginManifestLike = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
+>;
+
+function readBundledPluginManifestRecordFromDir(params: {
+  pluginsRoot: string;
+  resolvedDirName: string;
+}): FacadePluginManifestLike | null {
+  const file = readPluginCacheFile({
+    rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+    relativePath: "openclaw.plugin.json",
+    rejectHardlinks: false,
+  });
+  if (!file.ok) {
+    return null;
+  }
+  try {
+    const parsed = parsePluginCacheJson(file, { json5: true });
+    if (!parsed.ok || !isRecord(parsed.value)) {
+      return null;
+    }
+    const raw = parsed.value;
+    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+      return null;
+    }
+    return {
+      id: raw.id,
+      origin: "bundled",
+      enabledByDefault: raw.enabledByDefault === true,
+      rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+      channels: Array.isArray(raw.channels)
+        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve bundled facade metadata without importing activation or registry runtime. */
+export function resolveBundledMetadataManifestRecord(
+  params: BundledPluginPublicSurfaceParams & {
+    location: FacadeModuleLocationLike | null;
+    sourceExtensionsRoot: string;
+  },
+): FacadePluginManifestLike | null {
+  if (!params.location) {
+    return null;
+  }
+  if (params.location.modulePath.startsWith(`${params.sourceExtensionsRoot}${path.sep}`)) {
+    const relativeToExtensions = path.relative(
+      params.sourceExtensionsRoot,
+      params.location.modulePath,
+    );
+    const resolvedDirName = relativeToExtensions.split(path.sep)[0];
+    if (!resolvedDirName) {
+      return null;
+    }
+    return readBundledPluginManifestRecordFromDir({
+      pluginsRoot: params.sourceExtensionsRoot,
+      resolvedDirName,
+    });
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  if (!bundledPluginsDir) {
+    return null;
+  }
+  const normalizedBundledPluginsDir = path.resolve(bundledPluginsDir);
+  if (!params.location.modulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)) {
+    return null;
+  }
+  const relativeToBundledDir = path.relative(
+    normalizedBundledPluginsDir,
+    params.location.modulePath,
+  );
+  const resolvedDirName = relativeToBundledDir.split(path.sep)[0];
+  if (!resolvedDirName) {
+    return null;
+  }
+  return readBundledPluginManifestRecordFromDir({
+    pluginsRoot: normalizedBundledPluginsDir,
+    resolvedDirName,
+  });
+}
+
 /** Builds the cache key for one facade lookup under the current bundled-plugin mode. */
-export function createFacadeResolutionKey(params: {
-  dirName: string;
-  artifactBasename: string;
-  bundledPluginsDir?: string | null;
-  env?: NodeJS.ProcessEnv;
-}): string {
+export function createFacadeResolutionKey(
+  params: BundledPluginPublicSurfaceParams & { bundledPluginsDir?: string | null },
+): string {
   const disabledKey = areBundledPluginsDisabled(params.env ?? process.env) ? "disabled" : "enabled";
   return `${params.dirName}::${params.artifactBasename}::${
     params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : "<default>"
@@ -52,24 +182,27 @@ export function resolveFacadeBoundaryRoot(params: {
 }
 
 /** Resolves a bundled facade from source in dev and built artifacts in dist installs. */
-export function resolveBundledFacadeModuleLocation(params: {
-  currentModulePath: string;
-  packageRoot: string;
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-  bundledPluginsDir?: string | null;
-}): FacadeModuleLocationLike | null {
+export function resolveBundledFacadeModuleLocation(
+  params: BundledPluginPublicSurfaceParams & {
+    currentModulePath: string;
+    packageRoot: string;
+    bundledPluginsDir?: string | null;
+    preferSource?: boolean;
+  },
+): FacadeModuleLocationLike | null {
   const env = params.env ?? process.env;
   if (areBundledPluginsDisabled(env)) {
     return null;
   }
-  const preferSource = !params.currentModulePath.includes(`${path.sep}dist${path.sep}`);
+  const preferSource =
+    params.preferSource ?? !params.currentModulePath.includes(`${path.sep}dist${path.sep}`);
   const packageSourceRoot = path.resolve(params.packageRoot, "extensions");
   const publicSurfaceParams = {
     rootDir: params.packageRoot,
     env: params.env,
-    ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
+    ...(params.bundledPluginsDir
+      ? { bundledPluginsDir: params.bundledPluginsDir, bundledPluginsDirMode: "explicit" as const }
+      : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
   };
@@ -90,6 +223,7 @@ export function resolveBundledFacadeModuleLocation(params: {
     : resolveBundledPluginPublicSurfacePath(publicSurfaceParams);
   return modulePath
     ? {
+        origin: "bundled",
         modulePath,
         boundaryRoot: resolveFacadeBoundaryRoot({
           modulePath,
@@ -111,24 +245,20 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
     (plugin) => plugin.channels.includes(params.dirName),
   ];
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
     for (const record of params.registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
-      for (const builtCandidate of [
-        path.join(rootDir, artifactBasename),
-        path.join(rootDir, "dist", artifactBasename),
-      ]) {
-        if (fs.existsSync(builtCandidate)) {
-          return { modulePath: builtCandidate, boundaryRoot: rootDir };
-        }
-      }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
+      const modulePath = resolvePluginRootPublicSurfacePath({
+        pluginRoot: rootDir,
+        pluginId: record.id,
+        artifactBasename: params.artifactBasename,
+      });
+      if (modulePath) {
+        return {
+          modulePath,
+          boundaryRoot: rootDir,
+          ...(record.origin ? { origin: record.origin } : {}),
+        };
       }
     }
   }

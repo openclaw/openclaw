@@ -1,16 +1,36 @@
-import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Model,
+  OpenAICompletionsCompat,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  Usage,
+} from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { headersToRecord } from "../utils/headers.js";
+import { notifyProviderHttpResponse, transportAbortError } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
+const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
+  "response.created",
+  "response.in_progress",
+  "response.completed",
+  "response.done",
+  "response.incomplete",
+  "response.failed",
+]);
+const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
@@ -27,9 +47,263 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
+
+function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
+  return value
+    ? value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function readOpenAIResponseModelHeaders(headers: Headers): string[] {
+  return [...OPENAI_RESPONSE_MODEL_HEADER_NAMES].flatMap((name) =>
+    splitOpenAIResponseModelHeader(headers.get(name)),
+  );
+}
+
+function readOpenAIResponseModelHeaderRecord(headers: unknown): string[] {
+  if (!isRecord(headers)) {
+    return [];
+  }
+  return Object.entries(headers)
+    .filter(([name]) => OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()))
+    .flatMap(([, value]) =>
+      typeof value === "string" ? splitOpenAIResponseModelHeader(value) : [],
+    );
+}
+
+function readOpenAIResponseModelEvent(event: unknown): string[] {
+  if (!isRecord(event)) {
+    return [];
+  }
+  const response = isRecord(event.response) ? event.response : undefined;
+  return [
+    ...(OPENAI_RESPONSE_MODEL_EVENT_TYPES.has(String(event.type)) &&
+    typeof response?.model === "string" &&
+    response.model.trim()
+      ? [response.model.trim()]
+      : []),
+    ...readOpenAIResponseModelHeaderRecord(response?.headers),
+    ...readOpenAIResponseModelHeaderRecord(event.headers),
+  ];
+}
+
+function reconcileOpenAIResponseModels(
+  current: string | undefined,
+  observed: string,
+): string | undefined {
+  if (!current || current === observed) {
+    return observed;
+  }
+  const currentBase = current.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  const observedBase = observed.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  if (currentBase !== observedBase) {
+    return undefined;
+  }
+  // Prefer dated provider evidence when the lifecycle event reports the
+  // documented undated id and a response header reports its concrete release.
+  if (currentBase === current && observedBase !== observed) {
+    return observed;
+  }
+  if (observedBase === observed && currentBase !== current) {
+    return current;
+  }
+  return undefined;
+}
+
+export function createResponseModelTracker(enabled = true) {
+  let responseModel: string | undefined;
+  const observe = (models: readonly string[]) => {
+    for (const model of models) {
+      const reconciled = reconcileOpenAIResponseModels(responseModel, model);
+      if (!reconciled) {
+        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+      }
+      responseModel = reconciled;
+    }
+  };
+  const begin = (headers?: Headers) => {
+    responseModel = undefined;
+    if (enabled && headers) {
+      observe(readOpenAIResponseModelHeaders(headers));
+    }
+  };
+  const observeEvent = (event: unknown) => {
+    if (enabled) {
+      observe(readOpenAIResponseModelEvent(event));
+    }
+    return responseModel;
+  };
+  const resolve = () => responseModel;
+  return {
+    begin,
+    observeEvent,
+    resolve,
+    track(
+      response: Pick<Response, "headers"> | undefined,
+      stream: AsyncIterable<unknown>,
+    ): AsyncIterable<unknown> {
+      if (!enabled) {
+        return stream;
+      }
+      return (async function* () {
+        begin(response?.headers);
+        for await (const event of stream) {
+          observeEvent(event);
+          yield event;
+        }
+      })();
+    },
+    terminalOptions: enabled ? { resolveResponseModel: resolve } : {},
+  };
+}
+
+export function resolveOpenAIClientBaseUrl(
+  model: Pick<Model, "provider" | "baseUrl">,
+  baseUrl: string | undefined = model.baseUrl,
+): string | undefined {
+  if (baseUrl?.trim()) {
+    return baseUrl;
+  }
+  if (model.provider.trim().toLowerCase() === "openai") {
+    return undefined;
+  }
+  // The OpenAI SDK defaults a missing endpoint to api.openai.com. Only OpenAI may
+  // inherit that default; otherwise a third-party bearer token can cross providers.
+  throw new Error(
+    `Provider "${model.provider}" requires an explicit base URL before using an OpenAI-compatible API. Reload provider metadata or configure an endpoint.`,
+  );
+}
+
+export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
+
 export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
-  | { kind: "text"; text: string; source?: "refusal" };
+  | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
+
+type OpenAICompletionsReasoningBatch = {
+  readonly deltas: readonly OpenAICompletionsContentDelta[];
+  readonly mirroredThinking: readonly string[];
+  readonly hasThinking: boolean;
+  readonly hasVisibleText: boolean;
+};
+
+type MutableOpenAICompletionsReasoningBatch = {
+  deltas: OpenAICompletionsContentDelta[];
+  mirroredThinking: string[];
+  hasThinking: boolean;
+  hasVisibleText: boolean;
+};
+
+const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
+  deltas: [],
+  mirroredThinking: [],
+  hasThinking: false,
+  hasVisibleText: false,
+};
+
+const OPENAI_COMPLETIONS_REASONING_FIELDS = [
+  "reasoning_content",
+  "reasoning",
+  "reasoning_text",
+] as const;
+
+function appendOpenAICompletionsReasoningDelta(
+  batch: MutableOpenAICompletionsReasoningBatch,
+  next: OpenAICompletionsContentDelta,
+): void {
+  if (next.kind === "thinking") {
+    batch.hasThinking = true;
+  } else {
+    batch.hasVisibleText = true;
+  }
+  const previous = batch.deltas[batch.deltas.length - 1];
+  if (!previous || previous.kind !== next.kind) {
+    batch.deltas.push(next);
+    if (next.kind === "thinking") {
+      batch.mirroredThinking.push(next.text);
+    }
+    return;
+  }
+  if (next.kind === "thinking" && previous.kind === "thinking") {
+    if (previous.signature !== next.signature) {
+      batch.deltas.push(next);
+      batch.mirroredThinking.push(next.text);
+      return;
+    }
+    previous.text += next.text;
+    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
+    return;
+  }
+  previous.text += next.text;
+}
+
+function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
+  return {
+    deltas: [],
+    mirroredThinking: [],
+    hasThinking: false,
+    hasVisibleText: false,
+  };
+}
+
+export function readOpenAICompletionsReasoningBatch(
+  delta: Record<string, unknown>,
+  visibleReasoningDetailTypes: ReadonlySet<string>,
+): OpenAICompletionsReasoningBatch {
+  let batch: MutableOpenAICompletionsReasoningBatch | undefined;
+  const reasoningDetails = delta.reasoning_details;
+  let usedReasoningThinkingDetails = false;
+  if (Array.isArray(reasoningDetails)) {
+    for (const item of reasoningDetails) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const detail = item;
+      if (typeof detail.text !== "string" || !detail.text) {
+        continue;
+      }
+      if (detail.type === "reasoning.text") {
+        usedReasoningThinkingDetails = true;
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "thinking",
+          signature: "reasoning_details",
+          text: detail.text,
+        });
+        continue;
+      }
+      // Compat-classified visible details are explicit output items. Preserve
+      // their order with adjacent structured thinking instead of inferring commentary.
+      if (typeof detail.type === "string" && visibleReasoningDetailTypes.has(detail.type)) {
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "text",
+          text: detail.text,
+          source: "reasoning_detail",
+        });
+      }
+    }
+  }
+  if (!usedReasoningThinkingDetails) {
+    for (const field of OPENAI_COMPLETIONS_REASONING_FIELDS) {
+      const value = delta[field];
+      if (typeof value === "string" && value.length > 0) {
+        batch ??= createOpenAICompletionsReasoningBatch();
+        appendOpenAICompletionsReasoningDelta(batch, {
+          kind: "thinking",
+          signature: field,
+          text: value,
+        });
+        break;
+      }
+    }
+  }
+  return batch ?? EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH;
+}
 
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;
@@ -44,41 +318,32 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-export type MutableAssistantOutput = {
-  role: "assistant";
-  content: Array<Record<string, unknown>>;
-  api: Api;
-  provider: string;
-  model: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
+type MutableToolCall = ToolCall & { partialArgs?: string };
+
+export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
+  content: Array<TextContent | ThinkingContent | MutableToolCall>;
+  usage: Usage & {
     reasoningTokens?: number;
-    totalTokens: number;
-    cost: Usage["cost"];
   };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
 };
 
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
+    cache_creation_input_tokens?: number;
     prompt_cache_hit_tokens?: number;
+    prompt_tokens_details?: { cache_creation_input_tokens?: number };
   },
   model: Model,
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
   const cacheRead =
     rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWrite = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
+  const cacheWrite =
+    rawUsage.prompt_tokens_details?.cache_write_tokens ??
+    rawUsage.prompt_tokens_details?.cache_creation_input_tokens ??
+    rawUsage.cache_creation_input_tokens ??
+    0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
@@ -101,6 +366,25 @@ export function parseOpenAICompletionsUsage(
   return usage;
 }
 
+export function createOpenAIResponseHook(
+  onResponse: BaseOpenAIStreamOptions["onResponse"],
+  response: Response,
+  model: Model,
+): (() => void | Promise<void>) | undefined {
+  return onResponse
+    ? () =>
+        onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model)
+    : undefined;
+}
+
+export function createOpenAIProviderAcceptanceHook(
+  options: Pick<BaseOpenAIStreamOptions, "onResponse" | "signal"> | undefined,
+  response: Response,
+  model: Model,
+): () => Promise<void> {
+  return () => notifyProviderHttpResponse({ options, response, model });
+}
+
 type ModelStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -109,6 +393,24 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
+}
+
+/** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
+export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
+  let bytes = Buffer.byteLength(chunk, "utf8");
+  if (!chunk) {
+    return { bytes, endsWithHighSurrogate: bufferEndsWithHighSurrogate };
+  }
+  const nextCodeUnit = chunk.charCodeAt(0);
+  if (bufferEndsWithHighSurrogate && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+    // Each isolated surrogate counts as three UTF-8 bytes; the joined scalar is four.
+    bytes -= 2;
+  }
+  const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
+  return {
+    bytes,
+    endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
+  };
 }
 
 export function createModelStreamCooperativeScheduler(

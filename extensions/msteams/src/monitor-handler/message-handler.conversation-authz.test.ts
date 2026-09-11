@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import "./message-handler-mock-support.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
@@ -25,7 +26,7 @@ vi.mock("../graph-thread.js", () => ({
   fetchChannelMessage: vi.fn(async () => undefined),
   fetchThreadReplies: vi.fn(async () => []),
   fetchChatMessageText: vi.fn(async () => undefined),
-  formatThreadContext: vi.fn(() => ""),
+  buildThreadContext: vi.fn(() => []),
   stripHtmlFromTeamsMessage: vi.fn((value: string) => value),
 }));
 
@@ -51,6 +52,7 @@ function createMessageActivity(params: {
   text: string;
   conversation: { id: string; conversationType: ConversationType };
   from: { id: string; aadObjectId: string; name: string };
+  channelData?: Record<string, unknown>;
 }): HandlerInput {
   return {
     activity: {
@@ -60,7 +62,7 @@ function createMessageActivity(params: {
       from: params.from,
       recipient: { id: "bot-id", name: "Bot" },
       conversation: params.conversation,
-      channelData: {},
+      channelData: params.channelData ?? {},
       attachments: [],
     },
     sendActivity: vi.fn(async () => undefined),
@@ -287,6 +289,33 @@ describe("msteams group conversation allowlist authorization", () => {
       expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     },
   );
+
+  it("drops a personal message with contradictory team scope before routing", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const { conversationStore, deps, enqueueSystemEvent, resolveAgentRoute } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["sender-aad"],
+        },
+      },
+    } as OpenClawConfig);
+
+    await createMSTeamsMessageHandler(deps)(
+      createMessageActivity({
+        id: "msg-conflicting-scope",
+        text: "hello",
+        from: { id: "sender-id", aadObjectId: "sender-aad", name: "Sender" },
+        conversation: { id: "a:personal-chat", conversationType: "personal" },
+        channelData: { team: { id: "unexpected-team" } },
+      }),
+    );
+
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
 
   const httpCases: Array<ConversationCase & { expectedDispatches: number }> = [
     {

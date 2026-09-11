@@ -2,12 +2,14 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { resolveClawToolProfileSnapshot } from "./tool-profile-consent.js";
 
 type ClawUpdateCapabilityValue = {
   summary: string;
@@ -356,6 +358,44 @@ function pushAgentCapabilityChanges(params: {
 
 type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
+function normalizeLegacyAgent(
+  config: OpenClawConfig,
+  currentAgent: AgentConfig,
+  desiredAgent: AgentConfig,
+): AgentConfig {
+  const tools = currentAgent.tools;
+  if (!tools?.profile || desiredAgent.tools?.profile !== "full" || !desiredAgent.tools.allow) {
+    return currentAgent;
+  }
+  const snapshot = resolveClawToolProfileSnapshot({
+    ...tools,
+    alsoAllow: (
+      resolvePortableTools(config, currentAgent.id) as {
+        alsoAllow?: string[];
+      }
+    ).alsoAllow,
+  });
+  if (!snapshot) {
+    return currentAgent;
+  }
+  const {
+    profile: _profile,
+    allow: _allow,
+    alsoAllow: _alsoAllow,
+    deny: _deny,
+    ...otherTools
+  } = tools;
+  return {
+    ...currentAgent,
+    tools: {
+      ...otherTools,
+      profile: "full",
+      ...(snapshot.allow.length > 0 ? { allow: snapshot.allow } : {}),
+      ...(snapshot.deny.length > 0 ? { deny: snapshot.deny } : {}),
+    },
+  };
+}
+
 function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
   const defaults = config.agents?.defaults?.heartbeat;
   const overrides = listAgentEntries(config).find((agent) => agent.id === agentId)?.heartbeat;
@@ -383,23 +423,13 @@ function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): u
   const overrides = listAgentEntries(config).find((agent) => agent.id === agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const rememberAcrossConversations = resolveRememberAcrossConversations(config, agentId);
-  const sessionMemory =
-    rememberAcrossConversations ||
-    (overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false);
-  const configuredSources = overrides?.sources ?? defaults?.sources ?? ["memory"];
-  const sources = new Set<"memory" | "sessions">();
-  for (const source of configuredSources) {
-    if (source === "memory" || (source === "sessions" && sessionMemory)) {
-      sources.add(source);
-    }
-  }
-  if (rememberAcrossConversations) {
-    sources.add("sessions");
-  }
-  if (sources.size === 0) {
-    sources.add("memory");
-  }
-  return { enabled, rememberAcrossConversations, sources: [...sources].toSorted() };
+  const { sources } = resolveMemorySearchSourcePolicy({
+    configuredSources: overrides?.sources ?? defaults?.sources,
+    rememberAcrossConversations,
+    configuredSessionMemory:
+      overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false,
+  });
+  return { enabled, rememberAcrossConversations, sources: sources.toSorted() };
 }
 
 function prepareCapabilityComparisonConfig(
@@ -427,7 +457,14 @@ export function pushResolvedAgentCapabilityChanges(params: {
 }): void {
   const currentAgents = listAgentEntries(params.config);
   const currentIndex = currentAgents.findIndex((agent) => agent.id === params.agentId);
-  const currentAgent = currentIndex === -1 ? undefined : currentAgents[currentIndex];
+  const existingCurrentAgent = currentIndex === -1 ? undefined : currentAgents[currentIndex];
+  const currentAgent = existingCurrentAgent
+    ? normalizeLegacyAgent(params.config, existingCurrentAgent, params.desiredAgent)
+    : undefined;
+  const comparisonAgents = [...currentAgents];
+  if (currentAgent && currentIndex !== -1) {
+    comparisonAgents[currentIndex] = currentAgent;
+  }
   const desiredAgents = [...currentAgents];
   if (currentIndex === -1) {
     desiredAgents.push(params.desiredAgent);
@@ -436,7 +473,7 @@ export function pushResolvedAgentCapabilityChanges(params: {
   }
   const currentConfig = prepareCapabilityComparisonConfig(
     params.config,
-    currentAgents,
+    comparisonAgents,
     params.agentId,
   );
   const desiredConfig = prepareCapabilityComparisonConfig(
@@ -459,7 +496,7 @@ export function pushResolvedAgentCapabilityChanges(params: {
       ? resolvePortableMemorySearch(params.config, params.agentId)
       : undefined,
     desiredMemorySearch: resolvePortableMemorySearch(desiredConfig, params.agentId),
-    currentTools: currentAgent ? resolvePortableTools(params.config, params.agentId) : undefined,
+    currentTools: currentAgent ? resolvePortableTools(currentConfig, params.agentId) : undefined,
     desiredTools: resolvePortableTools(desiredConfig, params.agentId),
   });
 }

@@ -1,17 +1,18 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
-import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import { extractMessageMediaText } from "./chat-message-media.ts";
+import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 
 export type MessageReplyTarget = {
   messageId: string;
@@ -20,121 +21,96 @@ export type MessageReplyTarget = {
   sourceMessageId?: string | null;
 };
 
-const MAX_JSON_AUTOPARSE_CHARS = 20_000;
-
-/**
- * Detect whether a trimmed string is a JSON object or array.
- * Must start with `{`/`[` and end with `}`/`]` and parse successfully.
- * Size-capped to prevent render-loop DoS from large JSON messages.
- */
-export function detectJson(text: string): { parsed: unknown; pretty: string } | null {
-  const trimmed = text.trim();
-
-  // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
-  if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
-    return null;
-  }
-
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return { parsed, pretty: JSON.stringify(parsed, null, 2) };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-/** Build a short summary label for collapsed JSON (type + key count or array length). */
-export function jsonSummaryLabel(parsed: unknown): string {
-  if (Array.isArray(parsed)) {
-    return `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`;
-  }
-  if (parsed && typeof parsed === "object") {
-    const keys = Object.keys(parsed as Record<string, unknown>);
-    if (keys.length <= 4) {
-      return `{ ${keys.join(", ")} }`;
-    }
-    return `Object (${keys.length} keys)`;
-  }
-  return "JSON";
-}
-
 export type MessageActionDetails = {
   markdown?: string;
-  messageId?: string;
+  fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
-  shouldFetchFullMessage: boolean;
 };
 
-export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
-  return normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
+// Loading and completion each advance the revision: three automatic attempts.
+export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
+
+function resolveSourceMessageId(message: unknown): string | undefined {
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  return typeof metadata?.id === "string"
+    ? metadata.id
+    : typeof record?.messageId === "string"
+      ? record.messageId
+      : undefined;
 }
 
-export function resolveMessageActionDetails(params: {
-  message: unknown;
-  messageId: string;
-  canFetchFullMessage?: boolean;
-  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
-  onReply?: (target: MessageReplyTarget) => void;
-  senderLabel: string;
-}): MessageActionDetails | null {
-  const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
-  const record = message as Record<string, unknown>;
-  const transcriptMeta =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : null;
-  const messageId =
-    typeof transcriptMeta?.id === "string"
-      ? transcriptMeta.id
-      : typeof record.messageId === "string"
-        ? record.messageId
-        : undefined;
+export function resolveCappedMessageId(message: unknown, role: string): string | undefined {
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  const messageId = resolveSourceMessageId(message);
+  // Only the Gateway marker proves a display cap; sentinel text can be literal.
+  // Pending user inputs share read-only recovery with assistant messages.
+  return (normalizeRoleForGrouping(role) === "assistant" ||
+    messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) &&
+    !record?.openclawMessageToolMirror &&
+    metadata?.truncated === true
+    ? messageId
+    : undefined;
+}
+
+// Options and action handlers outlive a render; keep this preparation separate from them.
+export function prepareChatMessageRender(message: unknown) {
   const normalizedMessage = normalizeMessage(message);
-  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  return {
+    message,
+    normalizedMessage,
+    displayMarkdown: resolveMessageDisplayMarkdown(message, normalizedMessage),
+  };
+}
+
+export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
+
+// An explicit Markdown value is the displayed expansion, even when it is empty.
+export function resolveMessageReplyText(
+  message: unknown,
+  normalizedMessage = normalizeMessage(message),
+  markdown = resolveMessageDisplayMarkdown(message, normalizedMessage),
+): string {
+  return markdown || extractMessageMediaText(message, normalizedMessage.content);
+}
+
+export function resolveMessageActionDetails(
+  { message, normalizedMessage, displayMarkdown: previewMarkdown }: ChatMessageRenderPreparation,
+  params: {
+    messageId: string;
+    canFetchFullMessage?: boolean;
+    getAssistantMessageExpansion?: (
+      messageId: string,
+    ) => AssistantMessageExpansionState | undefined;
+    onReply?: (target: MessageReplyTarget) => void;
+    senderLabel: string;
+  },
+): MessageActionDetails | null {
+  const { messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const previewMarkdown =
-    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
-  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
-  const shouldFetchFullMessage = Boolean(
-    canFetchFullMessage &&
-    messageId &&
-    !record.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true ||
-      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
-  );
-  const expansion =
-    role === "assistant" && shouldFetchFullMessage && messageId
-      ? params.getAssistantMessageExpansion?.(messageId)
-      : undefined;
+  const pendingInput =
+    resolveSourceMessageId(message)?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
+  const cappedMessageId = canFetchFullMessage ? resolveCappedMessageId(message, role) : undefined;
+  const fullMessage = cappedMessageId
+    ? { messageId: cappedMessageId, state: params.getAssistantMessageExpansion?.(cappedMessageId) }
+    : undefined;
+  const expansion = fullMessage?.state;
+  const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
-    expansion?.status === "loaded" && expansion.expanded
-      ? stripThinkingTags(expansion.markdown).trim()
-      : previewMarkdown;
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
-  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
+    role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
+  const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
+  const replyText =
+    onReply && !pendingInput
+      ? truncateUtf16Safe(resolveMessageReplyText(message, normalizedMessage, visibleMarkdown), 500)
+      : "";
+  if (!markdown && !replyText && !fullMessage) {
     return null;
   }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
     ...(markdown === undefined ? {} : { markdown }),
-    messageId,
+    fullMessage,
     ...(replyText
       ? {
           replyTarget: {
@@ -145,7 +121,6 @@ export function resolveMessageActionDetails(params: {
           },
         }
       : {}),
-    shouldFetchFullMessage,
   };
 }
 
@@ -156,9 +131,11 @@ export function renderMessageActionButtons(
   },
 ) {
   return html`
-    ${details.replyTarget && opts.onReply
-      ? renderReplyButton(details.replyTarget, opts.onReply)
-      : nothing}
+    ${
+      details.replyTarget && opts.onReply
+        ? renderReplyButton(details.replyTarget, opts.onReply)
+        : nothing
+    }
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
   `;
 }
@@ -178,130 +155,5 @@ export function renderReplyButton(
         ${icons.messageSquare}
       </button>
     </openclaw-tooltip>
-  `;
-}
-
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 12;
-const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
-
-function collapsedUserMessagePreview(markdown: string): string | null {
-  let end = Math.min(markdown.length, USER_MESSAGE_COLLAPSED_CHAR_LIMIT);
-  let lineCount = 1;
-  for (let index = 0; index < end; index += 1) {
-    if (markdown[index] !== "\n") {
-      continue;
-    }
-    if (lineCount === USER_MESSAGE_COLLAPSED_LINE_LIMIT) {
-      end = index;
-      break;
-    }
-    lineCount += 1;
-  }
-  if (end === markdown.length) {
-    return null;
-  }
-  const sliced = markdown.slice(0, end);
-  const lastCodeUnit = sliced.charCodeAt(sliced.length - 1);
-  const preview = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? sliced.slice(0, -1) : sliced;
-  return `${preview.trimEnd()}…`;
-}
-
-export function renderUserMessageMarkdown(
-  markdown: string,
-  messageKey: string,
-  opts: {
-    isStreaming: boolean;
-    isUserMessageExpanded?: (messageId: string) => boolean;
-    onToggleUserMessageExpanded?: (messageId: string) => void;
-  },
-  markdownRenderOptions: MarkdownRenderOptions,
-) {
-  const preview = collapsedUserMessagePreview(markdown);
-  if (!opts.onToggleUserMessageExpanded || preview === null) {
-    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions);
-  }
-
-  const disclosureId = `user-message:${messageKey}`;
-  const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
-  return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
-        ${expanded
-          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
-      </div>
-      <button
-        class="chat-message-disclosure__toggle"
-        type="button"
-        aria-expanded=${String(expanded)}
-        @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
-      >
-        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
-      </button>
-    </div>
-  `;
-}
-
-export type AssistantMessageDisclosure = {
-  expanded: boolean;
-  markdown?: string;
-  loading: boolean;
-  error: boolean;
-  onToggle: () => void;
-};
-
-export function renderAssistantMessageMarkdown(
-  previewMarkdown: string,
-  isStreaming: boolean,
-  disclosure: AssistantMessageDisclosure | undefined,
-  markdownRenderOptions: MarkdownRenderOptions,
-) {
-  if (!disclosure) {
-    return renderMarkdownText(previewMarkdown, isStreaming, markdownRenderOptions);
-  }
-  const markdown = disclosure.expanded ? (disclosure.markdown ?? previewMarkdown) : previewMarkdown;
-  return html`
-    <div class="chat-message-disclosure ${disclosure.expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
-        ${renderMarkdownText(markdown, isStreaming, markdownRenderOptions)}
-      </div>
-      <div class="chat-message-disclosure__footer">
-        <button
-          class="chat-message-disclosure__toggle"
-          type="button"
-          aria-expanded=${String(disclosure.expanded)}
-          ?disabled=${disclosure.loading}
-          @click=${disclosure.onToggle}
-        >
-          ${disclosure.loading
-            ? t("common.loading")
-            : t(disclosure.expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
-        </button>
-        ${disclosure.error
-          ? html`<span class="chat-message-disclosure__error" role="status"
-              >${t("chat.messages.fullContentLoadFailed")}</span
-            >`
-          : nothing}
-      </div>
-    </div>
-  `;
-}
-
-export function renderMarkdownText(
-  markdown: string,
-  isStreaming: boolean,
-  markdownRenderOptions?: MarkdownRenderOptions,
-) {
-  if (isStreaming) {
-    return html`
-      <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
-      </div>
-    `;
-  }
-  return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">
-      ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
-    </div>
   `;
 }

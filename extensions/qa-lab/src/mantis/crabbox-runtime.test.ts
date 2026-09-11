@@ -1,6 +1,63 @@
-// Qa Lab tests cover Crabbox runtime behavior.
-import { describe, expect, it } from "vitest";
-import { type CommandRunner, defaultCommandRunner, sshCommand } from "./crabbox-runtime.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import * as network from "openclaw/plugin-sdk/ssrf-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type CommandRunner,
+  copyCrabboxArtifacts,
+  defaultCommandRunner,
+  resolveCrabboxBin,
+} from "./crabbox-runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+describe("Mantis Crabbox binary admission", () => {
+  it.each(["relative explicit", "relative PATH", "bare explicit"])(
+    "resolves and probes %s from the requested repository instead of the launch directory",
+    async (selection) => {
+      const root = tempDirs.make("mantis-crabbox-cwd-");
+      const repoRoot = path.join(root, "requested-repo");
+      const binDir = path.join(repoRoot, "tools");
+      const filename = process.platform === "win32" ? "crabbox.cmd" : "crabbox";
+      const executable = path.join(binDir, filename);
+      const cwdFile = path.join(root, "probe-cwd.txt");
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        executable,
+        process.platform === "win32"
+          ? '@echo off\r\n> "%CRABBOX_PROBE_CWD_FILE%" echo %CD%\r\necho crabbox 0.56.0\r\n'
+          : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 0.56.0\\n"\n',
+        { mode: 0o755 },
+      );
+      const download = vi
+        .spyOn(network, "fetchWithSsrFGuard")
+        .mockRejectedValue(new Error("supported repository binary must not trigger a download"));
+      const explicit =
+        selection === "relative explicit"
+          ? path.join("tools", filename)
+          : selection === "bare explicit"
+            ? "crabbox"
+            : undefined;
+      const env = {
+        ...process.env,
+        PATH: "tools",
+        CRABBOX_PROBE_CWD_FILE: cwdFile,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+      };
+
+      expect(process.cwd()).not.toBe(repoRoot);
+      await expect(
+        resolveCrabboxBin({ env, envName: "OPENCLAW_MANTIS_CRABBOX_BIN", explicit, repoRoot }),
+      ).resolves.toBe(explicit ?? executable);
+      expect(await fs.realpath((await fs.readFile(cwdFile, "utf8")).trim())).toBe(
+        await fs.realpath(repoRoot),
+      );
+      expect(download).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("Crabbox command runner", () => {
   it("preserves UTF-8 split across child-process pipe chunks", async () => {
@@ -54,7 +111,7 @@ describe("Crabbox command runner", () => {
       }
       return { stderr: "", stdout: "" };
     };
-    const transport = await sshCommand({
+    await copyCrabboxArtifacts({
       cwd: "/repo",
       env: {},
       inspect: {
@@ -63,10 +120,10 @@ describe("Crabbox command runner", () => {
         sshKey: "/tmp/key",
         sshUser: "proof",
       },
+      outputDir: "/output",
+      remoteOutputDir: "/remote",
       runner,
     });
-
-    await runner("rsync", ["-e", transport.sshArgs], {});
 
     const expectedProbes = ports.length === 1 ? [] : ports;
     expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[3])).toEqual(
@@ -75,9 +132,11 @@ describe("Crabbox command runner", () => {
     expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[12])).toEqual(
       expectedProbes.map(() => `proof@${host}`),
     );
-    expect(transport.host).toBe(host);
     expect(calls.filter((call) => call.command === "rsync")).toEqual([
-      { args: ["-e", expect.stringContaining(`-p ${ports.at(-1)}`)], command: "rsync" },
+      {
+        args: expect.arrayContaining([expect.stringContaining(`-p ${ports.at(-1)}`)]),
+        command: "rsync",
+      },
     ]);
   });
 
@@ -92,7 +151,7 @@ describe("Crabbox command runner", () => {
     };
 
     await expect(
-      sshCommand({
+      copyCrabboxArtifacts({
         cwd: "/repo",
         env: {},
         inspect: {
@@ -102,6 +161,8 @@ describe("Crabbox command runner", () => {
           sshPort: "2222",
           sshUser: "proof",
         },
+        outputDir: "/output",
+        remoteOutputDir: "/remote",
         runner,
       }),
     ).rejects.toThrow("Permission denied");

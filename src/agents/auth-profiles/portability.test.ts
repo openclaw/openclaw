@@ -4,6 +4,7 @@
  * copy-to-agent opt-outs.
  */
 import { describe, expect, it } from "vitest";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   resolveAuthProfilePortability,
@@ -15,11 +16,7 @@ describe("auth profile portability", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:api-key": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+        "openai:api-key": createApiKeyCredential("openai", "sk-test"),
         "github-copilot:default": {
           type: "token",
           provider: "github-copilot",
@@ -33,6 +30,12 @@ describe("auth profile portability", () => {
           expires: Date.now() + 60_000,
         },
       },
+      order: {
+        openai: ["openai:default", "openai:api-key"],
+        "github-copilot": ["github-copilot:default"],
+      },
+      lastGood: { openai: "openai:api-key" },
+      usageStats: { "openai:api-key": { lastUsed: 1_000 } },
     };
 
     const portable = buildPortableAuthProfileStoreForAgentCopy(store);
@@ -43,6 +46,12 @@ describe("auth profile portability", () => {
       "openai:api-key": store.profiles["openai:api-key"],
       "github-copilot:default": store.profiles["github-copilot:default"],
     });
+    expect(portable.store.order).toEqual({
+      openai: ["openai:api-key"],
+      "github-copilot": ["github-copilot:default"],
+    });
+    expect(portable.store.lastGood).toBeUndefined();
+    expect(portable.store.usageStats).toBeUndefined();
   });
 
   it("allows provider-owned OAuth profiles to opt in explicitly", () => {
@@ -67,7 +76,12 @@ describe("auth profile portability", () => {
       provider: "openai",
       expires: Date.now() + 60_000,
       copyToAgents: true,
-    } as AuthProfileCredential;
+      oauthRef: {
+        source: "openclaw-credentials",
+        provider: "openai",
+        id: "0123456789abcdef0123456789abcdef",
+      },
+    } as unknown as AuthProfileCredential;
 
     expect(resolveAuthProfilePortability(credential)).toEqual({
       portable: false,

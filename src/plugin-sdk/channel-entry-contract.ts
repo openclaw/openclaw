@@ -8,15 +8,14 @@ import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
+import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createProfiler,
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import type {
@@ -24,6 +23,7 @@ import type {
   BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
 } from "./channel-entry-contract.types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
 export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
@@ -71,6 +71,10 @@ type DefineBundledChannelSetupEntryOptions = {
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
   registerSetupRuntime?: (api: OpenClawPluginApi) => void;
@@ -79,6 +83,10 @@ type DefineBundledChannelSetupEntryOptions = {
 
 /** Feature flags exposed by bundled setup entries for optional migration/session surfaces. */
 export type BundledChannelSetupEntryFeatures = {
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
@@ -94,7 +102,7 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
@@ -128,10 +136,6 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   features?: BundledChannelSetupEntryFeatures;
 };
 
-const moduleLoaders: PluginModuleLoaderCache = new Map();
-const entryBoundaryInfoCache = new Map<string, BundledEntryBoundaryInfo>();
-const resolvedModulePaths = new Map<string, string>();
-const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
 function isBundledEntrySourceFallbackDisabled(value: string | undefined): boolean {
@@ -172,6 +176,9 @@ type BundledEntryBoundaryInfo = {
 
 function resolveBundledEntryBoundaryInfo(importMetaUrl: string): BundledEntryBoundaryInfo {
   const cacheKey = `${process.argv[1] ?? ""}\0${importMetaUrl}`;
+  const entryBoundaryInfoCache = getPluginCacheRoot(
+    resolveEntryBoundaryRoot(importMetaUrl),
+  ).entryBoundaries;
   const cached = entryBoundaryInfoCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -307,9 +314,15 @@ function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: 
 
 function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string): string {
   const cacheKey = createBundledEntryModulePathCacheKey(importMetaUrl, specifier);
+  const resolvedModulePaths = getPluginCacheRoot(
+    resolveEntryBoundaryRoot(importMetaUrl),
+  ).entryPaths;
   const cached = resolvedModulePaths.get(cacheKey);
   if (cached) {
-    return cached;
+    if ("error" in cached) {
+      throw cached.error;
+    }
+    return cached.path;
   }
   const candidates = resolveBundledEntryModuleCandidates(importMetaUrl, specifier);
   const fallbackCandidate = candidates[0] ?? {
@@ -332,7 +345,7 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     });
     if (opened.ok) {
       fs.closeSync(opened.fd);
-      resolvedModulePaths.set(cacheKey, opened.path);
+      resolvedModulePaths.set(cacheKey, { path: opened.path });
       return opened.path;
     }
     firstFailure ??= { candidate, failure: opened };
@@ -355,7 +368,7 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     );
   }
 
-  throw new Error(
+  const error = new Error(
     formatBundledEntryModuleOpenFailure({
       importMetaUrl,
       specifier,
@@ -364,6 +377,8 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
       failure: failure.failure,
     }),
   );
+  resolvedModulePaths.set(cacheKey, { error });
+  throw error;
 }
 
 function getSourceModuleLoader(
@@ -371,14 +386,13 @@ function getSourceModuleLoader(
   options: BundledEntryModuleLoadOptions,
   transformOpenClawDependencies = false,
 ) {
-  return getCachedPluginSourceModuleLoader({
-    cache: moduleLoaders,
+  return getCachedPluginModuleLoader({
     modulePath,
     importerUrl: import.meta.url,
-    preferBuiltDist: true,
     loaderFilename: import.meta.url,
     transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
+    tryNative: false,
   });
 }
 
@@ -398,9 +412,20 @@ function loadBundledEntryModuleSync(
   options: BundledEntryModuleLoadOptions = {},
 ): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
-  const cached = loadedModuleExports.get(modulePath);
-  if (cached !== undefined) {
-    return cached;
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  const captured = instance?.hasModuleSource(modulePath);
+  if (captured === false) {
+    throw new Error(
+      `Bundled companion is outside the plugin's captured module graph: ${modulePath}`,
+    );
+  }
+  if (instance && captured) {
+    return instance.loadModule(modulePath);
+  }
+  const source = getPluginCacheSource(modulePath);
+  const cached = source.variants.get("bundled-entry")?.exports;
+  if (cached) {
+    return cached.value;
   }
   let loaded: unknown;
   const profile = shouldProfilePluginLoader();
@@ -444,7 +469,7 @@ function loadBundledEntryModuleSync(
       }),
     );
   }
-  loadedModuleExports.set(modulePath, loaded);
+  source.variants.set("bundled-entry", { exports: { value: loaded } });
   return loaded;
 }
 
@@ -489,10 +514,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   registerFull,
   registerCapabilities,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
   const loadChannelOutbound = outbound
@@ -534,7 +556,9 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     ...(features || accountInspect
       ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
       : {}),

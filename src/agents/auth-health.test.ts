@@ -6,21 +6,23 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
-const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<
     (options?: { allowKeychainPrompt?: boolean }) => OAuthCredential | null
   >(() => null),
+  resolveProviderIdForAuthMock: vi.fn<(provider: string, params?: unknown) => string>(
+    (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  ),
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  resolveProviderIdForAuth: resolveProviderIdForAuthMock,
 }));
 
 import {
@@ -72,6 +74,10 @@ describe("buildAuthHealthSummary", () => {
   beforeEach(() => {
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    resolveProviderIdForAuthMock.mockReset();
+    resolveProviderIdForAuthMock.mockImplementation((provider: string) =>
+      provider === "codex-cli" ? "openai" : provider,
+    );
   });
 
   it("classifies OAuth and API key profiles", () => {
@@ -158,7 +164,7 @@ describe("buildAuthHealthSummary", () => {
     );
   });
 
-  it("uses external CLI bootstrap before marking empty OAuth profiles missing", () => {
+  it("does not replace missing OpenClaw auth with a native Codex login", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     mockFreshCodexCliCredentials();
     const store = {
@@ -176,17 +182,15 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
-    expect(profileReasonCodes(summary)["openai:default"]).toBeUndefined();
+    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
+    expect(profileReasonCodes(summary)["openai:default"]).toBe("missing_credential");
     const provider = summary.providers.find((entry) => entry.provider === "openai");
-    expect(provider?.status).toBe("ok");
-    expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    expect(provider?.status).toBe("missing");
+    expect(provider?.expiresAt).toBeUndefined();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
-  it("passes no-prompt policy to external CLI bootstrap during health checks", () => {
+  it("does not open Codex credentials during prompt-free health checks", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     mockFreshCodexCliCredentials();
     const store = {
@@ -205,10 +209,8 @@ describe("buildAuthHealthSummary", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {
@@ -579,6 +581,50 @@ describe("buildAuthHealthSummary", () => {
         profiles: [],
       },
     ]);
+  });
+
+  it("uses caller-owned plugin metadata when resolving explicit auth order", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    resolveProviderIdForAuthMock.mockImplementation((provider: string, params?: unknown) => {
+      const metadata = (params as { metadataSnapshot?: { plugins?: unknown[] } } | undefined)
+        ?.metadataSnapshot;
+      return provider === "fixture-alias" && metadata?.plugins?.length
+        ? "fixture-provider"
+        : provider;
+    });
+    const metadataSnapshot = {
+      plugins: [
+        {
+          id: "fixture-auth-alias",
+          origin: "bundled" as const,
+          providerAuthAliases: { "fixture-alias": "fixture-provider" },
+        },
+      ],
+    } as unknown as NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
+    const summary = buildAuthHealthSummary({
+      cfg: { auth: { order: { "fixture-provider": [] } } },
+      store: {
+        version: 1,
+        profiles: {
+          "fixture-alias:token": {
+            type: "token",
+            provider: "fixture-alias",
+            token: "fake-token",
+          },
+        },
+      },
+      authAliasLookupParams: {
+        metadataSnapshot,
+      },
+    });
+
+    expect(summary.providers).toMatchObject([
+      { provider: "fixture-alias", status: "missing", effectiveProfiles: [] },
+    ]);
+    expect(resolveProviderIdForAuthMock).toHaveBeenCalledWith(
+      "fixture-alias",
+      expect.objectContaining({ metadataSnapshot }),
+    );
   });
 });
 

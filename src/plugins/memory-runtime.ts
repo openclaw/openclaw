@@ -1,17 +1,26 @@
-// Runtime bridge for plugin-owned memory hooks and state.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryReadResult,
+  MemorySearchManager,
+} from "../memory-host-sdk/host/types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
+import { loadPluginRegistryHandle } from "./loader.js";
 import {
   getMemoryRuntime,
   resolveMemoryCapabilityRegistration,
   setStandaloneMemoryManagerActive,
 } from "./memory-state.js";
-import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
+import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
 type MemoryRuntime = NonNullable<
   PluginRegistry["memoryCapabilities"][number]["capability"]["runtime"]
@@ -19,10 +28,58 @@ type MemoryRuntime = NonNullable<
 type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
-type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
+type WorkspaceMemoryPathClassification = Parameters<
+  NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
+>[0];
+type MemoryRuntimeOwner = { runtime: MemoryRuntime; standalone?: true };
+const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryRuntime>();
 let standaloneMemoryRegistrySlot:
-  | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
+  | { runtime?: MemoryRuntime; retiredRuntimes: Set<MemoryRuntime> }
   | undefined;
+const registeredMemoryManagerAdapters = new WeakMap<
+  RegisteredMemorySearchManager,
+  MemorySearchManager
+>();
+
+function normalizeRegisteredMemoryReadResult(
+  result: LegacyMemoryReadResult | MemoryReadResult,
+): MemoryReadResult {
+  if (result.status === "ok" || result.status === "not_found") {
+    return result;
+  }
+  return { ...result, status: "ok" };
+}
+
+function normalizeRegisteredMemoryManager(
+  manager: RegisteredMemorySearchManager,
+): MemorySearchManager {
+  const existing = registeredMemoryManagerAdapters.get(manager);
+  if (existing) {
+    return existing;
+  }
+  const readFile: MemorySearchManager["readFile"] = async (params) =>
+    normalizeRegisteredMemoryReadResult(await manager.readFile(params));
+  // A neutral target permits wrapped methods even when the manager is frozen.
+  const adapter = new Proxy(
+    { readFile },
+    {
+      get(_target, property) {
+        if (property === "readFile") {
+          return readFile;
+        }
+        const value = Reflect.get(manager, property, manager) as unknown;
+        if (typeof value !== "function") {
+          return value;
+        }
+        // Registered managers may use class/private state, so calls retain the target receiver.
+        return value.bind(manager);
+      },
+    },
+    // SAFETY: readFile is canonical; every other member is forwarded from the manager.
+  ) as MemorySearchManager;
+  registeredMemoryManagerAdapters.set(manager, adapter);
+  return adapter;
+}
 
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
@@ -53,29 +110,16 @@ function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
   return resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.runtime;
 }
 
-function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {
+function listCurrentMemoryRuntimes(): MemoryRuntime[] {
+  const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
   const current = getMemoryRuntime();
-  const owners = new Map<MemoryRuntime, MemoryRuntimeOwner>();
-  for (const [runtime, registry] of standaloneMemoryRegistrySlot?.retiredRuntimes ?? []) {
-    owners.set(runtime, { runtime, registry });
-  }
   if (current) {
-    owners.set(current, { runtime: current });
+    runtimes.add(current);
   }
-  if (standaloneMemoryRegistrySlot) {
-    const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
-    if (runtime) {
-      owners.set(runtime, { runtime, registry: standaloneMemoryRegistrySlot.registry });
-    }
+  if (standaloneMemoryRegistrySlot?.runtime) {
+    runtimes.add(standaloneMemoryRegistrySlot.runtime);
   }
-  return [...owners.values()];
-}
-
-function withMemoryRuntimeOwner<T>(
-  owner: MemoryRuntimeOwner,
-  run: (runtime: MemoryRuntime) => T,
-): T {
-  return withPluginRuntimeRegistryScope(owner.registry, () => run(owner.runtime));
+  return [...runtimes];
 }
 
 function ensureMemoryRuntime(params?: {
@@ -91,51 +135,58 @@ function ensureMemoryRuntime(params?: {
     return undefined;
   }
   const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg, params.agentId);
-  const loadOptions = {
+  const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,
     workspaceDir,
-    activate: false as const,
-  };
-  const key = resolvePluginRegistryLoadCacheKey(loadOptions);
-  if (standaloneMemoryRegistrySlot?.key === key) {
-    const runtime = resolveMemoryRuntimeFromRegistry(standaloneMemoryRegistrySlot.registry);
-    return runtime ? { runtime, registry: standaloneMemoryRegistrySlot.registry } : undefined;
-  }
-  const registry = loadPluginRegistryHandle(loadOptions);
-  if (!registry) {
-    return undefined;
-  }
+    activate: false,
+  });
   const runtime = resolveMemoryRuntimeFromRegistry(registry);
   const previousSlot = standaloneMemoryRegistrySlot;
-  const retiredRuntimes = new Map(previousSlot?.retiredRuntimes);
-  const previousRuntime = previousSlot
-    ? resolveMemoryRuntimeFromRegistry(previousSlot.registry)
-    : undefined;
-  if (previousSlot && previousRuntime && previousRuntime !== runtime) {
-    retiredRuntimes.set(previousRuntime, previousSlot.registry);
+  if (previousSlot?.runtime === runtime) {
+    return runtime ? { runtime, standalone: true } : undefined;
   }
-  standaloneMemoryRegistrySlot = { key, registry, retiredRuntimes };
-  return runtime ? { runtime, registry } : undefined;
+  const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
+  if (previousSlot?.runtime) {
+    retiredRuntimes.add(previousSlot.runtime);
+  }
+  standaloneMemoryRegistrySlot = { runtime, retiredRuntimes };
+  if (runtime && !enrolledStandaloneMemoryRuntimes.has(runtime)) {
+    const lifecycle = getPluginValueInstance(runtime)?.lifecycle;
+    if (lifecycle) {
+      lifecycle.onDispose(() => {
+        const slot = standaloneMemoryRegistrySlot;
+        slot?.retiredRuntimes.delete(runtime);
+        if (slot?.runtime === runtime) {
+          delete slot.runtime;
+        }
+      });
+      // Selection resets do not end the instance lifetime or remove its existing pruning callback.
+      enrolledStandaloneMemoryRuntimes.add(runtime);
+    }
+  }
+  return runtime ? { runtime, standalone: true } : undefined;
 }
 
 /** Returns the active plugin-backed memory search manager for an agent. */
-export async function getActiveMemorySearchManager(params: {
+export async function getActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: "default" | "status" | "cli";
+  inspectSources?: boolean;
 }) {
   const owner = ensureMemoryRuntime(params);
   if (!owner) {
     return { manager: null, error: "memory plugin unavailable" };
   }
-  if (owner.registry) {
+  if (owner.standalone) {
     setStandaloneMemoryManagerActive(true);
   }
-  return await withMemoryRuntimeOwner(
-    owner,
-    async (runtime) => await runtime.getMemorySearchManager(params),
-  );
+  const result = await owner.runtime.getMemorySearchManager(params);
+  return {
+    ...result,
+    manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+  };
 }
 
 /** Applies the selected memory plugin's authorization policy to raw search hits. */
@@ -148,30 +199,46 @@ export async function authorizeActiveMemorySearchHits(
     // to expose. Runtimes without that capability may still return memory hits.
     return params.hits.filter((hit) => hit.source !== "sessions");
   }
-  return await withMemoryRuntimeOwner(owner, async (runtime) => {
-    if (!runtime.authorizeSearchHits) {
-      return params.hits.filter((hit) => hit.source !== "sessions");
+  return owner.runtime.authorizeSearchHits
+    ? await owner.runtime.authorizeSearchHits(params)
+    : params.hits.filter((hit) => hit.source !== "sessions");
+}
+
+/** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
+export async function classifyActiveMemoryWorkspacePaths(
+  params: WorkspaceMemoryPathClassification,
+): Promise<
+  | { status: "unavailable" }
+  | { status: "unsupported" }
+  | {
+      status: "classified";
+      classifications: Array<{ relativePath: string; originClass: string }>;
     }
-    return await runtime.authorizeSearchHits(params);
-  });
+> {
+  const owner = ensureMemoryRuntime(params);
+  if (!owner) {
+    return { status: "unavailable" };
+  }
+  if (!owner.runtime.classifyWorkspaceMemoryPaths) {
+    return { status: "unsupported" };
+  }
+  const classifications = await owner.runtime.classifyWorkspaceMemoryPaths(params);
+  return { status: "classified", classifications };
 }
 
 /** Resolves current memory backend config without constructing a manager. */
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
   const owner = ensureMemoryRuntime(params);
-  return owner
-    ? withMemoryRuntimeOwner(owner, (runtime) => runtime.resolveMemoryBackendConfig(params))
-    : null;
+  return owner ? owner.runtime.resolveMemoryBackendConfig(params) : null;
 }
 
 /** Closes all active plugin-backed memory search managers. */
-export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
+export async function closeActiveMemorySearchManagersCore(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
+  // CLI cleanup retires registries first; teardown remains admitted until instance disposal.
   await Promise.all(
-    listCurrentMemoryRuntimeOwners().map((owner) =>
-      withMemoryRuntimeOwner(owner, async (runtime) => {
-        await runtime.closeAllMemorySearchManagers?.();
-      }),
+    listCurrentMemoryRuntimes().map(async (runtime) =>
+      runPluginCleanup(runtime, () => runtime.closeAllMemorySearchManagers?.()),
     ),
   );
   standaloneMemoryRegistrySlot?.retiredRuntimes.clear();
@@ -179,15 +246,13 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
 }
 
 /** Closes the plugin-backed memory search manager for one agent. */
-export async function closeActiveMemorySearchManager(params: {
+export async function closeActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
   await Promise.all(
-    listCurrentMemoryRuntimeOwners().map((owner) =>
-      withMemoryRuntimeOwner(owner, async (runtime) => {
-        await runtime.closeMemorySearchManager?.(params);
-      }),
+    listCurrentMemoryRuntimes().map(async (runtime) =>
+      runPluginCleanup(runtime, () => runtime.closeMemorySearchManager?.(params)),
     ),
   );
 }
@@ -200,5 +265,116 @@ function resetStandaloneMemoryRegistrySlot(): void {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.memoryRuntimeTestApi")] = {
     resetStandaloneMemoryRegistrySlot,
+  };
+}
+
+type MemoryRuntimeRegistry = Pick<PluginRegistry, "memoryCapabilities" | "embeddingProviders">;
+
+/** Prepare memory consumers before any changed plugin loses ordinary call admission. */
+export function prepareMemoryRuntimeReload(
+  previousRegistry: MemoryRuntimeRegistry,
+  nextRegistry: MemoryRuntimeRegistry,
+) {
+  const runtimes = (registry: MemoryRuntimeRegistry) =>
+    new Set(
+      registry.memoryCapabilities.flatMap(({ capability }) =>
+        capability.runtime ? [capability.runtime] : [],
+      ),
+    );
+  const nextRuntimes = runtimes(nextRegistry);
+  const nextAdapters = new Set(nextRegistry.embeddingProviders.map(({ provider }) => provider));
+  const retiringEmbeddingProviders = previousRegistry.embeddingProviders
+    .map(({ provider }) => provider)
+    .filter((provider) => !nextAdapters.has(provider));
+  const prepared: Array<{
+    runtime: MemoryPluginRuntime;
+    handle: ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>>;
+  }> = [];
+  let cleanup: Promise<{ errors: readonly unknown[] }> | undefined;
+  const resume = (committed: boolean, retained = nextRegistry) => {
+    const failures: unknown[] = [];
+    const retainedRuntimes = runtimes(retained);
+    for (const { runtime, handle } of prepared) {
+      if (!committed || retainedRuntimes.has(runtime)) {
+        try {
+          runPluginCleanup(runtime, () => handle.resume());
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Memory reload admission recovery failed");
+    }
+  };
+  try {
+    for (const runtime of runtimes(previousRegistry)) {
+      const retireRuntime = !nextRuntimes.has(runtime);
+      if (!retireRuntime && retiringEmbeddingProviders.length === 0) {
+        continue;
+      }
+      const handle = runPluginCleanup(runtime, () => {
+        if (runtime.prepareReload) {
+          return runtime.prepareReload({ retireRuntime, retiringEmbeddingProviders });
+        }
+        // Legacy runtimes cannot identify dependent managers. Close them conservatively
+        // when an adapter retires so cached managers do not retain its revoked callbacks.
+        if (runtime.closeAllMemorySearchManagers) {
+          return { drain: () => runtime.closeAllMemorySearchManagers!(), resume() {} };
+        }
+        return undefined;
+      });
+      if (handle) {
+        prepared.push({ runtime, handle });
+      }
+    }
+  } catch (error) {
+    try {
+      resume(false);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Memory reload preparation failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
+  // A deadline limits an operation's observation, never the cleanup retained by
+  // the Gateway owner. Final shutdown must join close() before disposing shared state.
+  const close = () => {
+    if (!cleanup) {
+      cleanup = Promise.allSettled(
+        prepared.map(({ runtime, handle }) =>
+          Promise.resolve().then(() =>
+            runPluginCleanup(runtime, async () => {
+              // Admission stays outside this catch; only admitted teardown reports faults.
+              try {
+                return await handle.drain();
+              } catch (error) {
+                return { errors: [error] };
+              }
+            }),
+          ),
+        ),
+      ).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length) {
+          throw new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+        }
+        return {
+          errors: results.flatMap((result) =>
+            result.status === "fulfilled" ? (result.value?.errors ?? []) : [],
+          ),
+        };
+      });
+    }
+    return cleanup;
+  };
+  return {
+    drain: () => withPluginHostCleanupTimeout("memory managers", close),
+    close,
+    commit: (retained = nextRegistry) => resume(true, retained),
+    rollback: () => resume(false),
   };
 }

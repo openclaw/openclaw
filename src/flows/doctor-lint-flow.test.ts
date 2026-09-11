@@ -1,13 +1,16 @@
 // Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
-import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
+import {
+  exitCodeFromFindings,
+  runDoctorLintChecks,
+  selectUpdateReadinessChecks,
+} from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import {
   clearHealthChecksForTest,
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
 const ctx: HealthCheckContext = {
@@ -251,32 +254,28 @@ describe("runDoctorLintChecks", () => {
     });
   });
 
-  it("supports single-run checks in lint mode", async () => {
-    const runnable: RunnableHealthCheck = {
-      id: "run-check",
-      kind: "core",
-      description: "run check",
-      async run(runCtx) {
-        expect(runCtx).toMatchObject({
-          mode: "lint",
-          repair: false,
-        });
-        return {
-          findings: [
-            {
-              checkId: "run-check",
-              severity: "warning",
-              message: "warn",
-            },
-          ],
-        };
-      },
-    };
-    const checkLocal = normalizeHealthCheck(runnable);
+  it("runs only checks that own the selected update-readiness phase", async () => {
+    const detections: string[] = [];
+    const checks = [
+      Object.assign(
+        check("plugin/example/post-plugin", async () => {
+          detections.push("post-plugin");
+          return [];
+        }),
+        { updateReadiness: "post-plugin" as const },
+      ),
+      check("plugin/example/default", async () => {
+        detections.push("default");
+        return [];
+      }),
+    ];
 
-    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
+    const result = await runDoctorLintChecks(ctx, {
+      checks: selectUpdateReadinessChecks(checks, "post-plugin"),
+    });
 
-    expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
+    expect(detections).toEqual(["post-plugin"]);
   });
 
   it("turns thrown checks into error findings", async () => {

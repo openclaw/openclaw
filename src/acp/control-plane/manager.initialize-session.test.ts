@@ -1,4 +1,4 @@
-/** Tests ACP manager session initialization limits and persisted runtime options. */
+/** Tests ACP manager session initialization and persisted runtime options. */
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionManager,
@@ -55,6 +55,41 @@ describe("AcpSessionManager initializeSession", () => {
       model: "openai/gpt-5.4",
       thinking: "high",
     });
+  });
+
+  it("forwards inherited thinking provenance and omits thinking dropped by the backend", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValueOnce({
+      sessionKey: "agent:codex:acp:session-inherited-max",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+      appliedThinking: { kind: "dropped" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-inherited-max",
+      storeSessionKey: "agent:codex:acp:session-inherited-max",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-inherited-max",
+      agent: "codex",
+      mode: "persistent",
+      runtimeOptions: { thinking: "max" },
+      thinkingExplicit: false,
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      thinking: "max",
+      thinkingExplicit: false,
+    });
+    expect(extractRuntimeOptionsFromUpserts()).toEqual([undefined]);
   });
 
   it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {

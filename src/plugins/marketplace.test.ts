@@ -10,6 +10,7 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { createBundleInstallFixtureFactory } from "./test-helpers/install-fixtures.js";
 
 const installPluginFromPathMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -484,19 +485,14 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("passes dangerous force unsafe install through to marketplace path installs", async () => {
+  it("passes install policy acknowledgement through to marketplace path installs", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
       const manifestPath = await writeLocalMarketplaceFixture({
         rootDir,
         pluginDir,
         manifest: {
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
+          plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
         },
       });
       installPluginFromPathMock.mockResolvedValue({
@@ -506,15 +502,54 @@ describe("marketplace plugins", () => {
         version: "0.1.0",
         extensions: ["index.ts"],
       });
+      const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
       await installPluginFromMarketplace({
         marketplace: manifestPath,
         plugin: "frontend-design",
-        dangerouslyForceUnsafeInstall: true,
+        onInstallPolicyWarning,
       });
 
       expect(installPluginInput().path).toBe(pluginDir);
-      expect(installPluginInput().dangerouslyForceUnsafeInstall).toBe(true);
+      expect(installPluginInput().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    });
+  });
+
+  it("does not publish a marketplace plugin after authority closes during artifact review", async () => {
+    await withTempDir("openclaw-marketplace-guard-", async (rootDir) => {
+      const { pluginDir, extensionsDir } = createBundleInstallFixtureFactory(() => rootDir)({
+        bundleFormat: "claude",
+        name: "Guarded Bundle",
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [{ name: "guarded-bundle", source: "./plugin-src" }],
+      });
+      const { installPluginFromPath } = await import("./install-package.js");
+      installPluginFromPathMock.mockImplementationOnce(installPluginFromPath);
+      let authorityActive = true;
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "guarded-bundle",
+        extensionsDir,
+        onBeforePluginArtifactCommit: async () => {
+          authorityActive = false;
+        },
+        beforePersistentApply: () => {
+          if (!authorityActive) {
+            throw new Error("plugin installation authority closed");
+          }
+        },
+      });
+
+      expect(authorityActive).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plugin installation authority closed"),
+      });
+      await expect(fs.stat(path.join(extensionsDir, "guarded-bundle"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(pluginDir)).resolves.toBeDefined();
     });
   });
 

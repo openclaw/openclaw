@@ -1,4 +1,5 @@
 // JSON parse helpers recover structured values from partial model output.
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
@@ -30,8 +31,17 @@ function escapeControlCharacter(char: string): string {
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
  * - doubling backslashes before invalid escape characters
+ *
+ * By default a valid control escape (`\n`, `\t`, ...) that follows a Windows-path-looking
+ * prefix is treated as an unescaped path separator and doubled. Pass
+ * `preserveValidControlEscapes` when the text is authoritative (for example a completed
+ * tool-call argument buffer) and every valid escape must survive as written.
  */
-export function repairJson(json: string): string {
+export function repairJson(
+  json: string,
+  options?: { preserveValidControlEscapes?: boolean },
+): string {
+  const preserveValidControlEscapes = options?.preserveValidControlEscapes === true;
   let repaired = "";
   let inString = false;
   let stringValuePrefix = "";
@@ -79,7 +89,11 @@ export function repairJson(json: string): string {
         continue;
       }
 
-      if (JSON_CONTROL_ESCAPES.has(nextChar) && looksLikeWindowsPathPrefix(stringValuePrefix)) {
+      if (
+        !preserveValidControlEscapes &&
+        JSON_CONTROL_ESCAPES.has(nextChar) &&
+        looksLikeWindowsPathPrefix(stringValuePrefix)
+      ) {
         repaired += "\\\\";
         stringValuePrefix += "\\";
         continue;
@@ -113,12 +127,6 @@ function looksLikeWindowsPathPrefix(prefix: string): boolean {
   return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
 }
 
-function asStreamingJsonRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 /**
  * Attempts to parse potentially incomplete JSON during streaming.
  * Always returns a valid object, even if the JSON is incomplete.
@@ -132,16 +140,39 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   }
 
   try {
-    return asStreamingJsonRecord(parseJsonWithRepair(partialJson));
+    return asNonArrayRecord(parseJsonWithRepair(partialJson));
   } catch {
     try {
-      return asStreamingJsonRecord(partialParse(partialJson));
+      return asNonArrayRecord(partialParse(partialJson));
     } catch {
       try {
-        return asStreamingJsonRecord(partialParse(repairJson(partialJson)));
+        return asNonArrayRecord(partialParse(repairJson(partialJson)));
       } catch {
         return {};
       }
     }
   }
+}
+
+const TOOL_ARGUMENT_PREVIEW_FIRST_CHECKPOINT_CHARS = 512;
+
+/** Returns true when the streamed argument buffer crossed its next preview checkpoint. */
+export type ToolArgumentPreviewSchedule = (accumulatedChars: number) => boolean;
+
+/**
+ * Streamed tool-call arguments are preview-only; the terminal parse re-reads
+ * the full buffer authoritatively at content_block_stop. Reparsing every delta
+ * scans an ever-growing buffer and makes assembly quadratic in the argument
+ * size, so refresh previews on a geometric length schedule instead — bounded
+ * staleness, linear total parse work.
+ */
+export function createToolArgumentPreviewSchedule(): ToolArgumentPreviewSchedule {
+  let nextCheckpointChars = TOOL_ARGUMENT_PREVIEW_FIRST_CHECKPOINT_CHARS;
+  return (accumulatedChars: number): boolean => {
+    if (accumulatedChars < nextCheckpointChars) {
+      return false;
+    }
+    nextCheckpointChars = accumulatedChars * 2;
+    return true;
+  };
 }

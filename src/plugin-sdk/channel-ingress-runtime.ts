@@ -6,45 +6,6 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
-export {
-  channelIngressRoutes,
-  createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
-  readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelMessageIngress,
-  resolveStableChannelMessageIngress,
-} from "../channels/message-access/index.js";
-export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
-export type {
-  AccessGroupMembershipFact,
-  ChannelIngressDecision,
-  ChannelIngressAccessGroupMembershipResolver,
-  ChannelIngressCommandPresetInput,
-  ChannelIngressConfigInput,
-  ChannelIngressEventInput,
-  ChannelIngressEventPresetInput,
-  ChannelIngressIdentityDescriptor,
-  ChannelIngressIdentityAlias,
-  ChannelIngressIdentityField,
-  ChannelIngressIdentitySubjectInput,
-  ChannelIngressIdentifierKind,
-  ChannelIngressPolicyInput,
-  ChannelIngressRouteAccess,
-  ChannelIngressRouteDescriptor,
-  ChannelIngressResolver,
-  ChannelIngressResolverMessageParams,
-  ChannelIngressStateInput,
-  ChannelIngressState,
-  ChannelMessageIngressCommandInput,
-  CreateChannelIngressResolverParams,
-  IngressReasonCode,
-  ResolvedChannelMessageIngress,
-  ResolveChannelMessageIngressParams,
-  ResolveStableChannelMessageIngressParams,
-  StableChannelIngressIdentityParams,
-} from "../channels/message-access/index.js";
-export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
-
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDrainOptions,
@@ -53,6 +14,54 @@ import {
   type ChannelIngressMonitorPayloadCodec,
   type CreateChannelIngressMonitorOptions,
 } from "../channels/message/ingress-monitor.js";
+export {
+  channelIngressRoutes,
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "../channels/message-access/runtime.js";
+export {
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "../channels/message-access/identifier-authentication.js";
+export {
+  defineStableChannelIngressIdentity,
+  identityEntryAuthenticationClassifier,
+} from "../channels/message-access/runtime-identity.js";
+export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
+export type {
+  ChannelIngressAccessGroupMembershipResolver,
+  ChannelIngressCommandPresetInput,
+  ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
+  ChannelIngressEventPresetInput,
+  ChannelIngressIdentityDescriptor,
+  ChannelIngressIdentityAlias,
+  ChannelIngressIdentityField,
+  ChannelIngressIdentitySubjectInput,
+  ChannelIngressRouteAccess,
+  ChannelIngressRouteDescriptor,
+  ChannelIngressResolver,
+  ChannelIngressResolverMessageParams,
+  ChannelMessageIngressCommandInput,
+  CreateChannelIngressResolverParams,
+  ResolvedChannelMessageIngress,
+  ResolveChannelMessageIngressParams,
+  ResolveStableChannelMessageIngressParams,
+  StableChannelIngressIdentityParams,
+} from "../channels/message-access/runtime-types.js";
+export type {
+  AccessGroupMembershipFact,
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
+  ChannelIngressIdentifierKind,
+  ChannelIngressPolicyInput,
+  ChannelIngressState,
+  ChannelIngressStateInput,
+  IngressReasonCode,
+} from "../channels/message-access/types.js";
+export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -128,26 +137,70 @@ export function fanInChannelIngressLifecycles(
   lifecycle: ChannelIngressLifecycle | undefined;
   settle: () => Promise<void>;
   abandon: (error?: unknown) => Promise<void>;
+  cancel: () => Promise<void>;
 } {
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
   if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+    return {
+      lifecycle: undefined,
+      settle: async () => {},
+      abandon: async () => {},
+      cancel: async () => {},
+    };
   }
 
   let handedOff = false;
+  // Set once every claim has reached a terminal disposition. A consumer that
+  // wraps this lifecycle abandons through onAbandoned rather than the abandon
+  // helper below, so without this the claims a rejected adoption already
+  // released would be settled a second time and consume a second retry.
+  let settledAll = false;
+  const settleOnce = async (run: () => Promise<void>) => {
+    if (settledAll) {
+      return;
+    }
+    settledAll = true;
+    await run();
+  };
+  const fanOut = async (
+    invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
+    targets: readonly ChannelIngressLifecycle[] = lifecycles,
+  ) => {
+    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
+  };
+  const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
+  const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
+    fanOut(
+      (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
+      targets,
+    );
+  const failAll = (error: unknown) => settleOnce(() => failEach(lifecycles, error));
+  // Adoption runs in claim order so each durable source settles in the order it
+  // was taken. Handoff is already marked by the time this runs, so a caller's
+  // abandon after a rejection here is a no-op; release the claim that threw and
+  // every claim after it instead of leaving them held until recovery.
   const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
+    for (const [index, lifecycle] of lifecycles.entries()) {
+      try {
+        await lifecycle.onAdopted();
+      } catch (error) {
+        // Callers match the adoption error itself (isIngressAdoptionLostError),
+        // so a failing release must not replace it.
+        await Promise.allSettled([settleOnce(() => failEach(lifecycles.slice(index), error))]);
+        throw error;
+      }
     }
   };
-  const abandonAll = async () => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
-  };
-  const failAll = async (error: unknown) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
-  };
-
+  const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  // Omit aggregate cancellation unless every durable source supports it. Callers
+  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  const cancelAll = () =>
+    settleOnce(() =>
+      fanOut((lifecycle) =>
+        lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+      ),
+    );
   return {
     lifecycle: {
       abortSignal:
@@ -164,6 +217,11 @@ export function fanInChannelIngressLifecycles(
           lifecycle.onDeferred();
         }
       },
+      onDeferredHeartbeat: () => {
+        for (const lifecycle of lifecycles) {
+          lifecycle.onDeferredHeartbeat?.();
+        }
+      },
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();
@@ -173,6 +231,14 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
+      ...(supportsCancellation
+        ? {
+            onCancelled: async () => {
+              handedOff = true;
+              await cancelAll();
+            },
+          }
+        : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
@@ -181,14 +247,24 @@ export function fanInChannelIngressLifecycles(
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {
       if (!handedOff) {
-        await adoptAll();
+        // Mark before adopting, matching onAdopted: a rejection partway has
+        // already released the rest, so a later abandon must stay a no-op.
         handedOff = true;
+        await adoptAll();
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
+      }
+    },
+    // Source-compatible lifecycles predate onCancelled. Settle each source through
+    // its strongest release callback so mixed fan-in cannot strand a durable claim.
+    cancel: async () => {
+      if (!handedOff) {
+        handedOff = true;
+        await cancelAll();
       }
     },
   };

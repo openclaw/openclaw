@@ -1,5 +1,6 @@
 // Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -126,6 +127,10 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
+    // Apply rejects these origins too; exclude them before scoring and candidate limits.
+    if (isPromotionOriginBlocked(entry)) {
+      continue;
+    }
     if (
       isContaminatedDreamingSnippet(entry.snippet, {
         allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
@@ -149,12 +154,13 @@ export async function rankShortTermPromotionCandidates(
 
     const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
     const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
-    const uniqueQueries = entry.queryHashes?.length ?? 0;
-    const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
-    if (contextDiversity < minUniqueQueries) {
+    // Scheduler and grounded-backfill keys are synthetic. Only provenance-
+    // qualified interactive recalls can satisfy user-query diversity.
+    const uniqueQueries = entry.userQueryHashes?.length ?? 0;
+    if (uniqueQueries < minUniqueQueries) {
       continue;
     }
-    const diversity = clampScore(contextDiversity / 5);
+    const diversity = clampScore(uniqueQueries / 5);
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
@@ -240,8 +246,6 @@ export {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
-  SHORT_TERM_STORE_RELATIVE_PATH,
   type PromotionCandidate,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,
@@ -249,8 +253,6 @@ export {
   type ShortTermDreamingStatsEntry,
   type ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
-export { normalizeShortTermPhaseSignalStore } from "./short-term-promotion-store.js";
-export { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 export {
   filterFreshLightDreamingEntries,
   loadShortTermPromotionDreamingStats,

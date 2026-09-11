@@ -7,6 +7,7 @@ import type {
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -19,6 +20,12 @@ type MemoryIndexEntry = {
 };
 
 class IntervalSyncHarness extends MemoryManagerSyncOps {
+  protected readonly createProvider = (): never => {
+    throw new Error("Interval harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Interval harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-memory-interval-test";
@@ -30,11 +37,10 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = {} as DatabaseSync;
+  protected publishedDatabase = new MemoryIndexDatabase({} as DatabaseSync);
 
   constructor(params: { intervalMinutes?: number; batchTimeoutMinutes?: number }) {
     super();
@@ -82,7 +88,7 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 

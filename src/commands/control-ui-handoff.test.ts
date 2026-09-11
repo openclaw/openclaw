@@ -1,9 +1,28 @@
+import { execFile } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import fs from "node:fs/promises";
+import { createServer } from "node:https";
+import type { Socket } from "node:net";
+import path from "node:path";
 import type { PeerCertificate } from "node:tls";
-import { describe, expect, it, vi } from "vitest";
-import type { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { resolveControlUiHandoffTarget, waitForControlUiDocument } from "./control-ui-handoff.js";
 
 const documentUrl = "http://127.0.0.1:18789/dashboard/";
+const tempDirs = createTrackedTempDirs();
+const openssl = resolveSystemBin("openssl");
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await tempDirs.cleanup();
+});
 type GuardedDocumentRequest = Parameters<typeof fetchConfiguredLocalOriginWithSsrFGuard>[0];
 
 function guardedResponse(response: Response) {
@@ -24,6 +43,8 @@ function requireDirectTlsConnect(request: GuardedDocumentRequest): Record<string
 }
 
 describe("resolveControlUiHandoffTarget", () => {
+  const ambientPassword = ["ambient", "password"].join("-");
+
   it("keeps plaintext custom browser and exact-base-path document URLs on loopback", async () => {
     const target = await resolveControlUiHandoffTarget({
       config: {
@@ -41,10 +62,137 @@ describe("resolveControlUiHandoffTarget", () => {
     expect(target.documentUrl).toBe(documentUrl);
     expect(target.probeUrl).toBe("ws://10.0.0.5:18789/dashboard");
     expect(target.loopbackAliasHost).toBe("10.0.0.5");
+    expect(target.dashboardUrl).toBe(`${documentUrl}#token=shared-test-token`);
   });
+
+  it.each([
+    ["blocks implicit token failure", undefined, undefined, "password", undefined],
+    ["blocks explicit token failure", "token", undefined, "token", undefined],
+    ["ignores inactive token refs", "password", undefined, "password", ambientPassword],
+  ] as const)(
+    "%s",
+    async (_label, configuredMode, configuredPassword, expectedMode, expectedHandoff) => {
+      const target = await resolveControlUiHandoffTarget({
+        config: {
+          gateway: {
+            auth: {
+              ...(configuredMode ? { mode: configuredMode } : {}),
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+              ...(configuredPassword ? { password: configuredPassword } : {}),
+            },
+          },
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+          OPENCLAW_GATEWAY_PASSWORD: ambientPassword,
+        },
+      });
+
+      expect(target.authMode).toBe(expectedMode);
+      expect(target.gatewayAuthHandoff).toBe(expectedHandoff);
+      expect(target.includeTokenInUrl).toBe(false);
+      expect(target.dashboardUrl).not.toContain("ambient-token");
+    },
+  );
 });
 
 describe("waitForControlUiDocument", () => {
+  it.runIf(openssl)(
+    "verifies a CA-signed HTTPS leaf without the issuer or private key and rejects a replacement",
+    async () => {
+      const root = await tempDirs.make("openclaw-tls-owner-https-");
+      const certPath = path.join(root, "leaf.pem");
+      const keyPath = path.join(root, "signer.key");
+      const caPath = path.join(root, "signer.pem");
+      const csrPath = path.join(root, "leaf.csr");
+      await fs.writeFile(keyPath, TEST_TLS_KEY_PEM, { mode: 0o600 });
+      await fs.writeFile(caPath, TEST_TLS_CERT_PEM);
+      const run = promisify(execFile);
+      await run(
+        openssl!,
+        ["req", "-new", "-key", keyPath, "-subj", "/CN=gateway.test", "-out", csrPath],
+        { timeout: 10_000 },
+      );
+      await run(
+        openssl!,
+        [
+          "x509",
+          "-req",
+          "-in",
+          csrPath,
+          "-CA",
+          caPath,
+          "-CAkey",
+          keyPath,
+          "-set_serial",
+          "2",
+          "-days",
+          "1",
+          "-out",
+          certPath,
+        ],
+        { timeout: 10_000 },
+      );
+      const cert = await fs.readFile(certPath, "utf8");
+      await fs.unlink(keyPath);
+      await fs.unlink(caPath);
+      let requests = 0;
+      const server = createServer({ cert, key: TEST_TLS_KEY_PEM }, (_request, response) => {
+        requests++;
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end();
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected a test HTTPS port");
+        }
+        const options = {
+          url: `https://127.0.0.1:${address.port}/dashboard/`,
+          tlsConfig: { enabled: true, certPath, keyPath, caPath },
+        };
+        await expect(waitForControlUiDocument(options)).resolves.toMatchObject({ ready: true });
+        expect(requests).toBe(1);
+        server.closeAllConnections();
+        server.setSecureContext({ cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM });
+        await expect(waitForControlUiDocument(options)).resolves.toMatchObject({ ready: false });
+        expect(requests).toBe(1);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("can inspect dashboard TLS using only the public certificate", async () => {
+    const root = await tempDirs.make("openclaw-tls-owner-dashboard-");
+    const certPath = path.join(root, "cert.pem");
+    await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
+    const read = vi.spyOn(fs, "readFile");
+    const fetch = vi.fn(async () => htmlHead());
+
+    const result = await waitForControlUiDocument({
+      url: "https://127.0.0.1:32123/dashboard/",
+      tlsConfig: {
+        enabled: true,
+        certPath,
+        keyPath: path.join(root, "absent-key.pem"),
+        caPath: path.join(root, "absent-ca.pem"),
+      },
+      deps: { fetch },
+    });
+
+    expect(result.ready).toBe(true);
+    expect(read.mock.calls.map(([file]) => file)).toEqual([certPath]);
+    expect(fetch).toHaveBeenCalledOnce();
+    await expect(fs.readdir(root)).resolves.toEqual(["cert.pem"]);
+  });
+
   it("probes the exact HTML document without credentials or redirects", async () => {
     const response = htmlHead();
     const fetch = vi.fn(async () => response);
@@ -159,6 +307,109 @@ describe("waitForControlUiDocument", () => {
     expect(diagnostic.release).toHaveBeenCalledOnce();
   });
 
+  it.each(["request", "body"] as const)(
+    "keeps the observed HTTP failure when the diagnostic %s fails",
+    async (failure) => {
+      const head = guardedResponse(new Response(null, { status: 503 }));
+      const diagnostic = guardedResponse(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new Error("diagnostic body failed"));
+            },
+          }),
+          { status: 503, headers: { "content-type": "text/plain" } },
+        ),
+      );
+      const fetch = vi.fn().mockResolvedValueOnce(head);
+      if (failure === "request") {
+        fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
+      } else {
+        fetch.mockResolvedValueOnce(diagnostic);
+      }
+
+      await expect(
+        waitForControlUiDocument({ url: documentUrl, deps: { fetch } }),
+      ).resolves.toEqual({
+        ready: false,
+        reason: "Control UI dashboard is unavailable (HTTP 503).",
+        status: 503,
+      });
+      expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+      expect(head.release).toHaveBeenCalledOnce();
+      expect(diagnostic.release).toHaveBeenCalledTimes(failure === "body" ? 1 : 0);
+    },
+  );
+
+  it.each(["complete", "broken"] as const)(
+    "preserves a real HTTP failure with a %s diagnostic body",
+    async (body) => {
+      const methods: string[] = [];
+      const responses: Array<{ method: string; status: number }> = [];
+      const releases: string[] = [];
+      const diagnosticSocket = createDeferredCore<Socket>();
+      const diagnosticClosed = createDeferredCore();
+      await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
+        await withServer(
+          (request, response) => {
+            methods.push(request.method ?? "");
+            response.writeHead(503, { "content-type": "text/plain", connection: "close" });
+            if (request.method === "HEAD") {
+              response.end();
+              return;
+            }
+            diagnosticSocket.resolve(request.socket);
+            request.socket.once("close", () => diagnosticClosed.resolve());
+            response.write("Asset build failed");
+            if (body === "complete") {
+              response.end();
+            }
+          },
+          async (baseUrl) => {
+            const result = await waitForControlUiDocument({
+              url: `${baseUrl}/dashboard/`,
+              deps: {
+                fetch: async (request) => {
+                  const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
+                  const method = String(request.init?.method);
+                  responses.push({ method, status: guarded.response.status });
+                  if (method === "GET" && body === "broken") {
+                    // Fault the real body only after guarded fetch has delivered its headers.
+                    (await diagnosticSocket.promise).destroy();
+                  }
+                  return {
+                    ...guarded,
+                    release: async () => {
+                      await guarded.release();
+                      releases.push(method);
+                    },
+                  };
+                },
+              },
+            });
+            await diagnosticClosed.promise;
+
+            expect(result).toEqual({
+              ready: false,
+              reason:
+                body === "complete"
+                  ? "Asset build failed"
+                  : "Control UI dashboard is unavailable (HTTP 503).",
+              status: 503,
+            });
+            expect(methods).toEqual(["HEAD", "GET"]);
+            expect(responses).toEqual([
+              { method: "HEAD", status: 503 },
+              { method: "GET", status: 503 },
+            ]);
+            // Observe release and socket closure before withServer tears the fixture down.
+            expect(releases).toEqual(["GET", "HEAD"]);
+          },
+        );
+      });
+    },
+  );
+
   it("does not expose HTML when a terminal failure becomes ready during diagnostic fetch", async () => {
     const head = guardedResponse(new Response(null, { status: 503 }));
     const repaired = guardedResponse(
@@ -202,111 +453,50 @@ describe("waitForControlUiDocument", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
-  it("trusts only the configured Gateway certificate and pins the actual TLS peer", async () => {
-    const fingerprint = "ab".repeat(32);
-    const loadTls = vi.fn(async () => ({
-      enabled: true,
-      required: true,
-      fingerprintSha256: fingerprint,
-      tlsOptions: { cert: "exact-gateway-certificate" },
-    }));
+  it("trusts the public certificate and rejects a different peer without reading a server CA", async () => {
+    const root = await tempDirs.make("openclaw-tls-owner-dashboard-");
+    const certPath = path.join(root, "cert.pem");
+    await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
+    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
+      .replaceAll(":", "")
+      .toLowerCase();
     const fetch = vi.fn(async (_request: GuardedDocumentRequest) => htmlHead());
 
     await expect(
       waitForControlUiDocument({
-        url: "https://127.0.0.1:18789/dashboard/",
-        tlsConfig: { enabled: true },
-        deps: { fetch, loadTls },
+        url: "https://127.0.0.1:32123/dashboard/",
+        tlsConfig: { enabled: true, certPath, caPath: path.join(root, "absent-ca.pem") },
+        deps: { fetch },
       }),
     ).resolves.toEqual({ ready: true, tlsFingerprint: fingerprint });
 
-    expect(loadTls).toHaveBeenCalledWith({ enabled: true, autoGenerate: false });
     const [request] = fetch.mock.calls[0] ?? [];
     if (!request) {
       throw new Error("expected dashboard TLS request");
     }
     const connect = requireDirectTlsConnect(request);
-    expect(connect.ca).toBe("exact-gateway-certificate");
+    expect(connect.ca).toBe(TEST_TLS_CERT_PEM);
     expect(connect).not.toHaveProperty("rejectUnauthorized");
-    const check = connect.checkServerIdentity as
-      | ((hostname: string, certificate: PeerCertificate) => Error | undefined)
-      | undefined;
-    expect(
-      check?.("127.0.0.1", { fingerprint256: fingerprint } as PeerCertificate),
-    ).toBeUndefined();
-    expect(check?.("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate)).toEqual(
+    const check = connect.checkServerIdentity as (
+      hostname: string,
+      certificate: PeerCertificate,
+    ) => Error | undefined;
+    expect(check("127.0.0.1", { fingerprint256: fingerprint } as PeerCertificate)).toBeUndefined();
+    expect(check("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate)).toEqual(
       new Error("Gateway TLS certificate fingerprint mismatch."),
     );
-  });
-
-  it("trusts the served Gateway certificate alongside a distinct client-verification CA", async () => {
-    const fingerprint = "ab".repeat(32);
-    const loadTls = vi.fn(async () => ({
-      enabled: true,
-      required: true,
-      fingerprintSha256: fingerprint,
-      tlsOptions: {
-        cert: "exact-gateway-certificate",
-        ca: "separate-client-verification-ca",
-      },
-    }));
-    const fetch = vi.fn(async (request: GuardedDocumentRequest) => {
-      const connect = requireDirectTlsConnect(request);
-      if (!Array.isArray(connect.ca) || !connect.ca.includes("exact-gateway-certificate")) {
-        throw new Error("self-signed Gateway certificate is not trusted");
-      }
-      const check = connect.checkServerIdentity as (
-        hostname: string,
-        certificate: PeerCertificate,
-      ) => Error | undefined;
-      const mismatch = check("127.0.0.1", { fingerprint256: fingerprint } as PeerCertificate);
-      if (mismatch) {
-        throw mismatch;
-      }
-      return htmlHead();
-    });
-
-    await expect(
-      waitForControlUiDocument({
-        url: "https://127.0.0.1:18789/dashboard/",
-        tlsConfig: { enabled: true, caPath: "/gateway/client-verification-ca.pem" },
-        deps: { fetch, loadTls },
-      }),
-    ).resolves.toEqual({ ready: true, tlsFingerprint: fingerprint });
-
-    const [request] = fetch.mock.calls[0] ?? [];
-    if (!request) {
-      throw new Error("expected dashboard TLS request");
-    }
-    const connect = requireDirectTlsConnect(request);
-    expect(connect.ca).toEqual(["exact-gateway-certificate", "separate-client-verification-ca"]);
-    expect(connect).not.toHaveProperty("rejectUnauthorized");
-  });
-
-  it("rejects a mismatched TLS certificate before accepting dashboard HTML", async () => {
-    const loadTls = vi.fn(async () => ({
-      enabled: true,
-      required: true,
-      fingerprintSha256: "ab".repeat(32),
-      tlsOptions: { cert: "exact-gateway-certificate" },
-    }));
-    const fetch = vi.fn(async (request: GuardedDocumentRequest) => {
-      const check = requireDirectTlsConnect(request).checkServerIdentity as (
-        hostname: string,
-        certificate: PeerCertificate,
-      ) => Error | undefined;
+    fetch.mockImplementation(async () => {
       const mismatch = check("127.0.0.1", { fingerprint256: "cd".repeat(32) } as PeerCertificate);
       if (mismatch) {
         throw mismatch;
       }
       return htmlHead();
     });
-
     await expect(
       waitForControlUiDocument({
-        url: "https://127.0.0.1:18789/dashboard/",
-        tlsConfig: { enabled: true },
-        deps: { fetch, loadTls },
+        url: "https://127.0.0.1:32123/dashboard/",
+        tlsConfig: { enabled: true, certPath },
+        deps: { fetch },
       }),
     ).resolves.toEqual({
       ready: false,

@@ -15,7 +15,6 @@ import {
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
-  runSessionLocksHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
   runSessionTranscriptLabelsHealth,
@@ -60,7 +59,17 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node runtime",
+      healthCheckIds: ["core/doctor/node-runtime"],
+      async run(ctx) {
+        const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
+        await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -92,6 +101,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Gateway auth",
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
@@ -158,19 +179,22 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
+      // not the unsupported shared-root scan or its destructive repair advice.
       id: "doctor:legacy-plugin-dependencies",
       label: "Legacy plugin dependencies",
       healthChecks: {
-        description: "Legacy plugin dependency state roots are represented as findings.",
+        description: "Deprecated shared plugin dependency cleanup check.",
         defaultEnabled: false,
         async detect() {
-          const {
-            detectLegacyPluginDependencyStateIssues,
-            legacyPluginDependencyStateIssueToHealthFinding,
-          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
-          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
-            legacyPluginDependencyStateIssueToHealthFinding,
-          );
+          return [
+            {
+              checkId: "core/doctor/legacy-plugin-dependencies",
+              severity: "info",
+              message:
+                "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
+            },
+          ];
         },
       },
       run: async () => {},
@@ -253,6 +277,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:active-tool-schema-warnings",
       label: "Active tool schema warnings",
+      updatePolicy: "standalone",
       run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
@@ -267,17 +292,36 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect(ctx) {
+        async detect() {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings(ctx.cfg);
+          return collectDiskSpaceHealthFindings();
         },
       },
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:project-clone-shape",
+      label: "Project clones",
+      updatePolicy: "standalone",
+      healthChecks: {
+        description: "Partial and shallow registry-owned project clones need manual repair.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectProjectCloneShapeHealthFindings } =
+            await import("../commands/doctor-project-clone-shape.js");
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
+        await noteProjectCloneShape(ctx.cfg);
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
+      updatePolicy: "standalone",
       run: runDatabaseBloatHealth,
     }),
     createDoctorHealthContribution({
@@ -296,7 +340,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToHealthFinding);
         },
         repair: legacyOwnedRepair(async (ctx) => {
@@ -304,7 +348,7 @@ export function resolveInitialDoctorHealthContributions(params: {
             await import("../commands/doctor-state-integrity.js");
           return detectStateIntegrityHealthIssues(ctx.cfg, {
             configPath: ctx.configPath,
-            env: process.env,
+            env: ctx.env ?? process.env,
           }).map(stateIntegrityIssueToRepairEffect);
         }, "legacy doctor state integrity contribution owns state repairs"),
       },
@@ -321,12 +365,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Telegram General-topic conversations",
       healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
       run: runTelegramGeneralTopicConversationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-locks",
-      label: "Session locks",
-      healthCheckIds: ["core/doctor/session-locks"],
-      run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-headers",

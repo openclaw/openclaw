@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { readMemoryRecallMetadata } from "./memory-recall-metadata.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
@@ -52,7 +51,14 @@ describe("memory index schema", () => {
         text: "body",
         updated_at: 7,
       });
-      expect(readMemoryRecallMetadata(db, ["legacy"]).get("legacy")).toEqual({
+      expect(
+        db
+          .prepare(
+            `SELECT chunk_id AS id, importance, triggers, project_key
+             FROM memory_index_chunk_recall_metadata WHERE chunk_id = 'legacy'`,
+          )
+          .get(),
+      ).toEqual({
         id: "legacy",
         importance: 8,
         triggers: "legacy trigger",
@@ -200,6 +206,7 @@ describe("memory index schema", () => {
       ).toEqual({ origin_class: "untrusted", session_kind: "unknown", observed_at: 50 });
       expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
         { id: "chunk-1", text: "remember this" },
+        { id: "chunk-2", text: "next" },
       ]);
       expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "openai", hash: "chunk-hash" },

@@ -7,14 +7,19 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
+import { Worker } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
+import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -36,6 +41,73 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("builds a private worker without registering it as a plugin entry", async () => {
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
+    mkdirSync(path.join(packageDir, "src"));
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/worker-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          compat: { pluginApi: "1.0.0" },
+          build: { workerEntries: ["./src/store.worker.ts"] },
+        },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "index.ts"), 'export default { id: "worker-fixture" };\n');
+    writeFileSync(
+      path.join(packageDir, "src/store.worker.ts"),
+      'import { parentPort, isMainThread } from "node:worker_threads";\n' +
+        "const value: number = 42; parentPort!.postMessage({ value, isMainThread });\n",
+    );
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+    );
+    expect(plan.runtimeExtensions).toEqual(["./dist/index.js"]);
+    const worker = new Worker(path.join(packageDir, "dist/src/store.worker.js"));
+    try {
+      const result = await new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`Worker exited before replying: ${code}`)));
+      });
+      expect(result).toEqual({ value: 42, isMainThread: false });
+    } finally {
+      await worker.terminate();
+    }
+  });
+
+  it.each(["index.tsx", "src/index.tsx"])(
+    "builds an executable %s package entry",
+    async (entry) => {
+      const packageDir = tempDirs.make("openclaw-plugin-runtime-tsx-");
+      mkdirSync(path.dirname(path.join(packageDir, entry)), { recursive: true });
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/tsx-fixture",
+          version: "1.0.0",
+          type: "module",
+          openclaw: { extensions: [`./${entry}`], compat: { pluginApi: "1.0.0" } },
+        }),
+      );
+      writeFileSync(
+        path.join(packageDir, entry),
+        'const id: string = "tsx-fixture"; export default { id };\n',
+      );
+
+      await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" });
+
+      const outputPath = path.join(packageDir, "dist", entry.replace(/\.tsx$/u, ".js"));
+      expect(existsSync(outputPath)).toBe(true);
+      expect((await import(pathToFileURL(outputPath).href)).default.id).toBe("tsx-fixture");
+    },
+  );
+
   it("rejects a symlinked package dist root before building", async () => {
     const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-output-root-");
     const packageDir = path.join(syntheticRepoRoot, "extensions", "demo");
@@ -93,33 +165,13 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
   });
 
-  it("includes top-level public runtime surfaces and root-build-excluded plugins", () => {
-    const qqbotPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "qqbot"),
-    });
-    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
-    expect(qqbotRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
-      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
-      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
-      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
-      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
-      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
-    });
-    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-
+  it("includes top-level public runtime surfaces", () => {
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),
@@ -217,12 +269,42 @@ describe("plugin npm runtime build planning", () => {
     expect(indexText).toContain('specifier: "./secret-contract-api.cjs"');
     expect(indexText).toContain('specifier: "./runtime-api.cjs"');
 
-    const setupEntryText = readFileSync(
-      path.join(repoRoot, "extensions/msteams/dist/setup-entry.cjs"),
-      "utf8",
-    );
-    expect(setupEntryText).toContain('specifier: "./setup-plugin-api.cjs"');
-    expect(setupEntryText).toContain('specifier: "./secret-contract-api.cjs"');
+    const setupEntryPath = path.join(plan.outDir, "setup-entry.cjs");
+    const defineSetupEntry = vi.fn(defineBundledChannelSetupEntry);
+    const setupModule: { exports: Partial<ReturnType<typeof defineBundledChannelSetupEntry>> } = {
+      exports: {},
+    };
+    const require = createRequire(import.meta.url);
+    // Execute the emitted URL expressions and load companions through the host SDK;
+    // hashed inventory chunks are private, while the setup entry remains stable.
+    runInNewContext(readFileSync(setupEntryPath, "utf8"), {
+      __filename: setupEntryPath,
+      __dirname: plan.outDir,
+      module: setupModule,
+      exports: setupModule.exports,
+      URL,
+      require: (specifier: string) =>
+        specifier === "openclaw/plugin-sdk/channel-entry-contract"
+          ? { defineBundledChannelSetupEntry: defineSetupEntry }
+          : require(specifier),
+    });
+    expect(defineSetupEntry).toHaveBeenCalledOnce();
+    const options = defineSetupEntry.mock.calls[0]?.[0];
+    for (const reference of [options?.plugin, options?.secrets]) {
+      if (!reference) {
+        throw new Error("Missing setup companion reference");
+      }
+      expect(path.dirname(reference.specifier)).toBe(path.join(plan.outDir, ".setup"));
+      expect(path.extname(reference.specifier)).toBe(".cjs");
+      expect(existsSync(reference.specifier)).toBe(true);
+    }
+    expect(setupModule.exports).toBe(defineSetupEntry.mock.results[0]?.value);
+    expect(setupModule.exports.kind).toBe("bundled-channel-setup-entry");
+    expect(setupModule.exports.loadSetupPlugin?.()).toMatchObject({ id: "msteams" });
+    expect(setupModule.exports.loadSetupSecrets?.()).toMatchObject({
+      collectRuntimeConfigAssignments: expect.any(Function),
+      secretTargetRegistryEntries: expect.any(Array),
+    });
   });
 
   it("builds Tencent setup metadata for installed-package migrations", () => {
@@ -240,10 +322,37 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
+  it("plans the Zalo public setup API with its lazy package surface", () => {
+    const packageDir = path.join(repoRoot, "extensions", "zalo");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir,
+      }),
+    );
+    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
+    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
+    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+    expect(plan.packageFiles).toContain("dist/**");
+  });
+
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);

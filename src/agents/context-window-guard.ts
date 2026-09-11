@@ -4,8 +4,8 @@
  * Configured model values can cap provider metadata, and local endpoints get
  * more actionable remediation text.
  */
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
@@ -29,27 +29,6 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
-function modelIdMatchesProviderScope(params: {
-  configuredId?: string;
-  provider: string;
-  modelId: string;
-}): boolean {
-  const configuredId = params.configuredId?.trim();
-  if (!configuredId) {
-    return false;
-  }
-  if (configuredId === params.modelId) {
-    return true;
-  }
-  const providerPrefix = params.provider ? `${params.provider}/` : "";
-  if (!providerPrefix) {
-    return false;
-  }
-  const stripProvider = (id: string) =>
-    id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
-  return stripProvider(configuredId) === stripProvider(params.modelId);
-}
-
 /** Resolve the effective context window and source for one provider/model. */
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
@@ -57,47 +36,24 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
-  agentContextTokens?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
-  const fromModelsConfig = (() => {
-    const providers = params.cfg?.models?.providers as
-      | Record<
-          string,
-          { models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }> }
-        >
-      | undefined;
-    const providerEntry = findNormalizedProviderValue(providers, params.provider);
-    const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((model) =>
-      modelIdMatchesProviderScope({
-        configuredId: model?.id,
-        provider: params.provider,
-        modelId: params.modelId,
-      }),
-    );
-    return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
-  })();
+  const configured = resolveConfiguredContextTokenLimits(
+    { cfg: params.cfg, provider: params.provider, model: params.modelId },
+    normalizePositiveInt,
+  );
+  const fromModelsConfig =
+    configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
   const fromModel =
     normalizePositiveInt(params.modelContextTokens) ??
     normalizePositiveInt(params.modelContextWindow);
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  const baseInfo = fromModelsConfig
+  return fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
     : fromModel
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: defaultTokens, source: "default" as const };
-
-  const capTokens =
-    normalizePositiveInt(params.agentContextTokens) ??
-    normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (capTokens && capTokens < baseInfo.tokens) {
-    // Agent settings can intentionally cap a larger model context window.
-    return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
-  }
-
-  return baseInfo;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {
@@ -156,12 +112,6 @@ export function formatContextWindowWarningMessage(params: {
   if (!hint.likelySelfHosted) {
     return base;
   }
-  if (params.guard.source === "agentContextTokens") {
-    return (
-      `${base}; OpenClaw is capped by agents.defaults.contextTokens, so raise that cap ` +
-      `if you want to use more of the model context window`
-    );
-  }
   if (params.guard.source === "modelsConfig") {
     return (
       `${base}; OpenClaw is using the configured model context limit for this model, ` +
@@ -185,9 +135,6 @@ export function formatContextWindowBlockMessage(params: {
   const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
   if (!hint.likelySelfHosted) {
     return base;
-  }
-  if (params.guard.source === "agentContextTokens") {
-    return `${base} OpenClaw is capped by agents.defaults.contextTokens. Raise that cap.`;
   }
   if (params.guard.source === "modelsConfig") {
     return (

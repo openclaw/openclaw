@@ -1,12 +1,17 @@
 // Voice Call tests cover store plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerVoiceCallLogs } from "../cli-call-log.js";
 import {
   createTestStorePath,
   makePersistedCall,
@@ -16,23 +21,58 @@ import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
-  findCallMatchesInStore,
+  CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+  CALL_RECORD_EVENTS_NAMESPACE,
+  CALL_RECORD_CHUNK_MAX_ENTRIES,
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./store.js";
 
+const { sleepMock } = vi.hoisted(() => ({ sleepMock: vi.fn() }));
+vi.mock("../../api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api.js")>()),
+  sleep: sleepMock,
+}));
+
 const MANAGER_REPLAY_KEY_LIMIT = 10_000;
 
-function installStateRuntime(): void {
+function installStateRuntime({
+  bulkReads = true,
+  beforeOperation,
+}: {
+  bulkReads?: boolean;
+  beforeOperation?: (
+    namespace: string,
+    operation: "register" | "entries",
+    key?: string,
+  ) => Promise<void>;
+} = {}): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
-      openKeyedStore: (() => {
-        throw new Error("openKeyedStore is not used by voice-call store tests");
-      }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+        const backingStore = createPluginStateKeyedStoreForTests<T>("voice-call", options);
+        const store = beforeOperation
+          ? {
+              ...backingStore,
+              async register(...args: Parameters<typeof backingStore.register>) {
+                await beforeOperation(options.namespace, "register", args[0]);
+                await backingStore.register(...args);
+              },
+              async entries() {
+                await beforeOperation(options.namespace, "entries");
+                return backingStore.entries();
+              },
+            }
+          : backingStore;
+        if (bulkReads) {
+          return store;
+        }
+        const { lookupMany: _lookupMany, ...legacy } = store;
+        return legacy;
+      },
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
@@ -54,6 +94,49 @@ describe("voice-call call record store", () => {
     resetPluginStateStoreForTests();
   });
 
+  it.each([0, 1])("honors SQLite tail --since %s before following new snapshots", async (since) => {
+    const storePath = createTestStorePath();
+    const calls = ["first", "second", "third"].map((callId) =>
+      CallRecordSchema.parse(makePersistedCall({ callId })),
+    );
+    const added = CallRecordSchema.parse(makePersistedCall({ callId: "new" }));
+    for (const call of calls) {
+      await persistCallRecord(storePath, call);
+    }
+    const stopped = new Error("SQLite tail test finished");
+    sleepMock
+      .mockReset()
+      .mockRejectedValue(stopped)
+      .mockImplementationOnce(async () => {
+        await persistCallRecord(storePath, added);
+      });
+    let output = "";
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output += String(chunk);
+      return true;
+    });
+    const program = new Command();
+    registerVoiceCallLogs({
+      root: program,
+      defaultFile: path.join(storePath, "calls.jsonl"),
+      ensureHistoryStateRuntime: installStateRuntime,
+    });
+    try {
+      await expect(
+        program.parseAsync(["tail", "--since", String(since)], { from: "user" }),
+      ).rejects.toBe(stopped);
+      expect(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).callId),
+      ).toEqual(since === 0 ? ["new"] : ["third", "new"]);
+    } finally {
+      stdout.mockRestore();
+      fs.rmSync(storePath, { recursive: true, force: true });
+    }
+  });
+
   it("does not import legacy JSONL records at runtime", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(
@@ -61,7 +144,7 @@ describe("voice-call call record store", () => {
     );
     writeLegacyCallsJsonl(storePath, [call]);
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.has("call-legacy")).toBe(false);
     expect(restored.processedEventIds.has("evt-1")).toBe(false);
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
@@ -76,14 +159,14 @@ describe("voice-call call record store", () => {
       makePersistedCall({ callId: "call-sqlite", transcript: [] }),
     );
 
-    persistCallRecord(storePath, call);
+    await persistCallRecord(storePath, call);
 
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-sqlite")?.providerCallId).toBe(call.providerCallId);
   });
 
-  it("does not read the JSONL fallback when SQLite state cannot open", () => {
+  it("does not read the JSONL fallback when SQLite state cannot open", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-jsonl" }));
     writeLegacyCallsJsonl(storePath, [call]);
@@ -91,9 +174,6 @@ describe("voice-call call record store", () => {
       state: {
         resolveStateDir: () => "",
         openKeyedStore: (() => {
-          throw new Error("openKeyedStore is not used by voice-call store tests");
-        }) as never,
-        openSyncKeyedStore: (() => {
           throw new Error("sqlite unavailable");
         }) as never,
         openChannelIngressQueue: (() => {
@@ -105,10 +185,65 @@ describe("voice-call call record store", () => {
       },
     });
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.has("call-jsonl")).toBe(false);
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
   });
+
+  it.each([true, false])(
+    "restores complete chunked call transcripts (bulk: %s)",
+    async (bulkReads) => {
+      installStateRuntime({ bulkReads });
+      const storePath = createTestStorePath();
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-chunked",
+          transcript: [
+            { timestamp: Date.now(), speaker: "user", text: "🦞".repeat(180_000), isFinal: true },
+          ],
+        }),
+      );
+      await persistCallRecord(storePath, call);
+      resetPluginStateStoreForTests();
+      expect(
+        (await loadActiveCallsFromStore(storePath)).activeCalls.get(call.callId)?.transcript,
+      ).toEqual(call.transcript);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
+      const chunks = createPluginStateKeyedStoreForTests<{ index: number; dataBase64: string }>(
+        "voice-call",
+        {
+          namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+          maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+          env,
+        },
+      );
+      const rows = await chunks.entries();
+      const first = rows.find((row) => row.value.index === 0);
+      const later = rows.find((row) => row.value.index === 1);
+      if (!first || !later) {
+        throw new Error("expected call transcript chunks");
+      }
+      const good = CallRecordSchema.parse(
+        makePersistedCall({ callId: "good-call", transcript: [] }),
+      );
+      await persistCallRecord(storePath, good);
+      const { db } = openOpenClawStateDatabase({ env });
+      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+        "invalid JSON",
+        later.key,
+      );
+      await chunks.register(first.key, { ...first.value, index: -1 });
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([good]);
+      expect(await findCallInStore(storePath, good.callId)).toEqual(good);
+      await chunks.delete(first.key);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([good]);
+      await chunks.register(first.key, first.value);
+      await expect(findCallInStore(storePath, good.callId)).rejects.toThrowError(
+        expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
+      );
+    },
+  );
 
   it("persists oversized records in SQLite without creating a JSONL fallback", async () => {
     const storePath = createTestStorePath();
@@ -127,9 +262,9 @@ describe("voice-call call record store", () => {
       }),
     );
 
-    persistCallRecord(storePath, call);
+    await persistCallRecord(storePath, call);
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     const restoredCall = restored.activeCalls.get("call-large");
     expect(restoredCall?.providerCallId).toBe(call.providerCallId);
     expect(restoredCall?.transcript).toEqual([]);
@@ -141,7 +276,7 @@ describe("voice-call call record store", () => {
     expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
   });
 
-  it("replays same-millisecond snapshots in write order", () => {
+  it("replays same-millisecond snapshots in write order", async () => {
     vi.useFakeTimers({ now: new Date("2026-05-31T10:00:00.000Z") });
     const storePath = createTestStorePath();
     const first = CallRecordSchema.parse(
@@ -151,14 +286,116 @@ describe("voice-call call record store", () => {
       makePersistedCall({ callId: "call-order", state: "answered" }),
     );
 
-    persistCallRecord(storePath, first);
-    persistCallRecord(storePath, second);
+    await persistCallRecord(storePath, first);
+    await persistCallRecord(storePath, second);
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-order")?.state).toBe("answered");
   });
 
-  it("persists and restores only the newest per-call replay keys", () => {
+  it("captures call bytes and write order before a delayed chunk publishes", async () => {
+    vi.useFakeTimers({ now: new Date("2026-05-31T10:00:00.000Z") });
+    const storePath = createTestStorePath();
+    const blocked = createDeferred<void>();
+    const release = createDeferred<void>();
+    let delayed = false;
+    installStateRuntime({
+      beforeOperation: async (namespace, operation) => {
+        if (
+          !delayed &&
+          namespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE &&
+          operation === "register"
+        ) {
+          delayed = true;
+          blocked.resolve();
+          await release.promise;
+        }
+      },
+    });
+    const first = CallRecordSchema.parse(
+      makePersistedCall({
+        callId: "call-delayed",
+        state: "ringing",
+        transcript: [
+          { timestamp: Date.now(), speaker: "user", text: "🦞".repeat(30_000), isFinal: true },
+        ],
+      }),
+    );
+    const expectedFirst = structuredClone(first);
+    const pending = persistCallRecord(storePath, first);
+    try {
+      await blocked.promise;
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
+      expectDefined(first.transcript[0], "first transcript entry").text =
+        "mutated after persistence started";
+      first.state = "answered";
+      await persistCallRecord(storePath, first);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([first]);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    resetPluginStateStoreForTests();
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([expectedFirst, first]);
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.get(first.callId)?.state).toBe(
+      "answered",
+    );
+  });
+
+  it.each([CALL_RECORD_EVENT_CHUNKS_NAMESPACE, CALL_RECORD_EVENTS_NAMESPACE])(
+    "does not publish a call after a rejected %s write",
+    async (failedNamespace) => {
+      const storePath = createTestStorePath();
+      const failure = new Error("delayed SQLite write rejected");
+      installStateRuntime({
+        beforeOperation: async (namespace, operation, key) => {
+          await Promise.resolve();
+          if (
+            operation === "register" &&
+            namespace === failedNamespace &&
+            (namespace === CALL_RECORD_EVENTS_NAMESPACE || key?.endsWith(":chunk:0001"))
+          ) {
+            throw failure;
+          }
+        },
+      });
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          transcript: [
+            { timestamp: Date.now(), speaker: "user", text: "🦞".repeat(30_000), isFinal: true },
+          ],
+        }),
+      );
+      await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
+      installStateRuntime();
+      resetPluginStateStoreForTests();
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
+      await expect(findCallInStore(storePath, call.callId)).resolves.toBeUndefined();
+    },
+  );
+
+  it("propagates pruning rejection and preserves restore versus status read errors", async () => {
+    const storePath = createTestStorePath();
+    const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-read-error" }));
+    const failure = new Error("delayed SQLite listing rejected");
+    installStateRuntime({
+      beforeOperation: async (_namespace, operation) => {
+        await Promise.resolve();
+        if (operation === "entries") {
+          throw failure;
+        }
+      },
+    });
+    await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+    await expect(findCallInStore(storePath, call.callId)).rejects.toBe(failure);
+    installStateRuntime();
+    resetPluginStateStoreForTests();
+    await expect(findCallInStore(storePath, call.callId)).resolves.toEqual(call);
+  });
+
+  it("persists and restores only the newest per-call replay keys", async () => {
     const storePath = createTestStorePath();
     const replayKeys = Array.from(
       { length: MAX_CALL_REPLAY_KEYS + 2 },
@@ -171,17 +408,17 @@ describe("voice-call call record store", () => {
       }),
     );
 
-    persistCallRecord(storePath, call);
+    await persistCallRecord(storePath, call);
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
     const expected = replayKeys.slice(-MAX_CALL_REPLAY_KEYS);
     expect(restored.activeCalls.get("call-bounded-replay")?.processedEventIds).toEqual(expected);
     expect([...restored.processedEventIds]).toEqual(expected);
   });
 
-  it("hydrates manager replay keys in latest-snapshot call order", () => {
+  it("hydrates manager replay keys in latest-snapshot call order", async () => {
     const storePath = createTestStorePath();
-    persistCallRecord(
+    await persistCallRecord(
       storePath,
       CallRecordSchema.parse(
         makePersistedCall({
@@ -196,7 +433,7 @@ describe("voice-call call record store", () => {
       callIndex < MANAGER_REPLAY_KEY_LIMIT / MAX_CALL_REPLAY_KEYS;
       callIndex++
     ) {
-      persistCallRecord(
+      await persistCallRecord(
         storePath,
         CallRecordSchema.parse(
           makePersistedCall({
@@ -210,7 +447,7 @@ describe("voice-call call record store", () => {
         ),
       );
     }
-    persistCallRecord(
+    await persistCallRecord(
       storePath,
       CallRecordSchema.parse(
         makePersistedCall({
@@ -221,7 +458,7 @@ describe("voice-call call record store", () => {
       ),
     );
 
-    const restored = loadActiveCallsFromStore(storePath);
+    const restored = await loadActiveCallsFromStore(storePath);
 
     expect(restored.processedEventIds.size).toBe(MANAGER_REPLAY_KEY_LIMIT);
     expect(restored.processedEventIds.has("evt-latest-old")).toBe(true);
@@ -232,13 +469,13 @@ describe("voice-call call record store", () => {
 
   it("finds retained snapshots outside recent history and preserves internal-id precedence", async () => {
     const storePath = createTestStorePath();
-    persistCallRecord(
+    await persistCallRecord(
       storePath,
       CallRecordSchema.parse(
         makePersistedCall({ callId: "call-target", providerCallId: "provider-target" }),
       ),
     );
-    persistCallRecord(
+    await persistCallRecord(
       storePath,
       CallRecordSchema.parse(
         makePersistedCall({
@@ -249,7 +486,7 @@ describe("voice-call call record store", () => {
       ),
     );
     for (let index = 0; index < 101; index += 1) {
-      persistCallRecord(
+      await persistCallRecord(
         storePath,
         CallRecordSchema.parse(
           makePersistedCall({
@@ -260,15 +497,11 @@ describe("voice-call call record store", () => {
       );
     }
     expect(await getCallHistoryFromStore(storePath, 100)).toHaveLength(100);
-    const internalMatches = await findCallMatchesInStore(storePath, "call-target");
-    expect(internalMatches.byCallId).toMatchObject({
+    expect(await findCallInStore(storePath, "call-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });
-    expect(internalMatches.byProviderCallId).toMatchObject({ callId: "noise-100" });
-
-    const providerMatches = await findCallMatchesInStore(storePath, "provider-target");
-    expect(providerMatches.byProviderCallId).toMatchObject({
+    expect(await findCallInStore(storePath, "provider-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });

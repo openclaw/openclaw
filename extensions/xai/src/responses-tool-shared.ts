@@ -1,10 +1,14 @@
 // Xai plugin module implements responses tool shared behavior.
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeOptionalString as trimString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveXaiCatalogEntry } from "../model-definitions.js";
+import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_CITATION_MAX_COUNT = 20;
@@ -55,24 +59,65 @@ export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
   return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
 }
 
-export function buildXaiResponsesToolBody(params: {
+export function resolveXaiToolDefaultReasoningEffort(
+  model: string,
+  preferred: "none" | "low",
+): "none" | "low" | undefined {
+  // Per-model tool defaults must survive changes to the setup default.
+  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+}
+
+function buildXaiResponsesToolBody(params: {
   model: string;
   inputText: string;
   tools: Array<Record<string, unknown>>;
   maxTurns?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Record<string, unknown> {
+  const requested = params.reasoningEffort;
+  let reasoningEffort: string | undefined = requested;
+  const model = requested ? resolveXaiCatalogEntry(params.model) : undefined;
+  if (requested && model) {
+    const levels = applyXaiRuntimeModelCompat(model).thinkingLevelMap;
+    const level = requested === "none" ? "off" : requested;
+    // Direct tools must obey the same supported efforts as agent requests.
+    reasoningEffort = levels[level] ?? (level === "off" ? levels.minimal : undefined) ?? undefined;
+  }
   return {
     model: params.model,
     input: [{ role: "user", content: params.inputText }],
     tools: params.tools,
     store: false,
-    ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
+    ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
     ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
   };
 }
 
-export function extractXaiWebSearchContent(
+export async function requestXaiResponsesTool<T>(
+  params: Parameters<typeof buildXaiResponsesToolBody>[0] & {
+    apiKey: string;
+    endpoint: string;
+    timeoutSeconds: number;
+    errorLabel: string;
+    signal?: AbortSignal;
+  },
+  parseResponse: (data: XaiWebSearchResponse) => T,
+): Promise<T> {
+  return await postTrustedWebToolsJson(
+    {
+      url: params.endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      apiKey: params.apiKey,
+      ...(params.signal ? { signal: params.signal } : {}),
+      body: buildXaiResponsesToolBody(params),
+      errorLabel: "xAI",
+    },
+    async (response) =>
+      parseResponse(await readProviderJsonObjectResponse(response, params.errorLabel)),
+  );
+}
+
+function extractXaiWebSearchContent(
   data: XaiWebSearchResponse,
   maxContentChars?: number,
 ): {
@@ -169,7 +214,7 @@ export function requireXaiResponseTextAndCitations(
   const { text, annotationCitations, truncated, retainedRawChars, inlineCitationOffsetsSafe } =
     extractXaiWebSearchContent(data, maxContentChars);
   if (!text) {
-    throw new Error(`${label}: malformed JSON response`);
+    throw new Error(`${label}: no answer text returned; try a simpler request`);
   }
   const explicitCitations = new Set<string>();
   if (Array.isArray(data.citations)) {

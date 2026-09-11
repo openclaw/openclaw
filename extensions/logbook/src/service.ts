@@ -29,7 +29,7 @@ import {
   OBSERVATION_JSON_SCHEMA,
 } from "./prompts.js";
 import { dayKeyFor, LogbookStore } from "./store.js";
-import type { LogbookBatch, LogbookCard } from "./types.js";
+import type { LogbookBatch, LogbookStatus } from "./types.js";
 
 const ANALYSIS_TICK_MS = 60 * 1000;
 const PRUNE_TICK_MS = 60 * 60 * 1000;
@@ -73,28 +73,11 @@ function unwrapInvokePayload(raw: unknown): SnapshotPayload | null {
 /** Capture commands in preference order: app nodes first, headless node hosts second. */
 const CAPTURE_COMMANDS = ["screen.snapshot", "logbook.snapshot"] as const;
 
-type LogbookStatus = {
-  captureEnabled: boolean;
-  capturePaused: boolean;
-  captureIntervalSeconds: number;
-  analysisIntervalMinutes: number;
-  retentionDays: number;
-  nodeId?: string;
-  nodeName?: string;
-  lastCaptureAtMs?: number;
-  lastCaptureError?: string;
-  pendingFrames: number;
-  analysisRunning: boolean;
-  lastBatch?: Pick<LogbookBatch, "id" | "day" | "status" | "endMs" | "error">;
-  visionModel?: string;
-  visionModelSource: "config" | "media-defaults" | "missing";
-  today: string;
-  todayCards: number;
-  timeZone: string;
-};
-
 export class LogbookService {
   private store: LogbookStore | null = null;
+  private readonly operations = new Set<Promise<unknown>>();
+  private stopping: Promise<void> | undefined;
+  private starting: Promise<void> | undefined;
   private captureTimer: NodeJS.Timeout | null = null;
   private analysisTimer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
@@ -121,29 +104,54 @@ export class LogbookService {
     },
   ) {}
 
-  start(): void {
-    this.store = new LogbookStore(this.deps.dataDir);
-    // Batches interrupted by a gateway restart go back to pending.
-    this.store.resetRunningBatches();
-    this.captureTimer = setInterval(() => {
-      void this.captureTick();
-    }, this.config.captureIntervalSeconds * 1000);
-    this.captureTimer.unref?.();
-    this.analysisTimer = setInterval(() => {
-      void this.analysisTick();
-    }, ANALYSIS_TICK_MS);
-    this.analysisTimer.unref?.();
-    this.pruneTimer = setInterval(() => {
-      this.prune();
-    }, PRUNE_TICK_MS);
-    this.pruneTimer.unref?.();
-    this.prune();
-    this.deps.logger.info(
-      `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
-    );
+  async start(): Promise<void> {
+    if (this.starting || this.stopping) {
+      throw new Error("Logbook service cannot be started again");
+    }
+    this.starting = this.trackOperation(async () => {
+      const store = await LogbookStore.open(this.deps.dataDir);
+      this.store = store;
+      try {
+        if (this.stopping) {
+          return;
+        }
+        // Batches interrupted by a gateway restart go back to pending.
+        await store.resetRunningBatches();
+        if (this.stopping) {
+          return;
+        }
+        await this.pruneStore(store);
+        if (this.stopping) {
+          return;
+        }
+        this.captureTimer = setInterval(() => {
+          void this.captureTick();
+        }, this.config.captureIntervalSeconds * 1000);
+        this.captureTimer.unref?.();
+        this.analysisTimer = setInterval(() => {
+          void this.analysisTick();
+        }, ANALYSIS_TICK_MS);
+        this.analysisTimer.unref?.();
+        this.pruneTimer = setInterval(() => {
+          void this.prune();
+        }, PRUNE_TICK_MS);
+        this.pruneTimer.unref?.();
+        this.deps.logger.info(
+          `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
+        );
+      } catch (error) {
+        this.store = null;
+        await store.close();
+        throw error;
+      }
+    });
+    await this.starting;
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stopping) {
+      return this.stopping;
+    }
     for (const timer of [this.captureTimer, this.analysisTimer, this.pruneTimer]) {
       if (timer) {
         clearInterval(timer);
@@ -152,18 +160,30 @@ export class LogbookService {
     this.captureTimer = null;
     this.analysisTimer = null;
     this.pruneTimer = null;
-    this.store?.close();
-    this.store = null;
+    // Admitted work retains its connection through its final writes and error recording.
+    this.stopping = Promise.allSettled(this.operations).then(async () => {
+      const store = this.store;
+      this.store = null;
+      await store?.close();
+    });
+    return this.stopping;
+  }
+
+  private trackOperation<T>(run: () => Promise<T>): Promise<T> {
+    // Register ownership before runtime hooks can reenter shutdown.
+    const operation = Promise.resolve().then(run);
+    this.operations.add(operation);
+    const settled = () => this.operations.delete(operation);
+    void operation.then(settled, settled);
+    return operation;
   }
 
   private requireStore(): LogbookStore {
-    if (!this.store) {
+    if (this.stopping || !this.store) {
       throw new Error("Logbook service is not running");
     }
     return this.store;
   }
-
-  // ── Capture ────────────────────────────────────────────────────────
 
   setCapturePaused(paused: boolean): void {
     this.capturePaused = paused;
@@ -222,7 +242,14 @@ export class LogbookService {
   }
 
   private async captureTick(): Promise<void> {
-    if (!this.config.captureEnabled || this.capturePaused || this.captureInFlight || !this.store) {
+    const store = this.store;
+    if (
+      this.stopping ||
+      !this.config.captureEnabled ||
+      this.capturePaused ||
+      this.captureInFlight ||
+      !store
+    ) {
       return;
     }
     if (this.captureBackoffTicks > 0) {
@@ -230,87 +257,87 @@ export class LogbookService {
       return;
     }
     this.captureInFlight = true;
-    try {
-      const resolved = await this.resolveNode();
-      if ("reason" in resolved) {
-        if (this.lastCaptureError !== resolved.reason) {
-          this.deps.logger.warn(`logbook: ${resolved.reason}`);
+    return this.trackOperation(async () => {
+      try {
+        const resolved = await this.resolveNode();
+        if ("reason" in resolved) {
+          if (this.lastCaptureError !== resolved.reason) {
+            this.deps.logger.warn(`logbook: ${resolved.reason}`);
+          }
+          this.lastCaptureError = resolved.reason;
+          return;
         }
-        this.lastCaptureError = resolved.reason;
-        return;
-      }
-      const node = resolved.node;
-      const invoked = await this.deps.runtime.nodes.invoke({
-        nodeId: node.nodeId,
-        command: node.command,
-        params: {
+        const node = resolved.node;
+        const invoked = await this.deps.runtime.nodes.invoke({
+          nodeId: node.nodeId,
+          command: node.command,
+          params: {
+            screenIndex: this.config.screenIndex,
+            maxWidth: this.config.maxWidth,
+            quality: JPEG_QUALITY,
+            format: "jpeg",
+          },
+          timeoutMs: 30_000,
+        });
+        const raw = unwrapInvokePayload(invoked);
+        if (raw?.error) {
+          throw new Error(raw.error);
+        }
+        const rawBase64 = raw?.base64;
+        if (rawBase64 === undefined || rawBase64 === "") {
+          throw new Error(`${node.command} returned no image payload`);
+        }
+        if (typeof rawBase64 !== "string") {
+          throw new Error(`${node.command} returned invalid image payload`);
+        }
+        const base64 = canonicalizeBase64(rawBase64);
+        if (!base64) {
+          throw new Error(`${node.command} returned invalid image payload`);
+        }
+        const buffer = Buffer.from(base64, "base64");
+        const capturedAtMs = Date.now();
+        const day = dayKeyFor(capturedAtMs);
+        const contentHash = createHash("sha256").update(buffer).digest("hex");
+        // Unchanged consecutive frames mean the user is idle (or away); they are
+        // stored for the filmstrip but excluded from analysis batches.
+        const idle = (await store.lastFrame())?.contentHash === contentHash;
+        const filePath = store.frameFilePath(day, capturedAtMs);
+        // Screen captures can contain secrets; keep them owner-only.
+        mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        writeFileSync(filePath, buffer, { mode: 0o600 });
+        await store.insertFrame({
+          capturedAtMs,
+          day,
+          path: filePath,
           screenIndex: this.config.screenIndex,
-          maxWidth: this.config.maxWidth,
-          quality: JPEG_QUALITY,
-          format: "jpeg",
-        },
-        timeoutMs: 30_000,
-      });
-      const raw = unwrapInvokePayload(invoked);
-      if (raw?.error) {
-        throw new Error(raw.error);
+          width: raw?.width,
+          height: raw?.height,
+          byteSize: buffer.byteLength,
+          contentHash,
+          idle,
+        });
+        this.lastCaptureAtMs = capturedAtMs;
+        this.lastCaptureError = undefined;
+        this.captureFailures = 0;
+        this.failedNodeIds.clear();
+      } catch (err) {
+        this.captureFailures += 1;
+        if (this.cachedNode) {
+          this.failedNodeIds.add(this.cachedNode.nodeId);
+        }
+        this.cachedNode = null;
+        this.lastCaptureError = err instanceof Error ? err.message : String(err);
+        if (this.captureFailures >= CAPTURE_FAILURE_THRESHOLD) {
+          this.captureBackoffTicks = CAPTURE_FAILURE_PAUSE_TICKS;
+          this.deps.logger.warn(
+            `logbook: capture failing (${this.lastCaptureError}); backing off for ${CAPTURE_FAILURE_PAUSE_TICKS} ticks`,
+          );
+        }
+      } finally {
+        this.captureInFlight = false;
       }
-      const rawBase64 = raw?.base64;
-      if (rawBase64 === undefined || rawBase64 === "") {
-        throw new Error(`${node.command} returned no image payload`);
-      }
-      if (typeof rawBase64 !== "string") {
-        throw new Error(`${node.command} returned invalid image payload`);
-      }
-      const base64 = canonicalizeBase64(rawBase64);
-      if (!base64) {
-        throw new Error(`${node.command} returned invalid image payload`);
-      }
-      const buffer = Buffer.from(base64, "base64");
-      const capturedAtMs = Date.now();
-      const day = dayKeyFor(capturedAtMs);
-      const contentHash = createHash("sha256").update(buffer).digest("hex");
-      // Unchanged consecutive frames mean the user is idle (or away); they are
-      // stored for the filmstrip but excluded from analysis batches.
-      const idle = this.store.lastFrame()?.contentHash === contentHash;
-      const filePath = this.store.frameFilePath(day, capturedAtMs);
-      // Screen captures can contain secrets; keep them owner-only.
-      mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-      writeFileSync(filePath, buffer, { mode: 0o600 });
-      this.store.insertFrame({
-        capturedAtMs,
-        day,
-        path: filePath,
-        screenIndex: this.config.screenIndex,
-        width: raw?.width,
-        height: raw?.height,
-        byteSize: buffer.byteLength,
-        contentHash,
-        idle,
-      });
-      this.lastCaptureAtMs = capturedAtMs;
-      this.lastCaptureError = undefined;
-      this.captureFailures = 0;
-      this.failedNodeIds.clear();
-    } catch (err) {
-      this.captureFailures += 1;
-      if (this.cachedNode) {
-        this.failedNodeIds.add(this.cachedNode.nodeId);
-      }
-      this.cachedNode = null;
-      this.lastCaptureError = err instanceof Error ? err.message : String(err);
-      if (this.captureFailures >= CAPTURE_FAILURE_THRESHOLD) {
-        this.captureBackoffTicks = CAPTURE_FAILURE_PAUSE_TICKS;
-        this.deps.logger.warn(
-          `logbook: capture failing (${this.lastCaptureError}); backing off for ${CAPTURE_FAILURE_PAUSE_TICKS} ticks`,
-        );
-      }
-    } finally {
-      this.captureInFlight = false;
-    }
+    });
   }
-
-  // ── Analysis ───────────────────────────────────────────────────────
 
   private resolveVisionModel(): {
     ref?: { provider: string; model: string; profile?: string; preferredProfile?: string };
@@ -358,34 +385,35 @@ export class LogbookService {
     if (!this.resolveVisionModel().ref) {
       return { started: false, reason: MODEL_MISSING_MESSAGE };
     }
-    // Explicit user action is the retry path for failed batches; automatic
-    // retries could loop model spend on a persistently failing batch.
-    store.resetErrorBatches();
-    if (!store.nextPendingBatch()) {
-      const frames = store.unbatchedActiveFrames(2000);
-      // Force-close the current window so "analyze now" needs no elapsed time.
-      const selection = selectBatchFrames({
-        frames,
-        windowMs: this.config.analysisIntervalMinutes * 60_000,
-        nowMs: Date.now(),
-        force: true,
-      });
-      if (!selection) {
-        return { started: false, reason: "no unanalyzed activity captured yet" };
+    this.analysisInFlight = true;
+    return this.trackOperation(async () => {
+      let handedOff = false;
+      try {
+        // Explicit user action is the retry path for failed batches; automatic
+        // retries could loop model spend on a persistently failing batch.
+        await store.resetErrorBatches();
+        if (!(await store.nextPendingBatch())) {
+          // Force-close the current window so "analyze now" needs no elapsed time.
+          if (!(await this.enqueueNextBatch(store, true))) {
+            return { started: false, reason: "no unanalyzed activity captured yet" };
+          }
+        }
+        this.requireStore();
+        this.analysisInFlight = false;
+        void this.analysisTick();
+        handedOff = true;
+        return { started: true };
+      } finally {
+        if (!handedOff) {
+          this.analysisInFlight = false;
+        }
       }
-      store.createBatch({
-        day: dayKeyFor(selection.startMs),
-        startMs: selection.startMs,
-        endMs: selection.endMs,
-        frameIds: selection.frameIds,
-      });
-    }
-    void this.analysisTick();
-    return { started: true };
+    });
   }
 
   private async analysisTick(): Promise<void> {
-    if (this.analysisInFlight || !this.store) {
+    const store = this.store;
+    if (this.stopping || this.analysisInFlight || !store) {
       return;
     }
     // Without a vision model, leave frames unbatched and batches pending so
@@ -400,60 +428,68 @@ export class LogbookService {
       return;
     }
     this.analysisInFlight = true;
-    try {
-      this.enqueueElapsedWindow();
-      for (let i = 0; i < 4; i += 1) {
-        const batch = this.store.nextPendingBatch();
-        if (!batch) {
+    return this.trackOperation(async () => {
+      try {
+        if (this.stopping) {
           return;
         }
-        await this.runBatch(batch);
+        await this.enqueueElapsedWindow(store);
+        for (let i = 0; i < 4 && !this.stopping; i += 1) {
+          const batch = await store.nextPendingBatch();
+          if (!batch || this.stopping) {
+            return;
+          }
+          await this.runBatch(store, batch);
+        }
+      } catch (err) {
+        this.deps.logger.error(`logbook: analysis tick failed: ${String(err)}`);
+      } finally {
+        this.analysisInFlight = false;
       }
-    } catch (err) {
-      this.deps.logger.error(`logbook: analysis tick failed: ${String(err)}`);
-    } finally {
-      this.analysisInFlight = false;
-    }
+    });
   }
 
-  private enqueueElapsedWindow(): void {
-    const store = this.requireStore();
+  private async enqueueNextBatch(store: LogbookStore, force = false): Promise<boolean> {
+    const selection = selectBatchFrames({
+      frames: await store.unbatchedActiveFrames(2000),
+      windowMs: this.config.analysisIntervalMinutes * 60_000,
+      nowMs: Date.now(),
+      force,
+    });
+    if (!selection) {
+      return false;
+    }
+    await store.createBatch({
+      day: dayKeyFor(selection.startMs),
+      startMs: selection.startMs,
+      endMs: selection.endMs,
+      frameIds: selection.frameIds,
+    });
+    return true;
+  }
+
+  private async enqueueElapsedWindow(store: LogbookStore): Promise<void> {
     // Windows close on elapsed wall-clock or on a capture gap; both cases are
     // resolved by selectBatchFrames against the oldest unbatched frame.
-    while (true) {
-      const frames = store.unbatchedActiveFrames(2000);
-      const selection = selectBatchFrames({
-        frames,
-        windowMs: this.config.analysisIntervalMinutes * 60_000,
-        nowMs: Date.now(),
-      });
-      if (!selection) {
-        return;
-      }
-      store.createBatch({
-        day: dayKeyFor(selection.startMs),
-        startMs: selection.startMs,
-        endMs: selection.endMs,
-        frameIds: selection.frameIds,
-      });
+    while (!this.stopping && (await this.enqueueNextBatch(store))) {
+      // Continue until all elapsed windows are queued.
     }
   }
 
-  private async runBatch(batch: LogbookBatch): Promise<void> {
-    const store = this.requireStore();
+  private async runBatch(store: LogbookStore, batch: LogbookBatch): Promise<void> {
     const vision = this.resolveVisionModel();
     if (!vision.ref) {
       // Stay pending: the analysis tick pauses until a model is configured.
       return;
     }
-    store.setBatchStatus(
+    await store.setBatchStatus(
       batch.id,
       "running",
       undefined,
       `${vision.ref.provider}/${vision.ref.model}`,
     );
     try {
-      const frames = store.batchFrames(batch.id);
+      const frames = await store.batchFrames(batch.id);
       const sampled = sampleFrames(frames, MAX_FRAMES_PER_CALL);
       const images = sampled.map((frame) => ({
         type: "image" as const,
@@ -485,26 +521,26 @@ export class LogbookService {
         endMs: batch.endMs,
       });
       if (segments.length === 0) {
-        store.setBatchStatus(batch.id, "error", "vision model returned no usable segments");
+        await store.setBatchStatus(batch.id, "error", "vision model returned no usable segments");
         return;
       }
-      store.replaceObservations(batch.id, batch.day, segments);
-      await this.reviseCards(batch);
-      store.setBatchStatus(batch.id, "done");
+      await store.replaceObservations(batch.id, batch.day, segments);
+      await this.reviseCards(store, batch);
+      await store.setBatchStatus(batch.id, "done");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      store.setBatchStatus(batch.id, "error", message);
+      await store.setBatchStatus(batch.id, "error", message);
       this.deps.logger.warn(`logbook: batch ${batch.id} failed: ${message}`);
     }
   }
 
-  private async reviseCards(batch: LogbookBatch): Promise<void> {
-    const store = this.requireStore();
+  private async reviseCards(store: LogbookStore, batch: LogbookBatch): Promise<void> {
     const lookbackStart = batch.startMs - CARD_LOOKBACK_MS;
-    const previousCards = store
-      .cardsForDay(batch.day)
-      .filter((card) => card.endMs > lookbackStart && card.startMs < batch.endMs);
-    const observations = store.observationsInRange(
+    const previousCards = await store.cardsForDay(batch.day, {
+      startMs: lookbackStart,
+      endMs: batch.endMs,
+    });
+    const observations = await store.observationsInRange(
       batch.day,
       Math.min(lookbackStart, batch.startMs),
       batch.endMs,
@@ -566,134 +602,148 @@ export class LogbookService {
     if (!parsed.ok) {
       throw new Error(`card synthesis failed validation: ${parsed.error}`);
     }
-    const windowFrames = store
-      .framesInRange(window.startMs, window.endMs)
-      .map((frame) => ({ id: frame.id, capturedAtMs: frame.capturedAtMs }));
+    const windowFrames = (await store.framesInRange(window.startMs, window.endMs)).map((frame) => ({
+      id: frame.id,
+      capturedAtMs: frame.capturedAtMs,
+    }));
     const drafts = parsed.drafts.map((draft) =>
       Object.assign(draft, { keyframeId: pickKeyframeId(draft, windowFrames) }),
     );
-    store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, drafts);
+    await store.replaceCardsInWindow(batch.day, window.startMs, window.endMs, drafts);
   }
-
-  // ── Q&A / standup ──────────────────────────────────────────────────
 
   async standup(
     day: string,
     refresh: boolean,
   ): Promise<{ day: string; text: string; updatedMs: number }> {
     const store = this.requireStore();
-    if (!refresh) {
-      const cached = store.getStandup(day);
-      if (cached) {
-        return cached;
+    return this.trackOperation(async () => {
+      if (!refresh) {
+        const cached = await store.getStandup(day);
+        if (cached) {
+          return cached;
+        }
       }
-    }
-    const previousDay = dayKeyFor(new Date(`${day}T12:00:00`).getTime() - 24 * 60 * 60 * 1000);
-    const result = await this.deps.runtime.llm.complete({
-      messages: [
-        {
-          role: "user",
-          content: buildStandupPrompt({
-            day,
-            cards: store.cardsForDay(day),
-            previousDayCards: store.cardsForDay(previousDay),
-          }),
-        },
-      ],
-      purpose: "logbook.standup",
-      maxTokens: 800,
+      const previousDay = dayKeyFor(new Date(`${day}T12:00:00`).getTime() - 24 * 60 * 60 * 1000);
+      const result = await this.deps.runtime.llm.complete({
+        messages: [
+          {
+            role: "user",
+            content: buildStandupPrompt({
+              day,
+              cards: await store.cardsForDay(day),
+              previousDayCards: await store.cardsForDay(previousDay),
+            }),
+          },
+        ],
+        purpose: "logbook.standup",
+        maxTokens: 800,
+      });
+      await store.saveStandup(day, result.text.trim());
+      const saved = await store.getStandup(day);
+      if (!saved) {
+        throw new Error("standup save failed");
+      }
+      return saved;
     });
-    store.saveStandup(day, result.text.trim());
-    const saved = store.getStandup(day);
-    if (!saved) {
-      throw new Error("standup save failed");
-    }
-    return saved;
   }
 
   async ask(day: string, question: string): Promise<string> {
     const store = this.requireStore();
-    const observations = store.observationsInRange(day, 0, Number.MAX_SAFE_INTEGER).slice(-200);
-    const result = await this.deps.runtime.llm.complete({
-      messages: [
-        {
-          role: "user",
-          content: buildAskPrompt({
-            day,
-            cards: store.cardsForDay(day),
-            observations,
-            question,
-          }),
-        },
-      ],
-      purpose: "logbook.ask",
-      maxTokens: 600,
+    return this.trackOperation(async () => {
+      const observations = await store.observationsInRange(day, 0, Number.MAX_SAFE_INTEGER, 200);
+      const result = await this.deps.runtime.llm.complete({
+        messages: [
+          {
+            role: "user",
+            content: buildAskPrompt({
+              day,
+              cards: await store.cardsForDay(day),
+              observations,
+              question,
+            }),
+          },
+        ],
+        purpose: "logbook.ask",
+        maxTokens: 600,
+      });
+      return result.text.trim();
     });
-    return result.text.trim();
   }
 
-  // ── Introspection ──────────────────────────────────────────────────
-
-  cardsForDay(day: string): LogbookCard[] {
-    return this.requireStore().cardsForDay(day);
-  }
-
-  listDays(): ReturnType<LogbookStore["listDays"]> {
-    return this.requireStore().listDays();
-  }
-
-  dayStats(day: string): ReturnType<LogbookStore["dayStats"]> {
-    return this.requireStore().dayStats(day);
-  }
-
-  frameById(id: number): ReturnType<LogbookStore["frameById"]> {
-    return this.requireStore().frameById(id);
-  }
-
-  framesInRange(startMs: number, endMs: number): ReturnType<LogbookStore["framesInRange"]> {
-    return this.requireStore().framesInRange(startMs, endMs);
-  }
-
-  status(): LogbookStatus {
+  async timelineForDay(day: string): ReturnType<LogbookStore["timelineForDay"]> {
     const store = this.requireStore();
-    const today = dayKeyFor(Date.now());
-    const latestBatch = store.latestBatch();
-    const vision = this.resolveVisionModel();
-    return {
-      captureEnabled: this.config.captureEnabled,
-      capturePaused: this.capturePaused,
-      captureIntervalSeconds: this.config.captureIntervalSeconds,
-      analysisIntervalMinutes: this.config.analysisIntervalMinutes,
-      retentionDays: this.config.retentionDays,
-      nodeId: this.cachedNode?.nodeId ?? this.config.nodeId,
-      nodeName: this.cachedNode?.displayName,
-      lastCaptureAtMs: this.lastCaptureAtMs,
-      lastCaptureError: this.lastCaptureError,
-      pendingFrames: store.countUnbatchedActiveFrames(),
-      analysisRunning: this.analysisInFlight,
-      lastBatch: latestBatch
-        ? {
-            id: latestBatch.id,
-            day: latestBatch.day,
-            status: latestBatch.status,
-            endMs: latestBatch.endMs,
-            error: latestBatch.error,
-          }
-        : undefined,
-      visionModel: vision.ref ? `${vision.ref.provider}/${vision.ref.model}` : undefined,
-      visionModelSource: vision.source,
-      today,
-      todayCards: store.cardsForDay(today).length,
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    };
+    return this.trackOperation(() => store.timelineForDay(day));
   }
 
-  private prune(): void {
-    if (!this.store) {
+  async listDays(): ReturnType<LogbookStore["listDays"]> {
+    const store = this.requireStore();
+    return this.trackOperation(() => store.listDays());
+  }
+
+  async frameById(id: number): ReturnType<LogbookStore["frameById"]> {
+    const store = this.requireStore();
+    return this.trackOperation(() => store.frameById(id));
+  }
+
+  async framesInRange(startMs: number, endMs: number): ReturnType<LogbookStore["framesInRange"]> {
+    const store = this.requireStore();
+    return this.trackOperation(() => store.framesInRange(startMs, endMs));
+  }
+
+  async status(): Promise<LogbookStatus> {
+    const store = this.requireStore();
+    return this.trackOperation(async () => {
+      const today = dayKeyFor(Date.now());
+      const latestBatch = await store.latestBatch();
+      const vision = this.resolveVisionModel();
+      return {
+        captureEnabled: this.config.captureEnabled,
+        capturePaused: this.capturePaused,
+        captureIntervalSeconds: this.config.captureIntervalSeconds,
+        analysisIntervalMinutes: this.config.analysisIntervalMinutes,
+        retentionDays: this.config.retentionDays,
+        nodeId: this.cachedNode?.nodeId ?? this.config.nodeId,
+        nodeName: this.cachedNode?.displayName,
+        lastCaptureAtMs: this.lastCaptureAtMs,
+        lastCaptureError: this.lastCaptureError,
+        pendingFrames: await store.countUnbatchedActiveFrames(),
+        analysisRunning: this.analysisInFlight,
+        lastBatch: latestBatch
+          ? {
+              id: latestBatch.id,
+              day: latestBatch.day,
+              status: latestBatch.status,
+              endMs: latestBatch.endMs,
+              error: latestBatch.error,
+            }
+          : undefined,
+        visionModel: vision.ref ? `${vision.ref.provider}/${vision.ref.model}` : undefined,
+        visionModelSource: vision.source,
+        today,
+        todayCards: await store.countCardsForDay(today),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+    });
+  }
+
+  private async prune(): Promise<void> {
+    const store = this.store;
+    if (this.stopping || !store) {
       return;
     }
+    return this.trackOperation(async () => {
+      try {
+        await this.pruneStore(store);
+      } catch (error) {
+        this.deps.logger.error(`logbook: pruning failed: ${String(error)}`);
+      }
+    });
+  }
+
+  private async pruneStore(store: LogbookStore): Promise<void> {
     const cutoff = Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000;
-    const removed = this.store.pruneFrames(cutoff);
+    const removed = await store.pruneFrames(cutoff);
     if (removed > 0) {
       this.deps.logger.info(
         `logbook: pruned ${removed} frames older than ${this.config.retentionDays}d`,

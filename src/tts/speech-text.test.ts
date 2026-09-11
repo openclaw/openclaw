@@ -85,6 +85,34 @@ const ready = true;
     expect(isCodeHeavySpeechText(input)).toBe(true);
   });
 
+  it.each([
+    [
+      "inline code",
+      "```printf```\n\nThis explanation is ordinary prose and should be spoken in full.",
+    ],
+    [
+      "prose after a quoted fence",
+      "> ```\n> x\n\nThis explanation is ordinary prose and should be spoken in full.",
+    ],
+  ])("does not classify %s as fenced code", (_name, text) => {
+    expect(isCodeHeavySpeechText(text)).toBe(false);
+  });
+
+  it("recognizes a fence opened on the list marker line", () => {
+    const text = '- ```js\n  const detailedAnswer = "this body dominates the reply";\n  ```';
+    expect(isCodeHeavySpeechText(text)).toBe(true);
+  });
+
+  it.each([
+    ["1234567", false],
+    ["12345678", true],
+    ["123456789", true],
+    ["12345  ", false],
+    ["123456  ", true],
+  ])("keeps the inclusive half-code boundary for %j", (code, expected) => {
+    expect(isCodeHeavySpeechText(`\`\`\`\n${code}\n\`\`\``)).toBe(expected);
+  });
+
   it("keeps blockquoted code and surrounding prose aligned with Markdown stripping", () => {
     const input = `> This explanation is deliberately much longer than the code it introduces, so it remains the reply's main content for speech.
 >

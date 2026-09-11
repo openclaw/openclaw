@@ -69,6 +69,81 @@ afterEach(() => {
 });
 
 describe("resolveModelRuntimePolicy", () => {
+  it.each(["custom", ""])("merges trimmed provider policy entries for provider %j", (provider) => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          custom: { baseUrl: "https://custom.example/v1", models: [] },
+          " custom ": {
+            baseUrl: "https://custom.example/v1",
+            agentRuntime: { id: "openclaw" },
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(resolveModelRuntimePolicy({ config, provider, modelId: "custom/qwen-local" })).toEqual({
+      policy: { id: "openclaw" },
+      source: "provider",
+      ...(provider ? {} : { matchedProvider: "custom" }),
+    });
+  });
+
+  it.each([
+    {
+      name: "keeps model policy when later provider rows are omitted",
+      later: {},
+      expected: { policy: { id: "model-runtime" }, source: "model" },
+    },
+    {
+      name: "uses provider policy when later provider rows are explicitly empty",
+      later: { models: [] },
+      expected: { policy: { id: "openclaw" }, source: "provider" },
+    },
+  ])("$name", ({ later, expected }) => {
+    // Authored provider overlays can omit the model list before materialization.
+    const config = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            models: [createModelConfig("model-runtime")],
+          },
+          " custom ": {
+            baseUrl: "https://custom.example/v1",
+            agentRuntime: { id: "openclaw" },
+            ...later,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({ config, provider: "custom", modelId: "qwen-local" }),
+    ).toEqual(expected);
+  });
+
+  it.each([false, true])(
+    "keeps differently cased provider groups separate (reverse=%s)",
+    (reverse) => {
+      const common = { baseUrl: "https://custom.example/v1", models: [] };
+      const lowerCase = { ...common, agentRuntime: { id: "openclaw" } };
+      const otherCase = { ...common, agentRuntime: { id: "auto" } };
+      const config: OpenClawConfig = {
+        models: {
+          providers: reverse
+            ? { " custom ": lowerCase, " Custom ": otherCase }
+            : { " Custom ": otherCase, " custom ": lowerCase },
+        },
+      };
+
+      expect(
+        resolveModelRuntimePolicy({ config, provider: "custom", modelId: "qwen-local" }),
+      ).toEqual({ policy: { id: "openclaw" }, source: "provider" });
+    },
+  );
+
   it("ignores the QA force-runtime override when the private QA gate is unset", () => {
     deleteTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA");
     setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
@@ -100,6 +175,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "openclaw" },
       source: "model",
+      forcedByEnvironment: true,
     });
   });
 
@@ -122,6 +198,8 @@ describe("resolveModelRuntimePolicy", () => {
   it("honors provider wildcard agent model runtime policy entries", () => {
     const config = {
       agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
         defaults: {
           models: {
             "vllm/*": { agentRuntime: { id: "openclaw" } },
@@ -522,6 +600,78 @@ describe("resolveModelRuntimePolicy", () => {
       matchedProvider: "anthropic",
     });
   });
+
+  it("uses the persisted owner model runtime policy for a bare session key", () => {
+    const config = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          sessionStore: { agentId: "research" },
+          models: {
+            "vllm/qwen-local": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [
+          { id: "ops" },
+          {
+            id: "research",
+            models: {
+              "vllm/qwen-local": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "vllm",
+        modelId: "qwen-local",
+        sessionKey: "global",
+      }),
+    ).toEqual({
+      policy: { id: "openclaw" },
+      source: "model",
+      matchedProvider: "vllm",
+    });
+    expect(() =>
+      resolveModelRuntimePolicy({
+        config,
+        provider: "vllm",
+        modelId: "qwen-local",
+        agentId: "ops",
+        sessionKey: "global",
+      }),
+    ).toThrow(/belongs to "research"/);
+  });
+
+  it.each(["openai/gpt-5.5", "openai/*"])(
+    "uses a prepared stored-row owner for %s without re-admitting global",
+    (modelKey) => {
+      const config: OpenClawConfig = {
+        session: { store: "/synthetic/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: {
+            main: { models: { [modelKey]: { agentRuntime: { id: "openclaw" } } } },
+            ops: { models: { [modelKey]: { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      };
+      expect(
+        resolveModelRuntimePolicy({
+          config,
+          provider: "openai",
+          modelId: "gpt-5.5",
+          sessionKey: "global",
+          agentScope: { kind: "prepared", agentId: "main" },
+        }),
+      ).toEqual({ policy: { id: "openclaw" }, source: "model", matchedProvider: "openai" });
+    },
+  );
 
   it("fails closed for duplicate provider-prefixed bare-model policies", () => {
     const config = {

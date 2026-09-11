@@ -27,6 +27,7 @@ vi.mock("./register.backup.js", () => ({
 vi.mock("./register.maintenance.js", () => ({
   registerMaintenanceCommands: (program: Command) => {
     program.command("doctor");
+    program.command("triage");
     program.command("dashboard");
     program.command("reset");
     program.command("uninstall");
@@ -38,7 +39,6 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
-    program.command("commitments");
     const tasks = program.command("tasks");
     tasks.command("show");
   },
@@ -51,16 +51,14 @@ vi.mock("./register.setup.js", () => ({
   },
 }));
 
+import { registerCoreCliByName, registerCoreCliCommands } from "./command-registry-core.js";
 import {
-  getCoreCliCommandNames,
-  registerCoreCliByName,
-  registerCoreCliCommands,
-} from "./command-registry-core.js";
-import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+  getCoreCliCommandNamesCore,
+  getCoreCliCommandsWithSubcommands,
+} from "./core-command-descriptors.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
-  channelOptions: [],
   messageChannelOptions: "",
   agentChannelOptions: "web",
 };
@@ -80,7 +78,7 @@ describe("command-registry", () => {
   };
 
   it("includes both agent and agents in core CLI command names", () => {
-    const names = getCoreCliCommandNames();
+    const names = getCoreCliCommandNamesCore();
     expect(names).toContain("setup");
     expect(names).toContain("crestodian"); // hidden alias
     expect(names).toContain("mcp");
@@ -90,11 +88,11 @@ describe("command-registry", () => {
 
   it("only exposes Claws after an explicit process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
-    expect(getCoreCliCommandNames()).not.toContain("claws");
+    expect(getCoreCliCommandNamesCore()).not.toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
 
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-    expect(getCoreCliCommandNames()).toContain("claws");
+    expect(getCoreCliCommandNamesCore()).toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 
     vi.unstubAllEnvs();
@@ -107,7 +105,6 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).toContain("agent");
     expect(names).not.toContain("setup");
@@ -154,6 +151,7 @@ describe("command-registry", () => {
 
     const names = namesOf(program);
     expect(names).toContain("doctor");
+    expect(names).toContain("triage");
     expect(names).toContain("status");
     expect(names.length).toBeGreaterThan(1);
   });
@@ -163,7 +161,7 @@ describe("command-registry", () => {
 
     expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
 
-    const names = getCoreCliCommandNames();
+    const names = getCoreCliCommandNamesCore();
     expect(names).toContain("doctor");
     expect(names).toContain("dashboard");
     expect(names).toContain("reset");
@@ -183,21 +181,19 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
   });
 
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+    for (const name of ["status", "health", "sessions", "tasks"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 
     const names = namesOf(program);
     const countName = (target: string) =>
       names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
-    expect(countName("commitments")).toBe(1);
     expect(countName("tasks")).toBe(1);
   });
 
@@ -208,6 +204,6 @@ describe("command-registry", () => {
 
     const found = await registerCoreCliByName(program, testProgramContext, "dashboard");
     expect(found).toBe(true);
-    expect(namesOf(program)).toEqual(["doctor", "dashboard", "reset", "uninstall"]);
+    expect(namesOf(program)).toEqual(["doctor", "triage", "dashboard", "reset", "uninstall"]);
   });
 });

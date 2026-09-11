@@ -17,9 +17,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
 vi.mock("../commands/models/load-config.js", () => ({
@@ -72,9 +69,14 @@ it("does not execute an unrelated provider plugin", async () => {
     },
   };
 
-  await expect(tryRouteCli(["node", "openclaw", "models", "status", "--json"])).resolves.toBe(true);
-
-  const payload = JSON.parse(testState.logs.at(-1) ?? "{}") as { defaultModel?: string };
-  expect(payload.defaultModel).toBe("openai/gpt-5.6-sol");
+  for (const argv of [
+    ["node", "openclaw", "models", "status", "--json"],
+    ["node", "openclaw", "models", "--json"],
+    ["node", "openclaw", "models", "--agent", "main", "--status-json"],
+  ]) {
+    await expect(tryRouteCli(argv)).resolves.toBe(true);
+    const payload = JSON.parse(testState.logs.at(-1) ?? "{}") as { defaultModel?: string };
+    expect(payload.defaultModel).toBe("openai/gpt-5.6-sol");
+  }
   expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
 });

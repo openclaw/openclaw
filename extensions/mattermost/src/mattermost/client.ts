@@ -1,13 +1,18 @@
 // Mattermost plugin module implements client behavior.
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
-  readResponseTextLimited,
+  redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
@@ -144,21 +149,34 @@ async function readMattermostSuccessText(res: Response, path: string): Promise<s
   return new TextDecoder().decode(bytes);
 }
 
-export async function readMattermostError(res: Response): Promise<string> {
+export async function readMattermostError(
+  res: Response,
+  requestHeaders: HeadersInit,
+): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
-  const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
+  const { text, truncated } = await readResponseTextPrefix(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES, {
+    chunkTimeoutMs: 10_000,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
+  });
+  let detail = text;
   if (contentType.includes("application/json")) {
     try {
-      const data = JSON.parse(text) as { message?: string } | undefined;
-      if (data?.message) {
-        return data.message;
-      }
-      return JSON.stringify(data);
+      const data: unknown = JSON.parse(text);
+      detail =
+        data !== null &&
+        typeof data === "object" &&
+        "message" in data &&
+        typeof data.message === "string" &&
+        data.message
+          ? data.message
+          : JSON.stringify(data);
     } catch {
-      return text;
+      // A mislabeled or truncated JSON response retains its bounded text diagnostic.
     }
   }
-  return text;
+  // Decode first, then mask the active credential, including a clipped suffix.
+  return redactProviderResponseErrorText(detail, requestHeaders, { sourceTruncated: truncated });
 }
 
 export function createMattermostClient(params: {
@@ -242,7 +260,7 @@ export function createMattermostClient(params: {
     }
     const res = await fetchImpl(url, { ...init, headers });
     if (!res.ok) {
-      const detail = await readMattermostError(res);
+      const detail = await readMattermostError(res, headers);
       throw new Error(
         `Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
       );
@@ -392,35 +410,6 @@ export type CreateDmChannelRetryOptions = {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
-const DM_REPLY_DELIVERY_BARRIER_SLACK_MS = 60_000;
-
-/** Covers DM creation retries without extending channel-delivery stalls. */
-export function resolveMattermostReplyDeliveryBarrierTimeoutMs(params: {
-  isDirect: boolean;
-  dmRetryOptions?: CreateDmChannelRetryOptions;
-  queuedCounts: Readonly<Record<"tool" | "block" | "final", number>>;
-  humanDelayBudgetMs?: number;
-}): number | undefined {
-  if (!params.isDirect) {
-    return undefined;
-  }
-  const deliveryCount = Object.values(params.queuedCounts).reduce((sum, count) => sum + count, 0);
-  if (deliveryCount === 0) {
-    return undefined;
-  }
-  const maxRetries = params.dmRetryOptions?.maxRetries ?? 3;
-  const maxDelayMs = params.dmRetryOptions?.maxDelayMs ?? 10_000;
-  const timeoutMs = params.dmRetryOptions?.timeoutMs ?? 30_000;
-  const perDeliveryTimeoutMs =
-    (maxRetries + 1) * timeoutMs + maxRetries * maxDelayMs + DM_REPLY_DELIVERY_BARRIER_SLACK_MS;
-  const totalTimeoutMs =
-    perDeliveryTimeoutMs * deliveryCount + Math.max(0, params.humanDelayBudgetMs ?? 0);
-  return resolveTimerTimeoutMs(
-    Number.isFinite(totalTimeoutMs) ? totalTimeoutMs : Number.MAX_SAFE_INTEGER,
-    perDeliveryTimeoutMs,
-  );
-}
-
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -499,8 +488,8 @@ export async function createMattermostDirectChannelWithRetry(
       attempts: maxRetries + 1,
       // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
       // allows initialDelayMs above the (defaulted) maxDelayMs cap. The cap is
-      // the documented contract here and the reply-delivery barrier budgets
-      // with it, so clamp the base instead of letting the floor win.
+      // the documented contract here, so clamp the base instead of letting
+      // the floor win.
       minDelayMs: Math.min(initialDelayMs, maxDelayMs),
       maxDelayMs,
       // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
@@ -513,7 +502,11 @@ export async function createMattermostDirectChannelWithRetry(
 }
 
 function isRetryableError(error: Error): boolean {
-  const candidates = collectErrorCandidates(error);
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.reason,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ]);
   const messages = candidates
     .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
     .filter((message): message is string => Boolean(message));
@@ -590,39 +583,6 @@ function isRetryableError(error: Error): boolean {
   return messages.some((message) =>
     RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
   );
-}
-
-function collectErrorCandidates(error: unknown): unknown[] {
-  const queue: unknown[] = [error];
-  let queueIndex = 0;
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const nested = current as {
-      cause?: unknown;
-      reason?: unknown;
-      errors?: unknown;
-    };
-    queue.push(nested.cause, nested.reason);
-    if (Array.isArray(nested.errors)) {
-      queue.push(...nested.errors);
-    }
-  }
-
-  return candidates;
 }
 
 function readErrorMessage(error: unknown): string | undefined {
@@ -751,23 +711,19 @@ export async function uploadMattermostFile(
 ): Promise<MattermostFileInfo> {
   const form = new FormData();
   const fileName = normalizeOptionalString(params.fileName) ?? "upload";
-  const bytes = Uint8Array.from(params.buffer);
-  const blob = params.contentType
-    ? new Blob([bytes], { type: params.contentType })
-    : new Blob([bytes]);
+  const blob = new Blob([bufferToBlobPart(params.buffer)], { type: params.contentType });
   form.append("files", blob, fileName);
   form.append("channel_id", params.channelId);
 
+  const headers = { Authorization: `Bearer ${client.token}` };
   const res = await client.fetchImpl(`${client.apiBaseUrl}/files`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${client.token}`,
-    },
+    headers,
     body: form,
   });
 
   if (!res.ok) {
-    const detail = await readMattermostError(res);
+    const detail = await readMattermostError(res, headers);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
   const data = await readProviderJsonResponse<{ file_infos?: MattermostFileInfo[] }>(

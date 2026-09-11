@@ -3,8 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from "./types.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+type CliSessionBindingEntry = Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds">;
 
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
@@ -61,9 +61,9 @@ export function rebindCliSessionReseedReceiptsForReset(
   return rebound ?? bindings;
 }
 
-/** Read the stored CLI session binding for a provider, including legacy Claude state. */
+/** Read the stored provider-keyed CLI session binding. */
 export function getCliSessionBinding(
-  entry: SessionEntry | undefined,
+  entry: CliSessionBindingEntry | undefined,
   provider: string,
 ): CliSessionBinding | undefined {
   if (!entry) {
@@ -95,20 +95,13 @@ export function getCliSessionBinding(
   if (normalizedFromMap) {
     return { sessionId: normalizedFromMap };
   }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    // Keep accepting the shipped Claude-only field until stored sessions migrate.
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
-    if (legacy) {
-      return { sessionId: legacy };
-    }
-  }
   return undefined;
 }
 
-/** Read just the reusable CLI session ID for a provider. */
-export function getCliSessionId(
-  entry: SessionEntry | undefined,
-  provider: string,
-): string | undefined {
-  return getCliSessionBinding(entry, provider)?.sessionId;
+export function clearAllCliSessions(
+  entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
+): void {
+  entry.cliSessionBindings = undefined;
+  entry.cliSessionIds = undefined;
+  entry.claudeCliSessionId = undefined;
 }

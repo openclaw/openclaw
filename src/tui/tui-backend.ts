@@ -3,6 +3,11 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   CommandEntry,
   CommandsListParams,
+  ModelChoice,
+  QuestionGetResult,
+  QuestionListResult,
+  QuestionResolveParams,
+  QuestionResolveResult,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -140,13 +145,10 @@ export type TuiAgentsList = {
 };
 
 /** Model choice payload shown by TUI model pickers. */
-export type TuiModelChoice = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-};
+export type TuiModelChoice = Pick<
+  ModelChoice,
+  "id" | "name" | "provider" | "contextWindow" | "reasoning" | "available" | "unavailableReason"
+>;
 
 /** Result shape returned by session mutation commands. */
 export type TuiSessionMutationResult = {
@@ -206,10 +208,13 @@ export type TuiBackend = {
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
-  listModels: () => Promise<TuiModelChoice[]>;
+  listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  listQuestions?: () => Promise<QuestionListResult>;
+  getQuestion?: (id: string) => Promise<QuestionGetResult>;
+  resolveQuestion?: (params: QuestionResolveParams) => Promise<QuestionResolveResult>;
   getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
   acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
@@ -217,4 +222,8 @@ export type TuiBackend = {
   runGoalCommand?: (
     opts: TuiGoalCommandOptions,
   ) => Promise<{ text: string; continuationPrompt?: string }>;
+  runUsageCostCommand?: (opts: {
+    sessionKey: string;
+    agentId?: string;
+  }) => Promise<{ text: string }>;
 };

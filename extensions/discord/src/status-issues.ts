@@ -5,11 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import {
   appendMatchMetadata,
-  asString,
   isRecord,
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordIntentSummary = {
   messageContent?: "enabled" | "limited" | "disabled";
@@ -66,17 +66,17 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
           if (!isRecord(entry)) {
             return null;
           }
-          const channelId = asString(entry.channelId);
+          const channelId = normalizeOptionalString(entry.channelId);
           if (!channelId) {
             return null;
           }
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
           const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => asString(v)).filter(Boolean)
+            ? entry.missing.map((v) => normalizeOptionalString(v)).filter(Boolean)
             : undefined;
-          const error = asString(entry.error) ?? null;
-          const matchKey = asString(entry.matchKey) ?? undefined;
-          const matchSource = asString(entry.matchSource) ?? undefined;
+          const error = normalizeOptionalString(entry.error) ?? null;
+          const matchKey = normalizeOptionalString(entry.matchKey);
+          const matchSource = normalizeOptionalString(entry.matchSource);
           return {
             channelId,
             ok,
@@ -96,7 +96,12 @@ export function collectDiscordStatusIssues(
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readAccountStatusSnapshot(entry, ["application", "audit"]);
+    const account = readAccountStatusSnapshot(entry, [
+      "application",
+      "audit",
+      "groupPolicy",
+      "guildsConfigured",
+    ]);
     if (!account) {
       continue;
     }
@@ -106,6 +111,21 @@ export function collectDiscordStatusIssues(
     }
 
     const app = readDiscordApplicationSummary(account.application);
+    if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
+      const guildGuidance =
+        accountId === "default"
+          ? "Add your server under channels.discord.guilds. If channels.discord.accounts.default.guilds is set, add it there instead."
+          : `Add your server under channels.discord.accounts.${accountId}.guilds.`;
+      issues.push({
+        channel: "discord",
+        accountId,
+        kind: "config",
+        message:
+          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        fix: `${guildGuidance} Refresh channel status after the configuration reload applies.`,
+      });
+    }
+
     const messageContent = app.intents?.messageContent;
     if (messageContent === "disabled") {
       issues.push({

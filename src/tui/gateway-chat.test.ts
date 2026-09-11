@@ -1,13 +1,69 @@
-// Covers gateway-backed chat behavior used by the TUI backend.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+// Covers gateway-backed chat behavior used by the TUI backend.
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
-const { GatewayClientRequestError } = await import("../gateway/client.js");
+const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
 
 describe("GatewayChatClient", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each([true, false])(
+    "preserves model availability semantics for published-catalog capability %s",
+    async (published) => {
+      const models = [
+        {
+          provider: "fixture",
+          id: "waiting",
+          name: "Waiting",
+          available: false,
+          unavailableReason: "cooldown",
+        },
+        { provider: "fixture", id: "unknown", name: "Unknown" },
+      ];
+      const request = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({ models });
+      try {
+        const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+        client.hello = {
+          type: "hello-ok",
+          protocol: 3,
+          server: { version: "test", connId: "catalog-test" },
+          features: {
+            methods: ["models.list"],
+            events: [],
+            capabilities: published ? [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG] : [],
+          },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 0, health: 0 },
+            uptimeMs: 0,
+          },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
+        };
+
+        const result = await client.listModels({ agentId: "work" });
+
+        expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+          agentId: "work",
+          ...(published ? { includeDetails: true } : {}),
+        });
+        expect(result).toEqual(
+          published
+            ? models
+            : [
+                { provider: "fixture", id: "waiting", name: "Waiting" },
+                { provider: "fixture", id: "unknown", name: "Unknown" },
+              ],
+        );
+      } finally {
+        request.mockRestore();
+      }
+    },
+  );
 
   it("waits for gateway transport teardown on stop", async () => {
     const client = new GatewayChatClient({
@@ -74,6 +130,7 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceAuthScope: "wss://remote.example/rpc",
+        notifyOnStartupRetry: true,
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();
@@ -102,12 +159,16 @@ describe("GatewayChatClient", () => {
       expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
       expect(onDisconnected).not.toHaveBeenCalled();
 
+      // The close above ended that socket's cycle, so the next attempt's
+      // failure is a new socket and must be reported, not deduped forever.
       const retryError = new Error("retry failed");
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      options.onConnectError?.(new Error("duplicate within the retry socket"));
+      expect(onConnectError).toHaveBeenCalledTimes(2);
       options.onHelloOk?.({});
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      expect(onConnectError).toHaveBeenNthCalledWith(3, retryError);
 
       options.onHelloOk?.({});
       onDisconnected.mockClear();
@@ -119,6 +180,30 @@ describe("GatewayChatClient", () => {
         client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
       ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
       expect(onDisconnected).not.toHaveBeenCalled();
+
+      options.onHelloOk?.({});
+      onConnectError.mockClear();
+      onDisconnected.mockClear();
+      client.onConnectError = onConnectError;
+      const startupError = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+
+      onDisconnected.mockClear();
+      client.onConnectError = undefined;
+      options.onConnectError?.(startupError);
+      options.onClose?.(1013, "gateway starting");
+
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();
@@ -151,24 +236,23 @@ describe("GatewayChatClient", () => {
     }
   });
 
-  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+  it("retries startup-unavailable history only while the backend is active", async () => {
     vi.useFakeTimers();
 
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
+    const startupError = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "chat.history unavailable during gateway startup",
+      details: { method: "chat.history" },
+      retryable: true,
+      retryAfterMs: 250,
+    });
     const request = vi
       .fn()
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "UNAVAILABLE",
-          message: "chat.history unavailable during gateway startup",
-          details: { method: "chat.history" },
-          retryable: true,
-          retryAfterMs: 250,
-        }),
-      )
+      .mockRejectedValueOnce(startupError)
       .mockResolvedValueOnce({ messages: [] });
 
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -178,6 +262,30 @@ describe("GatewayChatClient", () => {
 
     await expect(historyPromise).resolves.toEqual({ messages: [] });
     expect(request).toHaveBeenCalledTimes(2);
+
+    const baselineTimerCount = vi.getTimerCount();
+    request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
+    const pendingHistory = Promise.all([
+      client.loadHistory({ sessionKey: "first" }).catch((error: unknown) => error),
+      client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 2);
+
+    await client.stop();
+
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    await expect(pendingHistory).resolves.toEqual([
+      expect.objectContaining({ name: "AbortError" }),
+      expect.objectContaining({ name: "AbortError" }),
+    ]);
+    await expect(client.loadHistory({ sessionKey: "stopped" })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
@@ -196,6 +304,7 @@ describe("GatewayChatClient", () => {
     });
     await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
     await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+    await client.listModels({ agentId: "work" });
 
     expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
       sessionKey: "global",
@@ -215,6 +324,33 @@ describe("GatewayChatClient", () => {
       sessionKey: "global",
       agentId: "work",
       runId: "run-global-work",
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "models.list", { agentId: "work" });
+  });
+
+  it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValue({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.resolveSession({
+        key: "Agent:Main:ALPHA",
+        agentId: "main",
+        includeGlobal: true,
+        allowMissing: true,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:alpha", agentId: "main" });
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+      key: "Agent:Main:ALPHA",
+      agentId: "main",
+      includeGlobal: true,
+      allowMissing: true,
     });
   });
 
@@ -399,17 +535,17 @@ describe("GatewayChatClient", () => {
     });
   });
 
-  it("lists, accepts, and dismisses task suggestions through the gateway", async () => {
+  it("requests a new non-worktree session even without mode capabilities", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
     const suggestion = {
       id: "task_1",
-      title: "Remove stale adapter",
-      prompt: "Delete the stale adapter.",
-      tldr: "The adapter is unreachable.",
-      cwd: "/repo",
+      title: "Investigate a restarting service",
+      prompt: "Inspect the service status and logs.",
+      tldr: "The service is unexpectedly restarting.",
+      cwd: "/workspace",
       sessionKey: "agent:main:main",
       agentId: "main",
       createdAt: 1_000,
@@ -438,8 +574,12 @@ describe("GatewayChatClient", () => {
     });
 
     expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", { taskId: "task_1" });
+    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", {
+      taskId: "task_1",
+      mode: "local",
+    });
     expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
@@ -456,6 +596,17 @@ describe("GatewayChatClient", () => {
 
     expect(client.getTaskSuggestionActionCapabilities()).toEqual({
       canAccept: false,
+      canDismiss: true,
+    });
+
+    client.hello = {
+      features: {
+        methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
+      },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+      canAccept: true,
       canDismiss: true,
     });
   });

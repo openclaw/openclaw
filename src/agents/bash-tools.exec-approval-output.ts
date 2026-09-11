@@ -1,6 +1,50 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  formatExecAutoReviewAssessment,
+  type ExecAutoReviewDecision,
+} from "../infra/exec-auto-review.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "./tool-result-limits.js";
+
+/** Renders automatic denials consistently for gateway and node tool transports. */
+export function buildExecAutoReviewDeniedToolResult(params: {
+  command: string;
+  cwd?: string;
+  decision: Extract<ExecAutoReviewDecision, { decision: "deny" }>;
+  toolCallId?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const { decision, command, toolCallId } = params;
+  const text = `Exec denied by auto-review (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}\nCommand: ${command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      failureKind: "auto-review-denied",
+      durationMs: 0,
+      aggregated: text,
+      timedOut: false,
+      cwd: params.cwd,
+      approvalReviewOutcome: "denied",
+      ...(toolCallId
+        ? {
+            approvalReviews: [
+              {
+                id: `guardian:${toolCallId}`,
+                label: "Guardian",
+                status: "denied" as const,
+                riskLevel: decision.risk,
+                rationale: decision.rationale,
+              },
+            ],
+          }
+        : {}),
+    },
+  };
+}
 
 type ExecApprovalOutputStream = {
   label: string;
@@ -74,8 +118,18 @@ function capContinuationOutput(text: string, maxUtf16Units: number): string {
     return truncateUtf16Safe(TRUNCATION_MARKER, boundedMax);
   }
   const headBudget = Math.floor(cutBudget * HEAD_SHARE);
-  const head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget));
+  let head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget));
   const tail = alignTailToLineBreak(sliceUtf16Safe(text, text.length - (cutBudget - headBudget)));
+  // Recapping can omit a stream header while retaining its contents; restore its
+  // label from the omitted span so stderr/error never masquerades as stdout.
+  const omittedHeaders = /^\[(?:stdout|stderr|error)\]\n/m.test(head)
+    ? text.slice(head.length, text.length - tail.length).match(/^\[(?:stdout|stderr|error)\]\n/gm)
+    : null;
+  const tailHeader = omittedHeaders?.at(-1) ?? "";
+  if (tailHeader && tailHeader.length <= headBudget) {
+    head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget - tailHeader.length));
+    return `${head}\n${TRUNCATION_MARKER}\n${tailHeader}${tail}`;
+  }
   return `${head}\n${TRUNCATION_MARKER}\n${tail}`;
 }
 

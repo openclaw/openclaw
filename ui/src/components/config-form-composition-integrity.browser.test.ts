@@ -6,6 +6,55 @@ import { renderObject } from "./config-form.node.collection.ts";
 import { analyzeConfigSchema, renderConfigForm, renderNode } from "./config-form.ts";
 
 describe("config form composition integrity", () => {
+  it("renders object fields guarded by a required-property exclusion", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        github: {
+          type: "object",
+          title: "GitHub",
+          properties: { token: { type: "string" } },
+          required: ["token"],
+        },
+        people: { type: "array", items: { type: "string" } },
+        peopleFile: { type: "string" },
+      },
+      required: ["github"],
+      not: { required: ["people", "peopleFile"] },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+        peopleFile: "people.json",
+      }),
+    ).toBe(false);
+    expect(
+      isSupportedConfigValueValid(analysis.schema ?? {}, {
+        github: { token: "secret" },
+        people: ["alice"],
+      }),
+    ).toBe(true);
+
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        showAdvanced: true,
+        onShowAdvanced: () => {},
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.textContent).toContain("Github");
+    expect(container.textContent).not.toContain("Unsupported schema node");
+  });
+
   it("keeps mixed union and allOf compositions fail-closed", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
@@ -37,26 +86,106 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("keeps literal and typed unions in Raw mode", () => {
+  it("renders finite boolean unions and string-or-literal unions while keeping constrained unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
         retention: {
           anyOf: [{ type: "string" }, { const: false }],
         },
+        guarded: {
+          anyOf: [{ type: "boolean", not: { const: true } }, { const: "auto" }],
+        },
+        nullableBoolean: {
+          anyOf: [{ type: ["boolean", "null"] }, { const: "auto" }],
+        },
+        nullableString: {
+          anyOf: [{ type: ["string", "null"] }, { type: "boolean", const: false }],
+        },
+        ambiguousBooleanLabel: {
+          anyOf: [{ type: "boolean" }, { const: "true" }],
+        },
+        overlappingOneOf: {
+          oneOf: [{ type: "boolean" }, { const: true }],
+        },
+        overlappingAnyOf: {
+          anyOf: [{ type: "boolean" }, { const: true }],
+        },
         mode: {
-          oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+          title: "Native Commands",
+          default: "auto",
+          anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
+        },
+        plainMode: {
+          title: "Plain Mode",
+          enum: ["auto", "manual"],
+        },
+        disjointOneOf: {
+          oneOf: [{ type: "boolean" }, { const: "auto" }],
         },
       },
     });
 
-    expect(analysis.unsupportedPaths).toEqual(["retention", "mode"]);
+    expect(analysis.unsupportedPaths).toEqual([
+      "guarded",
+      "nullableBoolean",
+      "nullableString",
+      "ambiguousBooleanLabel",
+      "overlappingOneOf",
+    ]);
     expect(analysis.schema?.properties?.retention).toMatchObject({
       anyOf: [{ type: "string" }, { const: false }],
     });
     expect(analysis.schema?.properties?.mode).toMatchObject({
-      oneOf: [{ type: "boolean" }, { enum: ["auto", "manual"] }],
+      enum: [true, false, "auto"],
+      default: "auto",
     });
+    expect(analysis.schema?.properties?.overlappingOneOf).toMatchObject({
+      oneOf: [{ type: "boolean" }, { const: true }],
+    });
+    expect(analysis.schema?.properties?.overlappingAnyOf).toMatchObject({
+      enum: [true, false],
+    });
+    expect(analysis.schema?.properties?.disjointOneOf).toMatchObject({
+      enum: [true, false, "auto"],
+    });
+
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { retention: "30d", mode: "auto", plainMode: "auto" },
+        showAdvanced: true,
+        onShowAdvanced: () => {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const modeControl = [
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        "wa-radio-group.settings-segmented",
+      ),
+    ].find((group) => group.querySelector("[slot='label']")?.textContent === "Native Commands");
+    expect(modeControl).not.toBeNull();
+    const modeOptions = [...(modeControl?.querySelectorAll("wa-radio") ?? [])];
+    // Web Awesome radios take their accessible names from their visible default-slot text.
+    expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
+    expect(modeOptions.map((option) => option.getAttribute("value"))).toEqual(["0", "1", "2"]);
+    const plainModeControl = [...container.querySelectorAll("wa-radio-group")].find(
+      (group) => group.querySelector("[slot='label']")?.textContent === "Plain Mode",
+    );
+    expect(
+      [...(plainModeControl?.querySelectorAll("wa-radio") ?? [])].map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toEqual(["auto", "manual"]);
+    modeControl!.value = "1";
+    modeControl!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["mode"], false);
   });
 
   it("marks required-only object branches as form-unsafe", () => {

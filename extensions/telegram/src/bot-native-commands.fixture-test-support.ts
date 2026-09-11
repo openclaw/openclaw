@@ -12,19 +12,12 @@ export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
   replyToMode?: RegisterTelegramNativeCommandsParams["opts"]["replyToMode"];
 };
 
-export function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 export function createNativeCommandTestParams(
   params: Partial<NativeCommandTestParams> = {},
 ): RegisterTelegramNativeCommandsParams {
   const log = vi.fn();
   return {
+    cancelPendingInbound: params.cancelPendingInbound ?? vi.fn(),
     bot:
       params.bot ??
       ({
@@ -46,7 +39,6 @@ export function createNativeCommandTestParams(
     telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
-    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
     resolveGroupPolicy:
       params.resolveGroupPolicy ??
       (() =>

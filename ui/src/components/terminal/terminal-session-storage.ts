@@ -1,27 +1,96 @@
 // Session ids deliberately use per-tab storage: attach is a takeover, so shared
 // local storage could let one Control UI window steal another window's shells.
 
-const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  TerminalPanelAction,
+  TerminalPanelCatalogReference,
+} from "./terminal-panel-session-types.ts";
 
-export function loadPersistedTerminalSessionIds(): string[] {
+const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
+const TERMINAL_ACTIONS_KEY = "openclaw.terminal.actions.v1";
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function catalogReference(value: unknown): TerminalPanelCatalogReference | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return nonEmptyString(value.catalogId) &&
+    nonEmptyString(value.hostId) &&
+    nonEmptyString(value.threadId)
+    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
+    : null;
+}
+
+function terminalAction(value: unknown): TerminalPanelAction | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.kind === "attach") {
+    return nonEmptyString(value.sessionId) && typeof value.agentOwned === "boolean"
+      ? {
+          kind: "attach",
+          sessionId: value.sessionId,
+          agentOwned: value.agentOwned,
+        }
+      : null;
+  }
+  const agentId = value.agentId;
+  if (agentId !== null && !nonEmptyString(agentId)) {
+    return null;
+  }
+  if (value.kind === "restore" || value.kind === "open") {
+    return { kind: value.kind, agentId };
+  }
+  // v2026.9.4 persisted pending catalog requests. Drain those once through the
+  // existing dock owner; new catalog requests use non-persistent page queues.
+  if (value.kind === "catalog") {
+    const catalog = catalogReference(value.catalog);
+    return catalog ? { kind: "catalog", agentId, catalog } : null;
+  }
+  return null;
+}
+
+function loadPersistedArray(key: string): unknown[] {
   try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_SESSIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
+    const raw = globalThis.sessionStorage?.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-export function persistTerminalSessionIds(ids: readonly string[]): void {
+export function loadPersistedTerminalSessionIds(scope = ""): string[] {
+  return loadPersistedArray(TERMINAL_SESSIONS_KEY + scope).filter(nonEmptyString);
+}
+
+export function persistTerminalSessionIds(ids: readonly string[], scope = ""): void {
   try {
-    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(ids));
+    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY + scope, JSON.stringify(ids));
   } catch {
     // Storage may be unavailable (private mode); reattach just won't work.
+  }
+}
+
+export function loadPersistedTerminalActions(): TerminalPanelAction[] {
+  return loadPersistedArray(TERMINAL_ACTIONS_KEY).flatMap((value) => {
+    const action = terminalAction(value);
+    return action ? [action] : [];
+  });
+}
+
+export function persistTerminalActions(actions: readonly TerminalPanelAction[]): void {
+  try {
+    if (actions.length === 0) {
+      globalThis.sessionStorage?.removeItem(TERMINAL_ACTIONS_KEY);
+      return;
+    }
+    globalThis.sessionStorage?.setItem(TERMINAL_ACTIONS_KEY, JSON.stringify(actions));
+  } catch {
+    // In-memory replay still covers an unchanged document when storage is unavailable.
   }
 }

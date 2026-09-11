@@ -41,6 +41,8 @@ import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-
 type TestMode = "agent" | "transcribe";
 type TestConfig = MeetingRealtimeEngineConfig & {
   chrome: MeetingRealtimeEngineConfig["chrome"] & {
+    audioBackend: "auto";
+    audioBufferBytes: number;
     audioInputCommand: string[];
     audioOutputCommand: string[];
     autoJoin: boolean;
@@ -61,6 +63,8 @@ type TestConfig = MeetingRealtimeEngineConfig & {
 
 const config = {
   chrome: {
+    audioBackend: "auto",
+    audioBufferBytes: 4_096,
     audioFormat: "pcm16-24khz",
     audioInputCommand: [],
     audioOutputCommand: [],
@@ -141,6 +145,21 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
 
   it("preserves the platform rollback ownership rule for tracked calls", async () => {
     const dispose = vi.fn(async () => {});
+    const engine = {
+      providerId: "openai",
+      speak: vi.fn(),
+      getHealth: vi.fn(),
+      stop: vi.fn(async () => {}),
+    };
+    const startAgent = vi
+      .fn(async () => engine)
+      .mockRejectedValueOnce(new Error("realtime startup failed"));
+    const createBindings = vi.fn(() => ({
+      platform: { displayName: "Test", logScope: "[test]", sessionIdPrefix: "test" },
+      consultAgent: vi.fn(),
+      tools: [],
+      handleToolCall: vi.fn(),
+    }));
     const transport = createMeetingChromeTransport<
       TestConfig,
       TestMode,
@@ -152,16 +171,10 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       isTalkBackMode: () => true,
       meetingLabel: `${testCase.name} meeting`,
       nodeCommandName: platform.nodeCommandName,
-      outputMentionsAudioDevice: () => true,
       platform,
       preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
       runtime: {
-        createBindings: vi.fn(() => ({
-          platform: { displayName: "Test", logScope: "[test]", sessionIdPrefix: "test" },
-          consultAgent: vi.fn(),
-          tools: [],
-          handleToolCall: vi.fn(),
-        })) as unknown as typeof createMeetingRealtimeEngineBindings,
+        createBindings: createBindings as unknown as typeof createMeetingRealtimeEngineBindings,
         createLocalAudioTransport: vi.fn(() => ({
           clearOutput: vi.fn(),
           dispose,
@@ -172,12 +185,9 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
         })) as unknown as typeof createLocalMeetingRealtimeAudioTransport,
         createNodeAudioTransport:
           vi.fn() as unknown as typeof createNodeMeetingRealtimeAudioTransport,
-        startAgentRealtimeEngine: vi.fn(async () => {
-          throw new Error("realtime startup failed");
-        }) as unknown as typeof startMeetingAgentRealtimeEngine,
+        startAgentRealtimeEngine: startAgent,
         startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
       },
-      systemProfilerCommand: "/usr/sbin/system_profiler",
     });
     const runtime = {
       system: {
@@ -189,18 +199,18 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       },
     } as unknown as PluginRuntime;
 
-    await expect(
+    const launch = () =>
       transport.launchInChrome({
         config,
         fullConfig: { transcripts: { enabled: false } } as OpenClawConfig,
         logger,
         meetingSessionId: "session-1",
-        mode: "agent",
+        mode: "agent" as const,
         runtime,
         trackedTargetId: "tracked-tab",
         url: "https://example.test/meeting",
-      }),
-    ).rejects.toThrow("realtime startup failed");
+      });
+    await expect(launch()).rejects.toThrow("realtime startup failed");
 
     expect(dispose).toHaveBeenCalledOnce();
     expect(browserMocks.open).toHaveBeenCalledWith(
@@ -209,6 +219,17 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       }),
     );
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves);
+    const bindingFailure = new Error("meeting binding failed");
+    createBindings.mockImplementationOnce(() => {
+      throw bindingFailure;
+    });
+    dispose.mockRejectedValueOnce(new Error("cleanup failed"));
+    await expect(launch()).rejects.toBe(bindingFailure);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves * 2);
+    const recovered = await launch();
+    expect(recovered.audioBridge).toEqual({ type: "command-pair", ...engine });
+    expect(recovered.audioBridge?.providerId).toBe("openai");
   });
 
   it("enables output generations when the node host advertises support", async () => {
@@ -232,7 +253,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       isTalkBackMode: () => true,
       meetingLabel: `${testCase.name} meeting`,
       nodeCommandName: platform.nodeCommandName,
-      outputMentionsAudioDevice: () => true,
       platform,
       preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
       runtime: {
@@ -254,7 +274,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
         })) as unknown as typeof startMeetingAgentRealtimeEngine,
         startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
       },
-      systemProfilerCommand: "/usr/sbin/system_profiler",
     });
     const runtime = {
       nodes: {
@@ -283,6 +302,22 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     });
 
     expect(result.audioBridge?.type).toBe("node-command-pair");
+    expect(result.audioBridge?.providerId).toBe("openai");
+    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "setup",
+          audioBackend: "auto",
+          audioBufferBytes: 4_096,
+          audioFormat: "pcm16-24khz",
+        }),
+      }),
+    );
+    const startCall = vi
+      .mocked(runtime.nodes.invoke)
+      .mock.calls.find(([call]) => (call.params as { action?: string }).action === "start")?.[0];
+    expect(startCall?.params).not.toHaveProperty("audioInputCommand");
+    expect(startCall?.params).not.toHaveProperty("audioOutputCommand");
     expect(
       Reflect.get(
         nodeAudioTransport,

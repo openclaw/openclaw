@@ -3,7 +3,10 @@ import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { StatusScanResult } from "./status.scan-result.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -117,7 +120,7 @@ function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
 
 async function runStatusAndGetLogs(args: Parameters<typeof statusCommand>[0] = {}) {
   runtimeLogMock.mockClear();
-  await statusCommand(args, runtime as never);
+  await statusCommand(args, runtime);
   return getRuntimeLogs();
 }
 
@@ -279,7 +282,15 @@ function createSessionStatusRows() {
   };
 }
 
-async function createMockStatusScanResult(params: { includePluginCompatibility?: boolean } = {}) {
+async function createMockStatusScanResult(
+  params: {
+    includePluginCompatibility?: boolean;
+    configDiagnostics?: {
+      path: string;
+      issues: Array<{ path: string; message: string }>;
+    } | null;
+  } = {},
+) {
   const cfg = mocks.loadConfig();
   const gatewayProbe = await mocks.probeGateway();
   const gatewayReachable = gatewayProbe.ok === true;
@@ -328,6 +339,7 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
   return {
     cfg,
     sourceConfig: cfg,
+    configDiagnostics: params.configDiagnostics ?? null,
     secretDiagnostics: gatewayAuthWarning ? ["gateway.auth.token unavailable"] : [],
     osSummary: {
       platform: "darwin",
@@ -533,7 +545,7 @@ vi.mock("../channels/config-presence.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+  getActiveMemorySearchManagerCore: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -566,10 +578,10 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (opts?: { storePath?: string }) =>
+  listSessionEntriesCore: (opts?: { storePath?: string }) =>
     Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
@@ -741,7 +753,7 @@ vi.mock("../config/config.js", () => ({
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   readBestEffortConfigSnapshot: vi.fn(async () => {
     const config = mocks.loadConfig();
-    return { config, sourceConfig: config };
+    return { config, sourceConfig: config, configDiagnostics: null };
   }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
@@ -753,6 +765,7 @@ vi.mock("../daemon/node-service.js", () => ({
 }));
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
@@ -783,9 +796,6 @@ vi.mock("./status.scan.js", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  loadStatusProviderUsageModule: vi.fn(async () => ({
-    formatUsageReportLines: vi.fn(() => []),
-  })),
   resolveStatusGatewayHealth: vi.fn(async () => ({})),
   resolveStatusSecurityAudit: vi.fn(async (input: unknown) =>
     mocks.runSecurityAudit({
@@ -839,13 +849,9 @@ import {
 import { statusCommand } from "./status.command.js";
 import { resolvePairingRecoveryContext } from "./status.command.test-support.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
-const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
+const runtimeLogMock = runtime.log;
 
 vi.mock("../channels/chat-meta.js", () => {
   const mockChatChannels = [
@@ -940,27 +946,7 @@ describe("statusCommand", () => {
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
     mocks.getInspectableTaskRegistrySummary.mockReset();
-    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    });
+    mocks.getInspectableTaskRegistrySummary.mockReturnValue(createEmptyTaskRegistrySummary());
     mocks.getInspectableTaskAuditSummary.mockReset();
     mocks.getInspectableTaskAuditSummary.mockReturnValue({
       total: 0,
@@ -1014,14 +1000,14 @@ describe("statusCommand", () => {
       }),
     });
     runtimeLogMock.mockClear();
-    (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
+    runtime.error.mockClear();
   });
 
   it("prints JSON and includes full diagnostics only when all is requested", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getRuntimeLog(0));
     expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory).toBeNull();
@@ -1048,7 +1034,7 @@ describe("statusCommand", () => {
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
 
     runtimeLogMock.mockClear();
-    await statusCommand({ json: true, all: true }, runtime as never);
+    await statusCommand({ json: true, all: true }, runtime);
 
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
@@ -1062,13 +1048,31 @@ describe("statusCommand", () => {
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
 
+  it("includes invalid config diagnostics in JSON status only when present", async () => {
+    const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+    vi.mocked(scanStatusJsonFast).mockResolvedValueOnce(
+      (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+    );
+
+    await statusCommand({ json: true }, runtime);
+
+    expect(JSON.parse(getRuntimeLog(0)).configDiagnostics).toEqual(configDiagnostics);
+    runtimeLogMock.mockClear();
+    await statusCommand({ json: true }, runtime);
+    expect(JSON.parse(getRuntimeLog(0))).not.toHaveProperty("configDiagnostics");
+  });
+
   it("scopes usage resolution to the scanned config", async () => {
     const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
     const usageMock = resolveStatusUsageSummary as Mock;
     snapshotMock.mockClear();
     usageMock.mockClear();
 
-    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime);
 
     const params = snapshotMock.mock.calls[snapshotMock.mock.calls.length - 1]?.[0] as
       | {
@@ -1094,13 +1098,59 @@ describe("statusCommand", () => {
   });
 
   it("keeps default text status off the security audit path", async () => {
-    await statusCommand({}, runtime as never);
+    await statusCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
   });
 
+  it("prints invalid config diagnostics in default and deep text status only when present", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [
+        {
+          path: "gateway.port",
+          message: "Invalid input: expected number, received string",
+        },
+      ],
+    };
+
+    for (const args of [{}, { deep: true }]) {
+      vi.mocked(scanStatus).mockResolvedValueOnce(
+        (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+      );
+      const output = (await runStatusAndGetLogs(args)).join("\n");
+      expect(output).toContain("Config diagnostics:");
+      expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
+      expect(output).toContain("gateway.port: Invalid input: expected number, received string");
+      expect(output).toContain("Fix: openclaw --profile isolated doctor --fix");
+    }
+
+    expect((await runStatusAndGetLogs()).join("\n")).not.toContain("Config diagnostics:");
+  });
+
+  it("prints invalid config diagnostics before a deep gateway-health failure", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    vi.mocked(scanStatus).mockResolvedValueOnce(
+      (await createMockStatusScanResult({
+        configDiagnostics: {
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        },
+      })) as unknown as StatusScanResult,
+    );
+    vi.mocked(resolveStatusRuntimeSnapshot).mockResolvedValueOnce({
+      health: { error: "gateway health unavailable" },
+    } as never);
+
+    await expect(statusCommand({ deep: true }, runtime)).rejects.toThrow(
+      "gateway health unavailable",
+    );
+    expect(runtimeLogMock.mock.calls.flat().join("\n")).toContain("Config diagnostics:");
+  });
+
   it("includes the security audit for deep JSON status", async () => {
-    await statusCommand({ json: true, deep: true }, runtime as never);
+    await statusCommand({ json: true, deep: true }, runtime);
 
     expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
     expect(JSON.parse(getRuntimeLog(0)).securityAudit.summary.critical).toBe(1);
@@ -1110,18 +1160,15 @@ describe("statusCommand", () => {
     const { scanStatus } = await import("./status.scan.js");
     vi.mocked(scanStatus).mockClear();
 
-    await statusCommand({ deep: true, timeoutMs: 5000 }, runtime as never);
+    await statusCommand({ deep: true, timeoutMs: 5000 }, runtime);
 
-    expect(scanStatus).toHaveBeenCalledWith(
-      { json: false, timeoutMs: 5000, all: undefined, deep: true },
-      runtime,
-    );
+    expect(scanStatus).toHaveBeenCalledWith({ timeoutMs: 5000, deep: true });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
-      await statusCommand({ json: true }, runtime as never);
+      await statusCommand({ json: true }, runtime);
       const payload = JSON.parse(getLastRuntimeLog());
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
@@ -1141,7 +1188,7 @@ describe("statusCommand", () => {
       },
     });
     runtimeLogMock.mockClear();
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
@@ -1336,7 +1383,7 @@ describe("statusCommand", () => {
       },
     });
 
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
     expect(typeof gatewayAuthMessage).toBe("string");
@@ -1547,7 +1594,7 @@ describe("statusCommand", () => {
       };
     });
 
-    await statusCommand({ json: true }, runtime as never);
+    await statusCommand({ json: true }, runtime);
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);

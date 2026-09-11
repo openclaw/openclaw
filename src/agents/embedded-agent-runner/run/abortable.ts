@@ -19,7 +19,7 @@ function tagAsAbortableWrapper(err: Error): Error {
   return err;
 }
 
-function makeAbortError(signal: AbortSignal): Error {
+export function createAbortableError(signal: AbortSignal): Error {
   const reason = getAbortReason(signal);
   if (reason instanceof Error) {
     const err = new Error(reason.message, { cause: reason });
@@ -47,7 +47,7 @@ export const RUN_LIVENESS_JOIN_TIMEOUT_MS = 120_000;
  */
 export function joinWithRunLivenessDeadline(input: {
   joinWork: () => Promise<void> | void;
-  runAbortSignal: AbortSignal;
+  runAbortSignal?: AbortSignal;
   timeoutMs?: number;
   onTimeout: () => void;
 }): Promise<void> {
@@ -59,7 +59,7 @@ export function joinWithRunLivenessDeadline(input: {
       }
       settled = true;
       clearTimeout(timer);
-      input.runAbortSignal.removeEventListener("abort", onAbort);
+      input.runAbortSignal?.removeEventListener("abort", onAbort);
       if (reason === "timeout") {
         input.onTimeout();
       }
@@ -71,11 +71,11 @@ export function joinWithRunLivenessDeadline(input: {
       input.timeoutMs ?? RUN_LIVENESS_JOIN_TIMEOUT_MS,
     );
     timer.unref?.();
-    if (input.runAbortSignal.aborted) {
+    if (input.runAbortSignal?.aborted) {
       finish("abort");
       return;
     }
-    input.runAbortSignal.addEventListener("abort", onAbort, { once: true });
+    input.runAbortSignal?.addEventListener("abort", onAbort, { once: true });
     Promise.resolve()
       .then(() => input.joinWork())
       .then(
@@ -92,12 +92,12 @@ export function joinWithRunLivenessDeadline(input: {
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
-    return Promise.reject(makeAbortError(signal));
+    return Promise.reject(createAbortableError(signal));
   }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      reject(makeAbortError(signal));
+      reject(createAbortableError(signal));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(

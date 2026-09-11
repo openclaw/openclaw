@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
@@ -121,7 +122,7 @@ describe("Claw package removal", () => {
     ]);
   });
 
-  it("removes an unused Claw-introduced reference through the canonical plugin lifecycle", async () => {
+  it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
     const ref = packageRef();
     const store = packageRefStore(ref);
     const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
@@ -135,7 +136,10 @@ describe("Claw package removal", () => {
           installedVersion: "1.0.0",
         }),
       },
-      referencedCleanup: { mode: "remove-if-unused" },
+      referencedCleanup: {
+        mode: "remove-selected",
+        selected: ["plugin:audit@1.0.0"],
+      },
     });
 
     expect(decisions).toMatchObject([{ action: "uninstall", pluginId: "audit" }]);
@@ -158,6 +162,28 @@ describe("Claw package removal", () => {
       invalidateRuntimeCache: false,
       clawManaged: true,
     });
+  });
+
+  it("excludes plugins from generic remove-if-unused cleanup", async () => {
+    const ref = packageRef();
+    const resolvePlugin = vi.fn();
+
+    const decisions = await planClawPackageRemovals(install, [ref], {
+      deps: {
+        readPackageRefs: vi.fn().mockReturnValue([ref]),
+        resolvePlugin,
+      },
+      referencedCleanup: { mode: "remove-if-unused" },
+    });
+
+    expect(decisions).toMatchObject([
+      {
+        action: "retain",
+        reason:
+          "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+      },
+    ]);
+    expect(resolvePlugin).not.toHaveBeenCalled();
   });
 
   it("rechecks plugin identity under the lifecycle lease before uninstalling", async () => {
@@ -203,6 +229,78 @@ describe("Claw package removal", () => {
       expect.anything(),
     );
   });
+
+  it.each(["discovery", "uninstall"])(
+    "refuses package mutations when parent deletion ends during %s",
+    async (stage) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const started = createDeferred();
+      const resume = createDeferred();
+      let active = true;
+      const uninstall = vi.fn();
+      const options = {
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("Parent deletion ended.");
+          }
+        },
+        deps: {
+          ...store,
+          resolvePlugin: vi.fn(async () => {
+            if (stage === "discovery") {
+              started.resolve();
+              await resume.promise;
+            }
+            return {
+              status: "found" as const,
+              pluginId: "audit",
+              record: {
+                source: "clawhub" as const,
+                integrity: "sha256:audit",
+                installedAt: "1970-01-01T00:00:00.001Z",
+              },
+              installedVersion: "1.0.0",
+            };
+          }),
+          uninstallPlugin: vi.fn(
+            async (_id: string, apply?: { beforePersistentApply?: () => void }) => {
+              if (stage === "uninstall") {
+                started.resolve();
+                await resume.promise;
+              }
+              apply?.beforePersistentApply?.();
+              uninstall();
+            },
+          ),
+        },
+      };
+      const removing = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        options,
+      );
+      try {
+        await started.promise;
+        active = false;
+      } finally {
+        resume.resolve();
+      }
+
+      await expect(removing).resolves.toMatchObject([
+        { action: "error", reason: "Parent deletion ended." },
+      ]);
+      expect(uninstall).not.toHaveBeenCalled();
+      expect(store.readPackageRefs()).toEqual([{ ...ref, status: "pending" }]);
+    },
+  );
 
   it("leaves failed provenance when an error occurs after uninstall starts", async () => {
     const ref = packageRef();
@@ -294,23 +392,6 @@ describe("Claw package removal", () => {
       },
     });
     expect(decisions).toMatchObject([{ action: "retain", reason: expect.any(String) }]);
-  });
-
-  it("does not inspect global plugin artifact state during removal planning", async () => {
-    const ref = packageRef();
-    const decisions = await planClawPackageRemovals(install, [ref], {
-      deps: {
-        readPackageRefs: vi.fn().mockReturnValue([ref]),
-        resolvePlugin: vi.fn(),
-      },
-    });
-    expect(decisions).toMatchObject([
-      {
-        action: "retain",
-        reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
-      },
-    ]);
   });
 
   it("retains a same-version plugin whose installed integrity drifted", async () => {

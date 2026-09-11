@@ -20,7 +20,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type RuntimeModelContext = {
@@ -38,16 +38,19 @@ async function resolveRuntimeModelContext(params: {
   provider: string;
   modelId: string;
 }): Promise<RuntimeModelContext> {
-  // Doctor runs before agent lifecycle publication; async resolution prepares discovery instead
-  // of reporting an unpublished synchronous runtime as a broken provider.
+  // Doctor diagnostics resolve static transport facts without publishing a live agent generation.
   const resolution = await resolveModelAsync(
     params.provider,
     params.modelId,
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: "selected",
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
+      skipAgentDiscovery: true,
+      allowBundledStaticCatalogFallback: true,
+      preferBundledStaticCatalogTransport: true,
     },
   );
   const model = resolution.model as ProviderRuntimeModel | undefined;
@@ -140,7 +143,6 @@ export async function collectActiveToolSchemaProjectionWarnings(params: {
           modelCompat: runtimeModelContext.modelCompat,
           modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
           allowGatewaySubagentBinding: true,
-          toolPolicyAuditLogLevel: "debug",
         });
       } catch (error) {
         agentWarnings.push(

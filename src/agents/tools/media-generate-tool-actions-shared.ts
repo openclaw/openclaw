@@ -21,7 +21,7 @@ type MediaGenerateActionResult = {
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
   inactiveText: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
+  findActiveTask: (sessionKey?: string, agentId?: string) => Promise<Task | undefined>;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
 };
@@ -158,24 +158,20 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
-/** Creates status action helpers for a media generation task type. */
-export function createMediaGenerateTaskStatusActions<Task>(
-  params: MediaGenerateTaskStatusParams<Task>,
-) {
-  return {
-    createStatusActionResult(this: void, sessionKey?: string): MediaGenerateActionResult {
-      const activeTask = params.findActiveTask(sessionKey);
-      return activeTask
-        ? {
-            content: [{ type: "text", text: params.buildStatusText(activeTask) }],
-            details: { action: "status", ...params.buildStatusDetails(activeTask) },
-          }
-        : {
-            content: [{ type: "text", text: params.inactiveText }],
-            details: { action: "status", active: false },
-          };
-    },
-  };
+/** Formats a selected task without reading its store again. */
+export function createMediaGenerateTaskStatusResult<Task>(
+  params: Omit<MediaGenerateTaskStatusParams<Task>, "findActiveTask"> & { activeTask?: Task },
+): MediaGenerateActionResult {
+  const { activeTask } = params;
+  return activeTask
+    ? {
+        content: [{ type: "text", text: params.buildStatusText(activeTask) }],
+        details: { action: "status", ...params.buildStatusDetails(activeTask) },
+      }
+    : {
+        content: [{ type: "text", text: params.inactiveText }],
+        details: { action: "status", active: false },
+      };
 }
 
 /** Creates status and duplicate-guard actions from one media-task owner. */
@@ -183,16 +179,21 @@ export function createMediaGenerateTaskActions<Task>(
   params: MediaGenerateTaskStatusParams<Task> & {
     findDuplicateTask: (
       sessionKey?: string,
-      request?: { prompt?: string; requestKey?: string },
-    ) => Task | undefined;
+      request?: { prompt?: string; requestKey?: string; agentId?: string },
+    ) => Promise<Task | undefined>;
   },
 ) {
   return {
-    ...createMediaGenerateTaskStatusActions(params),
+    async createStatusActionResult(this: void, sessionKey?: string, agentId?: string) {
+      return createMediaGenerateTaskStatusResult({
+        ...params,
+        activeTask: await params.findActiveTask(sessionKey, agentId),
+      });
+    },
     createDuplicateGuardResult(
       this: void,
       sessionKey?: string,
-      request?: { prompt?: string; requestKey?: string },
+      request?: { prompt?: string; requestKey?: string; agentId?: string },
     ) {
       return createMediaGenerateDuplicateGuardResult({ sessionKey, ...request, ...params });
     },
@@ -200,20 +201,22 @@ export function createMediaGenerateTaskActions<Task>(
 }
 
 /** Builds duplicate-guard status output for a media generation task type. */
-export function createMediaGenerateDuplicateGuardResult<Task>(params: {
+export async function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
   prompt?: string;
   requestKey?: string;
+  agentId?: string;
   findDuplicateTask: (
     sessionKey?: string,
-    params?: { prompt?: string; requestKey?: string },
-  ) => Task | undefined;
+    params?: { prompt?: string; requestKey?: string; agentId?: string },
+  ) => Promise<Task | undefined>;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
-}): MediaGenerateActionResult | undefined {
-  const blockingTask = params.findDuplicateTask(params.sessionKey, {
+}): Promise<MediaGenerateActionResult | undefined> {
+  const blockingTask = await params.findDuplicateTask(params.sessionKey, {
     prompt: params.prompt,
     requestKey: params.requestKey,
+    agentId: params.agentId,
   });
   if (!blockingTask) {
     return undefined;

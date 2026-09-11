@@ -61,6 +61,15 @@ If four users send messages while the agent is executing a tool call:
 
 Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
 
+Authorized participants with matching tool permissions can steer from different
+browsers. The running turn keeps its original approval destination. A different
+browser identity alone does not defer the message, but changes to permissions,
+execution policy, workspace, or bound tools can require a followup turn.
+
+The Control UI labels accepted messages that are still waiting for the agent as
+queued. A visible message or send acknowledgment does not mean the active runtime
+has consumed it.
+
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
 ## Debounce
@@ -73,3 +82,4 @@ The built-in queue debounce applies to queued `followup` and `collect` delivery.
 - [Steer](/tools/steer)
 - [Messages](/concepts/messages)
 - [Agent loop](/concepts/agent-loop)
+- [Codex harness runtime](/plugins/codex-harness-runtime) - `turn/steer` behavior on the native Codex harness

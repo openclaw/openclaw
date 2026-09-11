@@ -5,15 +5,220 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
+  findInlineSlashCompletion,
   getRemoteCommandEntries,
   getSkillCommandCompletions,
+  getSlashCommandCompletions,
+  isModelIndependentChatCommand,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
+  type SlashCommandDef,
 } from "./commands.ts";
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("model-independent commands", () => {
+  it.each([
+    "/models",
+    "/models xai",
+    "/status",
+    "/help",
+    "/help explain this",
+    "/id",
+    "/login xai",
+    "/model",
+    "/model example/model",
+    "/model default",
+    "/model list",
+    "/model status",
+    "/model example/model -a",
+    "/model example/model --runtime native",
+    "/model example/model /think high",
+    "/clear",
+    "/export-session",
+    "/export",
+    "/new",
+    "/think high",
+    "/thinking default",
+    "/verbose full",
+    "/fast off",
+    "/usage cost",
+    "/agents",
+    "/tools verbose",
+    "/commands",
+    "/tasks",
+    "/context detail",
+    "/diagnostics",
+    "/openclaw status",
+    "/name A useful title",
+    "/allowlist",
+    "/approve sample allow-once",
+    "/export-trajectory",
+    "/subagents log 1",
+    "/session idle 1h",
+    "/config show",
+    "/debug reset",
+    "/mcp show",
+    "/plugins list",
+    "/activation mention",
+    "/send inherit",
+    "/bash echo hello",
+    "/restart",
+    "/update",
+    "/trace raw",
+    "/reasoning stream",
+    "/elevated ask",
+    "/exec host=node",
+    "/queue collect",
+    "/goal",
+    "/goal edit revised objective",
+    "/goal pause waiting",
+    "/goal done",
+    "/goal clear",
+    "/goal start",
+    "/loop",
+    "/loop help",
+    "/skill",
+    "/steer",
+    "/redirect",
+    "/btw",
+    "/acp status",
+    "/acp spawn worker",
+    "/acp cancel",
+    "/acp steer",
+    "/tts audio hello",
+  ])("admits %s without model access", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(true),
+  );
+
+  it.each([
+    "Hello",
+    "/compact",
+    "/reset",
+    "/reset soft",
+    "/unknown",
+    "Please /models",
+    "/model example/model explain this",
+    "/model example/model -a explain this",
+    "/model example/model /think high explain this",
+    "/trace raw explain this",
+    "/reasoning on explain this",
+    "/elevated ask explain this",
+    "/exec host=node explain this",
+    "/queue collect explain this",
+    "/activation mention explain this",
+    "/send on explain this",
+    "/commands explain this",
+    "/whoami explain this",
+    "/restart explain this",
+    "/goal build something",
+    "/goal start build something",
+    "/goal resume",
+    "/loop status",
+    "/loop stop",
+    "/loop 5m check status",
+    "/skill research",
+    "/dashboard",
+    "/learn",
+    "/steer continue",
+    "/redirect continue",
+    "/btw explain this",
+    "/acp steer continue",
+  ])("requires model access for %s", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(false),
+  );
+});
+
+describe("findInlineSlashCompletion", () => {
+  it("finds slash tokens at the start or in normal prose", () => {
+    expect(findInlineSlashCompletion("/thi")).toEqual({
+      query: "thi",
+      start: 0,
+      end: 4,
+      inline: false,
+    });
+    expect(findInlineSlashCompletion("Please use /wea")).toEqual({
+      query: "wea",
+      start: 11,
+      end: 15,
+      inline: true,
+    });
+  });
+
+  it("uses the caret and replaces the complete token", () => {
+    expect(findInlineSlashCompletion("Use /weather tomorrow", 8)).toEqual({
+      query: "wea",
+      start: 4,
+      end: 12,
+      inline: true,
+    });
+    expect(findInlineSlashCompletion("/thinking please", 4)).toEqual({
+      query: "thi",
+      start: 0,
+      end: 9,
+      inline: true,
+    });
+  });
+
+  it("recognizes a trailing colon as a skill-only inline reference", () => {
+    expect(findInlineSlashCompletion("Please use /weather:")).toEqual({
+      query: "weather",
+      start: 11,
+      end: 20,
+      inline: true,
+      skillOnly: true,
+    });
+  });
+
+  it("ignores URLs, paths, and escaped double slashes", () => {
+    expect(findInlineSlashCompletion("https://example.com/wea")).toBeNull();
+    expect(findInlineSlashCompletion("Open tmp/wea")).toBeNull();
+    expect(findInlineSlashCompletion("Use //wea")).toBeNull();
+  });
+
+  it("offers every non-skill command inline and can hide them when no command owner exists", () => {
+    applyRemoteEntries([
+      {
+        name: "weather",
+        textAliases: ["/weather"],
+        description: "Weather skill",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "text",
+        acceptsArgs: true,
+      },
+    ]);
+    expect(
+      getSlashCommandCompletions("weather", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["weather"]);
+    expect(
+      getSlashCommandCompletions("reset", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["reset"]);
+    expect(
+      getSlashCommandCompletions("elevated", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["elevated"]);
+    expect(
+      getSlashCommandCompletions("exec", { inlineOnly: true }).map((entry) => entry.name),
+    ).toContain("exec");
+    expect(
+      getSlashCommandCompletions("think", { inlineOnly: true }).map((entry) => entry.name),
+    ).toContain("think");
+    expect(
+      getSlashCommandCompletions("reset", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getSlashCommandCompletions("weather", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }).map((entry) => entry.name),
+    ).toEqual(["weather"]);
+  });
 });
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -60,6 +265,160 @@ function expectParsedSlash(input: string, commandFields: Record<string, unknown>
   expect(parsed.args).toBe(args);
 }
 
+function completionNames(filter: string, options?: { showAll?: boolean }): string[] {
+  return getSlashCommandCompletions(filter, options).map((command) => command.name);
+}
+
+function slashCommand(
+  name: string,
+  options: Partial<Omit<SlashCommandDef, "key" | "name">> = {},
+): SlashCommandDef {
+  return { key: name, name, description: `${name} command.`, ...options };
+}
+
+describe("getSlashCommandCompletions", () => {
+  it("presents the first-class dashboard command with the dashboard icon", () => {
+    const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
+
+    expect(dashboard).toMatchObject({
+      category: "tools",
+      allowsInlineMultiWordArgs: true,
+      icon: "layoutDashboard",
+      source: "native",
+    });
+  });
+
+  it("ranks an exact name above prefixes and description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("openclaw", {
+        description: "Run the setup and repair helper.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("pair-device", {
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("pair", { tier: "power", category: "agents" }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pair", "pair-device", "openclaw"]);
+  });
+
+  it("ranks exact and prefix alias matches like primary names", () => {
+    replaceSlashCommands([
+      slashCommand("pair-device", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("connect", {
+        aliases: ["pairing"],
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("handoff", {
+        aliases: ["pair"],
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["handoff", "connect", "pair-device"]);
+  });
+
+  it("ranks name and alias substrings above description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("helper", {
+        description: "Repair a device.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("connect", {
+        aliases: ["repairing"],
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("repair", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("pairing", {
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pairing", "connect", "repair", "helper"]);
+  });
+
+  it("uses tier and category tie-breakers while keeping equal matches stable", () => {
+    replaceSlashCommands([
+      slashCommand("path-first", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("path-standard", {
+        tier: "standard",
+        category: "session",
+      }),
+      slashCommand("path-agent", {
+        tier: "essential",
+        category: "agents",
+      }),
+      slashCommand("path-second", {
+        tier: "essential",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("path-")).toEqual([
+      "path-first",
+      "path-second",
+      "path-agent",
+      "path-standard",
+    ]);
+  });
+
+  it("keeps empty-query tier and category ordering unchanged", () => {
+    replaceSlashCommands([
+      slashCommand("standard-agent", {
+        tier: "standard",
+        category: "agents",
+      }),
+      slashCommand("essential-tools", {
+        tier: "essential",
+        category: "tools",
+      }),
+      slashCommand("power-session", {
+        tier: "power",
+        category: "session",
+      }),
+      slashCommand("essential-session", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("standard-session", {
+        tier: "standard",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("")).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+    ]);
+    expect(completionNames("", { showAll: true })).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+      "power-session",
+    ]);
+  });
+});
+
 describe("parseSlashCommand", () => {
   it("parses commands with an optional colon separator", () => {
     expectParsedSlash("/think: high", { name: "think" }, "high");
@@ -90,6 +449,15 @@ describe("parseSlashCommand", () => {
       executeLocal: false,
     });
     expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
+  });
+
+  it("formats structured argument choices with the shared command serializer", () => {
+    expect(requireCommandByName("exec").argOptions).toEqual([
+      "host=auto",
+      "host=sandbox",
+      "host=gateway",
+      "host=node",
+    ]);
   });
 
   it("parses slash aliases through the shared registry", () => {
@@ -134,16 +502,16 @@ describe("parseSlashCommand", () => {
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
-  it("builds runtime commands from command entries so docks, plugins, and direct skills appear", () => {
+  it("builds runtime commands from native, plugin, and direct skill entries", () => {
     applyRemoteEntries([
       {
-        name: "dock-discord",
-        textAliases: ["/dock-discord", "/dock_discord"],
-        description: "Switch to discord for replies.",
+        name: "inspect-session",
+        textAliases: ["/inspect-session", "/inspect_session"],
+        description: "Inspect the active session.",
         source: "native",
         scope: "both",
         acceptsArgs: false,
-        category: "docks",
+        category: "tools",
       },
       {
         name: "dreaming",
@@ -154,8 +522,8 @@ describe("parseSlashCommand", () => {
         acceptsArgs: true,
       },
       {
-        name: "prose",
-        textAliases: ["/prose"],
+        name: "draft",
+        textAliases: ["/draft"],
         description: "Draft polished prose.",
         source: "skill",
         skillModelVisible: true,
@@ -164,8 +532,8 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expectRecordFields(requireCommandByName("dock-discord"), "dock-discord command", {
-      aliases: ["dock_discord"],
+    expectRecordFields(requireCommandByName("inspect-session"), "inspect-session command", {
+      aliases: ["inspect_session"],
       category: "tools",
       executeLocal: false,
     });
@@ -173,20 +541,21 @@ describe("parseSlashCommand", () => {
       key: "dreaming",
       executeLocal: false,
     });
-    expectRecordFields(requireCommandByName("prose"), "prose command", {
-      key: "prose",
+    expectRecordFields(requireCommandByName("draft"), "draft command", {
+      key: "draft",
       executeLocal: false,
       source: "skill",
       skillModelVisible: true,
     });
-    expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
-    expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
+    expectParsedSlash("/inspect_session", { name: "inspect-session" }, "");
+    expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 
-  it("normalizes hyphenated skill reference queries", () => {
+  it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries([
       {
         name: "release_notes",
+        skillDisplayName: "Release Notes",
         textAliases: ["/release_notes"],
         description: "Draft release notes.",
         source: "skill",
@@ -196,8 +565,11 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
-      "release_notes",
+    expect(getSkillCommandCompletions("notes")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
+    ]);
+    expect(getSkillCommandCompletions("release_n")).toMatchObject([
+      { name: "release_notes", skillDisplayName: "Release Notes" },
     ]);
   });
 
@@ -256,8 +628,8 @@ describe("parseSlashCommand", () => {
   it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
     applyRemoteEntries([
       {
-        name: "prose now",
-        textAliases: ["/prose now", "/safe-name"],
+        name: "draft now",
+        textAliases: ["/draft now", "/safe-name"],
         description: "Unsafe injected command.",
         source: "skill",
         scope: "both",
@@ -322,6 +694,55 @@ describe("parseSlashCommand", () => {
     expect(first.args?.split(" ")).toHaveLength(20);
     expect(first.args?.split(" ")[0]).toBe("[" + "n".repeat(199) + "]");
     expect(first.argOptions).toHaveLength(50);
+  });
+
+  it("preserves only known closed plugin client presentation metadata", () => {
+    applyRemoteEntries([
+      {
+        name: "pair",
+        textAliases: ["/pair"],
+        description: "Pair a device.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: true,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
+      },
+    ]);
+
+    expect(requireCommandByName("pair").clientPresentation).toEqual({
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+    });
+  });
+
+  it.each([
+    { when: "always", action: { kind: "device-pairing" } },
+    { when: "no-arguments", action: { kind: "open-route" } },
+    { when: "no-arguments", action: { kind: "device-pairing", callback: "run" } },
+    {
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+      route: "/settings/devices",
+    },
+  ])("drops malformed client presentation metadata %#", (clientPresentation) => {
+    applyCommandsListResult({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Pair a device.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+          clientPresentation,
+        },
+      ],
+    });
+
+    expect(requireCommandByName("pair").clientPresentation).toBeUndefined();
   });
 
   it("falls back safely when command payload shapes are malformed", () => {

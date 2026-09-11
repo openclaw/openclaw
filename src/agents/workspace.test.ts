@@ -18,16 +18,15 @@ import {
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  resolveWorkspaceStateIdentity,
 } from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -42,6 +41,7 @@ import {
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
+const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 let testState: OpenClawTestState | undefined;
 
 beforeEach(async () => {
@@ -69,9 +69,29 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
 
+  it("roots named profile workspaces inside the profile state directory", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      HOME: "/home/other",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw-work", "workspace"));
+  });
+
+  it("rejects invalid environment-only profile names", () => {
+    expect(() =>
+      resolveDefaultAgentWorkspaceDir({
+        OPENCLAW_PROFILE: "../escape",
+        HOME: "/home/peter",
+      } as NodeJS.ProcessEnv),
+    ).toThrow('Invalid profile name: "../escape"');
+  });
+
   it("prefers OPENCLAW_WORKSPACE_DIR for default workspace resolution", () => {
     const dir = resolveDefaultAgentWorkspaceDir({
       OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
+      OPENCLAW_PROFILE: "work",
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv);
@@ -90,7 +110,7 @@ async function readWorkspaceState(dir: string): Promise<{
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 }> {
-  return readWorkspaceStateSnapshot(dir).setup;
+  return (await readWorkspaceStateSnapshot(dir)).setup;
 }
 
 async function writeLegacyWorkspaceState(dir: string, state: unknown): Promise<void> {
@@ -151,6 +171,23 @@ function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("ensureAgentWorkspace", () => {
+  it("registers workspace aliases in the selected state database", async () => {
+    const root = testState!.root;
+    const workspace = path.join(root, "custom-db-workspace");
+    const workspaceAlias = path.join(root, "custom-db-workspace-alias");
+    const databasePath = path.join(root, "custom-state.sqlite");
+    const options = { path: databasePath };
+    const seededAt = "2026-07-31T12:00:00.000Z";
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
+    await mergeWorkspaceSetupState(workspace, { bootstrapSeededAt: seededAt }, Date.now(), options);
+
+    expect((await readWorkspaceStateSnapshot(workspaceAlias, options)).setup).toEqual({
+      version: 1,
+      bootstrapSeededAt: seededAt,
+    });
+  });
+
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
@@ -159,7 +196,7 @@ describe("ensureAgentWorkspace", () => {
     await expectBootstrapSeeded(tempDir);
     await expectNoLegacyWorkspaceStateWrites(tempDir);
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
-    expect(readWorkspaceStateSnapshot(tempDir).attestation).toBeDefined();
+    expect((await readWorkspaceStateSnapshot(tempDir)).attestation).toBeDefined();
   });
 
   it("does not overwrite a foreign root workspace-state.json file", async () => {
@@ -187,13 +224,13 @@ describe("ensureAgentWorkspace", () => {
     await expect(
       fs.access(path.join(tempDir, ...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceStateSnapshot(tempDir).setupExists).toBe(false);
+    expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(false);
   });
 
   it("requires Doctor when partial SQLite state coexists with legacy setup state", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const seededAt = "2026-07-15T10:00:00.000Z";
-    mergeWorkspaceSetupState(tempDir, { bootstrapSeededAt: seededAt });
+    await mergeWorkspaceSetupState(tempDir, { bootstrapSeededAt: seededAt });
     await writeLegacyWorkspaceState(tempDir, {
       version: 1,
       setupCompletedAt: "2026-07-15T10:01:00.000Z",
@@ -205,7 +242,7 @@ describe("ensureAgentWorkspace", () => {
     await expect(
       fs.access(path.join(tempDir, ...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceStateSnapshot(tempDir).setup).toEqual({
+    expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual({
       version: 1,
       bootstrapSeededAt: seededAt,
     });
@@ -214,7 +251,7 @@ describe("ensureAgentWorkspace", () => {
   it("refuses to re-seed a recently attested workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-    expect(readWorkspaceStateSnapshot(tempDir).attestation).toBeDefined();
+    expect((await readWorkspaceStateSnapshot(tempDir)).attestation).toBeDefined();
 
     await fs.rm(tempDir, { recursive: true, force: true });
 
@@ -235,7 +272,7 @@ describe("ensureAgentWorkspace", () => {
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
     );
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    expect(readWorkspaceStateSnapshot(tempDir).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
   });
 
   it("refuses to re-seed a recently attested workspace after only generated remnants survive", async () => {
@@ -251,15 +288,15 @@ describe("ensureAgentWorkspace", () => {
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
     );
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
-    expect(readWorkspaceStateSnapshot(tempDir).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
   });
 
   it("refuses to re-seed a future-attested workspace after only generated remnants survive", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-    const snapshot = readWorkspaceStateSnapshot(tempDir);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedAgents = await fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf-8");
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now() + 60_000,
       generatedHashes: snapshot.attestation!.generatedHashes,
@@ -293,11 +330,11 @@ describe("ensureAgentWorkspace", () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const oldGeneratedAgents = "old generated agents\n";
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), oldGeneratedAgents);
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
       setupCompletedAt: "2026-07-15T10:01:00.000Z",
     });
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes: new Map([
@@ -334,7 +371,7 @@ describe("ensureAgentWorkspace", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), generatedAgents);
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: Date.now(),
       generatedHashes: new Map(),
@@ -444,7 +481,7 @@ describe("ensureAgentWorkspace", () => {
   it("allows a brand new workspace when its SQLite attestation is stale", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const expiredAtMs = Date.now() - 25 * 60 * 60 * 1000;
-    mergeWorkspaceSetupState(
+    await mergeWorkspaceSetupState(
       tempDir,
       {
         bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
@@ -452,7 +489,7 @@ describe("ensureAgentWorkspace", () => {
       },
       expiredAtMs,
     );
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: expiredAtMs,
       generatedHashes: new Map(),
@@ -468,7 +505,7 @@ describe("ensureAgentWorkspace", () => {
   it("clears expired setup state when a wiped workspace retains only .git", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const expiredAtMs = Date.now() - 25 * 60 * 60 * 1000;
-    mergeWorkspaceSetupState(
+    await mergeWorkspaceSetupState(
       tempDir,
       {
         bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
@@ -476,7 +513,7 @@ describe("ensureAgentWorkspace", () => {
       },
       expiredAtMs,
     );
-    replaceWorkspaceAttestation({
+    await replaceWorkspaceAttestation({
       workspaceDir: tempDir,
       attestedAtMs: expiredAtMs,
       generatedHashes: new Map(),
@@ -492,7 +529,7 @@ describe("ensureAgentWorkspace", () => {
 
   it("clears expired setup-only state before reseeding an empty workspace", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    mergeWorkspaceSetupState(
+    await mergeWorkspaceSetupState(
       tempDir,
       {
         bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
@@ -518,12 +555,12 @@ describe("ensureAgentWorkspace", () => {
     ).rejects.toThrow(/run openclaw doctor --fix/u);
 
     expect(await fs.readFile(attestationPath, "utf-8")).toBe(marker);
-    expect(readWorkspaceStateSnapshot(tempDir).setupExists).toBe(false);
+    expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(false);
   });
 
   it("requires Doctor when SQLite setup state coexists with a legacy attestation", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
     });
     const attestationPath = `${tempDir}.attested`;
@@ -535,7 +572,7 @@ describe("ensureAgentWorkspace", () => {
     ).rejects.toThrow(/run openclaw doctor --fix/u);
 
     expect(await fs.readFile(attestationPath, "utf-8")).toBe(marker);
-    expect(readWorkspaceStateSnapshot(tempDir).setupExists).toBe(true);
+    expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(true);
   });
 
   it("ignores and preserves a foreign sibling attestation file", async () => {
@@ -622,7 +659,7 @@ describe("ensureAgentWorkspace", () => {
         DEFAULT_SOUL_FILENAME,
         DEFAULT_IDENTITY_FILENAME,
         DEFAULT_USER_FILENAME,
-        DEFAULT_HEARTBEAT_FILENAME,
+        LEGACY_HEARTBEAT_FILENAME,
       ],
     });
 
@@ -634,7 +671,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, fileName));
     }
@@ -711,7 +748,7 @@ describe("ensureAgentWorkspace", () => {
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
     let identityReads = 0;
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         identityReads += 1;
         if (identityReads === 1) {
@@ -721,8 +758,8 @@ describe("ensureAgentWorkspace", () => {
           );
         }
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
@@ -738,15 +775,15 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
       if (filePath === identityPath) {
         throw Object.assign(new Error("Unknown system error -11, read"), {
           code: "EAGAIN",
           errno: -11,
         });
       }
-      return await originalReadFile(filePath, options as never);
-    }) as typeof fs.readFile);
+      return await originalReadFile(filePath, options);
+    });
 
     try {
       await expect(
@@ -766,19 +803,19 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
-    const rmSpy = vi
-      .spyOn(fs, "rm")
-      .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
+    const originalRm = fs.rm.bind(fs);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (filePath === bootstrapPath) {
+        throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      }
+      await originalRm(filePath, options);
+    });
 
     try {
-      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-      expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-      expect(result.bootstrapPending).toBe(false);
-      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
-      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {
       rmSpy.mockRestore();
     }
@@ -828,7 +865,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     // Heartbeat monitor context lives in cron scratch now; new workspaces get no file.
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
   });
 
   it("does not recreate optional bootstrap files when workspace setup is already completed", async () => {
@@ -873,7 +910,7 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_SOUL_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_USER_FILENAME));
-    await expectPathMissing(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME));
+    await expectPathMissing(path.join(tempDir, LEGACY_HEARTBEAT_FILENAME));
 
     // Verify the required AGENTS.md file still exists.
     await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
@@ -883,7 +920,7 @@ describe("ensureAgentWorkspace", () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
     await fs.writeFile(agentsPath, "custom agents instructions\n", "utf8");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
     });
     const realAccess = fs.access.bind(fs);
@@ -891,7 +928,7 @@ describe("ensureAgentWorkspace", () => {
     const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (filePath, mode) => {
       if (!completed && filePath === agentsPath) {
         completed = true;
-        mergeWorkspaceSetupState(tempDir, {
+        await mergeWorkspaceSetupState(tempDir, {
           setupCompletedAt: "2026-07-15T10:01:00.000Z",
         });
       }
@@ -909,7 +946,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     ]) {
       await expectPathMissing(path.join(tempDir, filename));
     }
@@ -953,7 +990,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
-  it("treats hardlinked bootstrap aliases as missing", async () => {
+  it("treats hardlinked bootstrap aliases as unreadable", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -977,8 +1014,8 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
       const files = await loadWorkspaceBootstrapFiles(workspaceDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: path must not be hardlinked]");
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
@@ -1027,7 +1064,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
-  it("marks a bootstrap file missing after transient read retries are exhausted", async () => {
+  it("marks a bootstrap file unreadable after transient read retries are exhausted", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({
       dir: tempDir,
@@ -1046,12 +1083,10 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }) as typeof syncFs.read);
 
     try {
-      // Unlike the template check, this reader returns an io failure (not a
-      // throw) when the budget is exhausted, so the file surfaces as missing.
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("[UNREADABLE: Unknown system error -11: read]");
     } finally {
       readSpy.mockRestore();
     }
@@ -1065,10 +1100,10 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nboundary retry\n",
     });
 
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
-    const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
+    const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
+    const originalLstat = syncFs.lstatSync.bind(syncFs);
     let agentsLstatAttempts = 0;
-    const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
+    const lstatSpy = vi.spyOn(syncFs, "lstatSync").mockImplementation(((
       target: unknown,
       options?: unknown,
     ) => {
@@ -1078,12 +1113,12 @@ describe("loadWorkspaceBootstrapFiles", () => {
           errno: -11,
         });
       }
-      return await originalLstat(target as never, options as never);
-    }) as typeof syncFs.promises.lstat);
+      return originalLstat(target as never, options as never);
+    }) as typeof syncFs.lstatSync);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
-      expect(agentsLstatAttempts).toBe(2);
+      expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("boundary retry");

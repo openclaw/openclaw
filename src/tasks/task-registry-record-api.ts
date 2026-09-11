@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import {
   appendTaskEvent,
@@ -27,12 +28,17 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { syncFlowFromTaskAfterTaskMutation, updateTask } from "./task-registry-mutation.js";
-import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  cloneTaskRecordForObserver,
+  normalizeTaskTimestamps,
+} from "./task-registry-records.js";
 import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   addRunIdIndex,
+  bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunScope,
@@ -136,6 +142,9 @@ function updateTasksByRunId(params: {
   }
   const updated: TaskRecord[] = [];
   for (const match of matches) {
+    if (!hasAuthoritativeTaskBacking(match)) {
+      continue;
+    }
     const task = updateTask(match.taskId, params.patch);
     if (task) {
       updated.push(task);
@@ -263,8 +272,7 @@ export function createTaskRecord(params: {
     ...(params.detail !== undefined ? { detail: structuredClone(params.detail) } : {}),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    const cleanupAfter = resolveTaskCleanupAfter(record);
-    Object.assign(record, cleanupAfter === undefined ? {} : { cleanupAfter });
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const deliveryState = requesterOrigin
@@ -277,6 +285,7 @@ export function createTaskRecord(params: {
     return null;
   }
   tasks.set(taskId, record);
+  bumpTaskRegistryRevision();
   if (requesterOrigin) {
     taskDeliveryStates.set(taskId, deliveryState!);
   }
@@ -287,7 +296,7 @@ export function createTaskRecord(params: {
   syncFlowFromTaskAfterTaskMutation(record, "create");
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
-    task: cloneTaskRecord(record),
+    task: cloneTaskRecordForObserver(record),
   }));
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
@@ -321,6 +330,9 @@ export function updateTaskStateByRunId(params: {
   }
   const updated: TaskRecord[] = [];
   for (const current of matches) {
+    if (!hasAuthoritativeTaskBacking(current)) {
+      continue;
+    }
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     if (
@@ -482,7 +494,7 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
-export function finalizeTaskRunByRunId(params: {
+export function finalizeTaskRecordByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;

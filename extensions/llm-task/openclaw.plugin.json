@@ -1,8 +1,8 @@
 {
   "id": "llm-task",
+  "categories": ["agent-orchestration"],
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "activation": {
     "onStartup": true

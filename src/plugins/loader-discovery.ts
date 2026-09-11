@@ -3,17 +3,12 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import { pluginLoaderCacheState } from "./loader-cache.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
-import {
-  buildProvenanceIndex,
-  compareDuplicateCandidateOrder,
-  warnWhenAllowlistIsOpen,
-} from "./loader-provenance.js";
-import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
+import { buildProvenanceIndex, warnWhenAllowlistIsOpen } from "./loader-provenance.js";
+import { createPluginCandidatesFromManifestRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -36,13 +31,12 @@ export function resolvePluginLoadDiscovery(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   emitWarning: boolean;
   warningCacheKey: string;
-  suppliedManifestRegistry?: PluginManifestRegistry;
 }): ResolvedPluginLoadDiscovery {
   const { options, context } = params;
   // The load context has already verified workspace, environment, config, and
   // plugin scope against the current lifecycle-owned metadata generation.
   const suppliedManifestRegistry =
-    params.suppliedManifestRegistry ??
+    options.manifestRegistry ??
     (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
   const discovery = suppliedManifestRegistry
     ? {
@@ -58,7 +52,7 @@ export function resolvePluginLoadDiscovery(params: {
       }));
   const manifestRegistry =
     suppliedManifestRegistry ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryCore({
       config: context.cfg,
       workspaceDir: options.workspaceDir,
       env: context.env,
@@ -67,14 +61,14 @@ export function resolvePluginLoadDiscovery(params: {
       installRecords:
         Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
-  pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
+  params.diagnostics.push(...manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
     emitWarning: params.emitWarning,
     logger: params.logger,
     pluginsEnabled: context.normalized.enabled,
     allow: context.normalized.allow,
     warningCacheKey: params.warningCacheKey,
-    warningCache: pluginLoaderCacheState,
+    warningCache: context.cacheState,
     explicitlyEnabledPluginIds: new Set(
       Object.entries(context.normalized.entries)
         .filter(([, entry]) => entry.enabled === true)
@@ -97,14 +91,9 @@ export function resolvePluginLoadDiscovery(params: {
   const manifestBySource = new Map(
     manifestRegistry.plugins.map((record) => [record.source, record]),
   );
-  const orderedCandidates = [...discovery.candidates].toSorted((left, right) =>
-    compareDuplicateCandidateOrder({
-      left,
-      right,
-      manifestBySource,
-      provenance,
-      env: context.env,
-    }),
+  // Manifest selection owns duplicate precedence; runtime consumes only its winners.
+  const orderedCandidates = discovery.candidates.filter((candidate) =>
+    manifestBySource.has(candidate.source),
   );
   return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
 }

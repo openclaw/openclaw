@@ -50,9 +50,28 @@ const { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWid
     resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
   };
 
+function canvasMessage(role: string, url: string) {
+  return {
+    role,
+    content: [
+      {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          sandbox: "scripts",
+          url,
+        },
+      },
+    ],
+  };
+}
+
 function createFakeElement(tagName = "div") {
   const classes = new Set();
   const children: any[] = [];
+  const styles = new Map<string, string>();
   return {
     tagName: tagName.toUpperCase(),
     children,
@@ -71,7 +90,17 @@ function createFakeElement(tagName = "div") {
         return enabled;
       },
     },
-    style: { setProperty() {} },
+    style: {
+      setProperty(name: string, value: string) {
+        styles.set(name, value);
+      },
+      removeProperty(name: string) {
+        styles.delete(name);
+      },
+      getPropertyValue(name: string) {
+        return styles.get(name) ?? "";
+      },
+    },
     value: "",
     textContent: "",
     hidden: false,
@@ -176,6 +205,7 @@ function createQuickChatHarness(): Record<string, any> {
   };
   const document = {
     body: createFakeElement(),
+    documentElement: createFakeElement("html"),
     createElement: (tagName: string) => createFakeElement(tagName),
     createTextNode: (text: string) => ({ textContent: text }),
     querySelector(selector: string) {
@@ -214,6 +244,7 @@ this.harness = {
   },
   advanceTime(ms) { advanceTime(ms); },
   emitGatewayState(payload) { setGatewayState(payload); },
+  accent() { return document.documentElement.style.getPropertyValue("--accent"); },
   setMessage(value) { elements.input.value = value; },
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
@@ -249,6 +280,20 @@ test("visibility operations share one monotonic sequence", () => {
   assert.equal(harness.nextVisibilityOperation(), 1);
   assert.equal(harness.nextVisibilityOperation(), 2);
   assert.equal(harness.nextVisibilityOperation(), 3);
+});
+
+test("gateway state updates and clears the Quick Chat user accent", () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+
+  harness.emitGatewayState({ state: "up", accent: "#45b6fe" });
+  assert.equal(harness.accent(), "#45b6fe");
+
+  harness.emitGatewayState({ state: "up", accent: "#52c99a" });
+  assert.equal(harness.accent(), "#52c99a");
+
+  harness.emitGatewayState({ state: "up" });
+  assert.equal(harness.accent(), "");
 });
 
 test("widget child webviews inherit no Quick Chat Tauri capability", () => {
@@ -457,21 +502,8 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   assert.notEqual(cjkWidget?.key, cjkViewId);
   assert.ok(Buffer.byteLength(cjkWidget?.key ?? "", "utf8") <= 256);
   assert.equal(
-    chatMessageWidgets({
-      role: "tool",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/tool/index.html",
-          },
-        },
-      ],
-    }).length,
+    chatMessageWidgets(canvasMessage("tool", "/__openclaw__/canvas/documents/tool/index.html"))
+      .length,
     0,
   );
   assert.equal(
@@ -492,21 +524,9 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
     0,
   );
   assert.equal(
-    chatMessageWidgets({
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/%252e%252e/private-file",
-          },
-        },
-      ],
-    }).length,
+    chatMessageWidgets(
+      canvasMessage("assistant", "/__openclaw__/canvas/documents/%252e%252e/private-file"),
+    ).length,
     0,
   );
 });
@@ -679,21 +699,7 @@ test("expired Canvas capability refreshes before a new widget loads", async () =
     agentId: "work",
     runId: "refresh-run",
     state: "final",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/status/index.html",
-          },
-        },
-      ],
-    },
+    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
   });
 
   await harness.flushSurfaceRefresh();
@@ -767,21 +773,7 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
     agentId: "work",
     runId: "state-run",
     state: "delta",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/status/index.html",
-          },
-        },
-      ],
-    },
+    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
   });
   await harness.flushSurfaceRefresh();
   assert.equal(harness.widgetSurfaceRefreshCount(), 1);
@@ -794,21 +786,7 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
     agentId: "work",
     runId: "state-run",
     state: "delta",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/retry/index.html",
-          },
-        },
-      ],
-    },
+    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/retry/index.html"),
   });
   await harness.flushSurfaceRefresh();
   assert.equal(harness.widgetSurfaceRefreshCount(), 2);
@@ -826,21 +804,7 @@ test("clearing the widget reply restores semantic text-only layout", async () =>
     agentId: "work",
     runId: "widget-run",
     state: "delta",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/status/index.html",
-          },
-        },
-      ],
-    },
+    message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
   });
   await harness.flushWidgets();
   assert.equal(harness.syncedHasWidgets(), true);

@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
+import {
+  qaMaturityTaxonomyIdentitySchema,
+  type QaMaturityTaxonomyIdentity,
+} from "./scorecard-taxonomy.js";
 
 const idSchema = z.string().trim().min(1);
 const cellSchema = z.strictObject({
@@ -33,6 +37,8 @@ const planShape = z.strictObject({
   observedCells: z.array(cellSchema),
   missingCells: z.array(cellSchema),
   counts: z.record(z.enum(listNames), z.number().int().nonnegative()),
+  // Historical plans retain their original serialized bytes and attestation digest.
+  taxonomyIdentity: qaMaturityTaxonomyIdentitySchema.optional(),
 });
 
 type PlanShape = z.infer<typeof planShape>;
@@ -122,6 +128,7 @@ function canonicalCells(cells: readonly QaScenarioExecutionCell[]) {
 
 function build(params: {
   profile: string;
+  taxonomyIdentity: QaMaturityTaxonomyIdentity;
   membershipScenarios: readonly QaSeedScenarioWithSource[];
   selectedScenarios: readonly QaSeedScenarioWithSource[];
   excludedScenarios: readonly {
@@ -148,6 +155,7 @@ function build(params: {
     profile: params.profile,
     ...lists,
     counts: Object.fromEntries(listNames.map((name) => [name, lists[name].length])),
+    taxonomyIdentity: qaMaturityTaxonomyIdentitySchema.parse(params.taxonomyIdentity),
   });
 }
 

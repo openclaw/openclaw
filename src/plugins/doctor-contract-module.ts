@@ -1,11 +1,13 @@
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   OpenKeyedStoreOptions,
+  PluginDoctorRawStateEntry,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
-import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
+import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 
 export type PluginDoctorStateMigrationDetection = {
@@ -13,6 +15,17 @@ export type PluginDoctorStateMigrationDetection = {
 };
 
 export type PluginDoctorStateMigrationContext = {
+  /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
+  inspectAcpSessionClaims?: () => Promise<{
+    claims: PluginDoctorAcpSessionClaim[];
+    incomplete: string[];
+  }>;
+  /** Present only inside offline repair; compares metadata and entry binding before writing. */
+  updateAcpSessionIdentity?: (input: {
+    claim: PluginDoctorAcpSessionClaim;
+    runtimeSessionName: string;
+    acpxRecordId: string;
+  }) => void;
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (
@@ -21,6 +34,83 @@ export type PluginDoctorStateMigrationContext = {
   ) => void;
   /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
+  readPluginStateEntriesInKeyRange?: (
+    namespace: string,
+    range: { prefix: string; after?: string; limit: number },
+  ) => PluginDoctorRawStateEntry[];
+  readSessionIdentityEvidenceBatch?: (
+    requests: readonly { agentId: string; sessionId: string }[],
+  ) => Promise<
+    (
+      | { agentId: string; sessionId: string; state: "current"; sessionKey: string }
+      | { agentId: string; sessionId: string; state: "absent" | "unknown" }
+    )[]
+  >;
+  /** Present only while the host owns the offline SQLite maintenance lock. */
+  deletePluginStateEntriesIfUnchanged?: (
+    namespace: string,
+    entries: readonly PluginDoctorRawStateEntry[],
+  ) => { deleted: number; changed: number };
+  /** Owner-bound ingress queue access, one entry per manifest-declared channel;
+   *  the host fixes the channel identity and doctor state directory. Older test
+   *  hosts may omit it. */
+  channelIngressQueues?: readonly PluginDoctorChannelIngressQueueAccess[];
+};
+
+export type PluginDoctorAcpSessionClaim = {
+  agentId: string;
+  sessionKey: string;
+  binding: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "sessionStartedAt">;
+  meta: SessionAcpMeta;
+};
+
+/** Read-only projection of a durable ingress queue. Detection runs before the host
+    holds exclusive state ownership, so it is never handed anything wider. */
+export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unknown> = Pick<
+  ChannelIngressQueue<TPayload, TMetadata>,
+  "listPending" | "listClaims" | "listFailed"
+>;
+
+/** Doctor access to one host-bound channel's durable ingress queues. It mirrors
+ *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
+export type PluginDoctorChannelIngressQueueAccess = {
+  channelId: string;
+  /** Inspection-only access, available in every phase including detection. */
+  openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
+    accountId?: string;
+  }) => PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata>;
+  /** Account ids currently holding ingress rows, so migrations also sweep
+   *  accounts retired from config. Async because detection resolves it through the
+   *  non-creating read-only path. */
+  listChannelIngressQueueAccountIds: () => Promise<string[]>;
+  /** Present only while the host owns the exclusive Doctor maintenance lock. Every
+   *  call re-asserts that authority, so a handle retained past the repair section
+   *  fails instead of writing. */
+  openChannelIngressQueue?: <
+    TPayload,
+    TMetadata = unknown,
+    TCompletedMetadata = unknown,
+  >(options?: {
+    accountId?: string;
+  }) => ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
+};
+
+type PluginDoctorStateMigrationInput = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+  /** Same workspace selected for Gateway plugin services; never Doctor's cwd. */
+  serviceWorkspaceDir?: string;
+  context: PluginDoctorStateMigrationContext;
+};
+
+type PluginDoctorStateMigrationResult = {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  /** Every warning is advisory; required state remains safe for later repairs. */
+  warningDisposition?: "recoverable";
 };
 
 export type PluginDoctorStateMigration = {
@@ -28,31 +118,26 @@ export type PluginDoctorStateMigration = {
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
-  detectLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
+  phase?: "after-session-repair";
+  detectLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) =>
     | Promise<PluginDoctorStateMigrationDetection | null>
     | PluginDoctorStateMigrationDetection
     | null;
-  migrateLegacyState: (params: {
-    config: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-    context: PluginDoctorStateMigrationContext;
-  }) =>
-    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
-    | { changes: string[]; warnings: string[]; notices?: string[] };
+  migrateLegacyState: (
+    params: PluginDoctorStateMigrationInput,
+  ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
 };
 
 export type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   resolveSessionStoreAgentIds?: unknown;
+  /**
+   * @deprecated Declare static ownership in openclaw.plugin.json sessionRouteStateOwners.
+   * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
+   */
   sessionRouteStateOwners?: unknown;
   stateMigrations?: unknown;
 };
@@ -93,48 +178,6 @@ function coerceSessionStoreAgentIdsResolver(
     : undefined;
 }
 
-function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    providerIds?: unknown;
-    runtimeIds?: unknown;
-    cliSessionKeys?: unknown;
-    authProfilePrefixes?: unknown;
-  };
-  return (
-    typeof candidate.id === "string" &&
-    typeof candidate.label === "string" &&
-    candidate.id.trim().length > 0 &&
-    candidate.label.trim().length > 0 &&
-    (candidate.providerIds === undefined ||
-      normalizeTrimmedStringList(candidate.providerIds).length > 0) &&
-    (candidate.runtimeIds === undefined ||
-      normalizeTrimmedStringList(candidate.runtimeIds).length > 0) &&
-    (candidate.cliSessionKeys === undefined ||
-      normalizeTrimmedStringList(candidate.cliSessionKeys).length > 0) &&
-    (candidate.authProfilePrefixes === undefined ||
-      normalizeTrimmedStringList(candidate.authProfilePrefixes).length > 0)
-  );
-}
-
-function coerceDoctorSessionRouteStateOwners(value: unknown): DoctorSessionRouteStateOwner[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter(isDoctorSessionRouteStateOwner).map((owner) => ({
-    id: owner.id.trim(),
-    label: owner.label.trim(),
-    providerIds: normalizeTrimmedStringList(owner.providerIds),
-    runtimeIds: normalizeTrimmedStringList(owner.runtimeIds),
-    cliSessionKeys: normalizeTrimmedStringList(owner.cliSessionKeys),
-    authProfilePrefixes: normalizeTrimmedStringList(owner.authProfilePrefixes),
-  }));
-}
-
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
   if (!value || typeof value !== "object") {
     return false;
@@ -163,6 +206,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     id: migration.id.trim(),
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
+    phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));
@@ -185,8 +229,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
-    legacyConfigRules: rules.length > 0,
-    normalizeCompatibilityConfig: Boolean(normalizeCompatibilityConfig),
+    configRepair: rules.length > 0 || Boolean(normalizeCompatibilityConfig),
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
     sessionRouteStateOwners: sessionRouteStateOwners.length > 0,
     stateMigrations: stateMigrations.length > 0,

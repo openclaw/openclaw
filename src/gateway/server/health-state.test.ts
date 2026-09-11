@@ -1,19 +1,39 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { HealthSummary } from "../health/types.js";
 
 /**
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
  */
-const { collectGatewayHealthSnapshotMock, getUpdateAvailableMock, getUpdateScheduleMock } =
-  vi.hoisted(() => ({
-    collectGatewayHealthSnapshotMock: vi.fn(),
-    getUpdateAvailableMock: vi.fn(),
-    getUpdateScheduleMock: vi.fn(),
-  }));
+const {
+  collectGatewayHealthSnapshotMock,
+  getRuntimeConfigMock,
+  getUpdateAvailableMock,
+  getUpdateScheduleMock,
+} = vi.hoisted(() => ({
+  collectGatewayHealthSnapshotMock: vi.fn(),
+  getRuntimeConfigMock: vi.fn(),
+  getUpdateAvailableMock: vi.fn(),
+  getUpdateScheduleMock: vi.fn(),
+}));
 
 vi.mock("../health/collector.js", () => ({
   collectGatewayHealthSnapshot: collectGatewayHealthSnapshotMock,
+}));
+
+vi.mock("../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("../../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigAppliedHash: () => "internal-applied-hash",
+  getRuntimeConfigSourceSnapshot: () => null,
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
@@ -52,15 +72,10 @@ function createHealthSummary(): HealthSummary {
   };
 }
 
-function createDeferredHealthSummary() {
-  let resolve!: (summary: HealthSummary) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<HealthSummary>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+const revisionProjector = {
+  projectRawHash: (hash: string) => `raw-token:${hash}`,
+  projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+};
 
 async function loadHealthState() {
   vi.resetModules();
@@ -70,10 +85,46 @@ async function loadHealthState() {
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
+  getRuntimeConfigMock.mockReset().mockReturnValue({ agents: { entries: { main: {} } } });
   return await import("./health-state.js");
 }
 
 describe("buildGatewaySnapshot update metadata", () => {
+  it("reads suspension synchronously without waiting for health collection", async () => {
+    const healthState = await loadHealthState();
+    resetGatewayWorkAdmission();
+    const read = () =>
+      healthState.buildGatewaySnapshot({ client: null, revisionProjector }).suspension;
+    try {
+      expect(read()).toEqual({ phase: "accepting" });
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(read()).toEqual({ phase: "preparing" });
+      suspension?.drain();
+      expect(read()).toEqual({ phase: "draining" });
+      suspension?.commit();
+      expect(read()).toEqual({ phase: "prepared" });
+      suspension?.release();
+      expect(read()).toEqual({ phase: "accepting" });
+      expect(collectGatewayHealthSnapshotMock).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it.each([
+    { agent: { model: "openai/gpt-5.6-luna" }, expected: true },
+    { agent: {}, expected: false },
+  ])("advertises modelConfigured=$expected for the default agent", async ({ agent, expected }) => {
+    const healthState = await loadHealthState();
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { entries: { main: agent } },
+    });
+
+    const snapshot = healthState.buildGatewaySnapshot({ client: null, revisionProjector });
+
+    expect(snapshot.sessionDefaults?.modelConfigured).toBe(expected);
+  });
+
   it.each([
     { role: "operator", scopes: ["operator.pairing"], allowed: false },
     { role: "node", scopes: ["operator.read", "operator.admin"], allowed: false },
@@ -104,7 +155,11 @@ describe("buildGatewaySnapshot update metadata", () => {
       install: { kind: "git" },
     });
 
-    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: false });
+    const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
+      includeUpdateDetails: false,
+      revisionProjector,
+    });
 
     expect(snapshot.updateAvailable).toEqual({
       currentVersion: "2026.8.7",
@@ -112,6 +167,8 @@ describe("buildGatewaySnapshot update metadata", () => {
       channel: "dev",
     });
     expect(snapshot.updateSchedule).toBeUndefined();
+    expect(snapshot.sessionDefaults).toMatchObject({ ownership: "sole", selectionRequired: false });
+    expect(snapshot.appliedConfigHash).toBe("resolved-token:internal-applied-hash");
     expect(getUpdateScheduleMock).not.toHaveBeenCalled();
   });
 
@@ -135,7 +192,11 @@ describe("buildGatewaySnapshot update metadata", () => {
     getUpdateAvailableMock.mockReturnValue(updateAvailable);
     getUpdateScheduleMock.mockReturnValue(updateSchedule);
 
-    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: true });
+    const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
+      includeUpdateDetails: true,
+      revisionProjector,
+    });
 
     expect(snapshot.updateAvailable).toBe(updateAvailable);
     expect(snapshot.updateSchedule).toBe(updateSchedule);
@@ -149,8 +210,8 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("does not let a post-connect passive refresh absorb an explicit probe", async () => {
     const healthState = await loadHealthState();
-    const passiveDeferred = createDeferredHealthSummary();
-    const probeDeferred = createDeferredHealthSummary();
+    const passiveDeferred = createDeferred<HealthSummary>();
+    const probeDeferred = createDeferred<HealthSummary>();
     const passiveSummary = createHealthSummary();
     const probeSummary = createHealthSummary();
     const broadcast = vi.fn();
@@ -191,8 +252,8 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("publishes both generations in order when the passive refresh finishes first", async () => {
     const healthState = await loadHealthState();
-    const passiveDeferred = createDeferredHealthSummary();
-    const probeDeferred = createDeferredHealthSummary();
+    const passiveDeferred = createDeferred<HealthSummary>();
+    const probeDeferred = createDeferred<HealthSummary>();
     const passiveSummary = createHealthSummary();
     const probeSummary = createHealthSummary();
     const broadcast = vi.fn();
@@ -222,7 +283,7 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("lets a passive refresh join an in-flight explicit probe", async () => {
     const healthState = await loadHealthState();
-    const probeDeferred = createDeferredHealthSummary();
+    const probeDeferred = createDeferred<HealthSummary>();
     const probeSummary = createHealthSummary();
     collectGatewayHealthSnapshotMock.mockImplementationOnce(() => probeDeferred.promise);
 
@@ -237,7 +298,7 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("coalesces concurrent explicit probe waiters", async () => {
     const healthState = await loadHealthState();
-    const probeDeferred = createDeferredHealthSummary();
+    const probeDeferred = createDeferred<HealthSummary>();
     const probeSummary = createHealthSummary();
     collectGatewayHealthSnapshotMock.mockImplementationOnce(() => probeDeferred.promise);
 
@@ -251,8 +312,8 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("retains a displaced passive refresh after a faster probe settles", async () => {
     const healthState = await loadHealthState();
-    const passiveDeferred = createDeferredHealthSummary();
-    const probeDeferred = createDeferredHealthSummary();
+    const passiveDeferred = createDeferred<HealthSummary>();
+    const probeDeferred = createDeferred<HealthSummary>();
     const passiveSummary = createHealthSummary();
     collectGatewayHealthSnapshotMock
       .mockImplementationOnce(() => passiveDeferred.promise)
@@ -274,9 +335,9 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("detaches an older passive refresh after a newer probe succeeds", async () => {
     const healthState = await loadHealthState();
-    const firstPassiveDeferred = createDeferredHealthSummary();
-    const probeDeferred = createDeferredHealthSummary();
-    const secondPassiveDeferred = createDeferredHealthSummary();
+    const firstPassiveDeferred = createDeferred<HealthSummary>();
+    const probeDeferred = createDeferred<HealthSummary>();
+    const secondPassiveDeferred = createDeferred<HealthSummary>();
     const firstPassiveSummary = createHealthSummary();
     const probeSummary = createHealthSummary();
     const secondPassiveSummary = createHealthSummary();
@@ -406,9 +467,9 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("keeps strength-aware admin and public refresh lanes isolated", async () => {
     const healthState = await loadHealthState();
-    const adminPassiveDeferred = createDeferredHealthSummary();
-    const publicProbeDeferred = createDeferredHealthSummary();
-    const adminProbeDeferred = createDeferredHealthSummary();
+    const adminPassiveDeferred = createDeferred<HealthSummary>();
+    const publicProbeDeferred = createDeferred<HealthSummary>();
+    const adminProbeDeferred = createDeferred<HealthSummary>();
     const adminPassiveSummary = createHealthSummary();
     const publicProbeSummary = createHealthSummary();
     const adminProbeSummary = createHealthSummary();
@@ -451,8 +512,8 @@ describe("refreshGatewayHealthSnapshot", () => {
 
   it("recovers each strength lane after rejection without discarding an older success", async () => {
     const healthState = await loadHealthState();
-    const passiveDeferred = createDeferredHealthSummary();
-    const probeDeferred = createDeferredHealthSummary();
+    const passiveDeferred = createDeferred<HealthSummary>();
+    const probeDeferred = createDeferred<HealthSummary>();
     const passiveSummary = createHealthSummary();
     const recoveredProbeSummary = createHealthSummary();
     collectGatewayHealthSnapshotMock

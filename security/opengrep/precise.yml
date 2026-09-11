@@ -965,34 +965,6 @@ rules:
             }
           }
           heredocLine = "";
-  - id: ghsa-66r7-m7xm-v49h.qqbot-outbound-media-unvalidated-local-path
-    languages:
-      - typescript
-      - javascript
-    severity: ERROR
-    message: QQBot outbound helper resolves local media paths without media-root boundary validation.
-    patterns:
-      - pattern-either:
-          - pattern: |
-              const $MEDIA = resolveQQBotLocalMediaPath(normalizePath(...));
-          - pattern: |
-              const $MEDIA = resolveQQBotLocalMediaPath($PATH);
-      - pattern-inside: |
-          export async function $FN(...){
-            ...
-          }
-      - metavariable-regex:
-          metavariable: $FN
-          regex: ^(sendPhoto|sendVoice|sendVideoMsg|sendDocument|sendMedia|sendVoiceMessage)$
-      - pattern-not-inside: |
-          const $RESOLVED = resolveOutboundMediaPath(...);
-          ...
-    metadata:
-      ghsa: GHSA-66R7-M7XM-V49H
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-66R7-M7XM-V49H
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: qqbot-outbound-media-unvalidated-local-path
   - id: ghsa-6g25-pc82-vfwp.oauth-state-reuses-pkce-verifier
     languages:
       - typescript
@@ -1589,74 +1561,118 @@ rules:
       - javascript
     message: Skill env overrides are copied into process.env without host-env safety sanitization.
     severity: ERROR
-    patterns:
-      - pattern-either:
+    mode: taint
+    pattern-sources:
+      - pattern: $CONFIG.skills.entries
+      - pattern: resolveSkillConfig(...)
+      - pattern: skillConfig.env
+      - pattern: skillConfig.apiKey
+      - pattern: $ENTRY.metadata.primaryEnv
+      - pattern: $ENTRY.metadata?.primaryEnv
+      - pattern: $SNAPSHOT.skills
+      - patterns:
+          - pattern: $PARAM.skillConfig
+      - patterns:
+          - pattern-inside: |
+              function $F(..., $ENTRY: SkillConfig, ...) { ... }
+          - pattern: $ENTRY
+    pattern-propagators:
+      - pattern: |
+          for (const [$KEY, $VALUE] of Object.entries($INPUT)) {
+            ...
+            $OUTPUT[$ANY] = $VALUE;
+            ...
+          }
+        from: $INPUT
+        to: $OUTPUT
+      - pattern: |
+          for (const [$KEY, $VALUE] of Object.entries($INPUT)) {
+            ...
+            $OUTPUT[$KEY] = $ANY;
+            ...
+          }
+        from: $INPUT
+        to: $OUTPUT
+      - pattern: $ENV[$KEY] = $VALUE
+        from: $KEY
+        to: $ENV
+      - pattern: $ENV[$KEY] = $VALUE
+        from: $VALUE
+        to: $ENV
+    pattern-sanitizers:
+      - pattern: sanitizeSkillEnvOverrides(...).allowed
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const $RESULT = sanitizeSkillEnvOverrides(...);
+              ...
+          - pattern-not-inside: |
+              const $RESULT = sanitizeSkillEnvOverrides(...);
+              ...
+              $RESULT.allowed = $OTHER;
+              ...
+          - pattern: $RESULT.allowed
+        exact: true
+    pattern-sinks:
+      - patterns:
           - pattern: |
               for (const [$KEY, $VALUE] of Object.entries($ENV)) {
                 ...
-                process.env[$KEY] = $VALUE;
+                process.env[$KEY] = $ANY;
                 ...
               }
+          - focus-metavariable: $ENV
+      - patterns:
           - pattern: |
               for (const [$KEY, $VALUE] of Object.entries($ENV)) {
                 ...
-                $UPDATES.push({ key: $KEY, ... });
-                ...
-                process.env[$KEY] = $VALUE;
+                process.env[$ANY] = $VALUE;
                 ...
               }
-      - pattern-not-inside: |
-          const $SANITIZED = sanitizeSkillEnvOverrides(...);
-          ...
-      - pattern-not-inside: |
-          const $SANITIZED = sanitizeEnvVars(...);
-          ...
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern: process.env[$KEY] = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: process.env[$KEY] = $VALUE
+          - focus-metavariable: $KEY
+      - patterns:
+          - pattern: process.env.$KEY = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: Object.assign(process.env, ..., $ENV, ...)
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern: process.env = $ENV
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern-either:
+              - pattern: $HOST[$KEY] = $VALUE
+              - pattern: $HOST.$KEY = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern: $HOST[$KEY] = $VALUE
+          - focus-metavariable: $KEY
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern: Object.assign($HOST, ..., $ENV, ...)
+          - focus-metavariable: $ENV
     metadata:
       ghsa: GHSA-82G8-464F-2MV7
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-82G8-464F-2MV7
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
+      advisory-id: GHSA-82G8-464F-2MV7
       source-rule-id: openclaw-skill-env-host-injection
-  - id: ghsa-846p-hgpv-vphc.qqbot-outbound-local-read-without-boundary-check
-    message: QQ Bot outbound local media handling reads a user-influenced path after resolveQQBotLocalMediaPath() without resolveOutboundMediaPath()/resolveQQBotPayloadLocalFilePath() boundary enforcement.
-    severity: ERROR
-    languages:
-      - typescript
-      - javascript
-    patterns:
-      - pattern-either:
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              readFileAsync($MP)
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              audioFileToSilkBase64($MP, ...)
-          - pattern: |
-              $MP = resolveQQBotLocalMediaPath(normalizePath($RAW));
-              ...
-              checkFileSize($MP)
-      - pattern-not: |
-          $RES = resolveOutboundMediaPath($RAW, ..., ...)
-          ...
-      - pattern-not: |
-          $SAFE = resolveQQBotPayloadLocalFilePath($MP)
-          ...
-      - pattern-not: |
-          if (!resolveQQBotPayloadLocalFilePath($MP)) {
-            ...
-          }
-    metadata:
-      category: security
-      technology:
-        - qqbot
-      confidence: medium
-      ghsa: GHSA-846P-HGPV-VPHC
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-846P-HGPV-VPHC
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: qqbot-outbound-local-read-without-boundary-check
+      source-file: security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.yml
   - id: ghsa-8689-gm9g-jgr6.plivo-v3-replay-key-uses-unsorted-url
     languages:
       - typescript

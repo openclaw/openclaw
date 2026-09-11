@@ -1,11 +1,8 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 // Stream message tests lock down the sanitized assistant message emitted when a
 // provider stream fails mid-response.
 import { describe, expect, it } from "vitest";
-import {
-  STREAM_ERROR_FALLBACK_TEXT,
-  buildStreamErrorAssistantMessage,
-  buildUsageWithNoCost,
-} from "./stream-message-shared.js";
+import { buildStreamErrorAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 const model = {
   api: "bedrock-converse-stream",

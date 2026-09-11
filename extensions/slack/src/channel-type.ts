@@ -1,14 +1,15 @@
 // Slack plugin module implements channel type behavior.
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { createSlackReadClient, createSlackWebClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 export type SlackConversationInfo = {
   type: "channel" | "group" | "dm" | "unknown";
@@ -83,6 +84,7 @@ export async function resolveSlackConversationInfo(params: {
     return { type: "unknown" };
   }
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const operation = params.operation ?? "read";
   const token = resolveSlackOperationToken(account, operation);
   const userToken = normalizeOptionalString(account.userToken);
@@ -157,10 +159,3 @@ export async function resolveSlackChannelType(params: {
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }
-
-export function resetSlackChannelTypeCacheForTest(): void {
-  SLACK_CONVERSATION_INFO_CACHE.clear();
-}
-
-/** @deprecated Use `resetSlackChannelTypeCacheForTest`. */
-export { resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest };

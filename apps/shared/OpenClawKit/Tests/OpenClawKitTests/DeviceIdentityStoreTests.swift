@@ -74,6 +74,30 @@ private func deviceAuthEntry(
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test func `process state root configures once before identity use`() {
+        var state = DeviceIdentityStateRootState()
+        let work = URL(fileURLWithPath: "/Users/test/.openclaw-work", isDirectory: true)
+        let other = URL(fileURLWithPath: "/Users/test/.openclaw-other", isDirectory: true)
+        let configuredWork = state.configure(work)
+        let reconfiguredWork = state.configure(work)
+        let configuredOther = state.configure(other)
+        let resolvedWork = state.resolve()
+        let configuredWorkAfterUse = state.configure(work)
+        let configuredOtherAfterUse = state.configure(other)
+        #expect(configuredWork)
+        #expect(reconfiguredWork)
+        #expect(!configuredOther)
+        #expect(resolvedWork == work)
+        #expect(configuredWorkAfterUse)
+        #expect(!configuredOtherAfterUse)
+
+        var usedDefault = DeviceIdentityStateRootState()
+        let resolvedDefault = usedDefault.resolve()
+        let configuredDefaultAfterUse = usedDefault.configure(work)
+        #expect(resolvedDefault == nil)
+        #expect(!configuredDefaultAfterUse)
+    }
+
     @Test
     func `task scoped state directories isolate concurrent identity stores`() async throws {
         let fixture = DeviceIdentityMigrationFixture()
@@ -447,9 +471,8 @@ struct DeviceIdentityStoreTests {
         let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
             databaseURL: fixture.databaseURL,
             destinationStateDirURL: fixture.destination,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
             uid: getuid())
-        #expect(coordinatorURLs.count == 2)
+        #expect(coordinatorURLs.count == 1)
         for coordinatorURL in coordinatorURLs {
             let coordinatorDirectoryMode = try #require(
                 FileManager.default.attributesOfItem(
@@ -510,6 +533,66 @@ struct DeviceIdentityStoreTests {
         #expect(try Self.scalarInt(
             fixture.databaseURL,
             "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'node'") == 1_800_000_000_123)
+    }
+
+    @Test
+    func `adopts a Node row and creates primary while the global version zero migration is pending`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        try Self.seedCanonicalSchema(fixture.databaseURL)
+        try Self.execute(fixture.databaseURL, """
+        CREATE TABLE plugin_state_entries (entry_key TEXT NOT NULL PRIMARY KEY) STRICT;
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'node', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1800000000000, 1800000000123
+        )
+        """)
+
+        let nodeIdentity = try fixture.load(profile: .node)
+        let primaryIdentity = try fixture.load()
+
+        #expect(nodeIdentity.deviceId == Self.fixtureDeviceID)
+        #expect(nodeIdentity.createdAtMs == 1_800_000_000_000)
+        #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
+        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 0)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'node'") == 1_800_000_000_123)
+        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 2)
+    }
+
+    @Test
+    func `gateway identity failure names corrupt row and state directory without rotating it`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalSchema(fixture.databaseURL)
+        try Self.execute(fixture.databaseURL, """
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          'not-a-private-key', 1800000000000, 1800000000123
+        )
+        """)
+
+        await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            do {
+                _ = try GatewayChannelActor.loadDeviceIdentityForConnect(
+                    includeDeviceIdentity: true,
+                    profile: .primary)
+                Issue.record("corrupt identity unexpectedly loaded")
+            } catch {
+                let message = error.localizedDescription
+                #expect(message.contains("Could not access the persisted device identity"))
+                #expect(message.contains("row \"primary\""))
+                #expect(message.contains(fixture.destination.path))
+                #expect(message.contains("invalid key material"))
+            }
+        }
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT private_key_pem FROM device_identities WHERE identity_key = 'primary'") ==
+            "not-a-private-key")
     }
 
     @Test
@@ -666,6 +749,31 @@ struct DeviceIdentityStoreTests {
 
         #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
         #expect(FileManager.default.fileExists(atPath: claimURL.path))
+    }
+
+    @Test
+    func `conflicting legacy sources across directories throw detailed diagnostic`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let material1 = DeviceIdentityStore.generateMaterial()
+        let material2 = DeviceIdentityStore.generateMaterial()
+        let json1 = try String(decoding: JSONEncoder().encode(material1.identity), as: UTF8.self)
+        let json2 = try String(decoding: JSONEncoder().encode(material2.identity), as: UTF8.self)
+        let source1 = try fixture.source("source1", contents: json1)
+        let source2 = try fixture.source("source2", contents: json2)
+
+        do {
+            _ = try fixture.load(sources: [source1, source2])
+            Issue.record("Expected conflicting sources to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.contains("Legacy device identity sources conflict across"))
+            #expect(error.localizedDescription.contains(source1.identityURL.path))
+            #expect(error.localizedDescription.contains(source2.identityURL.path))
+            #expect(error.localizedDescription.contains(material1.identity.deviceId))
+            #expect(error.localizedDescription.contains(material2.identity.deviceId))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: source1.identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: source2.identityURL.path))
     }
 
     @Test

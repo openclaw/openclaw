@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BoardWidgetAppViewState, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
 
@@ -17,7 +18,7 @@ if (!customElements.get("mcp-app-view")) {
 
 type BoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
-function widget(overrides: Partial<BoardViewWidget> = {}): BoardViewWidget {
+function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
     name: "alpha",
     tabId: "main",
@@ -30,12 +31,13 @@ function widget(overrides: Partial<BoardViewWidget> = {}): BoardViewWidget {
     revision: 1,
     instanceId: "alpha-instance",
     ...overrides,
-  } as BoardViewWidget;
+  } as BoardWidget;
 }
 
 function callbacks(overrides: Partial<BoardWidgetCellCallbacks> = {}): BoardWidgetCellCallbacks {
   const noAction = vi.fn(async () => undefined);
   return {
+    appViewGeneration: () => 0,
     grant: noAction,
     movePointerDown: vi.fn(),
     resizePointerDown: vi.fn(),
@@ -63,7 +65,7 @@ function callbacks(overrides: Partial<BoardWidgetCellCallbacks> = {}): BoardWidg
 }
 
 async function mount(
-  currentWidget: BoardViewWidget,
+  currentWidget: BoardWidget,
   currentCallbacks: BoardWidgetCellCallbacks,
   active = true,
 ): Promise<BoardWidgetCell> {

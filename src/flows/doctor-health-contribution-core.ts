@@ -2,10 +2,33 @@ import type {
   DoctorHealthCheckContext,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
+import { copyHealthCheck } from "./health-check-adapter.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
+import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
+
+function reportDoctorRepairResult(
+  ctx: DoctorHealthFlowContext,
+  result: Awaited<ReturnType<typeof import("./doctor-repair-flow.js").runDoctorHealthRepairs>>,
+  findings: readonly HealthFinding[],
+  note: typeof import("../../packages/terminal-core/src/note.js").note,
+): void {
+  ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, findings);
+  recordDoctorHealthWarnings(ctx, findings, result.warnings);
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
 
 function withDoctorHealthCheckFacts<T extends object>(
   ctx: DoctorHealthFlowContext,
@@ -21,7 +44,7 @@ function withDoctorHealthCheckFacts<T extends object>(
 
 export async function runStructuredHealthRepairs(
   ctx: DoctorHealthFlowContext,
-  resolveCoreChecks: () => Promise<readonly HealthCheck[]>,
+  resolveCoreChecks: () => Promise<readonly DoctorHealthCheck[]>,
 ): Promise<void> {
   if (!ctx.prompter.shouldRepair) {
     return;
@@ -29,30 +52,25 @@ export async function runStructuredHealthRepairs(
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { listExtensionHealthChecksForDoctor } = await loadHealthCheckRegistryModule();
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks());
+  const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir, env: ctx.env });
+  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks())
+    .filter(isHealthCheckEnabledByDefault)
+    .map(copyHealthCheck);
   const result = await runDoctorHealthRepairs(
     withDoctorHealthCheckFacts(ctx, {
       mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
+      env: ctx.env,
       cwd: workspaceDir,
       configPath: ctx.configPath,
     }),
     { checks },
   );
-  ctx.cfg = result.config;
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  reportDoctorRepairResult(ctx, result, result.remainingFindings, note);
 }
 
 export async function runCoreContributionHealth(
@@ -64,8 +82,6 @@ export async function runCoreContributionHealth(
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const selectedIds = new Set(checkIds);
@@ -73,7 +89,7 @@ export async function runCoreContributionHealth(
   if (checks.length === 0) {
     return;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     withDoctorHealthCheckFacts(ctx, {
@@ -86,14 +102,7 @@ export async function runCoreContributionHealth(
     }),
     { checks, dryRun },
   );
-  ctx.cfg = result.config;
-  renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
 }
 
 function formatHealthFindings(findings: readonly HealthFinding[]): string {
@@ -119,8 +128,6 @@ export async function runCoreHealthFindingNote(
   checkId: string,
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
@@ -132,7 +139,7 @@ export async function runCoreHealthFindingNote(
       mode: "doctor" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
-      cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+      cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
       configPath: ctx.configPath,
       allowExecSecretRefs: ctx.options.allowExec === true,
     }),
@@ -140,6 +147,7 @@ export async function runCoreHealthFindingNote(
   if (findings.length === 0) {
     return;
   }
+  recordDoctorHealthWarnings(ctx, findings);
   const information = findings.filter((finding) => finding.severity === "info");
   const warnings = findings.filter((finding) => finding.severity !== "info");
   if (information.length > 0) {

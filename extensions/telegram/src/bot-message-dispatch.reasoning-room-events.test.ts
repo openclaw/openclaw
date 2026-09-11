@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
@@ -42,14 +43,6 @@ function mockTurn(
     await run(params);
     return result;
   });
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 function createGroupFixture(
@@ -97,9 +90,9 @@ function createGroupFixture(
 }
 
 function mockSupersedingRoomEvents() {
-  const firstStarted = createDeferred();
-  const firstRelease = createDeferred();
-  const secondStarted = createDeferred();
+  const firstStarted = createDeferred<void>();
+  const firstRelease = createDeferred<void>();
+  const secondStarted = createDeferred<void>();
   dispatchReplyWithBufferedBlockDispatcher
     .mockImplementationOnce(async () => {
       firstStarted.resolve();
@@ -188,7 +181,42 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _hidden_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("suppresses whitespace-form internal prefixes until one visible final", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    mockTurn(async ({ dispatcherOptions }) => {
+      for (const text of [
+        "< internal",
+        "<  internal",
+        "</ internal",
+        "< /internal",
+        "< / internal",
+        "<\u00a0internal",
+      ]) {
+        await dispatcherOptions.deliver({ text, isReasoning: true }, { kind: "block" });
+      }
+      expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await dispatcherOptions.deliver({ text: "VISIBLE" }, { kind: "final" });
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "VISIBLE",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -245,7 +273,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Before <think>literal tag text after",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -401,9 +432,9 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
   it("does not let room events supersede active user-request dispatch", async () => {
     const { context } = createGroupFixture({ commandAuthorized: true, entries: [] });
-    const firstStarted = createDeferred();
-    const firstRelease = createDeferred();
-    const roomEventStarted = createDeferred();
+    const firstStarted = createDeferred<void>();
+    const firstRelease = createDeferred<void>();
+    const roomEventStarted = createDeferred<void>();
     dispatchReplyWithBufferedBlockDispatcher
       .mockImplementationOnce(async ({ dispatcherOptions }) => {
         firstStarted.resolve();

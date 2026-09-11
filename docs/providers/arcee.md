@@ -84,7 +84,7 @@ openclaw gateway restart
 <Tabs>
   <Tab title="Direct (Arcee platform)">
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice arceeai-api-key \
       --arceeai-api-key "$ARCEEAI_API_KEY"
@@ -93,13 +93,19 @@ openclaw gateway restart
 
   <Tab title="Via OpenRouter">
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --mode local \
       --auth-choice arceeai-openrouter \
       --openrouter-api-key "$OPENROUTER_API_KEY"
     ```
   </Tab>
 </Tabs>
+
+Ordinary onboarding saves the connection without adding catalog rows to
+`models.providers.arcee.models`. Existing rows and model aliases stay in place.
+With `models.mode: "replace"`, onboarding also adds the route's catalog defaults
+because that mode disables automatic discovery. The public `applyArceeConfig`
+and `applyArceeOpenRouterConfig` helpers still add catalog defaults in every mode.
 
 ## Direct Arcee catalog
 

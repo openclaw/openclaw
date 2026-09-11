@@ -8,7 +8,6 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
-import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
@@ -16,17 +15,10 @@ import {
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
-import {
-  loadWhatsAppChannelRuntime,
-  readWhatsAppAccountLinkState,
-} from "./channel-runtime-loader.js";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
-import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import {
   isWhatsAppGroupJid,
@@ -39,9 +31,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupContract } from "./setup-core.js";
-import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
-import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
+import { createWhatsAppPluginBase } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
@@ -83,17 +73,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
     },
     base: {
-      ...createWhatsAppPluginBase({
-        groups: {
-          resolveRequireMention: resolveWhatsAppGroupRequireMention,
-          resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-        },
-        setupWizard: whatsappSetupWizardProxy,
-        setupContract: whatsappSetupContract,
-        isConfigured: (account) => Boolean(account.authDir),
-        isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
-      }),
-      agentTools: () => [createWhatsAppLoginTool()],
+      ...createWhatsAppPluginBase(),
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
@@ -211,10 +191,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             await loadWhatsAppChannelRuntime()
           ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
         },
-      },
-      lifecycle: {
-        detectLegacyStateMigrations: ({ oauthDir }) =>
-          detectWhatsAppLegacyStateMigrations({ oauthDir }),
       },
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>

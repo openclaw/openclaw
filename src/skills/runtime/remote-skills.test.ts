@@ -4,7 +4,8 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
-import { buildWorkspaceSkillSnapshot, loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import type { SkillEntry } from "../types.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -78,11 +79,11 @@ describe("node-hosted skill snapshots", () => {
       ],
     });
 
-    const entries = loadWorkspaceSkillEntries("/workspace", {
+    const entries = loadWorkspaceSkills("/workspace", {
       workspaceOnly: true,
       eligibility: { nodeSkills: { canExec: true } },
     });
-    const snapshot = buildWorkspaceSkillSnapshot("/workspace", { entries });
+    const snapshot = buildSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
     expect(snapshot.prompt).toContain("Build Mac (node-1)");
     expect(snapshot.prompt).toContain(
@@ -302,7 +303,7 @@ metadata:
     expect(warningText).toContain("BAD_INDENT");
   });
 
-  it("replaces a node catalog and invalidates the snapshot", () => {
+  it("replaces a changed node catalog without invalidating an identical catalog", () => {
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
@@ -313,6 +314,36 @@ metadata:
       skills: [{ name: "first", description: "First", content: content("first", "First") }],
     });
     const firstVersion = getSkillsSnapshotVersion();
+    const firstSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
+    expect(firstSkill.contentHash).toEqual(expect.any(String));
+
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [{ name: "first", description: "First", content: content("first", "First") }],
+    });
+    expect(getSkillsSnapshotVersion()).toBe(firstVersion);
+    expect(mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill.contentHash).toBe(
+      firstSkill.contentHash,
+    );
+
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [
+        {
+          name: "first",
+          description: "First",
+          content: content("first", "First", "# Changed instructions"),
+        },
+      ],
+    });
+    const changedSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
+    expect(changedSkill).toMatchObject({
+      name: firstSkill.name,
+      description: firstSkill.description,
+      filePath: firstSkill.filePath,
+    });
+    expect(changedSkill.contentHash).not.toBe(firstSkill.contentHash);
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(firstVersion);
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

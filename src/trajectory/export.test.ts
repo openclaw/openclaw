@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
+import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   replaceSessionEntry,
@@ -187,7 +188,7 @@ function writeToolCallOnlySessionFile(sessionFile: string): void {
   );
 }
 
-function writeToolCallSessionFile(sessionFile: string): void {
+function writeToolCallSessionFile(sessionFile: string, toolResultText = "README contents"): void {
   const header = {
     type: "session",
     version: 3,
@@ -226,7 +227,7 @@ function writeToolCallSessionFile(sessionFile: string): void {
       id: "entry-tool-result",
       parentId: "entry-tool-call",
       timestamp: "2026-04-01T05:46:42.000Z",
-      message: toolResultMessage([{ type: "text", text: "README contents" }]),
+      message: toolResultMessage([{ type: "text", text: toolResultText }]),
     },
     {
       type: "message",
@@ -493,6 +494,45 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
 
+  it("exports logical-agent runtime events from a shared physical store", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "shared.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
+      { sessionId: "unrelated", updatedAt: 1 },
+    );
+    const target = {
+      agentId: "ops",
+      sessionKey: "agent:ops:trace",
+      sessionId: "session-1",
+      storePath,
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    appendSqliteTrajectoryRuntimeEvents(
+      target,
+      runtimeAttemptEvents([
+        ["session.started", "ops-run"],
+        ["session.ended", "ops-run", { status: "success" }],
+      ]),
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionTarget: target,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      workspaceDir: tmpDir,
+    });
+    expect(bundle.manifest.runtimeEventCount).toBe(2);
+    expect(
+      bundle.events.filter((event) => event.source === "runtime").map((event) => event.type),
+    ).toEqual(["session.started", "session.ended"]);
+    expect(
+      bundle.events
+        .filter((event) => event.source === "runtime")
+        .every((event) => event.runId === "ops-run"),
+    ).toBe(true);
+  });
+
   it("does not synthesize prompt files from export-time fallbacks", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -544,6 +584,43 @@ describe("exportTrajectoryBundle", () => {
 
     expect(eventTypes(bundle.events)).toContain("partial-target-runtime");
     expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
+  });
+
+  it("keeps runtime timestamp validation on the Date.parse string contract", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvents: TrajectoryEvent[] = [
+      { ts: "2026", type: "date-compatible" },
+      { ts: "999999", type: "numeric-milliseconds-only" },
+    ].map(({ ts, type }, index) => ({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type,
+      ts,
+      seq: index + 1,
+      sourceSeq: index + 1,
+      sessionId: "session-1",
+    }));
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(eventTypes(bundle.events)).toContain("date-compatible");
+    expect(eventTypes(bundle.events)).not.toContain("numeric-milliseconds-only");
   });
 
   it("rejects an incomplete target that conflicts with a legacy marker", async () => {
@@ -726,6 +803,50 @@ describe("exportTrajectoryBundle", () => {
 
     expect(artifacts).toBeUndefined();
   });
+
+  it.each(["evidence-line-1", '{"project":"Orion","ready":true}'])(
+    "preserves paginated read evidence beginning with %s in exported trajectory events",
+    async (firstLine) => {
+      const tmpDir = makeTempDir();
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const sourceFile = path.join(tmpDir, "evidence.txt");
+      const outputDir = path.join(tmpDir, "bundle");
+      fs.writeFileSync(
+        sourceFile,
+        `${[firstLine, ...Array.from({ length: 14 }, (_, index) => `evidence-line-${index + 2}`)].join("\n")}\n`,
+        "utf8",
+      );
+      const readResult = await createReadTool(tmpDir).execute("call_1", {
+        path: "evidence.txt",
+        offset: 1,
+        limit: 3,
+      });
+      const resultText = readResult.content.find((part) => part.type === "text")?.text;
+      expect(resultText).toContain("[12 more lines in file. Use offset=4 to continue.]");
+      writeToolCallSessionFile(sessionFile, expectDefined(resultText, "read result text"));
+
+      await exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      });
+
+      const exportedEvents = fs
+        .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
+        .trim()
+        .split(/\r?\n/u)
+        .map((line) => JSON.parse(line) as TrajectoryEvent);
+      const toolResult = exportedEvents.find((event) => event.type === "tool.result");
+
+      expect(toolResult?.data).toMatchObject({
+        message: {
+          isError: false,
+          content: [{ type: "text", text: resultText }],
+        },
+      });
+    },
+  );
 
   it("preserves numeric transcript timestamps", async () => {
     const tmpDir = makeTempDir();

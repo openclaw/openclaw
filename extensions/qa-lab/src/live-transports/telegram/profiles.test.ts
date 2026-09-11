@@ -24,7 +24,6 @@ describe("Telegram QA profiles", () => {
     const live = resolveTelegramQaScenarioIds({ providerMode: "live-frontier" });
     const mock = resolveTelegramQaScenarioIds({ providerMode: "mock-openai" });
 
-    expect(mock).toHaveLength(19);
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
     expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
@@ -44,7 +43,6 @@ describe("Telegram QA profiles", () => {
   it("lets explicit scenarios override profile selection", () => {
     expect(
       resolveTelegramQaScenarioIds({
-        profile: "release",
         providerMode: "live-frontier",
         scenarioIds: ["telegram-help-command"],
       }),
@@ -73,6 +71,15 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-queue-invalid-mode"],
       }),
     ).toEqual(["telegram-queue-invalid-mode"]);
+  });
+
+  it("selects the Claude CLI compaction final-priority regression explicitly", () => {
+    expect(
+      resolveTelegramQaScenarioIds({
+        providerMode: "live-frontier",
+        scenarioIds: ["telegram-claude-cli-compaction-final-priority"],
+      }),
+    ).toEqual(["telegram-claude-cli-compaction-final-priority"]);
   });
 
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {

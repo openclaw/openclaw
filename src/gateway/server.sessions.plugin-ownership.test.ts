@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -115,6 +116,7 @@ test("sessions.reset rechecks plugin ownership inside lifecycle admission", asyn
     key: sessionKey,
     reason: "reset",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
     authorizedPluginId: "memory-core",
     assertCurrent: () => {
       if (replaced) {
@@ -196,10 +198,7 @@ test("sessions.patch rechecks plugin ownership after waiting for lifecycle admis
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const mutation = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],
@@ -249,7 +248,11 @@ test("sessions.delete protects the archived session generation from a replacemen
 
   const archived = await directSessionReq<{
     entry: { sessionId: string; lifecycleRevision?: string };
-  }>("sessions.patch", { key: sessionKey, archived: true }, { client: pluginClient });
+  }>(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: originalSessionId },
+    { client: pluginClient },
+  );
 
   expect(archived.ok, JSON.stringify(archived.error)).toBe(true);
   expect(archived.payload?.entry.sessionId).toBe(originalSessionId);

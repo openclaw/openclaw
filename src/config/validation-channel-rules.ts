@@ -7,6 +7,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+import type { ChannelDmPolicyMetadata } from "./channel-config-metadata.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   type DmPolicyAllowFromViolation,
@@ -132,7 +133,9 @@ export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawCo
  */
 export function collectChannelDmPolicyDependencyWarnings(
   config: OpenClawConfig,
-  options: { dmAllowFromModes?: ReadonlyMap<string, ChannelDmAllowFromMode> } = {},
+  options: {
+    dmPolicyMetadata?: ReadonlyMap<string, ChannelDmPolicyMetadata>;
+  } = {},
 ): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -146,7 +149,9 @@ export function collectChannelDmPolicyDependencyWarnings(
     ) {
       continue;
     }
-    const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
+    const metadata = options.dmPolicyMetadata?.get(channelId);
+    const mode: ChannelDmAllowFromMode = metadata?.dmAllowFromMode ?? "topOnly";
+    const openDmRequiresAllowFromWildcard = metadata?.openDmRequiresAllowFromWildcard !== false;
     if (mode === "nestedOnly") {
       continue;
     }
@@ -154,7 +159,10 @@ export function collectChannelDmPolicyDependencyWarnings(
       policy: resolveChannelDmPolicy({ account: channelValue, mode }),
       allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
     });
-    if (channelViolation) {
+    if (
+      channelViolation &&
+      (channelViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
+    ) {
       warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
     }
     if (!isRecord(channelValue.accounts)) {
@@ -171,7 +179,10 @@ export function collectChannelDmPolicyDependencyWarnings(
         policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
         allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
       });
-      if (accountViolation) {
+      if (
+        accountViolation &&
+        (accountViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
+      ) {
         warnings.push(
           buildDmPolicyDependencyWarning({
             channelId,

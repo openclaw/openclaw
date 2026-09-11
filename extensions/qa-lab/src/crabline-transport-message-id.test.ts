@@ -20,7 +20,7 @@ const PROVIDER_CASES = [
     channel: "matrix",
     conversation: { id: "main", kind: "group" },
     senderId: "driver",
-    nativeMessageId: /^\$[a-f0-9]{16}:matrix\.test$/u,
+    nativeMessageId: /^\$[A-Za-z0-9_-]{43}$/u,
   },
 ] as const;
 
@@ -33,10 +33,10 @@ describe("Crabline provider-native inbound message identity", () => {
         const transport = await createQaCrablineTransportAdapter({
           outputDir,
           selection: {
-            capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
             channel,
             channelDriver: "crabline",
-            smokeArtifactPath: "crabline-fake-provider-smoke.json",
+            providerReadinessArtifactPath: "crabline-provider-readiness.json",
           },
           state: busState,
         });
@@ -71,7 +71,7 @@ describe("Crabline provider-native inbound message identity", () => {
             id: inbound.id,
           });
         } finally {
-          await transport.cleanup?.();
+          await transport.cleanupAfterGatewayStop?.();
         }
       });
     },
@@ -84,10 +84,10 @@ describe("Crabline provider-native inbound message identity", () => {
         await createQaCrablineTransportAdapter({
           outputDir: `${outputDir}/${name}`,
           selection: {
-            capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
             channel: "telegram",
             channelDriver: "crabline",
-            smokeArtifactPath: "crabline-fake-provider-smoke.json",
+            providerReadinessArtifactPath: "crabline-provider-readiness.json",
           },
           state: busState,
         });
@@ -132,10 +132,10 @@ describe("Crabline provider-native inbound message identity", () => {
             `qa-bus message id is ambiguous for selected account: ${first.id}`,
           );
         } finally {
-          await secondTransport.cleanup?.();
+          await secondTransport.cleanupAfterGatewayStop?.();
         }
       } finally {
-        await firstTransport.cleanup?.();
+        await firstTransport.cleanupAfterGatewayStop?.();
       }
     });
   });

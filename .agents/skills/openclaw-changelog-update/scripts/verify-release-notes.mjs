@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -20,7 +21,7 @@ import {
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
   verifyGithubReleaseNotes,
-} from "../../../../scripts/render-github-release-notes.mjs";
+} from "../../../../scripts/render-github-release-notes.mts";
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
@@ -32,6 +33,7 @@ const excludedHandles = new Set([
   "claude",
   "codex",
   "hugin-bot",
+  "roboclaw-bot",
   "steipete",
   "steipete-oai",
 ]);
@@ -78,7 +80,7 @@ function fail(message) {
 
 function printUsage() {
   console.log(`Usage:
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
     --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
 
 Required:
@@ -96,6 +98,8 @@ Options:
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
+  --release-provenance <sha -> #PR[, #PR]>
+                        Supply an exact provenance marker; repeatable.
   --write-ledger        Write the verified ledger back into CHANGELOG.md.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
@@ -103,9 +107,10 @@ Options:
   --help                Show this help text.`);
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     releaseTags: [],
+    releaseProvenance: [],
     checkGithub: false,
     help: false,
     json: false,
@@ -150,6 +155,7 @@ function parseArgs(argv) {
       arg === "--target" ||
       arg === "--version" ||
       arg === "--release-tag" ||
+      arg === "--release-provenance" ||
       arg === "--shipped-ref" ||
       arg === "--github-snapshot" ||
       arg === "--main-ref" ||
@@ -162,6 +168,8 @@ function parseArgs(argv) {
       }
       if (arg === "--release-tag") {
         options.releaseTags.push(value);
+      } else if (arg === "--release-provenance") {
+        options.releaseProvenance.push(value);
       } else if (arg === "--shipped-ref") {
         options.shippedRefs.push(value);
       } else if (arg === "--manifest") {
@@ -262,9 +270,7 @@ function gitCommit(ref, required = false) {
 
 function fetchGithubApi(args) {
   try {
-    return JSON.parse(
-      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(ansiEscapePattern, ""),
-    );
+    return JSON.parse(run("gh", ["api", ...args]).replace(ansiEscapePattern, ""));
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
       return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
@@ -429,12 +435,16 @@ function githubHandleFromNoreply(email) {
 }
 
 function editorialClassification(subject) {
-  const type = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?!?:/i)?.[1]?.toLowerCase();
+  const conventional = subject.match(/^\s*([a-z]+)(?:\(([^)]*)\))?(!)?:/i);
+  const type = conventional?.[1]?.toLowerCase();
   return {
+    // Declared type/scope outrank ambiguous prose such as "doc" or "build".
+    // Breaking changes still need migration notes even for internal scopes.
     editorialEligible:
-      (Boolean(type) || editorialTitlePattern.test(subject)) &&
-      !nonEditorialTypes.has(type) &&
-      !nonEditorialTitlePattern.test(subject),
+      Boolean(conventional?.[3]) ||
+      ((Boolean(type) || editorialTitlePattern.test(subject)) &&
+        !nonEditorialTypes.has(type) &&
+        !nonEditorialTitlePattern.test(conventional ? (conventional[2] ?? "") : subject)),
     type: type ?? "other",
   };
 }
@@ -472,28 +482,28 @@ function sectionFor(changelog, version) {
 }
 
 function referencesIn(text) {
-  const references = [];
-  for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
-  )) {
-    const qualifiedRepository = match.groups?.owner
-      ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
-      : undefined;
-    if (!qualifiedRepository || qualifiedRepository === repo) {
-      references.push(Number(match.groups?.number));
-    }
-  }
-  return references;
+  return referenceLabelsIn(text)
+    .filter((reference) => reference.startsWith("#"))
+    .map((reference) => Number(reference.slice(1)));
 }
 
 function referenceLabelsIn(text) {
+  const hexColor = String.raw`#(?:[A-Fa-f0-9]{8}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{3})(?![A-Za-z0-9_])`;
+  // Mask only custom-property color values/transitions, never the rest of a line:
+  // a following issue ref must still participate in release attribution.
+  const source = text.replace(
+    new RegExp(
+      String.raw`--[\w-]+(?:[ \t]*:[ \t]*|[ \t]+)${hexColor}(?:[ \t]*(?:->|→)[ \t]*${hexColor})*`,
+      "g",
+    ),
+    " ",
+  );
   const labels = [];
-  for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+  // Issue ids are complete positive decimal tokens, not hex prefixes or zero-padded colors.
+  for (const match of source.matchAll(
+    /(?<![A-Za-z0-9_.&-])(?<repository>[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#(?<number>[1-9]\d*)(?![A-Za-z0-9_])/g,
   )) {
-    const qualifiedRepository = match.groups?.owner
-      ? `${match.groups.owner}/${match.groups.name}`
-      : undefined;
+    const qualifiedRepository = match.groups?.repository;
     labels.push(
       !qualifiedRepository || qualifiedRepository.toLowerCase() === repo
         ? `#${match.groups?.number}`
@@ -571,6 +581,98 @@ export function standardRevertedHash(message) {
     return revertedHash;
   }
   return undefined;
+}
+
+function verifiedMultiRevertedHashes(hash, subject, body) {
+  if (!/^(?:[a-z][a-z0-9-]*(?:\([^)]+\))?!?:\s*)?revert\b/i.test(subject)) {
+    return [];
+  }
+  const declarations = body
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .map((paragraph) =>
+      paragraph.match(
+        /^Reverts ([0-9a-f]{40}(?:, [0-9a-f]{40})*(?:,? and [0-9a-f]{40}))(?:\.| to restore the previous behavior\.)$/i,
+      ),
+    )
+    .filter(Boolean);
+  if (declarations.length !== 1) {
+    return [];
+  }
+  const targets = declarations[0][1].toLowerCase().match(/[0-9a-f]{40}/g);
+  if (new Set(targets).size !== targets.length) {
+    return [];
+  }
+
+  let temporaryDirectory;
+  try {
+    const parents = git(["rev-list", "--parents", "-n", "1", hash]).split(/\s+/);
+    if (parents.length !== 2) {
+      throw new Error("the revert must have exactly one parent");
+    }
+    const parent = parents[1];
+    for (const target of targets) {
+      if (gitCommit(target) !== target || !gitIsAncestor(target, parent)) {
+        throw new Error(`target ${target} must be an existing ancestor of the revert parent`);
+      }
+      if (git(["rev-list", "--parents", "-n", "1", target]).split(/\s+/).length !== 2) {
+        throw new Error(`target ${target} must have exactly one parent`);
+      }
+    }
+    const orderedTargets = git(["rev-list", "--topo-order", parent])
+      .split("\n")
+      .filter((candidate) => targets.includes(candidate));
+    const originalObjects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]);
+    temporaryDirectory = mkdtempSync(path.join(tmpdir(), "openclaw-release-revert-"));
+    const objects = path.join(temporaryDirectory, "objects");
+    mkdirSync(objects);
+    const env = {
+      ...process.env,
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+      GIT_OBJECT_DIRECTORY: objects,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+        JSON.stringify(originalObjects),
+        process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
+    };
+    const privateGit = (args, input) =>
+      execFileSync(
+        "git",
+        ["-c", `core.hooksPath=${path.join(temporaryDirectory, "hooks")}`, ...args],
+        { env, input, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    privateGit(["read-tree", parent]);
+    for (const target of orderedTargets) {
+      // Keep patch bytes intact; text decoding corrupts binary/non-UTF-8 reversals.
+      const patch = privateGit([
+        "diff-tree",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "-p",
+        `${target}^`,
+        target,
+      ]);
+      privateGit(["apply", "--cached", "--reverse", "--whitespace=nowarn", "-"], patch);
+    }
+    const reversedTree = privateGit(["write-tree"]).toString("utf8").trim();
+    if (reversedTree !== git(["rev-parse", `${hash}^{tree}`])) {
+      throw new Error("declared inverse patches do not reproduce the complete revert tree");
+    }
+    return targets;
+  } catch (error) {
+    fail(`could not verify explicit multi-commit revert ${hash}: ${error.message}`);
+  } finally {
+    if (temporaryDirectory) {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
 }
 
 function handlesIn(text) {
@@ -678,7 +780,7 @@ export function contributionRecordTarget(section) {
 }
 
 export function pullRequestTitleFromCommitSubject(subject, number) {
-  const match = subject.match(/^(?<title>\S(?:.*\S)?) \(#(?<number>[1-9]\d*)\)$/u);
+  const match = subject.match(/^(?<title>\S(?:.*\S)?)(?<! \(#\d+\)) \(#(?<number>[1-9]\d*)\)$/u);
   return match?.groups?.number === String(number) ? match.groups.title : undefined;
 }
 
@@ -808,17 +910,26 @@ export function contaminatingPullRequestReferences({
   nodes,
 }) {
   const allowed = new Set([...sourcePullRequests, ...seededPullRequests]);
+  const allowedEditorial = new Set(allowed);
   for (const number of sourceReferences) {
     if (nodes.get(number)?.__typename === "PullRequest") {
-      allowed.add(number);
+      allowedEditorial.add(number);
     }
   }
   const effectiveRecordedReferences = recordedReferences.filter(
     (number) => !excludedRecordedReferences.has(number),
   );
-  return [...new Set([...noteReferences, ...effectiveRecordedReferences])].filter(
-    (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
-  );
+  return [
+    ...new Set([
+      ...noteReferences.filter(
+        (number) =>
+          nodes.get(number)?.__typename === "PullRequest" && !allowedEditorial.has(number),
+      ),
+      ...effectiveRecordedReferences.filter(
+        (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
+      ),
+    ]),
+  ];
 }
 
 function appendReferences(references, additions) {
@@ -833,7 +944,7 @@ function appendReferences(references, additions) {
 
 function normalizedCommitSubject(subject) {
   return subject
-    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/(?:\s+\(#\d+\))+\s*$/, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -851,38 +962,47 @@ function backportPullRequestOrigins(message) {
   ].map((match) => Number(match[1]));
 }
 
-export function releaseProvenanceMarkers(message) {
-  const markers = [];
-  for (const line of message.split("\n")) {
-    if (!/^Release provenance:/i.test(line)) {
-      continue;
-    }
-    const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
-    if (!match) {
-      fail(`invalid release provenance marker: ${line}`);
-    }
-    markers.push({
-      commit: match[1].toLowerCase(),
-      pullRequests: [...match[2].matchAll(/#(\d+)/g)].map((reference) => Number(reference[1])),
-    });
+function releaseProvenanceMarker(line) {
+  const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
+  if (!match) {
+    fail(`invalid release provenance marker: ${line}`);
   }
-  return markers;
+  return {
+    commit: match[1].toLowerCase(),
+    pullRequests: [...match[2].matchAll(/#(\d+)/g)].map((reference) => Number(reference[1])),
+  };
 }
 
-export function collectReleaseProvenanceOverrides(activeCommits) {
+export function releaseProvenanceMarkers(message) {
+  return message
+    .split("\n")
+    .filter((line) => /^Release provenance:/i.test(line))
+    .map(releaseProvenanceMarker);
+}
+
+export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenance = []) {
   const activeCommitHashes = new Set(activeCommits.map((commit) => commit.hash));
   const overrides = new Map();
+  const addMarker = (marker) => {
+    if (!activeCommitHashes.has(marker.commit)) {
+      fail(`release provenance marker targets commit outside the active range: ${marker.commit}`);
+    }
+    const existing = overrides.get(marker.commit);
+    if (existing && existing.join(",") !== marker.pullRequests.join(",")) {
+      fail(`conflicting release provenance markers for ${marker.commit}`);
+    }
+    overrides.set(marker.commit, marker.pullRequests);
+  };
   for (const commit of activeCommits) {
     for (const marker of releaseProvenanceMarkers(commit.body)) {
-      if (!activeCommitHashes.has(marker.commit)) {
-        fail(`release provenance marker targets commit outside the active range: ${marker.commit}`);
-      }
-      const existing = overrides.get(marker.commit);
-      if (existing && existing.join(",") !== marker.pullRequests.join(",")) {
-        fail(`conflicting release provenance markers for ${marker.commit}`);
-      }
-      overrides.set(marker.commit, marker.pullRequests);
+      addMarker(marker);
     }
+  }
+  for (const value of releaseProvenance) {
+    if (/[\r\n]/u.test(value)) {
+      fail(`invalid release provenance marker: Release provenance: ${value}`);
+    }
+    addMarker(releaseProvenanceMarker(`Release provenance: ${value}`));
   }
   return overrides;
 }
@@ -1017,8 +1137,11 @@ function canonicalMainCommits(base, mainRef) {
   return commits;
 }
 
-function sourceCommits(base, target, mainRef) {
+function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
+  const targetHistory = new Set(git(["rev-list", targetCommit]).split("\n"));
+  const mainCommit = mainRef ? gitCommit(mainRef, true) : undefined;
+  const mainHistory = mainCommit ? new Set(git(["rev-list", mainCommit]).split("\n")) : new Set();
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
@@ -1029,11 +1152,23 @@ function sourceCommits(base, target, mainRef) {
   }
   const output = git([
     "log",
-    "--first-parent",
+    // Merged side branches carry source PRs too; first-parent hides their credit.
+    "--topo-order",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,
   ]);
+  const revertedTargetsByCommit = new Map();
+  const revertedHashesFor = (hash, subject, body) => {
+    if (!revertedTargetsByCommit.has(hash)) {
+      const standard = standardRevertedHash(body);
+      revertedTargetsByCommit.set(
+        hash,
+        standard ? [standard] : verifiedMultiRevertedHashes(hash, subject, body),
+      );
+    }
+    return revertedTargetsByCommit.get(hash);
+  };
   const commits = new Map();
   const revertsByTarget = new Map();
   for (const record of output.split("\x1e")) {
@@ -1044,8 +1179,8 @@ function sourceCommits(base, target, mainRef) {
       record.split("\x1f");
     const hash = rawHash.trim();
     const body = bodyParts.join("\x1f");
-    const revertedHash = standardRevertedHash(body);
-    const isRevert = Boolean(revertedHash) || subject.startsWith('Revert "');
+    const revertedHashes = revertedHashesFor(hash, subject, body);
+    const isRevert = revertedHashes.length > 0 || subject.startsWith('Revert "');
     commits.set(hash, {
       authorEmail,
       authorName,
@@ -1053,21 +1188,20 @@ function sourceCommits(base, target, mainRef) {
       committedAt,
       hash,
       isRevert,
-      revertedHash,
+      revertedHashes,
       subject,
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.revertedHash) {
-      continue;
-    }
-    const targetHash = [...commits.keys()].find((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetHash) {
-      const reverts = revertsByTarget.get(targetHash) ?? [];
-      reverts.push(commit.hash);
-      revertsByTarget.set(targetHash, reverts);
+    for (const revertedHash of commit.revertedHashes) {
+      const targetHash = [...commits.keys()].find((candidate) =>
+        candidate.startsWith(revertedHash),
+      );
+      if (targetHash) {
+        const reverts = revertsByTarget.get(targetHash) ?? [];
+        reverts.push(commit.hash);
+        revertsByTarget.set(targetHash, reverts);
+      }
     }
   }
   const active = new Map();
@@ -1081,7 +1215,7 @@ function sourceCommits(base, target, mainRef) {
     return value;
   }
   const revertedCommitStates = new Map();
-  function revertedCommitState(ref, seen = new Set()) {
+  function revertedCommitStatesFor(ref, seen = new Set()) {
     let hash;
     try {
       hash = git(["rev-parse", `${ref}^{commit}`]);
@@ -1100,13 +1234,16 @@ function sourceCommits(base, target, mainRef) {
     const [subject, ...bodyParts] = commitOutput.split("\x1f");
     const body = bodyParts.join("\x1f");
     const message = `${subject}\n${body}`;
-    const revertedHash = standardRevertedHash(body);
-    const targetState = revertedHash ? revertedCommitState(revertedHash, seen) : undefined;
-    const state = targetState
-      ? { ...targetState, depth: targetState.depth + 1 }
-      : { depth: 0, hash, references: referencesIn(message) };
-    revertedCommitStates.set(hash, state);
-    return state;
+    const targets = revertedHashesFor(hash, subject, body);
+    const targetStates = targets.flatMap(
+      (target) => revertedCommitStatesFor(target, new Set(seen)) ?? [],
+    );
+    const states =
+      targetStates.length > 0
+        ? targetStates.map((state) => ({ ...state, depth: state.depth + 1 }))
+        : [{ depth: 0, hash, references: referencesIn(message) }];
+    revertedCommitStates.set(hash, states);
+    return states;
   }
 
   const references = [];
@@ -1168,34 +1305,31 @@ function sourceCommits(base, target, mainRef) {
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.isRevert || !commit.revertedHash || !isActive(commit.hash)) {
+    if (!commit.isRevert || !isActive(commit.hash)) {
       continue;
     }
-    const targetInRange = [...commits.keys()].some((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetInRange) {
-      continue;
-    }
-    const revertedState = revertedCommitState(commit.revertedHash);
-    if (!revertedState) {
-      continue;
-    }
-    if (revertedState.depth % 2 !== 0) {
-      continue;
-    }
-    revertedCommitHashes.add(revertedState.hash);
-    for (const number of revertedState.references) {
-      revertedReferences.add(number);
+    for (const revertedHash of commit.revertedHashes) {
+      if ([...commits.keys()].some((candidate) => candidate.startsWith(revertedHash))) {
+        continue;
+      }
+      for (const state of revertedCommitStatesFor(revertedHash) ?? []) {
+        if (state.depth % 2 !== 0) {
+          continue;
+        }
+        revertedCommitHashes.add(state.hash);
+        for (const number of state.references) {
+          revertedReferences.add(number);
+        }
+      }
     }
   }
   const activePullRequests = resolveAssociatedPullRequests(
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
+    targetHistory,
   );
-  const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits);
-  const mainCommits = canonicalMainCommits(base, mainRef);
-  const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
+  const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits, releaseProvenance);
+  const mainCommits = canonicalMainCommits(base, mainCommit);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
@@ -1259,6 +1393,7 @@ function sourceCommits(base, target, mainRef) {
   const candidateMainPullRequests = resolveAssociatedPullRequests(
     [...mainAssociationCandidateHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
@@ -1286,6 +1421,7 @@ function sourceCommits(base, target, mainRef) {
   const canonicalMainPullRequests = resolveAssociatedPullRequests(
     [...canonicalMainHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
@@ -1342,6 +1478,7 @@ function sourceCommits(base, target, mainRef) {
   for (const revertedPullRequestNumbers of resolveAssociatedPullRequests(
     [...revertedCommitHashes],
     targetTimestamp,
+    new Set([...targetHistory, ...mainHistory]),
   ).values()) {
     for (const number of revertedPullRequestNumbers) {
       revertedPullRequests.add(number);
@@ -1380,6 +1517,7 @@ function sourceCommits(base, target, mainRef) {
     revertedReferences,
     target: targetCommit,
     targetTimestamp,
+    targetHistory,
   };
 }
 
@@ -1405,7 +1543,7 @@ function graphql(query) {
       const message = [error?.message, error?.stdout, error?.stderr].filter(Boolean).join("\n");
       // Historical ranges batch hundreds of objects; only retry transient transport failures.
       if (
-        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
+        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|unexpected EOF|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
           message,
         )
       ) {
@@ -1417,7 +1555,7 @@ function graphql(query) {
   throw lastError;
 }
 
-function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
+function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
   const pullRequestsByCommit = new Map();
   const pending = [];
   function appendPullRequests(commitHash, connection) {
@@ -1429,6 +1567,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
+        history.has(pullRequest.mergeCommit?.oid) &&
         (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
@@ -1560,10 +1699,54 @@ function resolveIssueRelationshipPages(nodes) {
   return nodes;
 }
 
+function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
+  const candidates = new Set();
+  const required = new Set([...requiredReferences, ...source.pullRequests]);
+  for (const commit of source.activeCommits) {
+    if (commit.isRevert) {
+      continue;
+    }
+    const message = `${commit.subject}\n${commit.body}`;
+    // Mask only explicitly labelled, unqualified occurrences. The same number
+    // anywhere else remains an issue/PR requirement, even in a different commit.
+    const remaining = message.replace(
+      /(?<![A-Za-z0-9_])(?:CI(?:[ \t]+run)?|Actions[ \t]+run|workflow[ \t]+run)[ \t]+#([1-9]\d*)(?![A-Za-z0-9_])/gi,
+      (_match, number) => {
+        candidates.add(Number(number));
+        return " ";
+      },
+    );
+    for (const number of referencesIn(remaining)) {
+      required.add(number);
+    }
+  }
+  const runs = [];
+  for (const number of candidates) {
+    if (!source.references.includes(number) || nodes.has(number) || required.has(number)) {
+      continue;
+    }
+    const run = githubApi([`repos/${repo}/actions/runs/${number}`]);
+    if (run?.id === number && run.repository?.full_name === repo) {
+      runs.push({ id: number, repository: repo });
+    }
+  }
+  const runIds = new Set(runs.map((run) => run.id));
+  source.references = source.references.filter((number) => !runIds.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !runIds.has(number));
+  }
+  for (const number of runIds) {
+    source.coauthorsByReference.delete(number);
+  }
+  return runs;
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
-  for (let index = 0; index < numbers.length; index += 40) {
-    const chunk = numbers.slice(index, index + 40);
+  // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
+  const issueNumbers = numbers.filter((number) => number <= 2147483647);
+  for (let index = 0; index < issueNumbers.length; index += 40) {
+    const chunk = issueNumbers.slice(index, index + 40);
     const fields = chunk
       .map(
         (number) => `n${number}: repository(owner: "openclaw", name: "openclaw") {
@@ -2024,11 +2207,11 @@ export function ledgerFor(
   priorRecord,
   sourcePullRequests,
   sourceReferences,
-  noteReferences,
   legacyIssuePullRequests,
   revertedReferences,
   shippedBaselines,
   targetTimestamp,
+  targetHistory,
 ) {
   const entries = references.map((number) => {
     const node = nodes.get(number);
@@ -2046,10 +2229,20 @@ export function ledgerFor(
     };
   });
 
-  const recordedPullRequests = new Set([
+  // A resolved reference supplies context; only shipped graph evidence supplies membership.
+  const inRangePullRequestNumbers = new Set([
     ...sourcePullRequests,
-    ...sourceReferences,
-    ...noteReferences,
+    ...[...sourceReferences].filter((number) => {
+      const node = nodes.get(number);
+      return (
+        node?.__typename === "PullRequest" &&
+        targetHistory.has(node.mergeCommit?.oid) &&
+        mergedByTarget(node.mergedAt, targetTimestamp)
+      );
+    }),
+  ]);
+  const recordedPullRequests = new Set([
+    ...inRangePullRequestNumbers,
     ...legacyIssuePullRequests,
     ...priorRecord.pullRequests.keys(),
   ]);
@@ -2062,10 +2255,6 @@ export function ledgerFor(
       !revertedReferences.has(entry.number),
   );
   const issues = entries.filter((entry) => entry.type === "Issue");
-  const inRangePullRequestNumbers = new Set([
-    ...sourcePullRequests,
-    ...[...sourceReferences].filter((number) => nodes.get(number)?.__typename === "PullRequest"),
-  ]);
   const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
   const records = pullRequests.map((entry) => {
     const priorEntry = priorRecord.pullRequests.get(entry.number);
@@ -2264,23 +2453,22 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
     }
   }
   const editorialProse = section.source.slice(0, ledgerStart);
+  const editorialReferences = new Set(referencesIn(editorialProse));
   for (const entry of pullRequests) {
-    if (
-      !entry.editorialEligible &&
-      new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(editorialProse)
-    ) {
+    if (!entry.editorialEligible && editorialReferences.has(entry.number)) {
       errors.push(
         `editorial release prose references non-editorial ${entry.type} PR #${entry.number} (${entry.type})`,
       );
     }
   }
   const editorialLines = editorialProse.split("\n");
-  for (const entry of pullRequests) {
-    for (const line of editorialLines) {
-      if (
-        !new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(line) ||
-        !line.startsWith("- ")
-      ) {
+  for (const line of editorialLines) {
+    if (!line.startsWith("- ")) {
+      continue;
+    }
+    const lineReferences = new Set(referencesIn(line));
+    for (const entry of pullRequests) {
+      if (!lineReferences.has(entry.number)) {
         continue;
       }
       for (const handle of entry.thanks) {
@@ -2288,11 +2476,6 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
           errors.push(`missing editorial Thanks @${handle} for PR #${entry.number}`);
         }
       }
-    }
-  }
-  for (const line of editorialLines) {
-    if (!line.startsWith("- ")) {
-      continue;
     }
     for (const handle of directCommitCreditsForLine(line, directCommits)) {
       if (!line.toLowerCase().includes(`@${handle.toLowerCase()}`)) {
@@ -2341,6 +2524,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     mergeBase: source.mergeBase,
     version: options.version,
     shippedBaselines: source.shippedBaselines,
+    workflowRuns: source.workflowRuns,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2412,7 +2596,12 @@ function main() {
   githubSnapshotState = initializeGithubSnapshot(options);
   const changelog = readFileSync("CHANGELOG.md", "utf8");
   const section = sectionFor(changelog, options.version);
-  const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
+  const source = sourceCommits(
+    options.base,
+    options.target,
+    options.mainRef ?? "origin/main",
+    options.releaseProvenance,
+  );
   const committedSection = optionalSectionFor(
     git(["show", `${source.target}:CHANGELOG.md`]),
     options.version,
@@ -2479,27 +2668,11 @@ function main() {
         .join(", ")}`,
     );
   }
-  const references = [...source.references];
+  let references = [...source.references];
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
   let nodes = resolveReferences(references);
-  const contamination = contaminatingPullRequestReferences({
-    noteReferences,
-    recordedReferences: effectiveRenderedRecordReferences,
-    excludedRecordedReferences,
-    sourcePullRequests: source.pullRequests,
-    sourceReferences: source.references,
-    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
-    nodes,
-  });
-  if (contamination.length > 0) {
-    fail(
-      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
-        .map((number) => `#${number}`)
-        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
-    );
-  }
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
@@ -2512,6 +2685,15 @@ function main() {
     recordTarget: committedRecordTarget,
     source,
   });
+  const workflowRuns = resolveSourceWorkflowRuns(source, nodes, [
+    ...noteReferences,
+    ...effectiveRenderedRecordReferences,
+    ...recordedReferences,
+    ...legacyIssuePullRequests,
+  ]);
+  source.workflowRuns = workflowRuns;
+  const workflowRunIds = new Set(workflowRuns.map((run) => run.id));
+  references = references.filter((number) => !workflowRunIds.has(number));
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2582,12 +2764,28 @@ function main() {
     priorRecord,
     source.pullRequests,
     source.references,
-    noteReferences,
     legacyIssuePullRequests,
     source.revertedReferences,
     source.shippedBaselines,
     source.targetTimestamp,
+    source.targetHistory,
   );
+  const contamination = contaminatingPullRequestReferences({
+    noteReferences,
+    recordedReferences: options.writeLedger ? [] : [...renderedRecord.pullRequests.keys()],
+    excludedRecordedReferences,
+    sourcePullRequests: new Set(ledger.pullRequests.map((entry) => entry.number)),
+    sourceReferences: source.references,
+    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
+    nodes,
+  });
+  if (contamination.length > 0) {
+    fail(
+      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
+        .map((number) => `#${number}`)
+        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
+    );
+  }
   const manifest = manifestFor(
     { ...options, target: source.target },
     source,
@@ -2635,6 +2833,7 @@ function main() {
   }
 
   const result = {
+    workflowRuns,
     base: options.base,
     target: source.target,
     mergeBase: source.mergeBase,

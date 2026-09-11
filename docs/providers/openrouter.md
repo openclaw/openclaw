@@ -15,6 +15,26 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 ## Getting started
 
+In a private chat, send `/login openrouter` or select OpenRouter from `/login`.
+Choose **Sign in with OpenRouter**, approve access in your browser, and return
+to chat. OpenClaw receives the browser callback and saves the credential before
+reporting success. Use `/login cancel` to cancel a pending sign-in.
+
+Login saves access without choosing a starter model. If current model restrictions
+hide OpenRouter models, choose **Show all OpenRouter models** or **Keep current
+restrictions**. The credential stays saved either way. In the Control UI, use
+**Settings → Models → Connect** for the same credential-only flow, then use the
+model menu to choose a model from the Gateway's catalog.
+
+Chat browser sign-in uses the Gateway's managed [Tailscale HTTPS address](/gateway/tailscale).
+With Tailscale Serve, your browser must have access to the same tailnet. If no
+managed HTTPS address is available, enable Serve and retry, or use the CLI flow
+below. The callback does not sign you in to the Control UI.
+
+The Control UI uses hosted completion when opened at the managed HTTPS address.
+When opened through localhost or another address, it keeps manual redirect
+completion so browsers outside the tailnet can still finish setup.
+
 <Tabs>
   <Tab title="OAuth">
     <Steps>
@@ -79,10 +99,13 @@ OpenAI-compatible, so OpenClaw talks to it over the same
 
 <Note>
 Model refs follow the pattern `openrouter/<provider>/<model>`. For the full list of
-available providers and models, see [/concepts/model-providers](/concepts/model-providers).
+providers and models OpenRouter routes to, see [OpenRouter's model catalog](https://openrouter.ai/models).
+For how OpenClaw resolves model refs and failover, see [Model selection](/concepts/model-providers).
 </Note>
 
-Bundled fallback models, used when live catalog discovery is unavailable:
+Bundled starter models enrich a nonempty public catalog. A failed live request
+reports a discovery failure rather than substituting these rows; a successful
+empty response stays empty:
 
 | Model ref                         | Notes                        |
 | --------------------------------- | ---------------------------- |
@@ -115,10 +138,16 @@ under `agents.defaults.mediaModels.image`:
 }
 ```
 
-OpenClaw sends image requests to OpenRouter's chat-completions image API with
-`modalities: ["image", "text"]`. Gemini image models additionally receive
-`aspectRatio` and `resolution` hints through OpenRouter's `image_config`; other
-image models do not. Use `agents.defaults.mediaModels.image.timeoutMs` for
+OpenClaw sends canonical OpenRouter image requests to the dedicated image API
+(`POST /api/v1/images`). Gemini image models additionally receive
+`aspect_ratio` and `resolution` hints, and image edits pass source images as
+`input_references`. Generated images come back as base64 (`b64_json`) with an
+optional `media_type`; when `media_type` is absent, OpenClaw sniffs the image
+format from the bytes.
+
+Configured custom OpenRouter `baseUrl` destinations retain the existing
+chat-completions image route for compatibility with proxies that do not expose
+the dedicated endpoint. Use `agents.defaults.mediaModels.image.timeoutMs` for
 slower models; the `image_generate` tool's per-call `timeoutMs` still wins.
 
 ## Video generation
@@ -475,5 +504,17 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
+  </Card>
+  <Card title="Arcee" href="/providers/arcee" icon="server">
+    Arcee models reachable with an OpenRouter key.
+  </Card>
+  <Card title="Image generation" href="/tools/image-generation" icon="image">
+    Shared image tool parameters and provider selection.
+  </Card>
+  <Card title="Video generation" href="/tools/video-generation" icon="video">
+    Shared video tool parameters and provider selection.
+  </Card>
+  <Card title="Music generation" href="/tools/music-generation" icon="music">
+    Shared music tool parameters and provider selection.
   </Card>
 </CardGroup>

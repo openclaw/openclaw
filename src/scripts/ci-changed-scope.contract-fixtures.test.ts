@@ -9,6 +9,7 @@ describe("shared Apple contract fixture CI scope", () => {
     expect(detectChangedScope([fixturePath])).toEqual({
       runNode: true,
       runMacos: true,
+      runMacosNode: true,
       runIosBuild: false,
       runAndroid: false,
       runWindows: false,
@@ -16,6 +17,24 @@ describe("shared Apple contract fixture CI scope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
       runUiTests: false,
+    });
+  });
+
+  it.each([
+    "src/agents/github-exec-launcher.ts",
+    "src/agents/github-exec-credential.ts",
+    "src/shared/worker-bundle-hash.ts",
+    "src/worker/workspace-rsync-receiver.ts",
+    "src/gateway/worker-environments/workspace-sync.ts",
+    "src/gateway/worker-environments/workspace-sync-helpers.ts",
+    "src/gateway/worker-environments/workspace-accepted-sync.ts",
+    "src/gateway/worker-environments/workspace-accepted-remote-script.ts",
+    "src/gateway/worker-environments/workspace-mutation-remote-script.ts",
+    "src/gateway/worker-environments/workspace-rsync-path.test.ts",
+  ])("routes worker deploy artifact owner %s through macOS CI", (ownerPath) => {
+    expect(detectChangedScope([ownerPath])).toMatchObject({
+      runNode: true,
+      runMacos: true,
     });
   });
 });

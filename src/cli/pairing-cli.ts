@@ -45,9 +45,30 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   );
 }
 
-async function notifyApproved(channel: PairingChannel, id: string, accountId?: string) {
+async function notifyApproved(
+  channel: PairingChannel,
+  id: string,
+  accountId?: string,
+  meta?: Record<string, string>,
+) {
   const cfg = getRuntimeConfig();
-  await notifyPairingApproved({ channelId: channel, id, cfg, ...(accountId ? { accountId } : {}) });
+  await notifyPairingApproved({
+    channelId: channel,
+    id,
+    cfg,
+    ...(accountId ? { accountId } : {}),
+    ...(meta ? { meta } : {}),
+  });
+}
+
+function resolveAccountId(raw: unknown): string | undefined {
+  const accountId = normalizeStringifiedOptionalString(raw);
+  // Omission intentionally leaves pairing unscoped; an explicit blank must not
+  // silently remove the account restriction.
+  if (raw !== undefined && !accountId) {
+    throw new Error("--account must not be blank");
+  }
+  return accountId;
 }
 
 export function registerPairingCli(program: Command) {
@@ -92,7 +113,7 @@ export function registerPairingCli(program: Command) {
           );
         }
       }
-      const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
+      const accountId = resolveAccountId(opts.account);
       const requests = accountId
         ? await listChannelPairingRequests(channel, process.env, accountId)
         : await listChannelPairingRequests(channel);
@@ -120,7 +141,7 @@ export function registerPairingCli(program: Command) {
           ],
           rows: requests.map((r) => ({
             Code: r.code,
-            ID: r.id,
+            ID: r.meta?.senderId ?? r.id,
             Meta: r.meta ? JSON.stringify(r.meta) : "",
             Requested: r.createdAt,
           })),
@@ -161,7 +182,7 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
+      const accountId = resolveAccountId(opts.account);
       const approved = accountId
         ? await approveChannelPairingCode({
             channel,
@@ -179,7 +200,7 @@ export function registerPairingCli(program: Command) {
       }
 
       defaultRuntime.log(
-        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
+        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.entry.meta?.senderId ?? approved.id)}.`,
       );
       const ownerBootstrap = await bootstrapCommandOwnerFromPairing({
         channel,
@@ -196,8 +217,10 @@ export function registerPairingCli(program: Command) {
       }
       const approvedAccountId =
         accountId || normalizeStringifiedOptionalString(approved.entry?.meta?.accountId);
-      await notifyApproved(channel, approved.id, approvedAccountId).catch((err: unknown) => {
-        defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
-      });
+      await notifyApproved(channel, approved.id, approvedAccountId, approved.entry.meta).catch(
+        (err: unknown) => {
+          defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
+        },
+      );
     });
 }

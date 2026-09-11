@@ -3,7 +3,8 @@
  *
  * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
  */
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import { randomUUID } from "node:crypto";
+import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
@@ -13,6 +14,20 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
+
+/** Standalone completions have no durable session, but may require routing identity. */
+export function prepareHeadersForSimpleCompletion(
+  model: Pick<Model, "baseUrl" | "headers">,
+  options?: Pick<StreamOptions, "sessionId" | "headers">,
+): Record<string, string> | undefined {
+  // Keep the synthetic identity in the required header only: a stream sessionId
+  // would also enable unrelated cache and WebSocket session ownership.
+  return resolveOpencodeSessionHeaders(model, {
+    ...options,
+    sessionId: options?.sessionId || randomUUID(),
+  });
+}
 
 const PROVIDER_SIMPLE_COMPLETION_API_PREFIX = "openclaw-provider-simple:";
 const PROVIDER_STREAM_API_PREFIX = "openclaw-provider-stream:";
@@ -95,6 +110,7 @@ function applyProviderSimpleCompletionWrapper(
   registry: ApiRegistry,
   model: Model,
   cfg?: unknown,
+  hookSourceApi: Api = model.api,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -104,9 +120,9 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const sourceApi = model.api;
+  const dispatchApi = model.api;
   const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    sourceProvider.streamSimple(projectModel(runtimeModel, { api: sourceApi }), context, options);
+    sourceProvider.streamSimple(projectModel(runtimeModel, { api: dispatchApi }), context, options);
   const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
     provider: model.provider,
     config: cfg,
@@ -115,6 +131,7 @@ function applyProviderSimpleCompletionWrapper(
       provider: model.provider,
       modelId: model.id,
       model,
+      sourceApi: hookSourceApi,
       streamFn: sourceStreamFn,
     },
   });
@@ -177,11 +194,6 @@ function prepareProviderStreamModel<TApi extends Api>(params: {
   cfg?: unknown;
   apiRegistry: ApiRegistry;
 }): Model | undefined {
-  // Google simple completions have managed transport and sanitizer paths below.
-  // A plugin-native stream here would bypass both and emit unsupported payloads.
-  if (params.model.api === "google-generative-ai") {
-    return undefined;
-  }
   const pluginModel = resolveModelHeaderSentinels(params.model);
   const providerStreamFn = getAiTransportHost().plugin.resolveProviderStream({
     provider: params.model.provider,
@@ -212,7 +224,11 @@ function prepareProviderStreamModel<TApi extends Api>(params: {
   const api = params.apiRegistry.getApiProvider(params.model.api)
     ? resolveProviderStreamApi(params.model)
     : params.model.api;
-  if (!registerCustomApi(params.apiRegistry, api, streamFn)) {
+  // The alias selects this stream; wire policy still needs the original API.
+  const sourceApi = params.model.api;
+  const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
+    streamFn(projectModel(runtimeModel, { api: sourceApi }), context, options);
+  if (!registerCustomApi(params.apiRegistry, api, sourceStreamFn)) {
     return undefined;
   }
   return api === params.model.api ? params.model : projectModel(params.model, { api });
@@ -226,28 +242,20 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   const { apiRegistry, model, cfg } = params;
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg);
+    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg, model.api);
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg);
+    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg, model.api);
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg);
+      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg, model.api);
     }
-  }
-
-  if (model.api === "google-generative-ai") {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      getAiTransportHost().prepareGoogleSimpleCompletionModel(apiRegistry, model),
-      cfg,
-    );
   }
 
   if (model.provider === "anthropic-vertex") {
@@ -256,7 +264,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
       const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg);
+      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg, model.api);
     }
   }
 

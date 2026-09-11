@@ -1,19 +1,18 @@
 // Imessage test support covers monitor provider.echo cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  resolveIMessageSentEchoEntryKey,
+} from "../state-contract.js";
+import {
   createIMessagePluginStateSyncStoreForTest,
   installIMessageFailingStateRuntimeForTest,
   installIMessageStateRuntimeForTest,
 } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
-import {
-  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
-  IMESSAGE_SENT_ECHOES_NAMESPACE,
-  IMESSAGE_SENT_ECHOES_TTL_MS,
-  hasPersistedIMessageEcho,
-  rememberPersistedIMessageEcho,
-  resolveIMessageSentEchoEntryKey,
-} from "./persisted-echo-cache.js";
+import { hasPersistedIMessageEcho, rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
   beforeEach(() => {
@@ -260,7 +259,7 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has(scope, { messageId: "guid-late" })).toBe(true);
   });
 
-  it("drops the in-memory mirror on persisted read failure so expired echoes do not match", () => {
+  it("does not match stale echoes after persisted read failure", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
     const scope = "acct:imessage:+1555";

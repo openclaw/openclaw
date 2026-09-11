@@ -1,12 +1,9 @@
-// Google provider module implements model/runtime integration.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type AudioTranscriptionRequest,
-  type AudioTranscriptionResult,
-  type MediaUnderstandingProvider,
-  type VideoDescriptionRequest,
-  type VideoDescriptionResult,
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowProviderError,
@@ -15,13 +12,15 @@ import {
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  createGoogleMediaUnderstandingProviderMetadata,
+  GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS,
+} from "./generation-provider-metadata.js";
+import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleModelId,
   resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./runtime-api.js";
 
-const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
-const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 const DEFAULT_GOOGLE_VIDEO_PROMPT = "Describe the video.";
 
@@ -125,7 +124,7 @@ export async function transcribeGeminiAudio(
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    defaultModel: DEFAULT_GOOGLE_AUDIO_MODEL,
+    defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.audio,
     defaultPrompt: DEFAULT_GOOGLE_AUDIO_PROMPT,
     defaultMime: "audio/wav",
     httpErrorLabel: "Audio transcription failed",
@@ -140,7 +139,7 @@ export async function describeGeminiVideo(
   const { text, model } = await generateGeminiInlineDataText({
     ...params,
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    defaultModel: DEFAULT_GOOGLE_VIDEO_MODEL,
+    defaultModel: GOOGLE_MEDIA_UNDERSTANDING_DEFAULT_MODELS.video,
     defaultPrompt: DEFAULT_GOOGLE_VIDEO_PROMPT,
     defaultMime: "video/mp4",
     httpErrorLabel: "Video description failed",
@@ -150,17 +149,7 @@ export async function describeGeminiVideo(
 }
 
 export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
-  id: "google",
-  capabilities: ["image", "audio", "video"],
-  defaultModels: {
-    image: DEFAULT_GOOGLE_VIDEO_MODEL,
-    audio: DEFAULT_GOOGLE_AUDIO_MODEL,
-    video: DEFAULT_GOOGLE_VIDEO_MODEL,
-  },
-  autoPriority: { image: 30, audio: 40, video: 10 },
-  nativeDocumentInputs: ["pdf"],
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  ...createGoogleMediaUnderstandingProviderMetadata(),
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
 };

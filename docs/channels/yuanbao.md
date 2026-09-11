@@ -35,7 +35,7 @@ Requires OpenClaw 2026.4.10 or above. Check with `openclaw --version`; upgrade w
 openclaw channels login --channel yuanbao
 ```
 
-Follow the prompts to enter your App ID and App Secret.
+Follow the prompts to enter your App Key (`appKey`) and App Secret (`appSecret`).
 
 ## Access control
 
@@ -283,11 +283,11 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
 ```json5
 {
   agents: {
-    list: [
-      { id: "main" },
-      { id: "agent-a", workspace: "/home/user/agent-a" },
-      { id: "agent-b", workspace: "/home/user/agent-b" },
-    ],
+    entries: {
+      main: { default: true },
+      "agent-a": { workspace: "/home/user/agent-a" },
+      "agent-b": { workspace: "/home/user/agent-b" },
+    },
   },
   bindings: [
     {
@@ -354,5 +354,5 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
 - [Security](/gateway/security) - access model and hardening

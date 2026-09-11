@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -9,20 +11,18 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
+  sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import {
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -30,6 +30,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
@@ -38,14 +39,12 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
-import {
-  buildPendingFinalDeliveryText,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
@@ -79,40 +78,57 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   );
 }
 
-export function resolvePendingFinalDeliveryRetryText(params: {
-  isHeartbeat: boolean;
-  payload: ReplyPayload;
-}): string {
-  const pendingText = buildPendingFinalDeliveryText([params.payload]);
-  if (!params.isHeartbeat) {
-    return pendingText;
-  }
-  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
-  return stripped.shouldSkip ? "" : stripped.text || pendingText;
-}
-
 export function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
+  fallbackAttempts: readonly RuntimeFallbackAttempt[];
+  cfg: OpenClawConfig;
   isHeartbeat: boolean;
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  hasExplicitSilentReply?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
+    params.hasExplicitSilentReply === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
   ) {
     return undefined;
   }
+  const selected = params.fallbackTransition.selectedModelRef;
+  const active = params.fallbackTransition.activeModelRef;
+  const attempts = params.fallbackAttempts;
+  const selectedAttempts = attempts.filter((attempt) =>
+    areRuntimeModelRefsEquivalent(`${attempt.provider}/${attempt.model}`, selected, {
+      config: params.cfg,
+    }),
+  );
+  let primary = `⚠️ The configured model backend ${selected} produced no usable reply. `;
+  // Local skips retain old failure reasons, not evidence of a new backend attempt.
+  if (
+    selectedAttempts.length > 0 &&
+    selectedAttempts.every((attempt) => attempt.code !== MODEL_FALLBACK_SKIPPED_CODE) &&
+    attempts.every((attempt) => attempt.provider.trim() && attempt.model.trim())
+  ) {
+    if (
+      selectedAttempts.every(({ reason }) =>
+        ["timeout", "server_error", "overloaded", "tls_certificate"].includes(reason),
+      )
+    ) {
+      primary = `⚠️ I couldn't reach the configured model backend ${selected}. `;
+    } else if (
+      selectedAttempts.every(({ reason }) => reason === "format" || reason === "empty_response")
+    ) {
+      primary = `⚠️ The configured model backend ${selected} responded but produced no usable reply. `;
+    }
+  }
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: `${primary}Fallback used ${active}, but it produced no visible reply.`,
     isError: true,
   });
 }
@@ -161,18 +177,15 @@ export function resolveReplyRunDeliveryContext(params: {
   ) {
     return undefined;
   }
-  const threadId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
-    normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
-    normalizeOptionalString(
-      parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
-    );
   return normalizeDeliveryContext({
     ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
-    threadId,
+    threadId: resolveRoutedDeliveryThreadId({
+      ctx: params.sessionCtx,
+      sessionKey: params.sessionCtx.SessionKey ?? params.sessionKey,
+    }),
   });
 }
 
@@ -199,9 +212,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
 }): boolean {
   const sentTerminalBlock = params.directlySentBlockPayloads?.some(
     (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
+      isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   return (
@@ -211,10 +222,15 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
   );
 }
 
-export function resolveConfiguredFallbackModel(params: {
+export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
+  runtimeModelSelection?: ModelRef;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
+  // Runtime-owned selection is not a fallback from the caller's nominal model.
+  if (params.runtimeModelSelection) {
+    return { ...params.runtimeModelSelection, persistedAutoFallback: false };
+  }
   const entry = params.fallbackStateEntry;
   const isAutoFallbackOverride =
     entry?.modelOverrideSource === "auto" ||
@@ -237,33 +253,18 @@ export function resolveConfiguredFallbackModel(params: {
 
 export function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
+  includeStatusLines: boolean;
   includeTraceLines: boolean;
 }): ReplyPayload | undefined {
-  const statusLines =
-    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
-      ? resolveSessionPluginStatusLines(params.entry)
-      : [];
-  const traceLines =
-    params.includeTraceLines &&
-    (params.entry?.traceLevel === "on" || params.entry?.traceLevel === "raw")
-      ? resolveSessionPluginTraceLines(params.entry)
-      : [];
+  const statusLines = params.includeStatusLines
+    ? resolveSessionPluginStatusLines(params.entry)
+    : [];
+  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
   const lines = [...statusLines, ...traceLines];
   if (lines.length === 0) {
     return undefined;
   }
   return { text: lines.join("\n") };
-}
-
-function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
-  return payloads
-    .filter(
-      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
-    )
-    .map((payload) => payload.text?.trim())
-    .filter((text): text is string => Boolean(text))
-    .join("\n")
-    .trim();
 }
 
 export function normalizeAssistantFinalDeliveryText(text: string): string {
@@ -275,60 +276,12 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
-export function enqueueCommitmentExtractionForTurn(params: {
-  cfg: OpenClawConfig;
-  commandBody: string;
-  isHeartbeat: boolean;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  sessionKey?: string;
-  replyToChannel?: string;
-  payloads: ReplyPayload[];
-  runId: string;
-}): void {
-  if (params.isHeartbeat) {
-    return;
-  }
-  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
-  const assistantText = joinCommitmentAssistantText(params.payloads);
-  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  const channel =
-    params.replyToChannel ??
-    params.followupRun.run.messageProvider ??
-    params.sessionCtx.Surface ??
-    params.sessionCtx.Provider;
-  if (!userText || !assistantText || !sessionKey || !channel) {
-    return;
-  }
-  const to = resolveOriginMessageTo({
-    originatingTo: params.sessionCtx.OriginatingTo,
-    to: params.sessionCtx.To,
-  });
-  enqueueCommitmentExtraction({
-    cfg: params.cfg,
-    agentId: params.followupRun.run.agentId,
-    sessionKey,
-    channel,
-    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
-    ...(to ? { to } : {}),
-    ...(params.sessionCtx.MessageThreadId !== undefined
-      ? { threadId: String(params.sessionCtx.MessageThreadId) }
-      : {}),
-    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
-    userText,
-    assistantText,
-    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
-      : {}),
-    sourceRunId: params.runId,
-  });
-}
-
 export function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
+  expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 }): SessionEntry | undefined {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
@@ -340,6 +293,14 @@ export function refreshSessionEntryFromStore(params: {
       sessionKey,
     });
     if (!latestEntry) {
+      return fallbackEntry;
+    }
+    // Completion may refresh facts, but only admission can adopt a replacement generation.
+    if (
+      params.expectedGeneration &&
+      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+    ) {
       return fallbackEntry;
     }
     if (activeSessionStore) {
@@ -368,8 +329,7 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
-    blockReplyPipeline: BlockReplyPipeline | null;
-    didDeliverVisiblePartialReply: () => boolean;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
@@ -380,8 +340,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
-    blockReplyPipeline,
-    didDeliverVisiblePartialReply,
+    resolveVisibleReplyDelivery,
     isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
@@ -390,6 +349,9 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (isReplyOperationSuperseded(replyOperation)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -435,19 +397,8 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
-  if (blockReplyPipeline) {
-    try {
-      await blockReplyPipeline.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-  }
-  const didDeliverVisibleReply =
-    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
-    didDeliverVisiblePartialReply();
-  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+  const visibleReplyDelivered = await resolveVisibleReplyDelivery();
+  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({
@@ -514,8 +465,8 @@ export async function cleanupReplyAgentRun(context: {
   // markDispatchIdle(), but if the dispatcher exits early, errors,
   // or the reply path doesn't go through it cleanly, the second
   // signal never fires and the typing keepalive loop runs forever.
-  // Calling this twice is harmless — cleanup() is guarded by the
-  // `active` flag.  Same pattern as the followup runner fix (#26881).
+  // Repeated completion signals are harmless: cleanup() is guarded by
+  // the typing controller's sealed flag.
   typing.markDispatchIdle();
 }
 
@@ -538,7 +489,6 @@ export type RunReplyAgentParams = {
   runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;

@@ -1,15 +1,20 @@
 // Line tests cover monitor.lifecycle plugin behavior.
 import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import type { webhook } from "@line/bot-sdk";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLineWebhookSpool } from "./webhook-spool.js";
+import { createEvent, withQueue } from "./webhook-spool.test-support.js";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
+type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
+type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
   createLineBotMock,
@@ -18,9 +23,9 @@ const {
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
-  createLineBotMock: vi.fn(() => ({
+  createLineBotMock: vi.fn((_options: LineBotOptions) => ({
     account: { accountId: "default" },
-    handleWebhook: vi.fn<LineHandleWebhook>(),
+    handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
     stop: vi.fn(),
   })),
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
@@ -99,7 +104,6 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   );
   return {
     ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
     registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
   };
 });
@@ -135,7 +139,6 @@ vi.mock("./send.js", () => ({
   createFlexMessage: vi.fn(),
   createImageMessage: vi.fn(),
   createLocationMessage: vi.fn(),
-  createQuickReplyItems: vi.fn(),
   getUserDisplayName: vi.fn(),
   pushMessagesLine: vi.fn(),
   replyMessageLine: vi.fn(),
@@ -169,7 +172,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockReset();
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
-      handleWebhook: vi.fn<LineHandleWebhook>(),
+      handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
       stop: vi.fn(async () => undefined),
     }));
     // Clear call history only; the implementation was wired to the actual
@@ -373,6 +376,231 @@ describe("monitorLineProvider lifecycle", () => {
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
+  it.each([
+    { from: "line:U0123456789abcdef0123456789abcdef", question: true, prompt: true, native: true },
+    {
+      from: "line:U0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: false,
+      native: false,
+    },
+    {
+      from: "line:group:C0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: true,
+      native: false,
+    },
+    {
+      from: "line:room:R0123456789abcdef0123456789abcdef",
+      question: true,
+      prompt: true,
+      native: false,
+    },
+    { from: "unknown", question: true, prompt: true, native: false },
+    {
+      from: "line:group:C0123456789abcdef0123456789abcdef",
+      question: false,
+      prompt: false,
+      native: true,
+    },
+  ])(
+    "prepares native=$native question=$question prompt=$prompt replies for $from",
+    async ({ from, question, prompt, native }) => {
+      const { setLineRuntime } = await import("./runtime.js");
+      type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
+      let resolvedTurn: ResolvedTurn | undefined;
+      const runTurn = async (params: {
+        adapter: { resolveTurn: () => ResolvedTurn };
+      }): Promise<{ dispatched: false }> => {
+        resolvedTurn = params.adapter.resolveTurn();
+        return { dispatched: false };
+      };
+      setLineRuntime({
+        channel: { inbound: { run: runTurn } },
+      } as unknown as Parameters<typeof setLineRuntime>[0]);
+      const monitor = await monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+      });
+      const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+      if (!onMessage) {
+        throw new Error("expected the LINE bot to receive an inbound message handler");
+      }
+
+      try {
+        await onMessage(
+          {
+            ctxPayload: { From: from, MessageSid: "m1", RawBody: "approve?" },
+            replyToken: "reply-token",
+            route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+            isGroup: !from.startsWith("line:U"),
+            accountId: "default",
+            turn: { record: {} },
+          } as unknown as Parameters<typeof onMessage>[0],
+          // Admission always hands the turn its live config; an empty one is unreachable.
+          { cfg: {} } as Parameters<typeof onMessage>[1],
+        );
+
+        const questionId = "ask_3d8dbe55be452a9a39add7c909beb119";
+        const prepared = await resolvedTurn?.delivery.preparePayload?.(
+          {
+            text: "Approve this run? Approve / Deny",
+            presentationTextMode: "fallback",
+            ...(question
+              ? { channelData: { askUser: { questionId, optionValues: ["Approve", "Deny"] } } }
+              : {}),
+            presentation: {
+              blocks: [
+                ...(prompt ? [{ type: "text" as const, text: "Approve this run?" }] : []),
+                {
+                  type: "buttons",
+                  buttons: question
+                    ? ["Approve", "Deny"].map((label) => ({
+                        label,
+                        action: { type: "question" as const, questionId, optionValue: label },
+                      }))
+                    : [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+                },
+              ],
+            },
+          },
+          { kind: "final" },
+        );
+        const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
+
+        expect(prepared?.presentation).toBeUndefined();
+        if (native) {
+          expect(line?.flexMessage).toBeDefined();
+          if (question) {
+            expect(line?.flexMessage).toMatchObject({
+              contents: {
+                footer: {
+                  contents: [
+                    { action: { data: `line.question=${questionId}&line.option=0` } },
+                    { action: { data: `line.question=${questionId}&line.option=1` } },
+                  ],
+                },
+              },
+            });
+          }
+        } else {
+          expect(line).toBeUndefined();
+          expect(prepared?.text).toBe("Approve this run? Approve / Deny");
+        }
+      } finally {
+        // A leaked registration makes later shared-path signature tests ambiguous.
+        await monitor.stop();
+      }
+    },
+  );
+
+  it("paces block replies with the humanDelay the turn's own config carries", async () => {
+    // humanDelay lives on the agent, but only the dispatcher can act on it, so a
+    // turn that never forwards it paces every block reply at zero.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { dispatcherOptions?: { humanDelay?: unknown } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
+          replyToken: "reply-token",
+          route: { accountId: "default", agentId: "ops", sessionKey: "line:U1" },
+          isGroup: false,
+          accountId: "default",
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {
+          // The per-agent entry wins, so a turn reading only the defaults would
+          // pace at the wrong interval rather than not at all.
+          cfg: {
+            agents: {
+              defaults: { humanDelay: { mode: "natural" } },
+              entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
+            },
+          },
+        } as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.dispatcherOptions?.humanDelay).toEqual({
+        mode: "custom",
+        minMs: 3_000,
+        maxMs: 4_000,
+      });
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it("carries a group's skill scope into the turn that answers it", async () => {
+    // The scope is configured per group but enforced per turn: it only applies
+    // if the reply options reaching the agent carry it.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { replyOptions?: { skillFilter?: string[] } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "hi" },
+          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+          isGroup: true,
+          accountId: "default",
+          skillFilter: ["triage"],
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        // Admission always hands the turn its live config; an empty one is unreachable.
+        { cfg: {} } as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.replyOptions?.skillFilter).toEqual(["triage"]);
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {
     const firstMonitor = await monitorLineProvider({
       channelAccessToken: "first-token",
@@ -488,8 +716,8 @@ describe("monitorLineProvider lifecycle", () => {
       let releaseAdmission: (() => void) | undefined;
       bot.handleWebhook.mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
-            releaseAdmission = resolve;
+          new Promise<Awaited<ReturnType<LineHandleWebhook>>>((resolve) => {
+            releaseAdmission = () => resolve("durable");
           }),
       );
       const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
@@ -544,6 +772,69 @@ describe("monitorLineProvider lifecycle", () => {
       expect(message).toContain("retryAfterMs");
       expect(message).not.toContain("[object Object]");
       expect(message).not.toContain(bearerToken);
+
+      // Keep the HTTP receipt tied to the real queue, including deliberate non-admission.
+      await withQueue(async (queue) => {
+        const delivered: webhook.Event[] = [];
+        const spool = createLineWebhookSpool({
+          accountId: "default",
+          runtime,
+          queue,
+          deliver: async (events, _destination, control) => {
+            delivered.push(...events);
+            await control.turnAdoptionLifecycle.onAdopted();
+          },
+        });
+        bot.handleWebhook.mockImplementation(spool.accept);
+        const active = createEvent({ webhookEventId: "receipt-active" });
+        const standby = createEvent({ webhookEventId: "receipt-standby", mode: "standby" });
+        const common = {
+          mode: "standby" as const,
+          timestamp: Date.now(),
+          deliveryContext: { isRedelivery: false },
+        };
+        const postback: webhook.Event = {
+          ...common,
+          type: "postback",
+          webhookEventId: "receipt-postback",
+          source: { type: "user", userId: "user-standby" },
+          postback: { data: "continue" },
+        };
+        const join = {
+          ...common,
+          type: "join",
+          webhookEventId: "receipt-join",
+          source: { type: "group", groupId: "group-standby" },
+        };
+        try {
+          for (const [events, expectedIds, marker] of [
+            [[standby, postback, join], [], null],
+            [[standby, active], ["message:message-receipt-active"], "durable"],
+            [[active], ["message:message-receipt-active"], "durable"],
+          ] as const) {
+            const body = JSON.stringify({ destination: "fixture-bot", events });
+            const admittedResponse = await fetch(webhookUrl, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-line-signature": crypto
+                  .createHmac("SHA256", "secret")
+                  .update(body)
+                  .digest("base64"),
+              },
+              body,
+            });
+            expect(admittedResponse.status).toBe(200);
+            expect((await queue.listPending()).map((entry) => entry.id)).toEqual(expectedIds);
+            expect(admittedResponse.headers.get("x-openclaw-delivery-accepted")).toBe(marker);
+            expect(await admittedResponse.json()).toEqual({ status: "ok" });
+          }
+          spool.start();
+          await vi.waitFor(() => expect(delivered).toEqual([active]));
+        } finally {
+          await spool.stop();
+        }
+      });
     } finally {
       try {
         if (server.listening) {
@@ -641,8 +932,8 @@ describe("monitorLineProvider lifecycle", () => {
     };
     bot.handleWebhook.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          releaseWebhook = resolve;
+        new Promise<Awaited<ReturnType<LineHandleWebhook>>>((resolve) => {
+          releaseWebhook = () => resolve("durable");
         }),
     );
 
@@ -716,7 +1007,7 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
     const limit = WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey;
-    const heldRequests: Array<EventEmitter & { destroy: () => void }> = [];
+    const heldRequests: IncomingMessage[] = [];
 
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
@@ -727,13 +1018,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     const route = requireRegisteredRoute();
     const createHeldPostRequest = () => {
-      const req = Object.assign(new EventEmitter(), {
-        destroyed: false,
-        destroy(this: EventEmitter & { destroyed: boolean }) {
-          this.destroyed = true;
-          this.emit("close");
-        },
-      });
+      const req = new IncomingMessage(new Socket());
       heldRequests.push(req);
       return Object.assign(req, {
         method: "POST",

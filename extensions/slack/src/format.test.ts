@@ -1,9 +1,87 @@
 // Slack tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
+import {
+  chunkSlackMrkdwnText,
+  markdownToSlackMrkdwnChunks,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
+describe("chunkSlackMrkdwnText", () => {
+  it.each(["`", "```"])("keeps %s code boundaries after literal backslashes", (marker) => {
+    const text = `Path: ${marker}C:\\${marker} ${"ordinary prose ".repeat(220)}done`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.slice(1).every((chunk) => !chunk.includes("`"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it("preserves ordinary whitespace at Slack section boundaries", () => {
+    const text = `${"x".repeat(2_998)}  tail`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it("keeps short inline-code spans together until the actual section boundary", () => {
+    const text = `${"a`b`".repeat(750)}x`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each(["`", "```"])("balances long %s code sections without losing their content", (marker) => {
+    const content = "x".repeat(3_100);
+    const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
+      content,
+    );
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each([
+    ["inline", "`", [1, 2]],
+    ["fenced", "```", [1, 5, 6]],
+  ] as const)("preserves content when a %s code wrapper cannot fit", (_name, marker, limits) => {
+    for (const limit of limits) {
+      expect(chunkSlackMrkdwnText(`${marker}x${marker}`, limit)).toEqual(["x"]);
+    }
+  });
+
+  it.each(["`", "```"])("does not emit marker-only sections for oversized %s links", (marker) => {
+    const token = `<https://example.com/${"x".repeat(3_000)}>`;
+    const chunks = chunkSlackMrkdwnText(`${marker}${token}${marker}`, 3_000);
+
+    expect(chunks.every((chunk) => chunk.length > marker.length * 2)).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(token);
+  });
+});
+
 describe("normalizeSlackOutboundText", () => {
+  it("escapes all angle tokens on request while preserving blockquotes and formatting", () => {
+    expect(
+      normalizeSlackOutboundText(
+        "> **Check** <@U123> <#C123> <!channel> <!date^0^{date}|today> <https://example.com> & `<@U456>`",
+        { mentions: "escape" },
+      ),
+    ).toBe(
+      "> *Check* &lt;@U123&gt; &lt;#C123&gt; &lt;!channel&gt; &lt;!date^0^{date}|today&gt; &lt;https://example.com&gt; &amp; `&lt;@U456&gt;`",
+    );
+  });
+
+  it("leaves table parsing off for callers without an authored-text table mode", () => {
+    const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+    expect(normalizeSlackOutboundText(table)).toBe(table);
+  });
+
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {
     expect(normalizeSlackOutboundText("**user**[Thu 2026-07-02] question")).toBe(
       "`user[Thu 2026-07-02]` question",
@@ -20,6 +98,7 @@ describe("normalizeSlackOutboundText", () => {
 
     expect(normalizeSlackOutboundText(input)).toBe(expected);
     expect(markdownToSlackMrkdwnChunks(input, 4000)).toEqual([expected]);
+    expect(markdownToSlackMrkdwnChunks(input, Number.POSITIVE_INFINITY)).toEqual([expected]);
     expect(normalizeSlackOutboundText(expected)).toBe(expected);
     expect(normalizeSlackOutboundText(`intro\n${input}`)).toBe(`\`Assistant:\` intro\n${input}`);
     expect(normalizeSlackOutboundText("<!date^0^user[Thu 2026-07-02]|safe> authorize")).toBe(
@@ -166,6 +245,28 @@ describe("normalizeSlackOutboundText", () => {
     ).toStrictEqual([]);
   });
 
+  it("includes transcript protection when a native token exactly fills the chunk budget", () => {
+    expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
+  });
+
+  it.each(["<@U|user[t]>", "<!date^0^user[t]|safe>", "<!date^0^safe|user[t]>"])(
+    "protects %s when an oversized link prevents any fitting split",
+    (header) => {
+      const href = `https://example.com/${"a".repeat(100)}`;
+      expect(markdownToSlackMrkdwnChunks(`[x](${href})\n${header}`, 32)).toEqual([
+        `\`Assistant:\` <${href}|x>\n${header}`,
+      ]);
+    },
+  );
+
+  it.each([1, 1.9, 0, -1, Number.NaN, Number.NEGATIVE_INFINITY])(
+    "preserves complete code points with normalized chunk limit %s",
+    (limit) => {
+      expect(markdownToSlackMrkdwnChunks("😀x", limit)).toEqual(["😀", "x"]);
+      expect(markdownToSlackMrkdwnChunks("", limit)).toEqual([]);
+    },
+  );
+
   it("keeps unsafe emphasis boundaries plain when chunking", () => {
     expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
     expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["重要。"]);
@@ -180,8 +281,8 @@ describe("escapeSlackMrkdwn", () => {
     expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
   });
 
-  it("escapes slack and mrkdwn control characters", () => {
-    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+  it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
   });
 });
 

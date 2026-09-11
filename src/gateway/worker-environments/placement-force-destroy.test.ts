@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -32,7 +32,10 @@ describe("forced worker environment destruction", () => {
 
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const harness = createHarness(placementStore, { workspaceOperations, workspacePath: root });
+    const harness = createHarness(database, placementStore, {
+      workspaceOperations,
+      workspacePath: root,
+    });
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
@@ -92,7 +95,7 @@ describe("forced worker environment destruction", () => {
     expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
@@ -102,7 +105,7 @@ describe("forced worker environment destruction", () => {
     { failure: "tunnel stop", state: "draining" as const },
     { failure: "provider stop", state: "destroying" as const },
   ])("stays successful after $failure failure", async ({ state }) => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: state,
       workspacePath: root,
@@ -116,7 +119,7 @@ describe("forced worker environment destruction", () => {
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "destroy pending" }),
@@ -124,7 +127,7 @@ describe("forced worker environment destruction", () => {
   });
 
   it("retries remote teardown when a failed rollback journal remains", async () => {
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: "destroying",
       failAt: "workspace",

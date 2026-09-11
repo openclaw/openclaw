@@ -4,9 +4,51 @@ import Foundation
 /// UI cannot load. Presentation-only; kept out of `DashboardWindowController`
 /// so the controller stays focused on window/navigation behavior.
 enum DashboardFailurePage {
-    static func html(title: String, message: String, detail: String?, url: URL?) -> String {
+    struct SignedOut: Equatable {
+        let target: DashboardGatewayTarget
+        let name: String
+        let host: String
+        let expiresAt: Date
+    }
+
+    static func html(
+        signedOut: SignedOut,
+        signingIn: Bool = false,
+        error: String? = nil,
+        now: Date = Date()) -> String
+    {
+        let host = signedOut.host
+        let elapsed = age(from: signedOut.expiresAt, now: now)
+        let message = signedOut.expiresAt <= now
+            ? String(
+                format: String(localized: "Your browser sign-in to %@ expired %@. Sign in again to continue."),
+                host,
+                elapsed)
+            : String(
+                format: String(localized: "Your browser sign-in to %@ expires soon. Sign in again to continue."),
+                host)
+        let action = signingIn ? "reconnect-cancel" : "reconnect"
+        let label = signingIn ? String(localized: "Cancel") : String(localized: "Sign in again")
+        let button = """
+        <button type="button" data-id="\(self.htmlEscape(signedOut.target.bridgeID))"
+          onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'\(action)',id:this.dataset.id})">\(self.htmlEscape(label))</button>
+        """
+        return self.html(
+            title: String(format: String(localized: "Signed out of %@"), signedOut.name),
+            message: message,
+            detail: signingIn ? String(localized: "Complete sign-in in your browser…") : error,
+            url: nil,
+            primaryButton: button)
+    }
+
+    static func html(
+        title: String, message: String, detail: String?, url: URL?, primaryButton: String = "") -> String
+    {
+        let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
+        let urlHTML = url
+            .map { "<code>\(self.htmlEscape(GatewayEndpointStore.diagnosticURLString(for: $0)))</code>" } ?? ""
         return """
         <!doctype html>
         <html>
@@ -72,6 +114,16 @@ enum DashboardFailurePage {
               overflow-wrap: anywhere;
               font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
             }
+            button {
+              margin-top: 22px;
+              padding: 9px 14px;
+              border: 1px solid currentColor;
+              border-radius: 8px;
+              background: transparent;
+              color: inherit;
+              font: inherit;
+              cursor: pointer;
+            }
             @media (prefers-color-scheme: light) {
               body { background: #f5f6f8; color: rgba(0,0,0,.86); }
               main {
@@ -97,6 +149,9 @@ enum DashboardFailurePage {
             <p>\(self.htmlEscape(message))</p>
             \(detailHTML)
             \(urlHTML)
+            \(primaryButton)
+            <button type="button" onclick="window.webkit.messageHandlers.openclawDeviceSettings
+              .postMessage({type:'open',panel:'connection'})">\(connectionTitle)</button>
           </main>
         </body>
         </html>

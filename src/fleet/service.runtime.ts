@@ -145,6 +145,7 @@ export type FleetLifecycleAction = "start" | "stop" | "restart";
 export type FleetLogsOptions = {
   tenant: string;
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
 };
@@ -204,7 +205,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         throw new Error("Gateway token must not be empty.");
       }
       const token = gatewayToken ?? generateToken();
-      const environment = buildCellEnvironment(token, parseEnvAssignments(createOptions.env ?? []));
+      const userEnvironment = parseEnvAssignments(createOptions.env ?? []);
+      const environment = buildCellEnvironment(token, userEnvironment);
+      const userEnvironmentKeys = Object.keys(userEnvironment);
       const attemptId = generateAttemptId();
       await containers.assertLocal(runtime);
       if (network === "internal" && runtime === "docker") {
@@ -300,6 +303,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               ...(diskSize ? { diskSize } : {}),
               pidsLimit: createOptions.pidsLimit ?? 512,
               environment,
+              userEnvironmentKeys,
               ...(containerUser ? { containerUser } : {}),
               selinuxRelabel: await selinuxEnabled(),
             };
@@ -540,6 +544,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       // Pin the inspected generation so a concurrent restore cannot redirect the stream.
       await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
+        timestamps: logOptions.timestamps,
         tail: logOptions.tail,
         since: logOptions.since,
         redactValues: gatewayCredential ? [gatewayCredential] : [],

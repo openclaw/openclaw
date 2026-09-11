@@ -1,6 +1,5 @@
-// Model Catalog Core module implements provider model id normalization behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelCatalogRef } from "./model-catalog-refs.js";
-import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
@@ -44,19 +43,10 @@ export function collectManifestModelIdNormalizationPolicies(
 }
 
 /** Replace the process-local manifest normalization policy snapshot. */
-export function setCurrentManifestModelIdNormalizationRecords(
-  plugins: readonly ManifestModelIdNormalizationRecord[] | undefined,
+export function setCurrentManifestModelIdNormalizationPolicies(
+  policies: ReadonlyMap<string, ManifestModelIdNormalizationProvider> | undefined,
 ): void {
-  currentManifestModelIdNormalizationPolicies = plugins
-    ? collectManifestModelIdNormalizationPolicies(plugins)
-    : undefined;
-}
-
-/** Return the current process-local manifest normalization policy snapshot. */
-function getCurrentManifestModelIdNormalizationPolicies():
-  | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
-  | undefined {
-  return currentManifestModelIdNormalizationPolicies;
+  currentManifestModelIdNormalizationPolicies = policies;
 }
 
 /** Return true when a model id already includes a provider namespace. */
@@ -135,11 +125,19 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
   }
   if (normalizedProvider === "anthropic") {
+    // Mirror the Anthropic manifest aliases for callers that skip manifest normalization.
     const anthropicAliases: Record<string, string> = {
+      fable: "claude-fable-5-1",
+      "fable-5": "claude-fable-5",
+      "fable-5.1": "claude-fable-5-1",
+      "fable-5-1": "claude-fable-5-1",
+      haiku: "claude-haiku-4-5",
       "opus-5": "claude-opus-5",
       opus: "claude-opus-5",
       "opus-4.8": "claude-opus-4-8",
+      "opus-4.7": "claude-opus-4-7",
       "opus-4.6": "claude-opus-4-6",
+      "mythos-5": "claude-mythos-5",
       "sonnet-5": "claude-sonnet-5",
       sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",
@@ -215,7 +213,7 @@ export function normalizeStaticProviderModelIdWithPolicies(
 export function normalizeConfiguredProviderCatalogModelId(
   provider: string,
   model: string,
-  policies = getCurrentManifestModelIdNormalizationPolicies(),
+  policies = currentManifestModelIdNormalizationPolicies,
 ): string {
   const providerModel = normalizeStaticProviderModelIdWithPolicies(provider, model, policies);
   return normalizeConfiguredProviderCatalogModelRef(providerModel);

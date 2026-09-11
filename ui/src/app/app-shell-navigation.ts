@@ -1,5 +1,9 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import {
+  isSessionRouteId,
+  pluginSlugCandidate,
+  pluginTabSlugFromPath,
+} from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import {
@@ -13,7 +17,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
-  uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
@@ -25,7 +28,7 @@ export interface ShellNavigationHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
-  lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null;
+  lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
@@ -87,28 +90,36 @@ export class ShellNavigationOwner {
     );
   }
 
-  replaceChatWithCurrentSession(): void {
+  recoverNotFoundRoute(): boolean {
+    const context = this.host.context;
+    const location = this.host.routeState.location ?? window.location;
+    if (context && pluginSlugCandidate(location.pathname, context.basePath)) {
+      if (context.gateway.snapshot.phase !== "connected") {
+        return false;
+      }
+      if (pluginTabSlugFromPath(location.pathname, context.basePath)) {
+        context.replace("plugin", {
+          pathname: location.pathname,
+          search: location.search,
+          hash: location.hash,
+        });
+        return true;
+      }
+    }
+    return this.replaceChatWithCurrentSession();
+  }
+
+  replaceChatWithCurrentSession(): boolean {
     const context = this.host.context;
     const sessionKey = this.host.activeSessionKey.trim();
-    if (
-      !context ||
-      (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected")
-    ) {
-      return;
+    if (!context) {
+      return true;
+    }
+    if (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected") {
+      return false;
     }
     const face = this.host.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
-      ({ key, agentId }) =>
-        uiSessionEventMatches(
-          {
-            agentsList: context.agents.state.agentsList,
-            hello: context.gateway.snapshot.hello,
-            sessionKey,
-          },
-          key,
-          agentId,
-        ),
-    );
+    const sessionWasDeleted = context.sessions.deletionState(sessionKey);
     // Session lists are filtered and windowed. Only a failed route for this
     // active key, or an authoritative deletion, proves it needs replacement.
     const activeSessionRow = findUiSessionRow(context, sessionKey);
@@ -138,7 +149,7 @@ export class ShellNavigationOwner {
     // Gateway rejects deletion of a live main session. If an orphaned event
     // still names that fallback, replacing the same route would retry forever.
     if (sessionWasDeleted && replacementSessionKey === sessionKey) {
-      return;
+      return true;
     }
     if (replacementSessionKey !== sessionKey) {
       // Commit the replacement to both selection owners before navigating;
@@ -154,26 +165,17 @@ export class ShellNavigationOwner {
       face,
       sessionNavigationTarget({ context, face, sessionKey: replacementSessionKey }).options,
     );
+    return true;
   }
 
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void {
+  recoverDeletedActiveSession(_sessionState: ApplicationContext["sessions"]["state"]): void {
     const context = this.host.context;
     const routeId = this.host.routeState.routeId;
     const sessionKey = this.host.activeSessionKey.trim();
     if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
       return;
     }
-    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-          sessionKey,
-        },
-        key,
-        agentId,
-      ),
-    );
+    const selectedSessionDeleted = context.sessions.deletionState(sessionKey);
     if (selectedSessionDeleted) {
       this.replaceChatWithCurrentSession();
     }
@@ -221,17 +223,7 @@ export class ShellNavigationOwner {
         const committedSessionKey = routeState.committedSessionKey;
         const committedSessionDeleted =
           committedSessionKey !== undefined &&
-          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
-            uiSessionEventMatches(
-              {
-                agentsList: routeContext.agents.state.agentsList,
-                hello: routeContext.gateway.snapshot.hello,
-                sessionKey: committedSessionKey,
-              },
-              key,
-              agentId,
-            ),
-          );
+          routeContext.sessions.deletionState(committedSessionKey);
         if (committedSessionDeleted) {
           // An older route can commit after deletion recovery has started.
           // Never let it persist or reselect the session we just retired.
@@ -259,12 +251,13 @@ export class ShellNavigationOwner {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
         search: routeState.location?.search ?? "",
+        hash: routeState.location?.hash ?? "",
       };
     }
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
     if (this.host.routeState.routeId !== "new-session") {
       return "";
     }
@@ -280,10 +273,8 @@ export class ShellNavigationOwner {
   exitSettings(): void {
     const previous = this.host.lastWorkspaceLocation;
     if (previous) {
-      this.navigate(previous.routeId, {
-        pathname: previous.pathname,
-        ...(previous.search ? { search: previous.search } : {}),
-      });
+      const { routeId, ...location } = previous;
+      this.navigate(routeId, location);
       return;
     }
     this.navigate("chat");

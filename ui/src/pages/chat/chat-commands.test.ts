@@ -1,14 +1,25 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import {
+  invalidateChatMetadataStore,
+  beginChatMetadataPublication,
+} from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  invalidateSessionSlashCommands,
+  dispatchChatSlashCommand,
+  refreshSlashCommands,
+} from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -28,15 +39,96 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
   }
 }
 
-function legacyConnectedSessionAccess() {
+function connectedSessionAccess() {
   return {
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     connected: true,
-    hello: null,
+    hello: sessionMutationGatewayHello(),
+  };
+}
+
+function remoteCommand(name: string, description: string) {
+  return {
+    name,
+    textAliases: [`/${name}`],
+    description,
+    source: "plugin" as const,
+    scope: "text" as const,
+    acceptsArgs: false,
   };
 }
 
 describe("refreshSlashCommands", () => {
+  it("keeps managed command catalogs scoped to the session when the same viewer switches chats", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    const request = vi
+      .spyOn(client, "request")
+      .mockResolvedValueOnce({
+        commands: [
+          {
+            ...remoteCommand("notes_alex", "Alex's selected notes"),
+            source: "skill",
+            skillDisplayName: "Notes · Alex",
+            skillModelVisible: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        commands: [
+          {
+            ...remoteCommand("notes_sam", "Sam's selected notes"),
+            source: "skill",
+            skillDisplayName: "Notes · Sam",
+            skillModelVisible: true,
+          },
+        ],
+      });
+    try {
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:sam" });
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_sam")).toBe(true);
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(false);
+      expect(request).toHaveBeenLastCalledWith("commands.list", {
+        agentId: "main",
+        sessionKey: "agent:main:sam",
+        includeArgs: true,
+        scope: "text",
+      });
+      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
+    } finally {
+      request.mockRestore();
+      await refreshSlashCommands({ client: null });
+    }
+  });
+  it("retires in-flight commands after an explicit selection invalidation", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    const scope = { agentId: "main", sessionKey: "agent:main:shared" };
+    const { promise: pending, resolve: settle } = createDeferred<{
+      commands: ReturnType<typeof remoteCommand>[];
+    }>();
+    const request = vi
+      .spyOn(client, "request")
+      .mockImplementationOnce(async () => pending)
+      .mockResolvedValue({ commands: [remoteCommand("new_pin", "Updated selection")] });
+    try {
+      const stale = refreshSlashCommands({ client, ...scope });
+      invalidateSessionSlashCommands(client, scope);
+      await refreshSlashCommands({ client, ...scope });
+      settle({ commands: [remoteCommand("old_pin", "Previous selection")] });
+      await stale;
+      await refreshSlashCommands({ client, ...scope });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(SLASH_COMMANDS.some((command) => command.name === "new_pin")).toBe(true);
+      expect(SLASH_COMMANDS.some((command) => command.name === "old_pin")).toBe(false);
+    } finally {
+      request.mockRestore();
+      await refreshSlashCommands({ client: null });
+    }
+  });
+
   it("resolves localized UI command metadata", () => {
     const clear = SLASH_COMMANDS.find((entry) => entry.name === "clear");
     const redirect = SLASH_COMMANDS.find((entry) => entry.name === "redirect");
@@ -142,10 +234,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("coalesces duplicate refreshes for the same agent", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    const first = new Promise((resolve) => {
-      resolveFirst = resolve;
-    });
+    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
     const request = vi.fn().mockImplementationOnce(async () => await first);
     const client = { request } as never;
 
@@ -182,10 +271,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("ignores stale refresh responses after switching agents", async () => {
-    let resolveFirst: ((value: unknown) => void) | undefined;
-    const first = new Promise((resolve) => {
-      resolveFirst = resolve;
-    });
+    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
     const request = vi.fn((_: string, params: { agentId?: string }) => {
       if (params.agentId === "main") {
         return first;
@@ -252,6 +338,67 @@ describe("refreshSlashCommands", () => {
       description: "Generate setup codes.",
     });
   });
+
+  it("reads commands from the chat metadata store without requesting commands.list", async () => {
+    const request = vi.fn();
+    const client = { request } as never;
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    });
+
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).not.toHaveBeenCalled();
+    expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+      description: "Loaded from chat metadata.",
+      executeLocal: false,
+    });
+  });
+
+  it("prefers stored metadata after the commands.list cache expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue({
+        commands: [remoteCommand("cached-command", "Loaded from commands.list.")],
+      });
+      const client = { request } as never;
+
+      await refreshSlashCommands({ client, agentId: "main" });
+      vi.advanceTimersByTime(60_001);
+      beginChatMetadataPublication(client, { agentId: "main" }).publish({
+        commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+      });
+
+      await refreshSlashCommands({ client, agentId: "main" });
+
+      expect(request).toHaveBeenCalledOnce();
+      expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+        description: "Loaded from chat metadata.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retain applied metadata commands in the commands.list cache", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [remoteCommand("requested-command", "Loaded after metadata invalidation.")],
+    });
+    const client = { request } as never;
+    const metadata = {
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    };
+    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
+    applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
+
+    invalidateChatMetadataStore(client);
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).toHaveBeenCalledOnce();
+    expectRecordFields(requireCommandByName("requested-command"), "requested command", {
+      description: "Loaded after metadata invalidation.",
+    });
+  });
 });
 
 describe("conversation reset confirmation", () => {
@@ -304,7 +451,7 @@ describe("conversation reset confirmation", () => {
     const sendResetMessage = vi.fn(async () => {});
     const result = await dispatchChatSlashCommand(
       {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         connectionEpoch: 1,
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
@@ -319,13 +466,10 @@ describe("conversation reset confirmation", () => {
   });
 
   it("cancels /reset when the selected session changes during confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "agent:main:first",
       confirmConversationReset: vi.fn(async () => await confirmation),
@@ -342,10 +486,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("does not send /reset through a replacement Gateway after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -374,13 +515,10 @@ describe("conversation reset confirmation", () => {
   });
 
   it("rechecks /reset admin scope after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
@@ -408,15 +546,23 @@ describe("conversation reset confirmation", () => {
   });
 
   it("continues /reset when the session key changes to an equivalent alias", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "main",
+      hello: {
+        ...connectedSessionAccess().hello,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
       confirmConversationReset: vi.fn(async () => await confirmation),
     };
 
@@ -433,14 +579,11 @@ describe("conversation reset confirmation", () => {
   it.each(["reset", "clear"])(
     "defers /%s when a run starts during confirmation",
     async (command) => {
-      let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-      const confirmation = new Promise<boolean>((resolve) => {
-        settleConfirmation = resolve;
-      });
+      const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
       const sendResetMessage = vi.fn(async () => {});
       const reset = vi.fn();
       const host = {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         chatRunId: null as string | null,
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => await confirmation),
@@ -462,7 +605,7 @@ describe("conversation reset confirmation", () => {
   it("keeps chat-only /reset unchanged", async () => {
     const sendResetMessage = vi.fn(async () => {});
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       sessionKey: "agent:main:current",
     };
@@ -487,7 +630,7 @@ describe("conversation reset confirmation", () => {
     const reset = vi.fn();
     const result = await dispatchChatSlashCommand(
       {
-        ...legacyConnectedSessionAccess(),
+        ...connectedSessionAccess(),
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
         sessions: { reset },
@@ -502,10 +645,7 @@ describe("conversation reset confirmation", () => {
   });
 
   it("does not clear through a replacement Gateway after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const reset = vi.fn();
     const originalClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
@@ -542,13 +682,10 @@ describe("conversation reset confirmation", () => {
   });
 
   it("rechecks /clear scope after confirmation", async () => {
-    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
-    const confirmation = new Promise<boolean>((resolve) => {
-      settleConfirmation = resolve;
-    });
+    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
     const reset = vi.fn();
     const host = {
-      ...legacyConnectedSessionAccess(),
+      ...connectedSessionAccess(),
       connectionEpoch: 1,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },

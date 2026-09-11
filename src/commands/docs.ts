@@ -122,7 +122,7 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
 export async function docsSearchCommand(
   queryParts: string[],
   runtime: RuntimeEnv,
-  options: { json?: boolean } = {},
+  options: { json?: boolean; limit?: number } = {},
 ) {
   const query = queryParts.join(" ").trim();
   if (!query) {
@@ -150,9 +150,10 @@ export async function docsSearchCommand(
     results = await fetchDocsSearch(query);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    runtime.error(`Docs search failed: ${message}`);
-    runtime.exit(1);
-    return;
+    throw new Error(`Docs search failed: ${message}`, { cause: error });
+  }
+  if (options.limit !== undefined) {
+    results = results.slice(0, options.limit);
   }
 
   if (options.json) {

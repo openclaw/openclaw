@@ -19,7 +19,7 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
+import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -31,13 +31,6 @@ type AgentToolResultEvent = {
   details?: unknown;
   isError?: boolean;
 };
-
-function snapshotToolSendReceipt(details: unknown): unknown {
-  const toolSend = (asOptionalRecord(details) ?? {}).toolSend;
-  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
-    ? { ...(toolSend as Record<string, unknown>) }
-    : toolSend;
-}
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
@@ -75,10 +68,14 @@ function buildAgentToolResultMiddlewareFactory(
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const rawToolSend = snapshotToolSendReceipt(current.details);
-      if (eventToolCallId && rawToolSend !== undefined) {
-        // Routing evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+      if (eventToolCallId) {
+        // Delivery evidence stays private so middleware may fully replace result details.
+        recordEmbeddedToolReceipt(
+          sessionManager,
+          eventToolCallId,
+          current.details,
+          event.toolName === "message",
+        );
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId
@@ -113,6 +110,7 @@ function buildAgentToolResultMiddlewareFactory(
       return {
         content: result.content,
         details: result.details,
+        ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
         ...(isError ? { isError: true } : {}),
         ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
@@ -127,6 +125,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  contextTokenBudget?: number;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -136,16 +135,20 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const contextWindowInfo = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
+    // Prepared runs carry the canonical policy budget; fallback resolution is
+    // only for callers that do not own a prepared attempt.
+    const contextWindowTokens =
+      params.contextTokenBudget ??
+      resolveContextWindowInfo({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: params.model?.contextTokens,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,

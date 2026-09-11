@@ -3,7 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,6 +16,14 @@ type GatewayAgentListRow = {
   id: string;
   kind?: GatewayAgentKind;
   name?: string;
+};
+
+export type GatewayAgentOwnership = "sole" | "legacy" | "explicit";
+
+type GatewayAgentSelectionState = {
+  defaultId: string;
+  ownership: GatewayAgentOwnership;
+  selectionRequired: boolean;
 };
 
 const OWNER_ROSTER_ENTRIES = SYSTEM_AGENT_ROSTER_ENTRIES satisfies ReadonlyArray<{
@@ -35,9 +44,31 @@ function listExistingAgentIdsFromDisk(): string[] {
   }
 }
 
+export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayAgentSelectionState {
+  const configuredIds = listAgentEntries(cfg).map((entry) => normalizeAgentId(entry.id));
+  const soleAgentId = tryResolveDefaultAgentId(cfg);
+  if (soleAgentId) {
+    return {
+      defaultId: normalizeAgentId(soleAgentId),
+      ownership: "sole",
+      selectionRequired: false,
+    };
+  }
+  const legacyAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const legacyCompatibleId = legacyAgentId ?? configuredIds[0];
+  if (!legacyCompatibleId) {
+    throw new Error("Cannot project gateway agent ownership without a configured agent.");
+  }
+  const defaultId = normalizeAgentId(legacyCompatibleId);
+  return {
+    defaultId,
+    ownership: legacyAgentId ? "legacy" : "explicit",
+    selectionRequired: !legacyAgentId,
+  };
+}
+
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
-  defaultId: string;
+export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentListRow[];
@@ -45,13 +76,14 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   const ownerEntries = new Map(
     OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
-  const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const selection = resolveGatewayAgentSelectionState(cfg);
+  const defaultId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
-  const configuredById = new Map<string, { name?: string }>();
-  const explicitIds = new Set<string>();
+  const configuredById = new Map<string, string | undefined>();
   const diskIds = new Set<string>();
-  const agentIds = new Set<string>([defaultId]);
+  const agentIds = new Set<string>();
+  agentIds.add(normalizeAgentId(defaultId));
 
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
@@ -60,8 +92,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     const id = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
     const identityName = normalizeOptionalString(entry.identity?.name);
-    configuredById.set(id, { name: configuredName ?? identityName });
-    explicitIds.add(id);
+    configuredById.set(id, configuredName ?? identityName);
     agentIds.add(id);
   }
 
@@ -70,7 +101,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     agentIds.add(id);
   }
 
-  const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
+  const allowedIds = configuredById.size > 0 ? configuredById : null;
   const visibleIds = [...agentIds].filter(
     (id) =>
       !allowedIds ||
@@ -79,9 +110,10 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
       (diskIds.has(id) && ownerEntries.has(id)),
   );
   visibleIds.sort((a, b) => a.localeCompare(b));
-  const orderedIds = visibleIds.includes(defaultId)
-    ? [defaultId, ...visibleIds.filter((id) => id !== defaultId)]
-    : visibleIds;
+  const orderedIds =
+    defaultId && visibleIds.includes(defaultId)
+      ? [defaultId, ...visibleIds.filter((id) => id !== defaultId)]
+      : visibleIds;
   if (mainKey && !orderedIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     orderedIds.push(mainKey);
   }
@@ -89,8 +121,10 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   const agents: GatewayAgentListRow[] = orderedIds.map((id) => ({
     id,
     kind:
-      !explicitIds.has(id) && diskIds.has(id) ? (ownerEntries.get(id)?.kind ?? "agent") : "agent",
-    name: configuredById.get(id)?.name,
+      !configuredById.has(id) && diskIds.has(id)
+        ? (ownerEntries.get(id)?.kind ?? "agent")
+        : "agent",
+    name: configuredById.get(id),
   }));
-  return { defaultId, mainKey, scope, agents };
+  return { ...selection, mainKey, scope, agents };
 }

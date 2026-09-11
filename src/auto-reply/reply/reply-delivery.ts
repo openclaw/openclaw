@@ -1,12 +1,16 @@
 /** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
-import { mergeReactionDirectiveChannelData, parseReplyDirectives } from "./reply-directives.js";
+import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -51,10 +55,6 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
-  const channelData = mergeReactionDirectiveChannelData(
-    params.payload.channelData,
-    parsed?.reaction,
-  );
   return {
     payload: copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
@@ -65,7 +65,6 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-      ...(channelData ? { channelData } : {}),
     }),
     isSilent: parsed?.isSilent ?? false,
   };
@@ -81,8 +80,8 @@ async function sendDirectBlockReply(params: {
   const deliveryIndex = params.directlySentBlockPayloads.length;
   params.directlySentBlockPayloads.push(undefined);
   await params.onBlockReply(params.payload);
-  params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
-  if (!isReplyPayloadStatusNotice(params.trackingPayload)) {
+  if (isReplyPayloadTerminalContent(params.trackingPayload)) {
+    params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
     params.directlySentBlockPayloads[deliveryIndex] = params.trackingPayload;
   }
 }
@@ -161,6 +160,9 @@ export function createBlockReplyDeliveryHandler(params: {
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );
+    if (blockPayload.text?.trim() !== payload.text?.trim()) {
+      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+    }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).

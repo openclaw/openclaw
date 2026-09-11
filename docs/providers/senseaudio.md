@@ -32,9 +32,15 @@ SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw
     {
       tools: {
         media: {
+          models: [
+            {
+              provider: "senseaudio",
+              model: "senseaudio-asr-pro-1.5-260319",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
           },
         },
       },
@@ -58,8 +64,8 @@ SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw
 | `headers`  | `tools.media.models[].headers`  | Extra request headers               |
 
 <Note>
-SenseAudio is batch STT only in OpenClaw. Voice Call realtime transcription
-continues to use providers with streaming STT support.
+SenseAudio is batch STT only in OpenClaw. [Voice Call](/plugins/voice-call)
+realtime transcription continues to use providers with streaming STT support.
 </Note>
 
 ## Related

@@ -23,7 +23,8 @@ export type RouterOutletSnapshot<
 
 type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
 };
 
 type RouterOutletControllerOptions = {
@@ -47,17 +48,6 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
     active: state.matches[0],
     pending: state.pendingMatches[0],
   };
-}
-
-function equalRouterOutletState(
-  previous: RouterOutletStateSlice,
-  next: RouterOutletStateSlice,
-): boolean {
-  return (
-    previous.status === next.status &&
-    previous.active === next.active &&
-    previous.pending === next.pending
-  );
 }
 
 function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSnapshot<
@@ -86,7 +76,7 @@ export class RouterOutletController<
   TData = unknown,
 > {
   private router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  private onNotFound?: () => void;
+  private onNotFound?: () => boolean | void;
   private connected = false;
   private unsubscribe?: () => void;
   private selection: RouterOutletStateSlice<TRouteId, TModule, TData> = idleSnapshot();
@@ -96,8 +86,10 @@ export class RouterOutletController<
   private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
   private showPending = false;
   private notFoundActive = false;
+  private notFoundDeclined = false;
   private notFoundQueued = false;
   private notFoundGeneration = 0;
+  private notFoundRecoveryReady = true;
   private readonly pendingDelayMs: number;
 
   constructor(
@@ -113,7 +105,15 @@ export class RouterOutletController<
 
   setInputs(inputs: RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>): void {
     this.onNotFound = inputs.onNotFound;
+    const nextNotFoundRecoveryReady = inputs.notFoundRecoveryReady ?? true;
+    const recoveryBecameReady =
+      !this.notFoundRecoveryReady && nextNotFoundRecoveryReady && this.notFoundDeclined;
+    this.notFoundRecoveryReady = nextNotFoundRecoveryReady;
     if (this.router === inputs.router) {
+      if (recoveryBecameReady && this.selection.status === "notFound") {
+        this.cancelNotFoundEffect();
+        this.updateNotFoundEffect(this.selection.status);
+      }
       return;
     }
 
@@ -159,10 +159,10 @@ export class RouterOutletController<
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterOutletState,
-      (selection) => this.applySelection(selection),
-      equalRouterOutletState,
+    // An earlier subscriber can navigate during this notification. Read the
+    // current route so its superseded not-found snapshot cannot trigger recovery.
+    this.unsubscribe = router.subscribe(() =>
+      this.applySelection(selectRouterOutletState(router.getState())),
     );
   }
 
@@ -253,13 +253,18 @@ export class RouterOutletController<
         return;
       }
       this.notFoundQueued = false;
-      this.onNotFound?.();
+      // A disconnected shell declines transiently. Keep the latch until its
+      // readiness input changes so unrelated renders cannot spin retries.
+      if (this.onNotFound?.() === false) {
+        this.notFoundDeclined = true;
+      }
     });
   }
 
   private cancelNotFoundEffect(): void {
     this.notFoundGeneration += 1;
     this.notFoundActive = false;
+    this.notFoundDeclined = false;
     this.notFoundQueued = false;
   }
 

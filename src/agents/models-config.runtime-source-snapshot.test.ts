@@ -2,8 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
@@ -13,7 +13,7 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ plugins: [] }),
+  loadPluginManifestRegistryCore: () => ({ plugins: [] }),
 }));
 
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -26,8 +26,6 @@ vi.mock("./model-auth-env-vars.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
@@ -50,7 +48,7 @@ let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeCon
 let setRuntimeConfigSnapshot: typeof import("../config/io.js").setRuntimeConfigSnapshot;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
+let planModelsJsonForTest: typeof import("./models-config.plan.test-support.js").planModelsJsonForTest;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 const fixtureSuite = createFixtureSuite("openclaw-models-runtime-source-");
 
@@ -60,7 +58,7 @@ beforeAll(async () => {
     await import("../config/io.js"));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
   ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
+  ({ planModelsJsonForTest } = await import("./models-config.plan.test-support.js"));
   ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
 });
 
@@ -230,19 +228,14 @@ async function planGeneratedProviders(params: {
   sourceConfigForSecrets: OpenClawConfig;
 }) {
   // Planner assertions avoid filesystem noise for marker-projection cases.
-  const plan = await planOpenClawModelsJsonWithDeps(
-    {
-      cfg: params.config,
-      sourceConfigForSecrets: params.sourceConfigForSecrets,
-      agentDir: "/tmp/openclaw-models-plan",
-      env: {},
-      existingRaw: "",
-      existingParsed: null,
-    },
-    {
-      resolveImplicitProviders: async () => ({}),
-    },
-  );
+  const plan = await planModelsJsonForTest({
+    cfg: params.config,
+    sourceConfigForSecrets: params.sourceConfigForSecrets,
+    agentDir: "/tmp/openclaw-models-plan",
+    env: {},
+    existingRaw: "",
+    existingParsed: null,
+  });
   expect(plan.action).toBe("write");
   if (plan.action !== "write") {
     throw new Error(`expected models.json write plan, got ${plan.action}`);
@@ -293,7 +286,7 @@ describe("models-config runtime source snapshot", () => {
     };
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders: sourceConfig.models!.providers,
+      sourceConfigForSecrets: sourceConfig,
     })!;
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
@@ -523,7 +516,7 @@ describe("models-config runtime source snapshot", () => {
 
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders,
+      sourceConfigForSecrets: { models: { providers: sourceProviders } },
     });
 
     expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret

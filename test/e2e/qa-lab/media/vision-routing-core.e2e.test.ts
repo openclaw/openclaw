@@ -28,7 +28,8 @@ const preparedVisionCatalog = vi.hoisted(() => [
 ]);
 
 vi.mock("../../../../src/agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
 }));
 
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
@@ -86,7 +87,7 @@ describe("core vision routing product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("bypasses summarization and sends the real image to an active vision model", async () => {
-    const workspaceDir = await fs.realpath(tempDirs.make("openclaw-vision-native-"));
+    const workspaceDir = tempDirs.make("openclaw-vision-native-");
     const imagePath = path.join(workspaceDir, "native.png");
     const imageBytes = createSolidPngBuffer(2, 2, { r: 24, g: 96, b: 208 });
     await fs.writeFile(imagePath, imageBytes);
@@ -174,7 +175,7 @@ describe("core vision routing product proof", () => {
   });
 
   it("falls back in order, inserts one summary, and suppresses the described raw image", async () => {
-    const workspaceDir = await fs.realpath(tempDirs.make("openclaw-vision-fallback-"));
+    const workspaceDir = tempDirs.make("openclaw-vision-fallback-");
     const imagePath = path.join(workspaceDir, "fallback.png");
     await fs.writeFile(imagePath, createSolidPngBuffer(2, 2, { r: 208, g: 64, b: 24 }));
     const ctx = createImageContext(imagePath, workspaceDir);

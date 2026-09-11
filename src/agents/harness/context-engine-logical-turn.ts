@@ -2,12 +2,18 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   evaluateContextEngineHostSupport,
+  supportsContextEngineDurableTurnAdvancement,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveLogicalTurnContextEngines } from "../../context-engine/registry.js";
+import {
+  hasSameContextEngineInstance,
+  resolveLogicalTurnContextEngines,
+} from "../../context-engine/registry.js";
+import { disposeContextEngineSources } from "../../context-engine/registry.resources.js";
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { recordAgentCleanupFailure, runAgentCleanupStep } from "../run-cleanup-timeout.js";
 
 type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
 
@@ -31,7 +37,6 @@ export type ContextEngineLogicalTurnLease = {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
     requiresDurableCommit: boolean;
-    hasAdmissionFence: boolean;
   }) => EffectiveContextEngineRef;
   degradeBeforeStart: (reason: string) => EffectiveContextEngineRef;
   begin: () => EffectiveContextEngineRef;
@@ -43,10 +48,14 @@ export function selectContextEngineForTranscriptHost(params: {
   lease: ContextEngineLogicalTurnLease;
   host: ContextEngineHostSupport;
   operation: ContextEngineOperation;
-  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt"> | undefined;
+  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "hasPersisted"> | undefined;
 }): EffectiveContextEngineRef {
   const admission = params.recorder?.getAdmissionReceipt();
-  if (params.recorder && !admission) {
+  // Selection runs during turn preparation, before the user turn is written, so an admitted
+  // receipt does not exist yet on the paths that persist during the run. A receipt is only
+  // owed once the turn has actually been persisted: until then there is no admitted entry for
+  // the fence to anchor to, so there is nothing to degrade over.
+  if (params.recorder && !admission && params.recorder.hasPersisted()) {
     return params.lease.degradeBeforeStart(
       "current-turn transcript admission receipt is unavailable",
     );
@@ -55,20 +64,22 @@ export function selectContextEngineForTranscriptHost(params: {
     host: params.host,
     operation: params.operation,
     requiresDurableCommit: params.recorder !== undefined,
-    hasAdmissionFence: admission !== undefined,
   });
 }
 
 export async function createContextEngineLogicalTurnLease(params: {
+  identity: { runId: string; sessionId: string };
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   warn?: (message: string) => void;
 }): Promise<ContextEngineLogicalTurnLease> {
+  const { runId, sessionId } = params.identity;
   ensureContextEnginesInitialized();
   const resolution = await resolveLogicalTurnContextEngines(params.config, {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    onCleanupFailure: recordAgentCleanupFailure,
   });
   let state: LogicalTurnSelectionState = "unselected";
   let effective = resolution.configured;
@@ -121,7 +132,6 @@ export async function createContextEngineLogicalTurnLease(params: {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
     requiresDurableCommit: boolean;
-    hasAdmissionFence: boolean;
   }): string | undefined => {
     const support = evaluateContextEngineHostSupport({
       contextEngineInfo: effective.engine.info,
@@ -137,16 +147,18 @@ export async function createContextEngineLogicalTurnLease(params: {
       return undefined;
     }
     if (
-      selection.hasAdmissionFence &&
+      // A recorder-backed turn will be admitted during the run, so the declaration is required
+      // whether or not the receipt exists yet at selection time. Gating this on the receipt alone
+      // would let an engine that declares durable advancement but omits current-turn fencing run
+      // on fresh turns, which the documented contract sends to legacy.
+      selection.requiresDurableCommit &&
       effective.engine.info.transcriptSemantics?.currentTurnFence !== "before-current-turn-entry-v1"
     ) {
       return "current-turn transcript fencing is not declared";
     }
     if (
       selection.requiresDurableCommit &&
-      (effective.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-        "atomic-idempotent-v1" ||
-        typeof effective.engine.commitTurn !== "function")
+      !supportsContextEngineDurableTurnAdvancement(effective.engine)
     ) {
       return "atomic idempotent turn advancement is not declared";
     }
@@ -217,12 +229,31 @@ export async function createContextEngineLogicalTurnLease(params: {
         return;
       }
       state = "disposed";
-      const engines = new Set<ContextEngine>([
-        resolution.configured.engine,
-        resolution.fallback.engine,
-      ]);
+      const engines = [resolution.configured.engine, resolution.fallback.engine];
+      const distinctEngines = engines.filter((engine, index) =>
+        engines.slice(0, index).every((other) => !hasSameContextEngineInstance(engine, other)),
+      );
+      // Dispose instances in parallel so their deadlines do not stack. The
+      // shared helper records each failure before one-shot cleanup checks ownership.
       const disposeEngines = async () => {
-        await Promise.allSettled([...engines].map(async (engine) => await engine.dispose?.()));
+        await Promise.allSettled(
+          distinctEngines.map((engine) =>
+            runAgentCleanupStep({
+              runId,
+              sessionId,
+              step: "context-engine-dispose",
+              log: { warn: params.warn ?? console.warn },
+              cleanup: async () => {
+                const sources = new Set(
+                  engines
+                    .filter((other) => hasSameContextEngineInstance(engine, other))
+                    .flatMap((other) => resolution.sourceResources?.get(other) ?? []),
+                );
+                await disposeContextEngineSources(engine, [...sources]);
+              },
+            }),
+          ),
+        );
       };
       if (disposalHolds.size > 0) {
         void Promise.allSettled(disposalHolds).then(disposeEngines);

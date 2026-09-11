@@ -8,24 +8,11 @@ export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   CliBackendAuthEpochMode,
-  CliBackendConfig,
-  CliBackendExecutionMode,
-  CliBackendJsonlUsage,
-  CliBackendLiveSessionRequirement,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
-  CliBackendParseJsonlEvent,
-  CliBackendParseJsonlEventContext,
-  CliBackendParsedJsonlEvent,
   CliBackendPlugin,
-  CliBackendPreparedExecution,
-  CliBackendPrepareExecutionContext,
-  CliBackendResolveExecutionArgs,
-  CliBackendResolveExecutionArgsContext,
   CliBackendSideQuestionToolMode,
-  CliBackendToolAvailability,
   CliBackendToolAvailabilityEnforcement,
-  CliBackendThinkingLevel,
   CliBundleMcpMode,
   PluginTextTransforms,
 } from "./cli-backend.types.js";
@@ -77,8 +64,6 @@ export type {
 } from "./provider-config-context.types.js";
 export type {
   ProviderAuthOptionBag,
-  ProviderExternalAuthProfile,
-  ProviderResolveExternalAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
 } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -137,8 +122,12 @@ export type {
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
   TranscriptSourceProvider,
+  WorkerDesktopApp,
+  WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -246,11 +235,8 @@ export type {
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCliRootCommandDescriptor,
-  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
-  OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHttpRouteUpgradeHandler,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
 } from "./plugin-registration.types.js";

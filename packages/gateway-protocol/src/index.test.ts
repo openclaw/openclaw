@@ -26,31 +26,24 @@ import {
   validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
-  validateTasksCancelParams,
-  validateTasksListParams,
-  validateTasksRecoveryParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
+  validateTalkClientCreateResult,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
-  validateTalkSessionCancelTurnParams,
   validateTalkSessionCreateParams,
-  validateTalkSessionJoinParams,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionSteerParams,
-  validateTalkSessionTurnParams,
   validateWakeParams,
   type ValidationError,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  TalkEvent,
-} from "./index.js";
-import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
@@ -109,11 +102,9 @@ const talkSession = (overrides: Record<string, unknown>) => ({
 });
 
 describe("protocol export registries", () => {
-  it("re-exports every runtime registry symbol by identity", () => {
-    for (const registry of [schemaExportRegistry, validatorRegistry]) {
-      for (const [name, value] of Object.entries(registry)) {
-        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
-      }
+  it("re-exports every validator registry symbol by identity", () => {
+    for (const [name, value] of Object.entries(validatorRegistry)) {
+      expect((protocol as Record<string, unknown>)[name], name).toBe(value);
     }
   });
 
@@ -121,21 +112,22 @@ describe("protocol export registries", () => {
     expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
     expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<SessionsCatalogStartTerminalParams>().toEqualTypeOf<Schema.SessionsCatalogStartTerminalParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
 
   it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
     expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+      protocol.SkillsProposalEvaluateParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+      protocol.SkillsProposalEvaluateResultSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+      protocol.SkillsProposalEventsListParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+      protocol.SkillsProposalEventsListResultSchema,
     );
   });
 });
@@ -171,32 +163,22 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
-    expectAccepted(validateSessionsListParams, [{ boardFace: "dashboard" }]);
-    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }]);
+    expectAccepted(validateSessionsListParams, [
+      { boardFace: "dashboard" },
+      { hasBoard: true },
+      { hasBoard: false },
+    ]);
+    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
     expectAccepted(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "chat" }]);
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.
     expectRejected(validateSessionsListParams, [{ face: "dashboard" }]);
-  });
-
-  it("validates session patch compare-and-swap identity", () => {
-    expectAccepted(validateSessionsPatchParams, [
-      sessionPatch({
-        key: "agent:main:self-archive",
-        archived: true,
-        expectedSessionId: "session-self-archive",
-        expectedLifecycleRevision: "revision-self-archive",
-      }),
-    ]);
-    expectRejected(validateSessionsPatchParams, [
-      sessionPatch({ key: "agent:main:self-archive", expectedSessionId: "" }),
-      sessionPatch({ key: "agent:main:self-archive", expectedLifecycleRevision: "" }),
-    ]);
   });
 
   it("validates bounded closed bulk session patch requests", () => {
@@ -211,13 +193,13 @@ describe("lazy protocol validators", () => {
       label: "Label",
       category: "Category",
       boardFace: "dashboard",
-      icon: "name:spark",
       statusNote: "Working",
       attention: "hand",
       ttlMinutes: 30,
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -227,8 +209,6 @@ describe("lazy protocol validators", () => {
       responseUsage: "full",
       elevatedLevel: "on",
       execHost: "gateway",
-      execSecurity: "allowlist",
-      execAsk: "on-miss",
       execNode: "node-1",
       model: "openai/gpt-5.6-luna",
       completionOwnerSessionKey: "agent:main:main",
@@ -273,6 +253,15 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it.each(["execSecurity", "execAsk"])("accepts retired v4 session policy field %s", (field) => {
+    for (const value of ["deny", "always", null]) {
+      expectAccepted(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
+      expectAccepted(validateSessionsPatchManyParams, [
+        { targets: [{ key: "agent:main:main" }], patch: { [field]: value } },
+      ]);
+    }
+  });
+
   it("validates sparse session tool overrides", () => {
     expectAccepted(validateSessionsPatchParams, [
       sessionPatch({
@@ -301,6 +290,7 @@ describe("lazy protocol validators", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
     expectAccepted(validateConnectParams, [connect]);
+    expectAccepted(validateConnectParams, [{ ...connect, computerUse: { version: 2 } }]);
     expect(validateConnectParams.errors).toBeNull();
   });
 
@@ -411,11 +401,19 @@ describe("lazy protocol validators", () => {
     expectAccepted(protocol.validateSessionsCompactParams, [{ key: "global", agentId: "work" }]);
   });
 
-  it("accepts selected-agent scope on chat metadata params", () => {
-    expectAccepted(validateChatMetadataParams, [{}, { agentId: "work" }]);
+  it("accepts distinct session and draft-account scopes on chat metadata params", () => {
+    expectAccepted(validateChatMetadataParams, [
+      {},
+      { agentId: "work" },
+      { sessionKey: "agent:work:main" },
+      { agentId: "work", sessionKey: "global" },
+      { agentId: "work", authProfileId: "test:locked" },
+    ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },
       { agentId: "work", view: "configured" },
+      { sessionKey: "" },
+      { sessionKey: "agent:work:main", authProfileId: "test:locked" },
     ]);
   });
 
@@ -484,6 +482,68 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("validates worker desktop observer request and result contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "worker:one" },
+      { environmentId: "worker:one", control: true },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "" },
+      { environmentId: "worker:one", control: "yes" },
+      { environmentId: "worker:one", extra: true },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: true,
+        vncPassword: "secret",
+      },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "vnc",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "",
+        expiresAtMs: -1,
+        control: false,
+      },
+    ]);
+  });
+
+  it("validates closed worker desktop app launch contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "worker:one", app: "browser" },
+      { environmentId: "worker:one", app: "terminal" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "", app: "browser" },
+      { environmentId: "worker:one", app: "editor" },
+      { environmentId: "worker:one", app: "browser", args: [] },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "browser", status: "ready" },
+      { app: "terminal", status: "ready" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "editor", status: "ready" },
+      { app: "browser", status: "starting" },
+      { app: "browser", status: "ready", executablePath: "/usr/bin/chromium" },
+    ]);
+  });
+
   it("validates chat sends that suppress command interpretation", () => {
     expectAccepted(validateChatSendParams, [
       {
@@ -512,6 +572,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",
@@ -676,6 +737,21 @@ describe("validateTalkConfigResult", () => {
       }),
     ]);
   });
+
+  it("accepts response-only realtime client routing hints", () => {
+    expectAccepted(validateTalkConfigResult, [
+      {
+        config: {
+          clientHints: {
+            realtime: {
+              modelSource: "gateway",
+              gatewayRelaySupported: false,
+            },
+          },
+        },
+      },
+    ]);
+  });
 });
 
 describe("validateTalkClientCreateParams", () => {
@@ -688,7 +764,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
-        capabilities: ["camera-frame"],
+        capabilities: ["camera-frame", "gateway-control-v1"],
       }),
     ]);
   });
@@ -705,6 +781,28 @@ describe("validateTalkClientCreateParams", () => {
   it("rejects unknown browser capabilities", () => {
     expectRejected(validateTalkClientCreateParams, [
       talkClient({ capabilities: ["screen-frame"] }),
+    ]);
+  });
+
+  it("accepts only the Gateway-owned control descriptor", () => {
+    expectAccepted(validateTalkClientCreateResult, [
+      {
+        provider: "openai",
+        transport: "webrtc",
+        voiceSessionId: "voice-1",
+        clientSecret: "single-use-token",
+        offerUrl: "/plugins/openai/realtime/calls",
+        clientControl: { owner: "gateway" },
+      },
+    ]);
+    expectRejected(validateTalkClientCreateResult, [
+      {
+        provider: "openai",
+        transport: "webrtc",
+        voiceSessionId: "voice-1",
+        clientSecret: "provider-secret",
+        clientControl: { owner: "client" },
+      },
     ]);
   });
 });
@@ -733,14 +831,6 @@ describe("validateTalkSession", () => {
       "unexpected property 'instructionsOverride'",
     );
     expectRejected(validateTalkSessionCreateParams, [{ mode: "realtime", language: "de-DE" }]);
-  });
-
-  it("accepts managed-room join and turn lifecycle params", () => {
-    expectAccepted(validateTalkSessionJoinParams, [talkSession({ token: "token-1" })]);
-    expectAccepted(validateTalkSessionTurnParams, [talkSession({ turnId: "turn-1" })]);
-    expectAccepted(validateTalkSessionCancelTurnParams, [
-      talkSession({ turnId: "turn-1", reason: "barge-in" }),
-    ]);
   });
 });
 
@@ -774,12 +864,11 @@ describe("validateTalkAgentControlParams", () => {
 });
 
 describe("validateTalkSessionRelayParams", () => {
-  it("accepts session audio, cancel, output cancel, and tool result params", () => {
+  it("accepts session audio, output cancel, and tool result params", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    expectAccepted(validateTalkSessionCancelTurnParams, [talkSession({ reason: "barge-in" })]);
-    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ reason: "barge-in" })]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",
@@ -931,16 +1020,27 @@ describe("validateModelsListParams", () => {
   it("accepts the supported model catalog views", () => {
     expectAccepted(validateModelsListParams, [
       {},
+      { sessionKey: "agent:work:saved", view: "configured" },
+      { agentId: "work", authProfileId: "personal:reader:account" },
       { view: "default" },
       { view: "configured" },
       { view: "all" },
+      { view: "configured", preparedOnly: true },
+      { view: "all", refresh: true },
+      { view: "configured", provider: "minimax", includeDetails: true },
     ]);
   });
 
   it("rejects unknown model catalog views and extra fields", () => {
     expectRejected(validateModelsListParams, [
       { view: "available" },
-      { view: "configured", provider: "minimax" },
+      { sessionKey: "agent:work:saved", authProfileId: "personal:reader:account" },
+      { sessionKey: "" },
+      { authProfileId: "" },
+      { preparedOnly: true, refresh: true },
+      { view: "configured", unexpected: true },
+      { provider: "" },
+      { includeDetails: "yes" },
     ]);
   });
 });
@@ -964,36 +1064,6 @@ describe("validateModelsProbeParams", () => {
       {},
       { provider: "openai", timeoutMs: 0 },
       { provider: "openai", extra: true },
-    ]);
-  });
-});
-
-describe("validateTasksListParams", () => {
-  it("accepts SDK task ledger filters", () => {
-    expectAccepted(validateTasksListParams, [
-      {
-        status: ["running", "completed"],
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        limit: 50,
-        cursor: "100",
-      },
-    ]);
-  });
-
-  it("rejects internal task statuses and unknown fields", () => {
-    expectRejected(validateTasksListParams, [{ status: "succeeded" }]);
-    expectRejected(validateTasksCancelParams, [{ taskId: "task-1", force: true }]);
-  });
-});
-
-describe("validateTasksRecoveryParams", () => {
-  it("accepts one to ten task ids and rejects unbounded recovery batches", () => {
-    expectAccepted(validateTasksRecoveryParams, [{ taskIds: ["task-1", "task-2"] }]);
-    expectRejected(validateTasksRecoveryParams, [
-      { taskIds: [] },
-      { taskIds: Array.from({ length: 11 }, (_, index) => `task-${index}`) },
-      { taskIds: ["task-1"], force: true },
     ]);
   });
 });

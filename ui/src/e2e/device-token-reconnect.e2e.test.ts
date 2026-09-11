@@ -1,9 +1,10 @@
 // Control UI tests cover browser-native device-token isolation and reuse.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +17,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("device-token-reconnect", artifactRoot)
+    : undefined;
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -32,13 +39,9 @@ const ROSITA_GATEWAY_URL = "wss://gateway.example/rosita";
 const WILFRED_GATEWAY_URL = "wss://gateway.example/wilfred";
 const ROSITA_DEVICE_TOKEN = "rosita-device-token";
 const WILFRED_DEVICE_TOKEN = "wilfred-device-token";
+const WILFRED_ROTATED_TOKEN = "wilfred-rotated-device-token";
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function readConnectAuth(request: { params?: unknown }): Record<string, unknown> | undefined {
   const auth = requireRecord(request.params).auth;
@@ -115,7 +118,6 @@ async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
@@ -150,7 +152,11 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       gatewayUrl: ROSITA_GATEWAY_URL,
       sharedToken: "shared-rosita",
     });
-    expect(requireConnectAuth(rositaSource.connect).token).toBe("shared-rosita");
+    expect(requireConnectAuth(rositaSource.connect)).toEqual({
+      // The single secret field sends the shared secret in both connect fields.
+      password: "shared-rosita",
+      token: "shared-rosita",
+    });
 
     const wilfredSource = await openGatewayPage({
       appBaseUrl: server.baseUrl,
@@ -159,7 +165,11 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       gatewayUrl: WILFRED_GATEWAY_URL,
       sharedToken: "shared-wilfred",
     });
-    expect(requireConnectAuth(wilfredSource.connect).token).toBe("shared-wilfred");
+    expect(requireConnectAuth(wilfredSource.connect)).toEqual({
+      // The single secret field sends the shared secret in both connect fields.
+      password: "shared-wilfred",
+      token: "shared-wilfred",
+    });
 
     const rositaReconnect = await openGatewayPage({
       appBaseUrl: server.baseUrl,
@@ -168,9 +178,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       gatewayUrl: ROSITA_GATEWAY_URL,
       route: "sessions",
     });
-    expect(requireConnectAuth(rositaReconnect.connect)).toMatchObject({
+    expect(requireConnectAuth(rositaReconnect.connect)).toEqual({
       deviceToken: ROSITA_DEVICE_TOKEN,
-      token: ROSITA_DEVICE_TOKEN,
     });
     expect(await rositaReconnect.page.locator("openclaw-login-gate").count()).toBe(0);
     await captureProof(rositaReconnect.page, "rosita-reconnected.png");
@@ -181,9 +190,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       deviceToken: WILFRED_DEVICE_TOKEN,
       gatewayUrl: WILFRED_GATEWAY_URL,
     });
-    expect(requireConnectAuth(wilfredReconnect.connect)).toMatchObject({
+    expect(requireConnectAuth(wilfredReconnect.connect)).toEqual({
       deviceToken: WILFRED_DEVICE_TOKEN,
-      token: WILFRED_DEVICE_TOKEN,
     });
     expect(await wilfredReconnect.page.locator("openclaw-login-gate").count()).toBe(0);
 
@@ -203,8 +211,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       deviceToken: "other-origin-device-token",
       gatewayUrl: ROSITA_GATEWAY_URL,
     });
-    expect(readConnectAuth(otherOrigin.connect)?.token).toBeUndefined();
-    expect(readConnectAuth(otherOrigin.connect)?.deviceToken).toBeUndefined();
+    expect(readConnectAuth(otherOrigin.connect)).toBeUndefined();
 
     const wilfredDevices = await openGatewayPage({
       appBaseUrl: server.baseUrl,
@@ -231,12 +238,22 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
           pending: [],
         },
         "device.token.revoke": {},
+        "device.token.rotate": {
+          deviceId,
+          role: "operator",
+          scopes: OPERATOR_SCOPES,
+          token: WILFRED_ROTATED_TOKEN,
+          rotatedAtMs: Date.now(),
+          tokenDelivery: "in-band",
+        },
         "node.list": { nodes: [] },
       },
       // Exercise the legacy /nodes alias while asserting the renamed Devices surface.
       route: "nodes",
     });
-    expect(requireConnectAuth(wilfredDevices.connect).token).toBe(WILFRED_DEVICE_TOKEN);
+    expect(requireConnectAuth(wilfredDevices.connect)).toEqual({
+      deviceToken: WILFRED_DEVICE_TOKEN,
+    });
     await wilfredDevices.gateway.waitForRequest("device.pair.list");
     const deviceEntry = wilfredDevices.page.locator(".device-entry").filter({
       has: wilfredDevices.page.getByText("This browser", { exact: true }),
@@ -247,15 +264,13 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
     await captureProof(wilfredDevices.page, "wilfred-before-revoke.png");
-    const dialogPromise = wilfredDevices.page.waitForEvent("dialog");
-    await Promise.all([
-      dialogPromise.then(async (dialog) => {
-        expect(dialog.type()).toBe("confirm");
-        expect(dialog.message()).toBe(`Revoke token for ${deviceId} (operator)?`);
-        await dialog.accept();
-      }),
-      revokeButton.click(),
-    ]);
+    await revokeButton.click();
+    // Revoke confirms in-page, not through window.confirm: webviews without a dialog
+    // bridge silently answer false and would drop the action with no visible outcome.
+    const revokeConfirm = wilfredDevices.page.locator("openclaw-modal-dialog");
+    await revokeConfirm.getByText("Revoke the operator token?").waitFor();
+    await revokeConfirm.getByText(`Device ID: ${deviceId}`).waitFor();
+    await revokeConfirm.getByRole("button", { name: "Revoke", exact: true }).click();
     const revoke = await wilfredDevices.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
     const wilfredStoreKey =
@@ -279,9 +294,8 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       deviceToken: ROSITA_DEVICE_TOKEN,
       gatewayUrl: ROSITA_GATEWAY_URL,
     });
-    expect(requireConnectAuth(rositaAfterRevoke.connect)).toMatchObject({
+    expect(requireConnectAuth(rositaAfterRevoke.connect)).toEqual({
       deviceToken: ROSITA_DEVICE_TOKEN,
-      token: ROSITA_DEVICE_TOKEN,
     });
 
     const wilfredAfterRevoke = await openGatewayPage({
@@ -290,7 +304,23 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       deviceToken: WILFRED_DEVICE_TOKEN,
       gatewayUrl: WILFRED_GATEWAY_URL,
     });
-    expect(readConnectAuth(wilfredAfterRevoke.connect)?.token).toBeUndefined();
-    expect(readConnectAuth(wilfredAfterRevoke.connect)?.deviceToken).toBeUndefined();
+    expect(readConnectAuth(wilfredAfterRevoke.connect)).toBeUndefined();
+
+    // Rotation hands back the only copy of the new credential, so it is revealed in-page:
+    // window.prompt rendered nothing in a webview without a dialog bridge. This runs last
+    // because Escape also exits the Settings takeover behind the dialog — pre-existing
+    // shell behavior shared by every modal — which must not disturb the assertions above.
+    await deviceEntry.getByRole("button", { name: "Rotate", exact: true }).click();
+    const rotateReveal = wilfredDevices.page.locator("openclaw-modal-dialog");
+    await rotateReveal.getByText("New operator token").waitFor();
+    await rotateReveal.getByText(WILFRED_ROTATED_TOKEN).waitFor();
+    await captureProof(wilfredDevices.page, "wilfred-rotated-token.png");
+    await wilfredDevices.page.keyboard.press("Escape");
+    await rotateReveal
+      .getByText("This dialog stays open until you confirm the token is saved.")
+      .waitFor();
+    await rotateReveal.getByText(WILFRED_ROTATED_TOKEN).waitFor({ state: "visible" });
+    await rotateReveal.getByRole("button", { name: "I saved this token", exact: true }).click();
+    await rotateReveal.waitFor({ state: "detached" });
   });
 });

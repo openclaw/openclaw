@@ -6,14 +6,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { createCommandError } from "../process/command-error.js";
+import type { SpawnResult } from "../process/exec-result.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { formatAgentInternalEventsForPrompt } from "./internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -24,6 +27,15 @@ describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
     expect(sanitizeUserFacingText("<final>Hello</final>")).toBe("Hello");
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
+  });
+
+  it.each([
+    'Example:\n```xml\n<final data-model="demo">payload</final>\n```',
+    "Write `<final>payload</final>` as XML.",
+  ])("preserves literal final tags through user-facing sanitization: %s", (example) => {
+    expect(sanitizeUserFacingText(`${example}\n<final>Outside answer</final>`)).toBe(
+      `${example}\nOutside answer`,
+    );
   });
 
   it("strips self-closing and attributed final tags", () => {
@@ -57,18 +69,18 @@ describe("sanitizeUserFacingText", () => {
   );
 
   it("sanitizes role ordering errors", () => {
-    const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });
+    const result = renderUserFacingText("400 Incorrect role information", { errorContext: true });
     expect(result).toContain("Message ordering conflict");
   });
 
   it("sanitizes HTTP status errors with error hints", () => {
-    expect(sanitizeUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
+    expect(renderUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
       "HTTP 500: Internal Server Error",
     );
   });
 
   it("preserves a provider-completed finish_reason error", () => {
-    expect(sanitizeUserFacingText("Provider finish_reason: error", { errorContext: true })).toBe(
+    expect(renderUserFacingText("Provider finish_reason: error", { errorContext: true })).toBe(
       "Provider finish_reason: error",
     );
   });
@@ -77,7 +89,7 @@ describe("sanitizeUserFacingText", () => {
     "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
     "Request size exceeds model context window",
   ])("sanitizes direct context-overflow error: %s", (text) => {
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+    expect(renderUserFacingText(text, { errorContext: true })).toContain(
       "Context overflow: prompt too large for the model.",
     );
   });
@@ -85,7 +97,7 @@ describe("sanitizeUserFacingText", () => {
   it("sanitizes Ollama prompt-too-long payloads through the context-overflow path", () => {
     const text =
       'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain(
+    expect(renderUserFacingText(text, { errorContext: true })).toContain(
       "Context overflow: prompt too large for the model.",
     );
   });
@@ -112,12 +124,12 @@ describe("sanitizeUserFacingText", () => {
 
   it("rewrites billing error-shaped text with errorContext", () => {
     const text = "billing: please upgrade your plan";
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
+    expect(renderUserFacingText(text, { errorContext: true })).toContain("billing error");
   });
 
   it("rewrites exec denied payloads with errorContext", () => {
     expect(
-      sanitizeUserFacingText("Exec denied (gateway id=req-1, approval-timeout): bash -lc ls", {
+      renderUserFacingText("Exec denied (gateway id=req-1, approval-timeout): bash -lc ls", {
         errorContext: true,
       }),
     ).toBe("Command did not run: approval timed out.");
@@ -125,7 +137,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
-    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+    expect(renderUserFacingText(raw, { errorContext: true })).toBe(
       "LLM error server_error: Something exploded",
     );
   });
@@ -138,7 +150,7 @@ describe("sanitizeUserFacingText", () => {
   it("sanitizes Codex error-prefixed API payloads", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
-    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+    expect(renderUserFacingText(raw, { errorContext: true })).toBe(
       "LLM error server_error: Something exploded",
     );
   });
@@ -146,7 +158,7 @@ describe("sanitizeUserFacingText", () => {
   it("sanitizes Codex error-prefixed API payloads without explicit errorContext", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
-    expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
+    expect(renderUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
   });
 
   it("keeps regular JSON examples intact without explicit errorContext", () => {
@@ -157,7 +169,7 @@ describe("sanitizeUserFacingText", () => {
   it("preserves specialized context overflow guidance for raw API payloads", () => {
     const raw =
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
-    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+    expect(renderUserFacingText(raw, { errorContext: true })).toContain(
       "Context overflow: prompt too large for the model.",
     );
   });
@@ -165,20 +177,20 @@ describe("sanitizeUserFacingText", () => {
   it("preserves specialized context overflow guidance for Codex-prefixed API payloads", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
-    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+    expect(renderUserFacingText(raw, { errorContext: true })).toContain(
       "Context overflow: prompt too large for the model.",
     );
   });
 
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
-    expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
+    expect(renderUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
   });
 
   it("preserves rate limit reset details that use resets wording", () => {
     expect(
-      sanitizeUserFacingText("Error: Rate limit reached, resets 6pm (UTC)", {
+      renderUserFacingText("Error: Rate limit reached, resets 6pm (UTC)", {
         errorContext: true,
       }),
     ).toBe("⚠️ Rate limit reached, resets 6pm (UTC)");
@@ -186,7 +198,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
     expect(
-      sanitizeUserFacingText(
+      renderUserFacingText(
         "OpenAI error: Selected model is at capacity. Please try a different model.",
         {
           errorContext: true,
@@ -197,16 +209,63 @@ describe("sanitizeUserFacingText", () => {
 
   it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
     expect(
-      sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
+      renderUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
         errorContext: true,
       }),
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
+  it("preserves the production Git inventory timeout and its hint instead of provider copy", () => {
+    const header =
+      "Error: git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):";
+    const hint = "Check repository access and disk space.";
+    const text = `${header}\n…\n4514\n4168\n…\n${hint}`;
+    const rendered = renderUserFacingText(text, { errorContext: true });
+    expect(rendered).toBe(`${header} ${hint}`);
+    expect(rendered).not.toBe("LLM request timed out.");
+  });
+
+  it.each([
+    ["Error: fetch failed", "LLM request failed: network connection error."],
+    ["Error: request timed out", "LLM request timed out."],
+  ])("keeps provider presentation for unmarked errors: %s", (text, expected) => {
+    expect(renderUserFacingText(text, { errorContext: true })).toBe(expected);
+  });
+
+  it.each([
+    { termination: "exit", code: 23, signal: null },
+    { termination: "no-output-timeout", code: null, signal: "SIGTERM" },
+    { termination: "signal", code: null, signal: "SIGKILL" },
+    { termination: "signal", code: null, signal: null },
+    { termination: "exit", code: null, signal: null, outputLimitExceeded: true },
+    { termination: "exit", code: null, signal: null },
+  ] satisfies Array<Partial<SpawnResult>>)(
+    "preserves command failure metadata and the bounded recovery tail: %j",
+    (metadata) => {
+      const error = createCommandError(
+        "worktree setup",
+        {
+          stdout: "",
+          stderr: `Provider rate limit reached\nCreate   the fixture input and retry ${"x".repeat(600)}`,
+          killed: false,
+          ...metadata,
+        },
+        { timeoutMs: 120_000 },
+      );
+      const header = String(error).split("\n", 1)[0];
+      const rendered = renderUserFacingText(String(error), { errorContext: true });
+      expect(rendered).toContain(`${header} Create the fixture input and retry`);
+      expect(rendered).not.toContain("Provider rate limit");
+      expect(rendered).not.toMatch(/\s{2,}/u);
+      expect(rendered.length).toBeLessThanOrEqual(500);
+      expect(rendered).toMatch(/\.\.\.$/u);
+    },
+  );
+
   it.each(["disk full", "ENOSPC: no space left on device"])(
     "rewrites disk-space failures with errorContext: %s",
     (input) => {
-      expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
+      expect(renderUserFacingText(input, { errorContext: true })).toBe(
         "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
       );
     },
@@ -214,7 +273,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("sanitizes invalid streaming event order errors", () => {
     expect(
-      sanitizeUserFacingText(
+      renderUserFacingText(
         'Unexpected event order, got message_start before receiving "message_stop"',
         { errorContext: true },
       ),
@@ -733,50 +792,34 @@ describe("stripThoughtSignatures", () => {
   });
 });
 
-describe("downgradeOpenAIReasoningBlocks", () => {
-  it("keeps reasoning signatures when followed by content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
+describe("dropStaleOpenAIReasoning", () => {
+  it.each([undefined, "synthetic-completed-reasoning"])(
+    "drops reasoning at the model switch boundary (encrypted: %s)",
+    (encryptedContent) => {
+      const input = [
+        {
+          role: "assistant",
+          timestamp: 2,
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_123",
+                type: "reasoning",
+                encrypted_content: encryptedContent,
+              }),
+            },
+            { type: "text", text: "answer" },
+          ],
+        },
+      ];
 
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
-  });
-
-  it("drops replayable reasoning at the switch boundary even with following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        timestamp: 2,
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
-    ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
-  });
+      expect(
+        dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
+      ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
+    },
+  );
 
   it("drops the paired message id when replayable reasoning is dropped", () => {
     const input = [
@@ -798,35 +841,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
-  });
-
-  it("keeps the paired message id when reasoning is preserved", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          {
-            type: "text",
-            text: "answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_123" }),
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual(input);
   });
 
   it("drops paired message ids across every text block when reasoning is dropped", () => {
@@ -854,10 +870,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(
-        input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoningBefore: 2 },
-      ),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([
       {
         role: "assistant",
@@ -878,45 +891,6 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ]);
   });
 
-  it("drops orphaned reasoning blocks without following content", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_abc", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
-    ).toEqual([{ role: "user", content: "next" }]);
-  });
-
-  it("drops object-form orphaned signatures", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: { id: "rs_obj", type: "reasoning" },
-          },
-        ],
-      },
-    ];
-
-    expect(
-      downgradeOpenAIReasoningBlocks(
-        input as unknown as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("keeps non-reasoning thinking signatures", () => {
     const input = [
       {
@@ -932,31 +906,8 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ];
 
     expect(
-      downgradeOpenAIReasoningBlocks(input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0]),
+      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual(input);
-  });
-
-  it("is idempotent for orphaned reasoning cleanup", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_orphan", type: "reasoning" }),
-          },
-        ],
-      },
-      { role: "user", content: "next" },
-    ];
-
-    const once = downgradeOpenAIReasoningBlocks(
-      input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    const twice = downgradeOpenAIReasoningBlocks(
-      once as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-    );
-    expect(twice).toEqual(once);
   });
 });
 

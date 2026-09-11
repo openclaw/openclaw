@@ -16,7 +16,6 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   chunkMarkdownTextWithMode,
-  isSilentReplyText,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
@@ -28,7 +27,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -36,12 +35,12 @@ import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import {
   postSlackMessageBestEffort,
+  rethrowSlackPermanentOutboundApiRejection,
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
-import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
-import { formatSlackError } from "./errors.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
@@ -97,11 +96,10 @@ type SlackResolvedDelivery = Readonly<{
   credential: string;
   identity?: SlackSendIdentity;
   recipient: SlackRecipient;
-  requireMessageTimestamp: boolean;
   teamId?: string;
   unfurl: SlackUnfurlOptions;
   upload?: Readonly<{
-    completionClient: WebClient;
+    client: WebClient;
     auditContext: string;
   }>;
 }>;
@@ -113,6 +111,7 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  forceDocument?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -280,18 +279,20 @@ export async function updateMessageSlack(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   channelId: string;
+  teamId?: string;
   messageTs: string;
   text: string;
   blocks: (Block | KnownBlock)[];
 }): Promise<void> {
   const cfg = requireRuntimeConfig(params.cfg, "Slack update");
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const token = resolveToken({
     accountId: account.accountId,
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = getSlackWriteClient(token);
+  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
@@ -322,7 +323,7 @@ function createSlackSendReceipt(params: {
 }): MessageReceipt {
   const platformMessageIds = params.platformMessageIds
     .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown" && messageId !== "suppressed");
+    .filter((messageId) => messageId && messageId !== "unknown");
   return createMessageReceiptFromOutboundResults({
     results: platformMessageIds.map((messageId) => {
       const result: MessageReceiptSourceResult = {
@@ -337,6 +338,18 @@ function createSlackSendReceipt(params: {
     kind: params.kind,
     threadId: params.threadTs,
   });
+}
+
+function createSlackSendReceiptFromResults(
+  results: readonly SlackSendResult[],
+  threadTs?: string,
+): MessageReceipt {
+  const receipt = createMessageReceiptFromOutboundResults({ results, threadId: threadTs });
+  const thread = threadTs ? { threadId: threadTs } : {};
+  for (const [index, part] of receipt.parts.entries()) {
+    Object.assign(part, { index, ...thread });
+  }
+  return Object.assign(receipt, thread);
 }
 
 function resolveToken(params: {
@@ -381,16 +394,10 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
-function resolveSlackSendEventScope(params: {
-  account: ReturnType<typeof resolveSlackAccount>;
-  opts: SlackSendOpts;
-}): SlackEventScope | undefined {
+function resolveSlackSendEventScope(params: { opts: SlackSendOpts }): SlackEventScope | undefined {
   const scope = params.opts.eventScope;
   if (!scope) {
     return undefined;
-  }
-  if (params.account.config.enterpriseOrgInstall !== true) {
-    throw new Error("unexpected_enterprise_slack_listener_scope");
   }
   if (!/^T[A-Z0-9]+$/i.test(scope.teamId) || !scope.client) {
     throw new Error("invalid_enterprise_slack_listener_scope");
@@ -405,25 +412,20 @@ function resolveSlackDelivery(params: {
   recipient: SlackRecipient;
 }): SlackResolvedDelivery {
   if (params.eventScope) {
-    if (params.opts.mediaUrl && !params.eventScope.uploadCompletionClient) {
-      throw new Error("missing_enterprise_slack_upload_completion_client");
+    if (!params.eventScope.writeClient) {
+      throw new Error("missing_enterprise_slack_write_client");
     }
     return Object.freeze({
-      client: params.eventScope.client,
+      client: params.eventScope.writeClient,
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
-      requireMessageTimestamp: true,
       teamId: params.eventScope.teamId,
       unfurl: { unfurlMedia: params.account.config.unfurlMedia },
-      ...(params.eventScope.uploadCompletionClient
-        ? {
-            upload: Object.freeze({
-              completionClient: params.eventScope.uploadCompletionClient,
-              auditContext: "slack-enterprise-immediate-upload",
-            }),
-          }
-        : {}),
+      upload: Object.freeze({
+        client: params.eventScope.client,
+        auditContext: "slack-enterprise-immediate-upload",
+      }),
     });
   }
 
@@ -446,7 +448,6 @@ function resolveSlackDelivery(params: {
       explicit: params.opts.identity,
     }),
     recipient: params.recipient,
-    requireMessageTimestamp: false,
     teamId: params.recipient.teamId,
     unfurl: params.recipient.teamId
       ? { unfurlMedia: params.account.config.unfurlMedia }
@@ -455,20 +456,6 @@ function resolveSlackDelivery(params: {
           unfurlMedia: params.account.config.unfurlMedia,
         },
   });
-}
-
-function assertSlackPostMessageResponse(
-  response: { ok?: boolean; ts?: string; error?: unknown },
-  required: boolean,
-): void {
-  if (!required || (response.ok && response.ts)) {
-    return;
-  }
-  throw new Error(
-    response.ok
-      ? "Slack chat.postMessage returned no message timestamp"
-      : `Slack chat.postMessage failed: ${formatSlackError(response.error, "unknown error")}`,
-  );
 }
 
 function resolveSlackTextChunkLimit(params: {
@@ -498,7 +485,7 @@ function resolveSlackTextChunks(params: {
     const chunks: string[] = [];
     let remaining = text;
     while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || Array.from(remaining)[0] || "";
+      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
       chunks.push(chunk);
       remaining = remaining.slice(chunk.length);
     }
@@ -618,7 +605,7 @@ async function resolveChannelId(
   }
   const response = await withSlackDnsRequestRetry("conversations.open", () =>
     client.conversations.open({ users: recipient.id }),
-  );
+  ).catch(rethrowSlackPermanentOutboundApiRejection);
   const channelId = response.channel?.id;
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
@@ -956,7 +943,7 @@ export async function reconcileSlackUnknownSend(
   }
   const recipient = parseRecipient(ctx.to);
   try {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
   } catch (error) {
     return {
       status: "unresolved",
@@ -1076,18 +1063,10 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const eventScope = resolveSlackSendEventScope({ account, opts });
+  const eventScope = resolveSlackSendEventScope({ opts });
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   if (!eventScope) {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
-  }
-  if (isSilentReplyText(normalizedMessage) && !opts.mediaUrl && !opts.blocks) {
-    logVerbose("slack send: suppressed NO_REPLY token before API call");
-    return {
-      messageId: "suppressed",
-      channelId: "",
-      receipt: createSlackSendReceipt({ platformMessageIds: [], kind: "unknown" }),
-    };
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
   }
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   if (!normalizedMessage && !opts.mediaUrl && !blocks) {
@@ -1164,6 +1143,7 @@ async function sendMessageSlackQueuedInner(params: {
         accountId: account.accountId,
         token: delivery.credential,
       });
+  const deliveredResults: SlackSendResult[] = [];
   const reportDelivery = async (
     result: SlackSendResult,
     deliveredBlocks?: (Block | KnownBlock)[],
@@ -1184,6 +1164,7 @@ async function sendMessageSlackQueuedInner(params: {
           },
         }
       : result;
+    deliveredResults.push(deliveryResult);
     await opts.onDeliveryResult?.(deliveryResult);
     return deliveryResult;
   };
@@ -1243,7 +1224,6 @@ async function sendMessageSlackQueuedInner(params: {
     orderedBlockDeliveryPlan?.skipOriginalBlocks
       ? orderedBlockDeliveryPlan
       : undefined;
-  const sentMessageIds: string[] = [];
   let lastMessageId = "";
   let deliveredChannelId = channelId;
   let canonicalDeliveredThreadTs: string | undefined;
@@ -1283,8 +1263,7 @@ async function sendMessageSlackQueuedInner(params: {
           ...(usesOrderedBlockAccessibility ? { mrkdwn: false } : {}),
           unfurl,
         });
-        assertSlackPostMessageResponse(response, delivery.requireMessageTimestamp);
-        const messageId = response.ts ?? "unknown";
+        const messageId = response.ts;
         deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
@@ -1337,15 +1316,10 @@ async function sendMessageSlackQueuedInner(params: {
           unfurl,
         });
         const response = posted.response;
-        assertSlackPostMessageResponse(response, delivery.requireMessageTimestamp);
         sendIdentity = posted.identity;
-        lastMessageId = response.ts ?? lastMessageId;
+        lastMessageId = response.ts;
         deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
         canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-        if (!response.ts) {
-          continue;
-        }
-        sentMessageIds.push(response.ts);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
         const fallbackDelivery = await reportDelivery(
@@ -1366,11 +1340,10 @@ async function sendMessageSlackQueuedInner(params: {
           questionDelivery = fallbackDelivery;
         }
       }
-      const messageId = lastMessageId || "unknown";
       const deliveredThreadTs =
         canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
       return {
-        messageId,
+        messageId: lastMessageId,
         channelId: deliveredChannelId,
         threadTs: deliveredThreadTs,
         // Core replaces per-card progress with this aggregate; retain the
@@ -1383,12 +1356,7 @@ async function sendMessageSlackQueuedInner(params: {
               },
             }
           : {}),
-        receipt: createSlackSendReceipt({
-          platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
-          channelId: deliveredChannelId,
-          kind: fallbackMessages.some((message) => message.blocks) ? "card" : "text",
-          threadTs: deliveredThreadTs,
-        }),
+        receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
       };
     }
   }
@@ -1410,8 +1378,8 @@ async function sendMessageSlackQueuedInner(params: {
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
-      client,
-      ...(delivery.upload ? { completionClient: delivery.upload.completionClient } : {}),
+      client: delivery.upload?.client ?? client,
+      completionClient: client,
       channelId,
       mediaUrl: opts.mediaUrl,
       mediaAccess: opts.mediaAccess,
@@ -1422,10 +1390,10 @@ async function sendMessageSlackQueuedInner(params: {
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
+      ...(opts.forceDocument ? { optimizeImages: false } : {}),
       onPlatformSendDispatch: dispatchOnce,
       ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
     });
-    sentMessageIds.push(lastMessageId);
     await reportDelivery({
       messageId: lastMessageId,
       channelId,
@@ -1443,8 +1411,7 @@ async function sendMessageSlackQueuedInner(params: {
   }
 
   for (const [partIndex, chunk] of chunksToPost.entries()) {
-    const carriesPrimaryMessageOptions =
-      partIndex === 0 && !opts.mediaUrl && sentMessageIds.length === 0;
+    const carriesPrimaryMessageOptions = partIndex === 0 && !opts.mediaUrl;
     const baseMetadata = carriesPrimaryMessageOptions ? opts.metadata : undefined;
     // Every post carries its index/count so reconciliation proves the complete
     // logical text send and never mistakes a partial chunk fanout for success.
@@ -1472,43 +1439,32 @@ async function sendMessageSlackQueuedInner(params: {
       unfurl,
     });
     const response = posted.response;
-    assertSlackPostMessageResponse(response, delivery.requireMessageTimestamp);
     sendIdentity = posted.identity;
-    lastMessageId = response.ts ?? lastMessageId;
+    lastMessageId = response.ts;
     deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
     canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-    if (response.ts) {
-      sentMessageIds.push(response.ts);
-      await reportDelivery({
-        messageId: response.ts,
+    await reportDelivery({
+      messageId: response.ts,
+      channelId: deliveredChannelId,
+      threadTs:
+        resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs),
+      receipt: createSlackSendReceipt({
+        platformMessageIds: [response.ts],
         channelId: deliveredChannelId,
+        kind: "text",
         threadTs:
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs),
-        receipt: createSlackSendReceipt({
-          platformMessageIds: [response.ts],
-          channelId: deliveredChannelId,
-          kind: "text",
-          threadTs:
-            resolvePostedMessageThreadTs(response) ??
-            normalizeSlackThreadTsCandidate(opts.threadTs),
-        }),
-      });
-    }
+      }),
+    });
   }
 
-  const messageId = lastMessageId || "unknown";
   const deliveredThreadTs =
     canonicalDeliveredThreadTs ?? normalizeSlackThreadTsCandidate(opts.threadTs);
   return {
-    messageId,
+    messageId: lastMessageId,
     channelId: deliveredChannelId,
     threadTs: deliveredThreadTs,
-    receipt: createSlackSendReceipt({
-      platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
-      channelId: deliveredChannelId,
-      kind: opts.mediaUrl ? "media" : "text",
-      threadTs: deliveredThreadTs,
-    }),
+    receipt: createSlackSendReceiptFromResults(deliveredResults, deliveredThreadTs),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

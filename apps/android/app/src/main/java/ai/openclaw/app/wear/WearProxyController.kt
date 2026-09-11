@@ -1,6 +1,8 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.chat.providerQualifiedRef
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -32,25 +34,23 @@ internal data class WearProxyAgent(
   val emoji: String?,
 )
 
-internal data class WearProxyModel(
-  val ref: String,
-  val name: String,
-)
-
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
   private val hasOperatorAdminScope: () -> Boolean = { false },
+  private val supportsSessionModelCatalog: () -> Boolean = { false },
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
   private val agents: () -> List<WearProxyAgent> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
-  private val models: () -> List<WearProxyModel> = { emptyList() },
   private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
   private val disconnectGateway: suspend () -> Unit = {},
+  private val loadAgentPulse: suspend (sessionKey: String?) -> JsonObject = {
+    throw WearProxyGatewayException("unavailable", "Agent Pulse is unavailable")
+  },
   private val startRealtimeTalk:
     suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?, attemptScopedAudio: Boolean) -> WearRealtimeTalkSnapshot? = { _, _, _, _, _ -> null },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
@@ -63,6 +63,7 @@ internal class WearProxyController(
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> proxyStatus(request.params)
+          WearRpcMethod.AgentPulse -> agentPulse(request.params)
           WearRpcMethod.SessionsList -> listSessions(request.params)
           WearRpcMethod.AgentsList -> listAgents(request.params)
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
@@ -86,6 +87,12 @@ internal class WearProxyController(
     } catch (_: Throwable) {
       failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
     }
+
+  private suspend fun agentPulse(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey")
+    val sessionKey = params.optionalStringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    return loadAgentPulse(sessionKey)
+  }
 
   private suspend fun talkStart(
     sourceNodeId: String,
@@ -130,8 +137,16 @@ internal class WearProxyController(
         "capabilities",
         buildJsonArray {
           WearProxyCapability.entries
-            .filter { capability -> capability != WearProxyCapability.ModelControls || hasOperatorAdminScope() }
-            .forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+            .filter { capability ->
+              when (capability) {
+                WearProxyCapability.SessionScopedModelCatalog,
+                WearProxyCapability.ModelControls,
+                WearProxyCapability.ModelCatalogSearch,
+                -> hasOperatorAdminScope() && supportsSessionModelCatalog()
+
+                else -> true
+              }
+            }.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
         },
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
@@ -189,17 +204,47 @@ internal class WearProxyController(
     return buildJsonObject { put("activeAgentId", agentId) }
   }
 
-  private fun listModels(params: JsonObject): JsonObject {
-    params.requireOnly("selectedModelRef")
+  private suspend fun listModels(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "selectedModelRef", "query")
+    // Shipped protocol-v1 Watches omit the session; both forms use the same catalog owner.
+    val sessionKey =
+      params.optionalStringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+        ?: activeSessionKey()?.takeIf(String::isNotBlank)
+        ?: throw WearProxyInvalidRequest("Missing sessionKey")
+    val query = params.optionalStringParam("query", MAX_SEARCH_QUERY_CHARS)?.trim().orEmpty()
     val selected =
       canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
-        ?: canonicalModelRef(selectedModelRef())
-    val availableModels = availableModels()
-    // The Watch picker moves one adjacent model at a time and reloads after each choice.
+    if (!supportsSessionModelCatalog()) {
+      throw WearProxyGatewayException("unsupported_peer", "Update the Gateway to choose models for this chat")
+    }
+    val catalog =
+      parseGatewayModelCatalog(
+        requestGateway(
+          "models.list",
+          buildJsonObject {
+            put("sessionKey", sessionKey)
+            put("view", "configured")
+            put("includeDetails", true)
+          },
+        ).asObject("models.list"),
+      )
+    val availableModels =
+      catalog.models
+        .filter { it.available != false }
+        .mapNotNull { model -> canonicalModelRef(model.providerQualifiedRef())?.let { ref -> ref to model } }
+        .distinctBy { (ref) -> ref }
+    val matchingModels =
+      availableModels.filter { (ref, model) ->
+        query.isBlank() || model.name.contains(query, ignoreCase = true) || ref.contains(query, ignoreCase = true)
+      }
+    // Queries match the full catalog before the bounded transport response.
+    // Blank requests keep the selected model centered in the compact Watch list.
     // Centering keeps both directions reachable without exceeding the message cap.
     val selectedIndex = availableModels.indexOfFirst { (ref) -> ref == selected }
     val boundedModels =
-      if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
+      if (query.isNotBlank()) {
+        matchingModels.take(MAX_MODEL_COUNT)
+      } else if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
         availableModels.take(MAX_MODEL_COUNT)
       } else {
         val start =
@@ -208,6 +253,7 @@ internal class WearProxyController(
         availableModels.subList(start, start + MAX_MODEL_COUNT)
       }
     return buildJsonObject {
+      put("refreshFailed", catalog.refreshFailed)
       put(
         "models",
         buildJsonArray {
@@ -230,9 +276,6 @@ internal class WearProxyController(
     val modelRef =
       canonicalModelRef(params.stringParam("modelRef", MAX_MODEL_REF_CHARS))
         ?: throw WearProxyInvalidRequest("Invalid modelRef")
-    if (availableModels().none { (ref) -> ref == modelRef }) {
-      throw WearProxyGatewayException("not_found", "Model is no longer available")
-    }
     if (!selectSessionModel(sessionKey, modelRef)) {
       throw WearProxyGatewayException("action_rejected", "Model could not be changed")
     }
@@ -241,11 +284,6 @@ internal class WearProxyController(
       put("selectedModelRef", modelRef)
     }
   }
-
-  private fun availableModels(): List<Pair<String, WearProxyModel>> =
-    models()
-      .mapNotNull { model -> canonicalModelRef(model.ref)?.let { ref -> ref to model } }
-      .distinctBy { (ref) -> ref }
 
   private fun canonicalModelRef(value: String?): String? =
     value
@@ -265,8 +303,10 @@ internal class WearProxyController(
   }
 
   private suspend fun listSessions(params: JsonObject): JsonObject {
-    params.requireOnly("limit", "selectedSessionKey")
+    params.requireOnly("limit", "offset", "search", "selectedSessionKey")
     val limit = params.intParam("limit", default = DEFAULT_SESSION_LIMIT, range = 1..MAX_SESSION_LIMIT)
+    val offset = params.optionalIntParam("offset", range = 0..MAX_SESSION_OFFSET)
+    val search = params.optionalStringParam("search", MAX_SEARCH_QUERY_CHARS)?.trim()?.takeIf(String::isNotEmpty)
     val selectedSessionKey = params.optionalStringParam("selectedSessionKey", MAX_SESSION_KEY_CHARS)
     val agentId = activeAgentId()?.trim()?.takeIf(String::isNotEmpty)
     val gatewayResult =
@@ -274,6 +314,8 @@ internal class WearProxyController(
         "sessions.list",
         buildJsonObject {
           put("limit", limit)
+          offset?.let { put("offset", it) }
+          search?.let { put("search", it) }
           put("includeGlobal", false)
           put("includeUnknown", false)
           agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
@@ -310,6 +352,7 @@ internal class WearProxyController(
       put("sessions", JsonArray(sessions))
       agentId?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
       if (selectedSessionKey != null) put("selectedSessionValid", selectedSessionValid)
+      gatewayResult["nextOffset"].longPrimitiveOrNull()?.let { put("nextOffset", it) }
       gatewayResult["hasMore"].booleanPrimitiveOrNull()?.let { put("hasMore", it) }
       gatewayResult["totalCount"].longPrimitiveOrNull()?.let { put("totalCount", it) }
     }
@@ -376,6 +419,8 @@ internal class WearProxyController(
   private companion object {
     const val DEFAULT_SESSION_LIMIT = 20
     const val MAX_SESSION_LIMIT = 50
+    const val MAX_SESSION_OFFSET = 100_000
+    const val MAX_SEARCH_QUERY_CHARS = 200
     const val DEFAULT_HISTORY_LIMIT = 20
     const val MAX_HISTORY_LIMIT = 20
     const val DEFAULT_HISTORY_CHARS = 2_000
@@ -421,8 +466,11 @@ internal fun projectedWearMessageText(message: JsonElement?): String? {
   val content = (message as? JsonObject)?.get("content")
   val text =
     when (content) {
-      is JsonPrimitive -> content.contentOrNull
-      is JsonArray ->
+      is JsonPrimitive -> {
+        content.contentOrNull
+      }
+
+      is JsonArray -> {
         content.joinToString(separator = "") { part ->
           when (part) {
             is JsonPrimitive -> part.contentOrNull.orEmpty()
@@ -430,7 +478,11 @@ internal fun projectedWearMessageText(message: JsonElement?): String? {
             else -> ""
           }
         }
-      else -> null
+      }
+
+      else -> {
+        null
+      }
     }
   return text?.takeIf { it.isNotEmpty() }
 }
@@ -493,8 +545,11 @@ private fun projectMessage(element: JsonElement?): JsonObject? {
 
 private fun projectContent(content: JsonElement?): JsonElement? =
   when (content) {
-    is JsonPrimitive -> content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
-    is JsonArray ->
+    is JsonPrimitive -> {
+      content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
+    }
+
+    is JsonArray -> {
       buildJsonArray {
         var remainingBytes = MAX_PROJECTED_CONTENT_BYTES
         var partCount = 0
@@ -502,13 +557,19 @@ private fun projectContent(content: JsonElement?): JsonElement? =
           if (remainingBytes == 0 || partCount == MAX_PROJECTED_CONTENT_PARTS) break
           val text =
             when (part) {
-              is JsonPrimitive -> part.contentOrNull
+              is JsonPrimitive -> {
+                part.contentOrNull
+              }
+
               is JsonObject -> {
                 val type = part.stringOrNull("type")
                 if (type != null && type != "text") continue
                 part.stringOrNull("text")
               }
-              else -> null
+
+              else -> {
+                null
+              }
             } ?: continue
           val projectedText = text.takeUtf8Bytes(remainingBytes)
           if (projectedText.isEmpty() && text.isNotEmpty()) break
@@ -529,7 +590,11 @@ private fun projectContent(content: JsonElement?): JsonElement? =
           partCount += 1
         }
       }
-    else -> null
+    }
+
+    else -> {
+      null
+    }
   }
 
 private fun projectAck(source: JsonObject): JsonObject =
