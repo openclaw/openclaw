@@ -297,13 +297,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
-  // A pin recorded on the session row must stay clearable even when the configured
-  // default is absent from this catalog. Without such a pin the row has no job (New
-  // Session drafts have no row, and an agent-scoped catalog may legitimately omit the
-  // Gateway default), so nothing is synthesized.
+  // Only a pin recorded on the session row makes Default a reset target: New Session
+  // drafts have no row, and a local optimistic override is not yet a recorded pin.
+  const sessionModelPinned = props.selectedSession?.modelOverrideSource === "user";
+  // That pin must stay clearable even when the configured default is absent from
+  // this catalog. Without it the row has no job (an agent-scoped catalog may
+  // legitimately omit the Gateway default), so nothing is synthesized.
   if (
     defaultModel &&
-    props.selectedSession?.modelOverrideSource === "user" &&
+    sessionModelPinned &&
     modelOptions.length > 0 &&
     !modelOptions.some((option) => option.isDefault)
   ) {
@@ -462,6 +464,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
+        sessionModelPinned,
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue,

@@ -50,6 +50,8 @@ type ChatModelPickerParams = {
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
+  /** Pin recorded on the session row; only then does an unavailable Default row reset. */
+  sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
   triggerModelValue?: string;
@@ -141,8 +143,8 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
-    // An unavailable Default row still clears a pin: it commits the reset, not the model.
-    const resetsPin = entry.isDefault && params.selectedModelValue !== "";
+    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
+    const resetsPin = entry.isDefault && params.sessionModelPinned;
     if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
       event.preventDefault();
       return;
@@ -372,6 +374,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           entry,
                                           index: optionIndex.get(entry.value) ?? 0,
                                           selectedModelValue: params.selectedModelValue,
+                                          sessionModelPinned: params.sessionModelPinned,
                                           onHighlight: highlightOption,
                                           onSelect: selectModel,
                                           onModelSetup: params.onModelSetup,

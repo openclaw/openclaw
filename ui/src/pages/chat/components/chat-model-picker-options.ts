@@ -90,6 +90,7 @@ export function renderChatModelPickerOption(params: {
   entry: ChatModelPickerOption;
   index: number;
   selectedModelValue: string;
+  sessionModelPinned: boolean;
   onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
   onModelSetup?: () => void;
@@ -98,10 +99,11 @@ export function renderChatModelPickerOption(params: {
     params.entry.value === params.selectedModelValue ||
     (params.entry.isDefault && params.selectedModelValue === "");
   const modelLabel = formatModelLabel(params.entry);
-  // A pinned session (even one pinned to the default's own value) can always
-  // return to Default when the default model is unavailable: the row commits the
-  // reset, not that model. An inherited default has nothing to clear.
-  const resetsPin = params.entry.isDefault && params.selectedModelValue !== "";
+  // A session with a recorded pin (even one pinned to the default's own value)
+  // can always return to Default when the default model is unavailable: the row
+  // commits the reset, not that model. Otherwise an unavailable default routes
+  // to sign-in like any other unavailable row.
+  const resetsPin = params.entry.isDefault && params.sessionModelPinned;
   const needsAuth =
     params.entry.disabled &&
     (params.entry.unavailableReason === "missing-auth" ||
