@@ -142,8 +142,7 @@ export function renderNewSessionPlaceControls({
           isAdmin: place.isAdmin(),
           ...browser.popoverCallbacks("where"),
           onSelectDevice: (deviceId) => place.selectDevice(deviceId),
-          onToggleAutoDevice: (enabled) =>
-            place.selectDevice("", enabled, { keepPickerOpen: true }),
+          onSelectAutoDevice: () => place.selectDevice("", true),
           onSelectCloudProfile: (profileId) => place.selectCloudProfile(profileId),
           onSelectCloudOs: (osId) =>
             place.cloudMachines.selectOs(

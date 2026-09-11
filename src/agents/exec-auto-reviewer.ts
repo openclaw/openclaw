@@ -432,6 +432,10 @@ export function createModelExecAutoReviewer(params: {
                 "exec reviewer denied the command because it contains reviewer-directed text",
             };
       }
+      completionController = new AbortController();
+      const signal = params.signal
+        ? AbortSignal.any([completionController.signal, params.signal])
+        : completionController.signal;
       const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
       const finished = createDeferredCore();
       callerFinished = finished;
@@ -447,6 +451,7 @@ export function createModelExecAutoReviewer(params: {
               agentId,
               modelRef,
               allowMissingApiKeyModes: ["aws-sdk"],
+              signal,
             }),
           );
           preparedResult.resolve(acquired);
@@ -456,13 +461,14 @@ export function createModelExecAutoReviewer(params: {
         } finally {
           await work.drain();
           if (acquired && !("error" in acquired)) {
-            acquired.release();
+            await acquired[Symbol.asyncDispose]();
           }
         }
       }).catch((error: unknown) => preparedResult.reject(error));
       const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
         timeoutMs,
         signal: params.signal,
+        onTimeout: () => completionController?.abort(),
       });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
@@ -474,8 +480,6 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      const controller = new AbortController();
-      completionController = controller;
       const result = await raceWithReviewerTimeout(
         work.track(() =>
           complete({
@@ -498,9 +502,7 @@ export function createModelExecAutoReviewer(params: {
             options: {
               maxTokens: EXEC_REVIEWER_MAX_TOKENS,
               temperature: 0,
-              signal: params.signal
-                ? AbortSignal.any([controller.signal, params.signal])
-                : controller.signal,
+              signal,
             },
           }),
         ),

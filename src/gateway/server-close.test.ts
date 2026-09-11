@@ -7,6 +7,7 @@ import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   createReplyOperation,
@@ -14,9 +15,16 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getPluginCache } from "../plugins/plugin-cache.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  clearActivePluginRegistry,
+  createPluginRegistryOwner,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -26,8 +34,10 @@ import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
 } from "../plugins/services.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
@@ -178,6 +188,25 @@ function createGatewayCloseTestDeps(
 ): GatewayCloseParams {
   return {
     resolveGatewayContext: () => undefined,
+    closePluginRegistry: async (onRetirement) => {
+      let retirement: Promise<void> | undefined;
+      const retire = () => (retirement ??= clearActivePluginRegistry());
+      await onRetirement?.(retire);
+      await retire();
+      return { memoryErrors: [] };
+    },
+    pluginMetadata: {
+      beginClose() {},
+      async close(onFinal, retireRegistry) {
+        let retirement: Promise<void> | undefined;
+        const retire = () =>
+          (retirement ??= Promise.resolve()
+            .then(retireRegistry)
+            .then(() => {}));
+        await onFinal?.(retire);
+        await retire();
+      },
+    },
     bonjourStop: null,
     tailscaleCleanup: null,
     stopChannel: vi.fn(async () => undefined),
@@ -231,6 +260,267 @@ function createGatewayCloseTestDeps(
 }
 
 describe("createGatewayCloseHandler", () => {
+  it("joins model work before inventory retirement and shared teardown", async () => {
+    const modelEntered = createDeferredCore();
+    const modelReleased = createDeferredCore();
+    const unregisterModel = registerPreparedModelRuntimeClose(async () => {
+      modelEntered.resolve();
+      await modelReleased.promise;
+      unregisterModel();
+    });
+    const cleanupEntered = createDeferredCore();
+    const cleanupReleased = createDeferredCore();
+    const sharedEntered = createDeferredCore();
+    const sharedReleased = createDeferredCore();
+    const instance = new PluginInstance("setup-close");
+    const useDependency = instance.wrap(() => "available");
+    instance.lifecycle.onDispose(async () => {
+      cleanupEntered.resolve();
+      await cleanupReleased.promise;
+    });
+    const cache = getPluginCache();
+    cache.setupModules.set("setup-close", instance);
+    resolveGlobalSingleton(
+      Symbol("gateway-close-held-shared-cleanup"),
+      () => undefined,
+      async () => {
+        sharedEntered.resolve();
+        await sharedReleased.promise;
+      },
+    );
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const metadata = retainGatewayPluginMetadata();
+    const closing = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        pluginMetadata: metadata,
+        clearSecretsRuntimeSnapshot,
+      }),
+    )();
+    try {
+      await Promise.race([modelEntered.promise, cleanupEntered.promise]);
+      expect(cache.retirement).toBeUndefined();
+      expect(useDependency()).toBe("available");
+      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      modelReleased.resolve();
+      await cleanupEntered.promise;
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      cleanupReleased.resolve();
+      await sharedEntered.promise;
+      expect(getPluginCache()).toBe(cache);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+      sharedReleased.resolve();
+      await closing;
+      expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+      await retainGatewayPluginMetadata().close();
+    } finally {
+      modelReleased.resolve();
+      unregisterModel();
+      cleanupReleased.resolve();
+      sharedReleased.resolve();
+      await closing;
+    }
+  });
+
+  it("reports admitted memory cleanup failure while completing registry retirement", async () => {
+    const failure = new Error("memory teardown failed");
+    const cleanup = vi.fn(async () => {
+      throw failure;
+    });
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "memory-close" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    registry.memoryCapabilities.push({
+      pluginId: record.id,
+      capability: instance.wrap({
+        runtime: {
+          getMemorySearchManager: async () => ({ manager: null }),
+          resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
+          prepareReload: () => ({ drain: cleanup, resume() {} }),
+        } satisfies MemoryPluginRuntime,
+      }),
+    });
+    setActivePluginRegistry(registry);
+    const owner = createPluginRegistryOwner(registry);
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const result = await createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ closePluginRegistry: owner.close, clearSecretsRuntimeSnapshot }),
+    )();
+
+    expect(result.warnings).toContain("memory-managers");
+    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
+    expect(mocks.logInfo).not.toHaveBeenCalledWith(
+      expect.stringContaining("shutdown completed cleanly"),
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(instance.lifecycle.signal.aborted).toBe(true);
+    expect(getActivePluginRegistry()).toBeNull();
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+    const repeated = owner.close();
+    expect(owner.close()).toBe(repeated);
+    await expect(repeated).resolves.toEqual({ memoryErrors: [failure] });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])(
+    "selects only serving Gateway owners while closing custodians drain (open survivor: %s)",
+    async (openSurvivor) => {
+      const database = new DatabaseSync(":memory:");
+      let resets = 0;
+      resolveGlobalSingleton(
+        Symbol("gateway-closing-owner-database"),
+        () => database,
+        (db) => {
+          if (db.isOpen) {
+            resets++;
+            db.close();
+          }
+        },
+        "plugin-registry",
+      );
+      const disposed: string[] = [];
+      const createOwner = (id: string, holdMemory: boolean) => {
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        if (!holdMemory) {
+          release.resolve();
+        }
+        const registry = createEmptyPluginRegistry();
+        const record = createPluginRecord({ id, status: "loaded" });
+        registry.plugins.push(record);
+        const instance = new PluginInstance(id, { record, registry });
+        let retiring = false;
+        const drain = vi.fn(async () => {
+          entered.resolve();
+          await release.promise;
+          expect(database.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
+        });
+        registry.memoryCapabilities.push({
+          pluginId: id,
+          capability: instance.wrap({
+            runtime: {
+              getMemorySearchManager: async () => {
+                if (retiring) {
+                  throw new Error("Selected Gateway memory runtime is closing");
+                }
+                expect(database.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
+                return { manager: null };
+              },
+              resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
+              prepareReload: () => {
+                retiring = true;
+                return {
+                  drain,
+                  resume: () => {
+                    retiring = false;
+                  },
+                };
+              },
+            } satisfies MemoryPluginRuntime,
+          }),
+        });
+        instance.lifecycle.onDispose(() => {
+          expect(database.prepare("SELECT 3 AS value").get()).toEqual({ value: 3 });
+          disposed.push(id);
+        });
+        setActivePluginRegistry(registry, id, "gateway-bindable", `/virtual/${id}`);
+        const owner = createPluginRegistryOwner(registry);
+        return { id, registry, owner, entered, release, drain };
+      };
+      const oldest = createOwner("oldest", !openSurvivor);
+      const closing = createOwner("closing", true);
+      const newest = createOwner("newest", false);
+      const pending: Promise<unknown>[] = [];
+      try {
+        const closingDone = closing.owner.close();
+        pending.push(closingDone);
+        await closing.entered.promise;
+        if (!openSurvivor) {
+          pending.push(oldest.owner.close());
+          await oldest.entered.promise;
+        }
+        const newestDone = newest.owner.close();
+        pending.push(newestDone);
+        await newestDone;
+        expect(captureActivePluginRegistrySnapshot()).toEqual(
+          openSurvivor
+            ? {
+                activeRegistry: oldest.registry,
+                key: oldest.id,
+                workspaceDir: "/virtual/oldest",
+                runtimeSubagentMode: "gateway-bindable",
+              }
+            : {
+                activeRegistry: null,
+                key: null,
+                workspaceDir: null,
+                runtimeSubagentMode: "default",
+              },
+        );
+        expect(database.isOpen).toBe(true);
+        expect(resets).toBe(0);
+        expect(disposed).toEqual([newest.id]);
+        if (openSurvivor) {
+          await expect(
+            getActivePluginRegistry()!.memoryCapabilities[0]!.capability.runtime!.getMemorySearchManager(
+              { cfg: {}, agentId: "fixture" },
+            ),
+          ).resolves.toEqual({ manager: null });
+        }
+        closing.release.resolve();
+        await closingDone;
+        expect(getActivePluginRegistry()).toBe(openSurvivor ? oldest.registry : null);
+        expect(database.isOpen).toBe(true);
+        expect(resets).toBe(0);
+        expect(disposed).toEqual([newest.id, closing.id]);
+        oldest.release.resolve();
+        const oldestDone = oldest.owner.close();
+        pending.push(oldestDone);
+        await oldestDone;
+        expect(getActivePluginRegistry()).toBeNull();
+        expect(disposed).toEqual([newest.id, closing.id, oldest.id]);
+        expect(database.isOpen).toBe(false);
+        expect(resets).toBe(1);
+        for (const item of [oldest, closing, newest]) {
+          expect(item.drain).toHaveBeenCalledOnce();
+        }
+      } finally {
+        for (const item of [oldest, closing, newest]) {
+          item.release.resolve();
+          pending.push(item.owner.close());
+        }
+        await Promise.allSettled(pending);
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
+  it("reports failed instance disposal and completes shared dependency teardown", async () => {
+    const failure = new Error("active instance cleanup failed");
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "active-cleanup" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    instance.lifecycle.onDispose(() => {
+      throw failure;
+    });
+    setActivePluginRegistry(registry);
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    await createGatewayCloseHandler(createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }))();
+    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
+    await expect(instance.dispose()).resolves.toEqual({ errors: [failure] });
+    expect(instance.lifecycle.signal.aborted).toBe(true);
+    expect(getActivePluginRegistry()).toBeNull();
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+  });
+
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
@@ -272,7 +562,7 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it.each(["shutdown", "pre-restart", "harness"] as const)(
+  it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
     async (owner) => {
       const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
@@ -286,8 +576,13 @@ describe("createGatewayCloseHandler", () => {
       const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
       const database = openOpenClawStateDatabase({ env: state.env });
       const sdkDatabase = new DatabaseSync(":memory:");
+      const preparedDatabase = new DatabaseSync(":memory:");
+      const unregisterPrepared = registerPreparedModelRuntimeClose(async () => {
+        preparedDatabase.close();
+        unregisterPrepared();
+      });
       const sdkHost = new LegacyPluginSdkResourceHost();
-      const inspection = new PluginRegistryInspectionResources();
+      const inspection = new PluginRegistryInspectionResources(async () => {});
       inspection.attach(createEmptyPluginRegistry());
       const sdkDisposalReads: unknown[] = [];
       inspection.register("sdk-provider", {
@@ -310,6 +605,7 @@ describe("createGatewayCloseHandler", () => {
           await release.promise;
           reads.push(database.db.prepare("SELECT 1 AS value").get());
           expect(sdkDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+          expect(preparedDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
         } catch (error) {
           failures.push(error);
         } finally {
@@ -317,7 +613,14 @@ describe("createGatewayCloseHandler", () => {
         }
       });
       const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
-      if (owner === "harness") {
+      if (owner === "sdk") {
+        await expect(
+          sdkHost.track(async () => {
+            void trackAsyncWork(cleanup);
+            return "public SDK result";
+          }),
+        ).resolves.toBe("public SDK result");
+      } else if (owner === "harness") {
         const harnesses = await vi.importActual<typeof import("../agents/harness/registry.js")>(
           "../agents/harness/registry.js",
         );
@@ -342,6 +645,7 @@ describe("createGatewayCloseHandler", () => {
         createGatewayCloseTestDeps({
           httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
           closeSdkResources: () => sdkHost.close(),
+          drainSdkWork: () => sdkHost.drainWork(),
         }),
       );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -364,6 +668,7 @@ describe("createGatewayCloseHandler", () => {
         await vi.waitFor(() => expect(httpClose).toHaveBeenCalledOnce());
         expect(database.db.isOpen).toBe(true);
         expect(sdkDatabase.isOpen).toBe(true);
+        expect(preparedDatabase.isOpen).toBe(true);
         expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
         expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
@@ -374,10 +679,15 @@ describe("createGatewayCloseHandler", () => {
           await closing;
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
           expect(sdkDatabase.isOpen).toBe(false);
+          expect(preparedDatabase.isOpen).toBe(false);
         } finally {
           await sdkHost.close().catch(() => undefined);
           if (sdkDatabase.isOpen) {
             sdkDatabase.close();
+          }
+          unregisterPrepared();
+          if (preparedDatabase.isOpen) {
+            preparedDatabase.close();
           }
           hooks.unregisterInternalHook(eventKey, cleanup);
           vi.useRealTimers();
@@ -405,7 +715,7 @@ describe("createGatewayCloseHandler", () => {
       const database = openOpenClawStateDatabase({ env: state.env });
       const sdkDatabase = new DatabaseSync(":memory:");
       const sdkHost = new LegacyPluginSdkResourceHost();
-      const inspection = new PluginRegistryInspectionResources();
+      const inspection = new PluginRegistryInspectionResources(async () => {});
       inspection.attach(createEmptyPluginRegistry());
       const entered = createDeferredCore();
       const resume = createDeferredCore();
@@ -509,32 +819,58 @@ describe("createGatewayCloseHandler", () => {
     expect(getActivePluginRegistry()).toBeNull();
   });
 
-  it("retains Gateway dependencies when a trusted diagnostic service rejects shutdown", async () => {
-    const service: OpenClawPluginService = {
-      id: "diagnostics-otel",
-      start: async () => {},
-      stop: async () => {
-        throw new Error("synthetic plugin cleanup failed");
-      },
-    };
-    const registry = createEmptyPluginRegistry();
-    registry.services.push({ pluginId: service.id, service, source: "test", origin: "bundled" });
-    setActivePluginRegistry(registry);
-    const pluginServices = await startPluginServices({ registry, config: {} });
-    const clearSecretsRuntimeSnapshot = vi.fn();
-    const deps = createGatewayCloseTestDeps({ pluginServices, clearSecretsRuntimeSnapshot });
-    try {
-      await expect(
-        createGatewayCloseHandler(deps)({ reason: "gateway startup failed" }),
-      ).rejects.toThrow("synthetic plugin cleanup failed");
-      expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
-      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
-      expect(getActivePluginRegistry()).toBe(registry);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-    } finally {
-      await pluginServices.stop().catch(() => {});
-    }
-  });
+  it.each(["callback", "admission"] as const)(
+    "distinguishes trusted diagnostic %s failures during Gateway shutdown",
+    async (failureKind) => {
+      const failure = new Error("synthetic plugin cleanup failed");
+      const stop = vi.fn(async () => {
+        throw failure;
+      });
+      const instance = new PluginInstance("diagnostics-otel");
+      const service = instance.wrap<OpenClawPluginService>({
+        id: "diagnostics-otel",
+        start: async () => {},
+        stop,
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.services.push({
+        pluginId: "diagnostics-otel",
+        service,
+        source: "test",
+        origin: "bundled",
+      });
+      setActivePluginRegistry(registry);
+      const pluginServices = await startPluginServices({ registry, config: {} });
+      if (failureKind === "admission") {
+        await instance.dispose();
+      }
+      const clearSecretsRuntimeSnapshot = vi.fn();
+      const deps = createGatewayCloseTestDeps({ pluginServices, clearSecretsRuntimeSnapshot });
+      try {
+        const closing = createGatewayCloseHandler(deps)({ reason: "gateway startup failed" });
+        if (failureKind === "admission") {
+          await expect(closing).rejects.toThrow(/retir/);
+          expect(stop).not.toHaveBeenCalled();
+          expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+          expect(getActivePluginRegistry()).toBe(registry);
+          expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+        } else {
+          const result = await closing;
+          expect(result.warnings).toContain("plugin-services");
+          expect(stop).toHaveBeenCalledOnce();
+          expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+          expect(getActivePluginRegistry()).toBeNull();
+          expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+          expect(await pluginServices.stop()).toEqual({ errors: [failure] });
+          expect(stop).toHaveBeenCalledOnce();
+        }
+        expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      } finally {
+        await pluginServices.stop().catch(() => {});
+        await instance.dispose();
+      }
+    },
+  );
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
     const deps = createGatewayCloseTestDeps();

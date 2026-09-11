@@ -846,7 +846,7 @@ describe("codex plugin", () => {
       pluginConfig: { appServer: {} },
       bindingStore: testCodexAppServerBindingStore,
     });
-    const result = { success: true };
+    const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
     await expect(harness.runAttempt({ prompt: "hello" } as never)).resolves.toBe(result);
@@ -912,7 +912,7 @@ describe("codex plugin", () => {
     const harness = mockCallArg(registerAgentHarness) as ReturnType<
       typeof createCodexAppServerAgentHarness
     >;
-    const result = { success: true };
+    const result = { terminal: { kind: "ok" as const } };
     runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
 
     await expect(harness.runAttempt({ prompt: "calendar" } as never)).resolves.toBe(result);

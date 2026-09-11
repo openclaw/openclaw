@@ -10,6 +10,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
@@ -607,6 +608,79 @@ describe("gateway agent handler", () => {
       sessionKey,
     });
   });
+
+  it.each([false, true])(
+    "responds with the admission error after model cleanup (cleanup fails: %s)",
+    async (cleanupFails) => {
+      primeMainAgentRun();
+      const context = makeContext();
+      const runId = `admission-cleanup-${cleanupFails}`;
+      const inputError = new Error("input persistence failed");
+      const cleanupError = new Error("model cleanup failed");
+      const cleanupEntered = createDeferredCore();
+      const releaseCleanup = createDeferredCore();
+      const order: string[] = [];
+      const dispose = vi.fn(async () => {
+        order.push("cleanup started");
+        cleanupEntered.resolve();
+        await releaseCleanup.promise;
+        order.push("cleanup finished");
+        if (cleanupFails) {
+          throw cleanupError;
+        }
+      });
+      const runtime = await import("../../agents/prepared-model-runtime.js");
+      const acquire = vi.mocked(runtime.acquireAgentRunPreparedModelRuntime);
+      const createLease = requireValue(
+        acquire.getMockImplementation(),
+        "model lease fixture missing",
+      );
+      acquire.mockImplementationOnce(async (...args) => ({
+        ...(await createLease(...args)),
+        [Symbol.asyncDispose]: dispose,
+      }));
+      mocks.stageSessionPendingInput.mockRejectedValueOnce(inputError);
+      const respond = vi.fn(() => order.push("response"));
+      const outcome = invokeAgent(
+        {
+          message: "persist this input",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, respond, flushDispatch: false },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await Promise.race([
+          cleanupEntered.promise,
+          outcome.then(() => {
+            throw new Error("Admission completed without joining model cleanup");
+          }),
+        ]);
+        expect(mocks.stageSessionPendingInput).toHaveBeenCalledOnce();
+        expect(order).toEqual(["cleanup started"]);
+        expect(respond).not.toHaveBeenCalled();
+        expect(mocks.agentCommand).not.toHaveBeenCalled();
+        releaseCleanup.resolve();
+        await expect(outcome).resolves.toBe(cleanupFails ? cleanupError : undefined);
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(order).toEqual(["cleanup started", "cleanup finished", "response"]);
+        expect(respond.mock.calls).toEqual([
+          [false, undefined, { code: ErrorCodes.UNAVAILABLE, message: inputError.message }],
+        ]);
+        expect(mocks.agentCommand).not.toHaveBeenCalled();
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+      } finally {
+        releaseCleanup.resolve();
+        await outcome;
+        acquire.mockReset().mockImplementation(createLease);
+      }
+    },
+  );
 
   it("passes a canonical user-turn recorder to gateway agent runs", async () => {
     primeMainAgentRun();

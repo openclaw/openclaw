@@ -25,6 +25,7 @@ import {
   type CachedCopilotToken,
 } from "./provider-auth-copilot-cache.js";
 
+export { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { CachedCopilotToken } from "./provider-auth-copilot-cache.js";
 export type { SecretInput } from "../config/types.secrets.js";
@@ -56,7 +57,6 @@ export {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";
 export {
   formatApiKeyPreview,

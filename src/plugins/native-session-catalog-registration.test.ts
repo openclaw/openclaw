@@ -6,13 +6,16 @@ import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 const roots: string[] = [];
+const disposals: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  await Promise.all(disposals.splice(0).map((dispose) => dispose()));
   vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -135,6 +138,10 @@ async function registerCatalog(
   });
   registry.registry.plugins.push(record);
   const api = registry.createApi(record, { config });
+  const dispose = async () => {
+    await getPluginInstance(record)?.dispose();
+  };
+  disposals.push(dispose);
   const list = vi.fn(async () => []);
   const read = vi.fn(async () => ({ hostId: "local", threadId: "thread", items: [] }));
   const available = vi.fn(() => true);
@@ -148,6 +155,7 @@ async function registerCatalog(
     handle: staticHandle,
   });
   return {
+    dispose,
     provider: registry.registry.sessionCatalogs[0]!.provider,
     node: registry.registry.nodeHostCommands[0]!.command,
     staticNode: registry.registry.nodeHostCommands[1]!.command,
@@ -168,6 +176,26 @@ async function registerCatalog(
 }
 
 describe("registered native catalog access", () => {
+  it.each([false, true])(
+    "rejects retained catalog and node calls after instance retirement (enabled: %s)",
+    async (enabled) => {
+      const state = await registerCatalog(true, enabled);
+      await state.provider.list({});
+      expect(state.list).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      await state.dispose();
+      await expect(Promise.resolve().then(() => state.provider.list({}))).rejects.toThrow(
+        /reloaded|disabled/,
+      );
+      expect(() => state.node.isAvailable?.({ config: {}, env: {} })).toThrow(/reloaded|disabled/);
+      await expect(Promise.resolve().then(() => state.staticNode.handle())).rejects.toThrow(
+        /reloaded|disabled/,
+      );
+      expect(state.list).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(state.available).not.toHaveBeenCalled();
+      expect(state.staticHandle).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires opt-in for a new declared catalog after fresh configuration is written", async () => {
     const state = await registerCatalog("fresh", undefined, { legacyDefaultEnabled: true });
     await state.provider.list({});

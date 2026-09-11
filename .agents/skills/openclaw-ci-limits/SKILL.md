@@ -300,9 +300,17 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   that contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
   including the browser-extension row. Failed-job-only PR and hybrid push retries
   retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
-  The browser-extension row stays on 8 and real-Gateway
-  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
-  native timing proof and does not refresh stale timing weights.
+  The browser-extension row stays on 8. Twelve rows finished by 4:38 in run
+  33695337496; the reduced width needs native timing proof and does not refresh
+  stale timing weights.
+- Eligible real-Gateway jobs request the existing 32-class for the private artifact
+  build's two canonical SDK cache misses. Overlap requires at least two available
+  CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
+  768 MiB native headroom each. Unknown finite-cgroup usage or insufficient capacity
+  keeps compilation serial. Keep browser workers, inventory, build/read ordering,
+  routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
+  Compiler-only AWS evidence does not prove CI timing; validate the complete job
+  through exact-head native CI before claiming an improvement.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.

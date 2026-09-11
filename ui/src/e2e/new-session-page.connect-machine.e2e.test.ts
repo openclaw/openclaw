@@ -90,6 +90,10 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       const connect = place.getByRole("button", { name: "Connect a machine" });
       await connect.waitFor();
+      expect(
+        await connect.evaluate((element) => element.previousElementSibling?.getAttribute("role")),
+      ).toBe("separator");
+      expect(await connect.getAttribute("aria-pressed")).toBe("false");
       await captureProof(page, "01-picker-foot.png", {
         surface: place.locator('wa-popup [part="popup"]'),
         content: [connect],

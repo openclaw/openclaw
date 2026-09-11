@@ -414,6 +414,29 @@ function seedDatabase(sql: string) {
   return file;
 }
 
+const unix = process.platform === "win32" ? it.skip : it;
+
+// An interrupted first write leaves the store readable, because `open` creates it
+// under the caller's umask before the store chmods it. Refusing that forever locked
+// every install root out of config and service mutation on the host.
+unix("repairs read-only mode drift and admits both lock owners", async () => {
+  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
+  const config = source.configPaths[0]!;
+  fs.writeFileSync(config, "before");
+  fs.chmodSync(file, 0o644);
+
+  expect(() => store.assertSourceUnborrowed(config)).not.toThrow();
+  expect(fs.lstatSync(file).mode & 0o777).toBe(0o600);
+
+  const mutateConfig = vi.fn(async () => fs.writeFileSync(config, "after"));
+  await expect(withConfigWriteLock(config, mutateConfig, env)).resolves.toBeUndefined();
+  expect(mutateConfig).toHaveBeenCalledTimes(1);
+
+  const mutateService = vi.fn(async () => undefined);
+  await expect(withGatewayServiceOperationLock(env, mutateService)).resolves.toBeUndefined();
+  expect(mutateService).toHaveBeenCalledTimes(1);
+});
+
 function databaseSnapshot(file: string) {
   const { dev, ino, mode, size, mtimeMs } = fs.lstatSync(file);
   return { dev, ino, mode, size, mtimeMs, bytes: fs.readFileSync(file) };
@@ -480,7 +503,9 @@ it.each(
   if (kind === "corrupt") {
     fs.writeFileSync(file, "not a SQLite database");
   } else if (kind === "unsafe-mode") {
-    fs.chmodSync(file, 0o640);
+    // Group-writable: chmod cannot revoke a descriptor another user already holds,
+    // so this stays unrepairable. Read-only drift is repaired, covered below.
+    fs.chmodSync(file, 0o660);
   }
   const before = databaseSnapshot(file);
   const entries = fs.readdirSync(fixture.root).toSorted();

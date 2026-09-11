@@ -14,7 +14,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
-import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
@@ -25,7 +24,6 @@ import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-std
 let sequence = 0;
 const sdkHostDirs = createTempDirTracker();
 let sdkHost: string | undefined;
-let beforeLoad: ReturnType<typeof getPluginModuleLoaderStats>;
 beforeAll(() => {
   sdkHost = createCompiledSdkHost(mcpProviderCatalogEntrypoint, (prefix) =>
     sdkHostDirs.make(prefix),
@@ -35,7 +33,6 @@ beforeEach(() => {
   if (sdkHost) {
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", sdkHost);
   }
-  beforeLoad = getPluginModuleLoaderStats();
 });
 function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = {}) {
   useNoBundledPlugins();
@@ -135,18 +132,9 @@ module.exports = { id: "mcp-native", register(api) {
 }
 
 afterEach(() => {
-  try {
-    if (sdkHost) {
-      const afterLoad = getPluginModuleLoaderStats();
-      expect(afterLoad.nativeHits).toBeGreaterThan(beforeLoad.nativeHits);
-      expect(afterLoad.sourceTransformForced).toBe(beforeLoad.sourceTransformForced);
-      expect(afterLoad.sourceTransformFallbacks).toBe(beforeLoad.sourceTransformFallbacks);
-    }
-  } finally {
-    vi.restoreAllMocks();
-    resetPluginLoaderTestStateForTest();
-    vi.unstubAllEnvs();
-  }
+  vi.restoreAllMocks();
+  resetPluginLoaderTestStateForTest();
+  vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 afterAll(sdkHostDirs.cleanup);

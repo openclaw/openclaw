@@ -36,6 +36,7 @@ export class AsyncWorkScope {
       return currentWorkScope.run(this, run);
     } finally {
       operation.resolve();
+      this.pending.delete(operation.promise);
     }
   }
 

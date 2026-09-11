@@ -522,9 +522,7 @@ export async function stopCloudWorker(
   scope: SidebarSessionMutationScope,
 ) {
   const stopAction = session.cloudWorkerStopAction;
-  // Reclaim during an active run is never offered, so decide that before the
-  // await; a run starting while the modal is open is left to the gateway, whose
-  // rejection is a recorded reason instead of a silently dropped confirmation.
+  // The Gateway revalidates placement and run state after confirmation.
   if (!stopAction || (stopAction.blocksActiveRun && session.hasActiveRun)) {
     return;
   }

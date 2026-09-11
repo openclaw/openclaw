@@ -2,6 +2,7 @@
  * Daybreak cyber-failover policy: what may escalate, and for how long a
  * workspace that cannot use the target stops trying.
  */
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
   planCodexCyberEscalation,
@@ -10,6 +11,7 @@ import {
   reserveCodexCyberProbe,
   resolveCodexCyberFailoverConfig,
   type CodexCyberFailoverConfig,
+  type CodexCyberAttemptOutcome,
 } from "./cyber-failover.js";
 
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -27,15 +29,24 @@ function config(overrides: Partial<CodexCyberFailoverConfig> = {}): CodexCyberFa
   return { mode: "auto", model: DAYBREAK, cooloffMs: 600_000, ...overrides };
 }
 
-function refusal(category: string, provider = "openai") {
+function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberAttemptOutcome {
   return {
-    currentAttemptAssistant: {
-      role: "assistant",
-      stopReason: "error",
-      diagnostics: [{ type: "provider_refusal", details: { provider, category } }],
-    },
-    replayMetadata: { replaySafe: true },
+    terminal: { kind: "ok" },
+    lastAssistant: undefined,
+    replayMetadata: { replaySafe: false, hadPotentialSideEffects: false },
+    ...overrides,
   };
+}
+
+function refusal(category: string, provider = "openai") {
+  return outcome({
+    currentAttemptAssistant: makeAgentAssistantMessage({
+      content: [],
+      stopReason: "error",
+      diagnostics: [{ type: "provider_refusal", timestamp: 0, details: { provider, category } }],
+    }),
+    replayMetadata: { replaySafe: true, hadPotentialSideEffects: false },
+  });
 }
 
 describe("config", () => {
@@ -61,69 +72,72 @@ describe("attempt verdict", () => {
     expect(readCodexCyberAttemptVerdict(refusal("cyber")).cyberRefused).toBe(true);
     expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
-    // Another provider's cyber refusal must not reroute a prompt to OpenAI's tier.
     expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
-    // A previous turn's row must not escalate an attempt that produced none.
     expect(
-      readCodexCyberAttemptVerdict({
-        lastAssistant: {
-          role: "assistant",
-          diagnostics: [
-            { type: "provider_refusal", details: { provider: "openai", category: "cyber" } },
-          ],
-        },
-      }).cyberRefused,
+      readCodexCyberAttemptVerdict(
+        outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant }),
+      ).cyberRefused,
     ).toBe(false);
     expect(readCodexCyberAttemptVerdict(undefined).cyberRefused).toBe(false);
   });
 
-  it("treats a missing replay verdict as unsafe", () => {
-    expect(readCodexCyberAttemptVerdict({ replayMetadata: { replaySafe: true } }).replaySafe).toBe(
-      true,
-    );
-    expect(readCodexCyberAttemptVerdict({ replayMetadata: { replaySafe: false } }).replaySafe).toBe(
-      false,
-    );
-    expect(readCodexCyberAttemptVerdict({}).replaySafe).toBe(false);
+  it("requires an affirmative replay verdict", () => {
+    expect(
+      readCodexCyberAttemptVerdict(
+        outcome({ replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }),
+      ).replaySafe,
+    ).toBe(true);
+    expect(readCodexCyberAttemptVerdict(outcome()).replaySafe).toBe(false);
+    expect(readCodexCyberAttemptVerdict(undefined).replaySafe).toBe(false);
   });
 
   it("counts only a real reply as answered", () => {
     expect(
-      readCodexCyberAttemptVerdict({
-        currentAttemptAssistant: { role: "assistant", stopReason: "stop" },
-      }).answered,
+      readCodexCyberAttemptVerdict(
+        outcome({
+          currentAttemptAssistant: makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Reply" }],
+          }),
+        }),
+      ).answered,
     ).toBe(true);
-    // A transport failure is not a reply, even carrying no refusal.
-    expect(readCodexCyberAttemptVerdict({ promptError: "stream disconnected" }).answered).toBe(
-      false,
-    );
     expect(
-      readCodexCyberAttemptVerdict({
-        currentAttemptAssistant: { role: "assistant", stopReason: "aborted" },
-      }).answered,
+      readCodexCyberAttemptVerdict(
+        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
+      ).answered,
     ).toBe(false);
-    // A bio or misalignment refusal is still a refusal, never an answer.
+    expect(
+      readCodexCyberAttemptVerdict(
+        outcome({
+          terminal: { kind: "aborted", source: "runtime" },
+          currentAttemptAssistant: makeAgentAssistantMessage({
+            content: [],
+            stopReason: "aborted",
+          }),
+        }),
+      ).answered,
+    ).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("bio")).answered).toBe(false);
-    expect(readCodexCyberAttemptVerdict({}).answered).toBe(false);
+    expect(readCodexCyberAttemptVerdict(outcome()).answered).toBe(false);
   });
 
-  it("reads an unauthorized target from the attempt outcome", () => {
+  it.each([
+    "unexpected status 403 Forbidden: target is not authorized",
+    new Error("unexpected status 401 Unauthorized: not authorized to access this model."),
+  ])("reads an unauthorized target from the canonical terminal", (error) => {
     expect(
-      readCodexCyberAttemptVerdict({
-        currentAttemptAssistant: {
-          role: "assistant",
-          errorMessage: "unexpected status 401 Unauthorized: not authorized to access this model.",
-        },
-      }).unavailable,
+      readCodexCyberAttemptVerdict(
+        outcome({ terminal: { kind: "failed", source: "prompt", error } }),
+      ).unavailable,
     ).toBe(true);
+  });
+
+  it("does not record other terminal failures as target denials", () => {
     expect(
-      readCodexCyberAttemptVerdict({
-        promptError: "unexpected status 403 Forbidden: Cyber access program is not authorized",
-      }).unavailable,
-    ).toBe(true);
-    expect(readCodexCyberAttemptVerdict({ promptError: "stream disconnected" }).unavailable).toBe(
-      false,
-    );
+      readCodexCyberAttemptVerdict(
+        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
+      ).unavailable,
+    ).toBe(false);
   });
 });
 

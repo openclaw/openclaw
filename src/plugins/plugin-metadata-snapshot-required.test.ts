@@ -10,7 +10,7 @@ const { loadSource, createSourceLoader } = vi.hoisted(() => {
   return { loadSource: sourceLoader, createSourceLoader: vi.fn(() => sourceLoader) };
 });
 vi.mock("./plugin-module-loader-cache.js", () => ({
-  getCachedPluginSourceModuleLoader: createSourceLoader,
+  getCachedPluginModuleLoader: createSourceLoader,
 }));
 
 const readerKeys = ["getCurrentPluginMetadataSnapshot", "loadPluginMetadataSnapshot"] as const;

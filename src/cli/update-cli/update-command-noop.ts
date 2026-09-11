@@ -36,6 +36,7 @@ export async function finishAlreadyCurrentUpdate(
     | "opts"
     | "result"
     | "root"
+    | "previousInstallRoot"
     | "requestedChannel"
     | "storedChannel"
     | "channel"

@@ -232,7 +232,7 @@ export async function generateBranchSummary(
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
-    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions))
+    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions), options.runtime)
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
   // Usage belongs to the completed provider request even when its summary is invalid.
   options.runtime?.internalUsageSink?.(response.usage);

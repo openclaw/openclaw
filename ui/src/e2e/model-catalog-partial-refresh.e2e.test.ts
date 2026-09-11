@@ -118,13 +118,9 @@ suite.define(() => {
           const model = composer.locator("[data-chat-model-select]");
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
-          await page
-            .getByText("Some models could not be refreshed. Open Models to try again.", {
-              exact: true,
-            })
-            .waitFor();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
           await expect.poll(() => available.isVisible()).toBe(true);
+          expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}-catalog.png`),
             animations: "disabled",
@@ -181,7 +177,7 @@ suite.define(() => {
             });
             await gateway.emitGatewayEvent("chat.metadata.changed", {});
             const notice = composer.locator("[data-chat-model-catalog-state]");
-            await expect.poll(() => notice.count()).toBe(refreshFailed ? 1 : 0);
+            await expect.poll(() => notice.count()).toBe(0);
             await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
             expect(await effort.getAttribute("data-chat-fast-mode")).toBe("true");
             expect(await model.textContent()).toContain("GPT-5.4");
@@ -292,9 +288,12 @@ suite.define(() => {
           await gateway.setMethodResponse("models.list", failure);
         }
         await model.click();
-        await expect
-          .poll(() => page.locator("[data-chat-model-catalog-state]").isVisible())
-          .toBe(true);
+        const notice = page.locator("[data-chat-model-catalog-state]");
+        if (["empty", "rejected", "retained rejection"].includes(condition)) {
+          await expect.poll(() => notice.isVisible()).toBe(true);
+        } else {
+          expect(await notice.count()).toBe(0);
+        }
         await expect
           .poll(async () => {
             const { effort } = await readControls(page);

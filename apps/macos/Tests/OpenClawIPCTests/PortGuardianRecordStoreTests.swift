@@ -135,7 +135,7 @@ struct PortGuardianRecordStoreTests {
 
         let sweep = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await guardian.sweep(mode: .unconfigured)
+            await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
         }
         await sweep.value
 
@@ -153,7 +153,7 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        await guardian.sweep(mode: .unconfigured)
+        await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
 
         #expect(try store.records().isEmpty)
     }

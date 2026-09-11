@@ -1,5 +1,6 @@
 // Fresh-process fixture: value imports stay outside OpenClaw until each scenario demands them.
 import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
@@ -12,20 +13,26 @@ const PLUGIN_ID = "mcp-proof-owner";
 const PROVIDER_ID = "mcp-proof-provider";
 const EXTERNAL_PROFILE = `${PROVIDER_ID}:external`;
 const STORED_PROFILE = `${PROVIDER_ID}:stored`;
-const OBSERVER_KEY: unique symbol = Symbol.for("openclaw.mcpAuthIntegrationObserver");
+const OBSERVER_CHANNEL = "openclaw.test.mcpAuthIntegrationObserver";
 type HookContext = { config?: OpenClawConfig; agentDir?: string };
 type ProviderEvent = { kind: string; owner: string };
-type FixtureGlobal = typeof globalThis & {
-  [OBSERVER_KEY]?: (kind: string, owner: string, context?: HookContext) => void;
-};
+type ProviderObservation = ProviderEvent & { context?: HookContext };
 const providerEvents: ProviderEvent[] = [];
+const observerErrors: unknown[] = [];
 let inspectHook: ((owner: string, context?: HookContext) => void) | undefined;
 let authRuntimeEntered = false;
 
-function observe(kind: string, owner: string, context?: HookContext): void {
+function observe(message: unknown): void {
+  // The generated fixture publishes this exact payload through Node's synchronous channel.
+  const { kind, owner, context } = message as ProviderObservation;
   providerEvents.push({ kind, owner });
   if (kind !== "evaluated" && kind !== "registered") {
-    inspectHook?.(owner, context);
+    try {
+      inspectHook?.(owner, context);
+    } catch (error) {
+      // Report scope failures after cleanup; subscriber throws become uncaught Node errors.
+      observerErrors.push(error);
+    }
   }
 }
 
@@ -51,7 +58,8 @@ function writeProvider(root: string, owner: string, tokenUrl: string, enabled = 
   fs.writeFileSync(
     source,
     `const fs = require("node:fs");
-const observe = (kind, context) => globalThis[Symbol.for("openclaw.mcpAuthIntegrationObserver")](kind, ${JSON.stringify(owner)}, context);
+const observer = require("node:diagnostics_channel").channel(${JSON.stringify(OBSERVER_CHANNEL)});
+const observe = (kind, context) => observer.publish({ kind, owner: ${JSON.stringify(owner)}, context });
 observe("evaluated");
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
@@ -109,7 +117,7 @@ module.exports = {
       slots: { memory: "none" },
     },
   };
-  return { config, agentDir, workspaceDir, credentialPath };
+  return { config, agentDir, workspaceDir, credentialPath, source };
 }
 
 type ProviderFixture = ReturnType<typeof writeProvider>;
@@ -540,10 +548,14 @@ async function runScopeScenario(root: string): Promise<void> {
     assert.equal(first.generation.pluginRegistry.providers.length, 1);
     assert.equal(second.generation.pluginRegistry.providers.length, 1);
     assert.equal(disabled.generation.pluginRegistry.providers.length, 0);
-    const checkScope = (owner: ScopedOwner, context?: HookContext) => {
+    const checkScope = (owner: ScopedOwner, context?: HookContext, pluginOwner = false) => {
       const scope = getPluginRuntimeGatewayRequestScope();
       assert(scope, "request scope must survive deferred auth");
-      assert.equal(scope.pluginId, owner.request.pluginId);
+      assert.equal(scope.pluginId, pluginOwner ? PLUGIN_ID : owner.request.pluginId);
+      if (pluginOwner) {
+        assert.equal(scope.pluginSource, owner.fixture.source);
+        assert.equal(scope.pluginOrigin, "config");
+      }
       assert.equal(scope.isWebchatConnect === owner.request.isWebchatConnect, true);
       assert.equal(scope.resolveGatewayContext === owner.request.resolveGatewayContext, true);
       assert.equal(scope.pluginRegistry === owner.generation.pluginRegistry, true);
@@ -557,7 +569,7 @@ async function runScopeScenario(root: string): Promise<void> {
         assert.equal(context.agentDir, owner.fixture.agentDir);
       }
     };
-    inspectHook = (name, context) => checkScope(name === "first" ? first : second, context);
+    inspectHook = (name, context) => checkScope(name === "first" ? first : second, context, true);
     const bind = (owner: ScopedOwner) => {
       const wrapped = withMcpAuthProfileBearer({
         fetchFn: async (url, init) => {
@@ -619,8 +631,8 @@ async function runScopeScenario(root: string): Promise<void> {
 async function main(): Promise<void> {
   const [scenario, root] = process.argv.slice(2);
   assert(root);
-  const globals = globalThis as FixtureGlobal;
-  globals[OBSERVER_KEY] = observe;
+  const observer = channel(OBSERVER_CHANNEL);
+  observer.subscribe(observe);
   try {
     switch (scenario) {
       case "external":
@@ -649,9 +661,10 @@ async function main(): Promise<void> {
         closeOpenClawStateDatabaseForTest();
       }
     } finally {
-      delete globals[OBSERVER_KEY];
+      observer.unsubscribe(observe);
     }
   }
+  assert.deepEqual(observerErrors, [], "provider hooks must retain their exact request scope");
   console.log(`MCP_AUTH_PROOF_OK ${scenario}`);
 }
 

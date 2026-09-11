@@ -18,12 +18,14 @@ final class GatewayProcessManager {
     private struct LaunchAgentEnableRequest: Sendable {
         let bundlePath: String
         let port: Int
+        let allowUnconfigured: Bool
         let generation: UInt64
         var invocationIDs: [UInt64]
 
         func hasSameConfiguration(as other: LaunchAgentEnableRequest) -> Bool {
             self.bundlePath == other.bundlePath &&
                 self.port == other.port &&
+                self.allowUnconfigured == other.allowUnconfigured &&
                 self.generation == other.generation
         }
     }
@@ -196,17 +198,24 @@ final class GatewayProcessManager {
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30
+    private var hostsLocalGatewayWithRemotePrimary: Bool {
+        CommandResolver.connectionModeIsRemote() && AppStateStore.shared.hostsLocalGatewayWithRemotePrimary
+    }
+
     private var connection: GatewayConnection {
-        #if DEBUG
-        return self.testingConnection ?? .shared
-        #else
-        return .shared
-        #endif
+        get async {
+            #if DEBUG
+            if let testingConnection { return testingConnection }
+            #endif
+            if CommandResolver.connectionModeIsRemote() {
+                return await MacGatewayConnectionFleet.shared.localConnection()
+            }
+            return .shared
+        }
     }
 
     func setActive(_ active: Bool) {
-        // Remote mode should never manage a local Gateway; treat as stopped.
-        if CommandResolver.connectionModeIsRemote() {
+        if CommandResolver.connectionModeIsRemote(), !self.hostsLocalGatewayWithRemotePrimary {
             self.desiredActive = false
             self.stop()
             self.status = .stopped
@@ -218,11 +227,18 @@ final class GatewayProcessManager {
             self.profilePortConflict = nil
             Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(nil) }
         }
-        if active, let conflict = GatewayEnvironment.profileGatewayPortConflict() {
-            self.desiredActive = false
-            self.recordProfilePortConflict(conflict)
-            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
-            return
+        if active {
+            do {
+                _ = try GatewayEndpointStore.localEndpoint(
+                    hostingBesideRemotePrimary: self.hostsLocalGatewayWithRemotePrimary)
+            } catch {
+                let conflict = error.localizedDescription
+                if self.desiredActive { self.stop() }
+                self.desiredActive = false
+                self.recordProfilePortConflict(conflict)
+                Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+                return
+            }
         }
         self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
@@ -235,7 +251,7 @@ final class GatewayProcessManager {
     }
 
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
-        guard !CommandResolver.connectionModeIsRemote() else { return false }
+        guard !CommandResolver.connectionModeIsRemote() || self.hostsLocalGatewayWithRemotePrimary else { return false }
         guard self.desiredActive else { return false }
         guard self.profilePortConflict == nil else { return false }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
@@ -268,6 +284,7 @@ final class GatewayProcessManager {
         let request = LaunchAgentEnableRequest(
             bundlePath: bundlePath,
             port: port,
+            allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary,
             generation: generation,
             invocationIDs: [invocationID])
         if let task = self.launchAgentEnableTask {
@@ -334,11 +351,16 @@ final class GatewayProcessManager {
     private func performLaunchAgentEnable(_ request: LaunchAgentEnableRequest) async -> LaunchAgentEnableResult {
         // App startup and onboarding can request persistence together. One drain owns all installs;
         // a second forced install would kill the first Gateway during startup migrations.
-        let launchAgent = await GatewayLaunchAgentManager.loadedGatewayState(port: request.port)
+        let launchAgent = await GatewayLaunchAgentManager.loadedGatewayState(
+            port: request.port,
+            allowUnconfigured: request.allowUnconfigured)
         // Pair one launchd snapshot with a current listener read. A PID that starts after the
         // status read cannot look reusable, so the ownership guard preserves it instead of forcing
         // an install; a reusable PID from this same snapshot receives its readiness cycle below.
         let listener = await PortGuardian.shared.describe(port: request.port)
+        // Stop waits for the admitted install before disabling; it only discards queued requests.
+        guard request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
+        else { return .skipped }
         if let listener {
             guard listener.pid == launchAgent.runningPID else {
                 // A healthy manually started Gateway may be attached without becoming app-owned.
@@ -373,7 +395,8 @@ final class GatewayProcessManager {
         if let error = await GatewayLaunchAgentManager.set(
             enabled: true,
             bundlePath: request.bundlePath,
-            port: request.port)
+            port: request.port,
+            allowUnconfigured: request.allowUnconfigured)
         {
             return .failed(error)
         }
@@ -398,7 +421,10 @@ final class GatewayProcessManager {
     }
 
     private func reusableLaunchdPIDOwningPort(port: Int) async -> Int32? {
-        guard let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port) else {
+        guard let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(
+            port: port,
+            allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary)
+        else {
             return nil
         }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
@@ -420,8 +446,7 @@ final class GatewayProcessManager {
 
     func startIfNeeded() {
         guard self.desiredActive else { return }
-        // Do not start a local Gateway in remote mode; the remote host owns it.
-        guard !CommandResolver.connectionModeIsRemote() else {
+        guard !CommandResolver.connectionModeIsRemote() || self.hostsLocalGatewayWithRemotePrimary else {
             self.status = .stopped
             return
         }
@@ -480,6 +505,7 @@ final class GatewayProcessManager {
         while let task = self.gatewayStartTask {
             await task.value
         }
+        await self.waitForPendingLaunchAgentDisable()
     }
 
     func stop() {
@@ -773,7 +799,9 @@ extension GatewayProcessManager {
             return nil
         }
 
-        let readinessPID = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port)
+        let readinessPID = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(
+            port: port,
+            allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary)
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         return self.gatewayReadinessContext(
             purpose: .launchd,
@@ -995,6 +1023,7 @@ extension GatewayProcessManager {
     }
 
     private func refreshControlChannelIfNeeded(reason: String, force: Bool = false) {
+        guard !CommandResolver.connectionModeIsRemote() else { return }
         #if DEBUG
         self.testingControlChannelRefreshForces.append(force)
         if self.testingSkipControlChannelRefresh {
@@ -1169,7 +1198,7 @@ extension GatewayProcessManager {
     }
 
     private func probeGatewayHealth(timeoutMs: Double) async throws -> Data {
-        let connection = self.connection
+        let connection = await self.connection
         // Startup owns recovery and its wall-clock deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
         // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.

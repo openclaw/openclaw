@@ -74,10 +74,14 @@ type StoredChannelScope = ["v1", "channel" | "conversation", string, string, str
 type StoredSenderScope = ["v1", string, string, string];
 
 function withStandingIntentDatabase<T>(
-  agentId: string,
+  params: { agentId: string; assertCurrent?: () => void },
   callback: (db: DatabaseSync) => T,
 ): Promise<T> {
+  const { agentId, assertCurrent } = params;
+  assertCurrent?.();
   return withOpenClawAgentDatabaseAsync({ agentId }, ({ db }) => {
+    // Refuse only this callback; hook expiry must not cancel a shared physical open.
+    assertCurrent?.();
     ensureOpenClawAgentStandingIntentsSchema(db);
     return callback(db);
   });
@@ -288,7 +292,7 @@ export async function createStandingIntent(params: {
     created_at: nowMs,
     source_session_id: params.sourceSessionId ?? null,
   };
-  await withStandingIntentDatabase(params.agentId, (db) => {
+  await withStandingIntentDatabase(params, (db) => {
     runSqliteImmediateTransactionSync(db, () => {
       const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
       executeSqliteQuerySync(db, kysely.insertInto("standing_intents").values(row));
@@ -302,7 +306,7 @@ export async function listStandingIntents(params: {
   status?: StandingIntentStatus;
   nowMs?: number;
 }): Promise<StandingIntent[]> {
-  return await withStandingIntentDatabase(params.agentId, (db) =>
+  return await withStandingIntentDatabase(params, (db) =>
     runSqliteImmediateTransactionSync(db, () => {
       const nowMs = params.nowMs ?? Date.now();
       maintainStandingIntentLifecycle(db, nowMs);
@@ -323,7 +327,7 @@ export async function sweepStandingIntents(params: {
   agentId: string;
   nowMs?: number;
 }): Promise<void> {
-  await withStandingIntentDatabase(params.agentId, (db) => {
+  await withStandingIntentDatabase(params, (db) => {
     runSqliteImmediateTransactionSync(db, () => {
       maintainStandingIntentLifecycle(db, params.nowMs ?? Date.now());
     });
@@ -334,7 +338,7 @@ export async function cancelStandingIntent(params: {
   agentId: string;
   id: string;
 }): Promise<StandingIntent | null> {
-  return await withStandingIntentDatabase(params.agentId, (db) =>
+  return await withStandingIntentDatabase(params, (db) =>
     runSqliteImmediateTransactionSync(db, () => {
       const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
       const result = executeSqliteQuerySync(
@@ -406,6 +410,7 @@ export async function matchStandingIntents(params: {
   accountId?: string;
   senderId?: string;
   nowMs?: number;
+  assertCurrent?: () => void;
 }): Promise<StandingIntent[]> {
   const promptTokens = new Set(tokenizeIntentText(params.prompt));
   const ftsQuery = buildFtsQuery(promptTokens);
@@ -443,7 +448,7 @@ export async function matchStandingIntents(params: {
           senderId,
         })
       : undefined;
-  return await withStandingIntentDatabase(params.agentId, (db) =>
+  return await withStandingIntentDatabase(params, (db) =>
     runSqliteImmediateTransactionSync(db, () => {
       const nowMs = params.nowMs ?? Date.now();
       maintainStandingIntentLifecycle(db, nowMs);

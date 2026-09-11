@@ -81,7 +81,9 @@ describe("setup inference plugin ownership", () => {
           mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(
             createEmptyPluginRegistry(),
           );
+          await using generationCache = createPluginCache();
           const generation = loadSetupInferencePluginGeneration({
+            cache: generationCache,
             config,
             workspaceDir: state.workspaceDir,
             selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },

@@ -328,7 +328,7 @@ async function runEmbeddedAgentInternal(
       const parentSignal = getAsyncWorkSignal();
       const work = new AsyncWorkScope();
       let context = work.run(() => AsyncLocalStorage.snapshot());
-      let releasePreparedRuntime: (() => void) | undefined;
+      let preparedRuntimeResource: AsyncDisposable | undefined;
       const runPreparedCandidate = async () => {
         // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
         // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
@@ -354,7 +354,7 @@ async function runEmbeddedAgentInternal(
           noteLaneTaskProgress();
           laneController.setLaneTaskDeadline(undefined);
         });
-        releasePreparedRuntime = () => preparedModelRuntimeLease.release();
+        preparedRuntimeResource = preparedModelRuntimeLease;
         startupStages.mark("prepared-runtime");
         const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
         let preparedLeaseActive = true;
@@ -612,7 +612,7 @@ async function runEmbeddedAgentInternal(
             );
           } finally {
             try {
-              releasePreparedRuntime?.();
+              await preparedRuntimeResource?.[Symbol.asyncDispose]();
             } finally {
               parentSignal?.removeEventListener("abort", closeWork);
             }

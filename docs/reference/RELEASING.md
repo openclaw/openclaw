@@ -358,6 +358,15 @@ the inventory must not accumulate indefinitely. A release with no post-swap
 imports still has an entry with an empty chunk list, so coverage is explicit.
 Conflicting origins for the same chunk export across releases fail generation.
 
+The recorder corrects one verified historical bundler annotation: the 2026.9.1,
+2026.9.2, and 2026.9.3 registry-lifecycle chunks grouped the retirement function
+under the cache module's source region. The correction requires the exact release
+version, build identity, commit, npm integrity, chunk and export. It changes only
+recorded source provenance; missing or ambiguous current exports still fail the
+build. Remove each correction when its release leaves the supported upgrade
+window. Regenerate the inventory from verified tarballs rather than editing its
+origins by hand.
+
 `pnpm update:compat:check` reads `npm view openclaw dist-tags --json` and requires
 the versions tagged `latest` and `beta` to be present, even when both tags refer
 to stable versions or the same version. A missing version fails with the exact

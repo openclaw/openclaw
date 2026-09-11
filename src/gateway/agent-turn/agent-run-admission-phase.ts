@@ -347,20 +347,27 @@ export async function prepareAgentRunDispatch(params: {
     cwd: params.sessionEntry?.spawnedCwd,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
-  const cleanupPreaccept = (admissionReleased = false) => {
-    preparedModelRuntimeLease?.release();
+  const cleanupPreaccept = async (admissionReleased = false) => {
+    const lease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
-    activeRunAbort.cleanup();
-    if (!admissionReleased) {
-      activeGatewayWorkAdmission.release();
+    try {
+      await lease?.[Symbol.asyncDispose]();
+    } finally {
+      activeRunAbort.cleanup();
+      if (!admissionReleased) {
+        activeGatewayWorkAdmission.release();
+      }
     }
   };
-  const rejectPreaccept = (error: ReturnType<typeof errorShape>) => {
-    cleanupPreaccept();
-    params.io.emitAcceptance([false, undefined, error]);
+  const rejectPreaccept = async (error: ReturnType<typeof errorShape>) => {
+    try {
+      await cleanupPreaccept();
+    } finally {
+      params.io.emitAcceptance([false, undefined, error]);
+    }
     return undefined;
   };
-  const revalidateAdmission = () => {
+  const revalidateAdmission = (): true | Promise<undefined> => {
     if (activeRunAbort.controller.signal.aborted) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
@@ -373,14 +380,12 @@ export async function prepareAgentRunDispatch(params: {
     try {
       params.assertGatewayWorkAdmissionAllowed();
     } catch (err) {
-      rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
-      return false;
+      return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
     }
     if (!params.respondToGatewayAdmissionOutcome()) {
       return true;
     }
-    cleanupPreaccept(true);
-    return false;
+    return cleanupPreaccept(true).then(() => undefined);
   };
   let replyDispatchRuntime: PreparedReplyDispatchRuntime;
   try {
@@ -388,8 +393,9 @@ export async function prepareAgentRunDispatch(params: {
       agentId: params.activeSessionAgentId,
       abortSignal: activeRunAbort.controller.signal,
     });
-    if (!revalidateAdmission()) {
-      return undefined;
+    const publishedAdmission = revalidateAdmission();
+    if (publishedAdmission !== true) {
+      return publishedAdmission;
     }
     if (!publishedRuntime) {
       throw new Error(`published reply runtime missing for ${params.activeSessionAgentId}`);
@@ -416,16 +422,18 @@ export async function prepareAgentRunDispatch(params: {
         abortSignal: activeRunAbort.controller.signal,
       },
     );
-    if (!revalidateAdmission()) {
-      return undefined;
+    const runtimeAdmission = revalidateAdmission();
+    if (runtimeAdmission !== true) {
+      return runtimeAdmission;
     }
     replyDispatchRuntime = Object.freeze({
       ...replyDispatchRuntime,
       pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
     });
   } catch (err) {
-    if (!revalidateAdmission()) {
-      return undefined;
+    const failedAdmission = revalidateAdmission();
+    if (failedAdmission !== true) {
+      return failedAdmission;
     }
     return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
   }
@@ -477,8 +485,9 @@ export async function prepareAgentRunDispatch(params: {
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
         gatewayContextResolver: params.context.resolveGatewayContext,
       });
-      if (!revalidateAdmission()) {
-        return undefined;
+      const registrationAdmission = revalidateAdmission();
+      if (registrationAdmission !== true) {
+        return registrationAdmission;
       }
     } catch (err) {
       params.context.logGateway.warn(
@@ -516,8 +525,9 @@ export async function prepareAgentRunDispatch(params: {
         requireWriteSuccess: true,
         target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
       });
-      if (!revalidateAdmission()) {
-        return undefined;
+      const recoveryRevalidation = revalidateAdmission();
+      if (recoveryRevalidation !== true) {
+        return recoveryRevalidation;
       }
       if (recoveryAdmission.transition.kind !== "admitted_recovery") {
         throw new Error(
@@ -607,9 +617,13 @@ export async function prepareAgentRunDispatch(params: {
   } catch (err) {
     return rejectPreaccept(errorShapeFromError(ErrorCodes.UNAVAILABLE, err));
   }
-  if (!revalidateAdmission()) {
-    releasePreparedAgentRunUserTurn(userTurn);
-    return undefined;
+  const inputAdmission = revalidateAdmission();
+  if (inputAdmission !== true) {
+    try {
+      return await inputAdmission;
+    } finally {
+      releasePreparedAgentRunUserTurn(userTurn);
+    }
   }
   const accepted = {
     runId: params.runId,

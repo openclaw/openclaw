@@ -1,17 +1,32 @@
 /** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { closeCliResources } from "../cli/runtime-cleanup.js";
 import type {
   LegacyMemoryReadResult,
   MemoryProviderStatus,
   MemoryReadResult,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createPluginRecord } from "./loader-records.js";
+import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
+import { PluginInstance } from "./plugin-instance.js";
 import type {
   MemoryPluginRuntime,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginLoaderCacheState,
+  isPluginRegistryRetired,
+  markPluginRegistryRetired,
+} from "./registry-lifecycle.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 
 type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
 type ClassifyWorkspaceMemoryPaths = NonNullable<
@@ -21,7 +36,6 @@ type ClassifyWorkspaceMemoryPaths = NonNullable<
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
-  resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
 
@@ -31,7 +45,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("./loader.js", () => ({
   loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
-  resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
 vi.mock("./memory-state.js", async (importOriginal) => {
@@ -66,7 +79,13 @@ function createRuntime() {
 type TestRegistry<T extends MemoryPluginRuntime> = {
   registry: ReturnType<typeof createEmptyPluginRegistry>;
   runtime: T;
+  instance: PluginInstance;
 };
+
+const instances: PluginInstance[] = [];
+afterEach(async () => {
+  await Promise.all(instances.splice(0).map((instance) => instance.dispose()));
+});
 
 function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
 function createRegistry<T extends MemoryPluginRuntime>(runtime: T): TestRegistry<T>;
@@ -74,8 +93,21 @@ function createRegistry(
   runtime: MemoryPluginRuntime = createRuntime(),
 ): TestRegistry<MemoryPluginRuntime> {
   const registry = createEmptyPluginRegistry();
-  registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
-  return { registry, runtime };
+  const record = createPluginRecord({
+    id: "memory-core",
+    source: "/plugins/memory-core/index.js",
+    origin: "config",
+    enabled: true,
+    configSchema: false,
+  });
+  const instance = new PluginInstance(record.id, { record, registry });
+  instances.push(instance);
+  registry.plugins.push(record);
+  registry.memoryCapabilities.push({
+    pluginId: record.id,
+    capability: instance.wrap({ runtime }),
+  });
+  return { registry, runtime, instance };
 }
 
 const memoryConfig = {
@@ -87,12 +119,88 @@ describe("memory runtime handles", () => {
     resetStandaloneMemoryRegistrySlot();
     mocks.getMemoryRuntime.mockReset().mockReturnValue(undefined);
     mocks.loadPluginRegistryHandle.mockReset();
-    mocks.resolvePluginRegistryLoadCacheKey.mockClear();
     mocks.resolveAgentWorkspaceDir
       .mockReset()
       .mockImplementation((_cfg, agentId: string) =>
         agentId === "research" ? "/workspace/research" : "/workspace/main",
       );
+  });
+
+  it.each([
+    ["all", "retired"],
+    ["all", "quiesced"],
+    ["agent", "retired"],
+    ["agent", "quiesced"],
+  ] as const)(
+    "closes %s managers through a %s owner without reviving disposal",
+    async (scope, state) => {
+      const { registry, runtime, instance } = createRegistry();
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+      await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      const releaseClose = createDeferredCore();
+      const closeCallback =
+        scope === "all" ? runtime.closeAllMemorySearchManagers : runtime.closeMemorySearchManager;
+      closeCallback.mockImplementationOnce(async () => {
+        await releaseClose.promise;
+      });
+      const close = () =>
+        scope === "all"
+          ? closeActiveMemorySearchManagersCore()
+          : closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      if (state === "retired") {
+        markPluginRegistryRetired(registry);
+      } else {
+        instance.quiesce();
+      }
+      const closing = close();
+      void closing.catch(() => {});
+      try {
+        expect(closeCallback).toHaveBeenCalledTimes(1);
+        expect(closeCallback.mock.contexts[0]).toBe(runtime);
+        const disposal = instance.dispose();
+        expect(instance.lifecycle.signal.aborted).toBe(false);
+        releaseClose.resolve();
+        await Promise.all([closing, disposal]);
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+        await expect(close()).resolves.toBeUndefined();
+        expect(closeCallback).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseClose.resolve();
+        await Promise.allSettled([closing, instance.dispose()]);
+      }
+    },
+  );
+
+  it("closes memory after the CLI retires its acquired harness registry", async () => {
+    const { registry, runtime, instance } = createRegistry();
+    const disposeHarness = vi.fn(async () => {});
+    registry.agentHarnesses.push({
+      pluginId: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      harness: instance.wrap({
+        id: "memory-fixture",
+        label: "Memory fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("catalog-only fixture");
+        },
+        dispose: disposeHarness,
+      }),
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    runtime.closeAllMemorySearchManagers.mockImplementationOnce(async () => {
+      expect(isPluginRegistryRetired(registry)).toBe(true);
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+    });
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+        withPluginRuntimeRegistryScope(registry, listRegisteredAgentHarnesses);
+        await closeCliResources(cleanup);
+      }),
+    );
+    expect(disposeHarness).toHaveBeenCalledTimes(1);
+    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
   });
 
   it("loads only the selected memory plugin into a non-activating handle", async () => {
@@ -144,11 +252,110 @@ describe("memory runtime handles", () => {
 
     await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(hasMemoryRuntime()).toBe(true);
-    expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
 
     await closeActiveMemorySearchManagersCore();
     expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
     expect(hasMemoryRuntime()).toBe(false);
+  });
+
+  it.each(["present", "missing"] as const)(
+    "reloads the same memory selection after its %s capability owner retires",
+    async (capability) => {
+      const first = createRegistry();
+      const replacement = createRegistry();
+      if (capability === "missing") {
+        first.registry.memoryCapabilities = [];
+      }
+      const cache = createPluginCache();
+      getPluginLoaderCacheState(cache).set("memory-fixture", first.registry);
+      mocks.loadPluginRegistryHandle
+        .mockReturnValueOnce(first.registry)
+        .mockReturnValue(replacement.registry);
+
+      await expect(
+        getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
+      ).resolves.toEqual({
+        manager: null,
+        error: capability === "missing" ? "memory plugin unavailable" : "no index",
+      });
+      await retirePluginCache(cache);
+      expect(first.instance.lifecycle.signal.aborted).toBe(true);
+
+      for (let query = 0; query < 2; query += 1) {
+        await expect(
+          getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
+        ).resolves.toEqual({ manager: null, error: "no index" });
+      }
+      expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
+      expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
+      await closeActiveMemorySearchManagersCore();
+      expect(replacement.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("enrolls cached standalone runtimes once across selection and cleanup resets", async () => {
+    const first = createRegistry();
+    const second = createRegistry();
+    const observeRegistration = (instance: PluginInstance) => {
+      const onDispose = vi.fn(instance.lifecycle.onDispose);
+      // Observe the public call while retaining the real instance's registration and signal.
+      Object.defineProperty(instance, "lifecycle", {
+        value: Object.freeze({ ...instance.lifecycle, onDispose }),
+      });
+      return onDispose;
+    };
+    const firstDisposals = observeRegistration(first.instance);
+    const secondDisposals = observeRegistration(second.instance);
+    mocks.loadPluginRegistryHandle.mockImplementation(({ workspaceDir }) =>
+      workspaceDir === "/workspace/research" ? second.registry : first.registry,
+    );
+    const alternate = async () => {
+      for (const agentId of ["main", "research", "main"]) {
+        await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId });
+      }
+    };
+    await alternate();
+    expect.soft(firstDisposals).toHaveBeenCalledOnce();
+    expect.soft(secondDisposals).toHaveBeenCalledOnce();
+    await closeActiveMemorySearchManagersCore();
+    resetStandaloneMemoryRegistrySlot();
+    await alternate();
+    expect.soft(firstDisposals).toHaveBeenCalledOnce();
+    expect.soft(secondDisposals).toHaveBeenCalledOnce();
+
+    await second.instance.dispose();
+    await closeActiveMemorySearchManagersCore();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
+    expect(second.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
+    await first.instance.dispose();
+    await closeActiveMemorySearchManagersCore();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
+
+    const fresh = createRegistry(first.runtime);
+    const freshDisposals = observeRegistration(fresh.instance);
+    mocks.loadPluginRegistryHandle.mockReturnValue(fresh.registry);
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    expect(freshDisposals).toHaveBeenCalledOnce();
+  });
+
+  it("retiring an older workspace removes only that runtime from memory cleanup", async () => {
+    const first = createRegistry();
+    const current = createRegistry();
+    const cache = createPluginCache();
+    getPluginLoaderCacheState(cache).set("memory-fixture", first.registry);
+    mocks.loadPluginRegistryHandle
+      .mockReturnValueOnce(first.registry)
+      .mockReturnValue(current.registry);
+
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
+    await retirePluginCache(cache);
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
+
+    await expect(closeActiveMemorySearchManagersCore()).resolves.toBeUndefined();
+    expect(current.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
+    expect(current.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
   });
 
   it("retains standalone ownership across workspace replacement and per-agent cleanup", async () => {
@@ -193,12 +400,12 @@ describe("memory runtime handles", () => {
     expect(hasMemoryRuntime()).toBe(false);
   });
 
-  it("keys the single slot by the requesting agent workspace", () => {
+  it("selects the memory runtime for the requesting agent workspace", () => {
     const main = createRegistry();
     const research = createRegistry();
-    mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(main.registry)
-      .mockReturnValueOnce(research.registry);
+    mocks.loadPluginRegistryHandle.mockImplementation(({ workspaceDir }) =>
+      workspaceDir === "/workspace/research" ? research.registry : main.registry,
+    );
 
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",
@@ -212,7 +419,8 @@ describe("memory runtime handles", () => {
 
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenNthCalledWith(1, memoryConfig, "main");
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenLastCalledWith(memoryConfig, "research");
-    expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(main.runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(2);
+    expect(research.runtime.resolveMemoryBackendConfig).toHaveBeenCalledOnce();
   });
 
   it.each([

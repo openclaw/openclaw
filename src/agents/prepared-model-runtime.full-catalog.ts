@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
@@ -31,12 +32,13 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
-import type { PreparedRuntimeCapabilityModel } from "./prepared-model-runtime.configured.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquirePreparedMediaCapabilityProviders,
   buildPreparedPluginModelCatalog,
 } from "./prepared-model-runtime.plugin-generation.js";
 import type {
+  PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
@@ -44,6 +46,40 @@ import type {
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
+
+export function runSerializedPreparedModelRuntimeTask<T>(params: {
+  agentDir: string;
+  agentBuildCompletions: Map<string, Promise<void>>;
+  isCurrent: () => boolean;
+  task: () => Promise<T>;
+}): Promise<T> {
+  const previous = params.agentBuildCompletions.get(params.agentDir);
+  const pending = (async () => {
+    if (previous) {
+      await previous;
+    }
+    // Workspace generations serialize to bound heap growth. Yield before the first and between
+    // later builds so queued Gateway accepts and health probes always get an admission turn.
+    await yieldToEventLoop();
+    if (!params.isCurrent()) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        `prepared model runtime catalog generation was superseded for ${params.agentDir}`,
+      );
+    }
+    return await params.task();
+  })();
+  const completion = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  params.agentBuildCompletions.set(params.agentDir, completion);
+  void completion.then(() => {
+    if (params.agentBuildCompletions.get(params.agentDir) === completion) {
+      params.agentBuildCompletions.delete(params.agentDir);
+    }
+  });
+  return pending;
+}
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -354,6 +390,7 @@ export function createPreparedModelRuntimeSnapshot(
             acquirePreparedMediaCapabilityProviders(
               mediaCapabilityProviderSource,
               mediaCapabilityProviders,
+              pluginRegistry ?? mediaCapabilityProviderSource.registry,
             ),
         }
       : {}),

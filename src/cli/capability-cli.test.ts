@@ -110,7 +110,9 @@ const mocks = vi.hoisted(() => ({
   >(async () => []),
   releaseSimpleCompletion: vi.fn(),
   acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
-    release: () => mocks.releaseSimpleCompletion(),
+    async [Symbol.asyncDispose]() {
+      mocks.releaseSimpleCompletion();
+    },
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1359,7 +1361,9 @@ describe("capability cli", () => {
 
   it("adds minimal instructions only for openai local model probes", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1538,7 +1542,9 @@ describe("capability cli", () => {
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",

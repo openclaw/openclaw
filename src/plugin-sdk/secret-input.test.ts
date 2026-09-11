@@ -2,6 +2,7 @@
  * Tests secret input parsing, normalization, and configured secret resolution.
  */
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
@@ -11,9 +12,31 @@ import {
   buildOptionalSecretInputSchema,
   buildSecretInputArraySchema,
   normalizeSecretInputString,
+  readProviderEnvValue,
 } from "./secret-input.js";
 
 describe("plugin-sdk secret input helpers", () => {
+  it.each([
+    { primary: " first ", fallback: "second", expected: "first" },
+    { primary: " \n ", fallback: " usable\r\nkey ", expected: "usablekey" },
+    { primary: "\u2028\u200b", fallback: undefined, expected: undefined },
+  ])("reads the first normalized nonempty provider env value ($expected)", (testCase) => {
+    withEnv(
+      {
+        OPENCLAW_TEST_PROVIDER_PRIMARY: testCase.primary,
+        OPENCLAW_TEST_PROVIDER_FALLBACK: testCase.fallback,
+      },
+      () => {
+        expect(
+          readProviderEnvValue([
+            "OPENCLAW_TEST_PROVIDER_PRIMARY",
+            "OPENCLAW_TEST_PROVIDER_FALLBACK",
+          ]),
+        ).toBe(testCase.expected);
+      },
+    );
+  });
+
   it.each([
     {
       name: "accepts undefined for optional secret input",

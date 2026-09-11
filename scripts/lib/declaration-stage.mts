@@ -60,9 +60,10 @@ export async function publishStagedDeclarations(
   required: string[],
   previous: string[],
   sealInputs?: () => void,
+  concurrency: 1 | 2 = 1,
 ) {
   if (plan.invocations.length) {
-    const code = await executeTsdownBuildPlan(plan);
+    const code = await executeTsdownBuildPlan(plan, concurrency);
     if (code !== 0) {
       throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {
         exitCode: code,
