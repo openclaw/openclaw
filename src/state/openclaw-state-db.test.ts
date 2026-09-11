@@ -6499,8 +6499,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         );
         if (variant === "export failure") {
           fileOpen.mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-            if (String(args[0]).endsWith("orphan-rows.jsonl"))
+            if (String(args[0]).endsWith("orphan-rows.jsonl")) {
               throw new Error("ENOSPC: synthetic export failure");
+            }
             return openSync(...args);
           });
         } else {

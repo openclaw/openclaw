@@ -160,8 +160,12 @@ export function recoverOrphanTaskDeliveryRows(database: DatabaseSync, pathname: 
       }
       const sourceHash = createHash("sha256");
       const snapshotHash = createHash("sha256");
-      for (const row of orphanRows(database)) sourceHash.update(encodeOrphanRow(row));
-      for (const row of orphanRows(snapshot)) snapshotHash.update(encodeOrphanRow(row));
+      for (const row of orphanRows(database)) {
+        sourceHash.update(encodeOrphanRow(row));
+      }
+      for (const row of orphanRows(snapshot)) {
+        snapshotHash.update(encodeOrphanRow(row));
+      }
       if (sourceHash.digest("hex") !== snapshotHash.digest("hex")) {
         throw new Error("Orphan task delivery snapshot does not preserve the current payload.");
       }
