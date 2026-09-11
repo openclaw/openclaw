@@ -5345,6 +5345,9 @@ export const en: TranslationMap & {
       showDetails: "Show goal details",
       hideDetails: "Hide goal details",
     },
+    asyncQuestions: {
+      sendFailed: "Could not send your answer. Your draft is preserved.",
+    },
     questions: {
       other: "Type your own answer here",
       answer: "Answer",

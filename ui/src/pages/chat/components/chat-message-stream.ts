@@ -31,6 +31,7 @@ type StreamMessageOptions = Pick<
   | "boardProvider"
   | "agentId"
   | "runActive"
+  | "asyncQuestions"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
