@@ -459,8 +459,14 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await editDialog.waitFor({ timeout: 10_000 });
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
-      await page.locator(".workboard-draft").getByRole("button", { name: /^Priority:/u }).click();
-      await page.locator(".workboard-draft").getByRole("option", { name: "High", exact: true }).click();
+      await page
+        .locator(".workboard-draft")
+        .getByRole("button", { name: /^Priority:/u })
+        .click();
+      await page
+        .locator(".workboard-draft")
+        .getByRole("option", { name: "High", exact: true })
+        .click();
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
