@@ -357,6 +357,32 @@ it("clears filters without changing the global agent context", async () => {
   });
 });
 
+it("suspends the session summary when its page is hidden and resumes on return", async () => {
+  const page = mountPage();
+  const session = createGatewaySession({ key: "agent:main:retained", agentId: "main" });
+  observeSessions(page, { sessions: [session], hasMore: false });
+  Object.assign(page.fixture.host.sessions, { rows: [session] });
+  const card = createWorkboardCard({ sessionKey: session.key });
+  page.cards([card]);
+  page.workboard.state.detailCardId = card.id;
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  await openSessionTab(page);
+  const summaries = () => [
+    ...page.container.querySelectorAll<HTMLElement & { presented: boolean }>(
+      "[data-test-session-summary]",
+    ),
+  ];
+  await vi.waitFor(() => expect(summaries().some((summary) => summary.presented)).toBe(true));
+  page.present(false);
+  await vi.waitFor(() => expect(summaries().some((summary) => summary.presented)).toBe(false));
+  page.fixture.emit("session.message", { sessionKey: session.key, agentId: "main" });
+  await Promise.resolve();
+  expect(summaries().some((summary) => summary.presented)).toBe(false);
+  page.present(true);
+  await vi.waitFor(() => expect(summaries().some((summary) => summary.presented)).toBe(true));
+});
+
 it.each([
   {
     link: "subagent:workboard-default-writer",
@@ -986,6 +1012,60 @@ describe("selection reconciliation", () => {
       }
     },
   );
+
+  it("refreshes active automation on cron events and defers hidden updates until return", async () => {
+    const page = mountPage({ boardId: "planning" });
+    const earlier = createDeferred<ReturnType<typeof automationJob>>();
+    let loads = 0;
+    const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+    page.request.mockImplementation(async (method) => {
+      if (method === "workboard.cards.list") {
+        return {
+          cards: [],
+          boards: [
+            {
+              id: "planning",
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+              automationJobId: "job-planning",
+            },
+          ],
+        };
+      }
+      if (method === "cron.get") {
+        loads += 1;
+        return loads === 1 ? earlier.promise : automationJob("job-planning", `Revision ${loads}`);
+      }
+      return request(method);
+    });
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await vi.waitFor(() => expect(loads).toBe(1));
+    page.fixture.emit("cron", { jobId: "other-job", action: "updated" });
+    await Promise.resolve();
+    expect(loads).toBe(1);
+    page.fixture.emit("cron", { jobId: "job-planning", action: "updated" });
+    await vi.waitFor(() => expect(page.container.textContent).toContain("Revision 2"));
+    earlier.resolve(automationJob("job-planning", "Stale revision"));
+    await earlier.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(page.container.textContent).not.toContain("Stale revision");
+    page.present(false);
+    await vi.waitFor(() =>
+      expect(page.container.querySelector(".workboard-heading__automation-name")).toBeNull(),
+    );
+    page.fixture.emit("cron", { jobId: "job-planning", action: "finished" });
+    await Promise.resolve();
+    expect(loads).toBe(2);
+    page.present(true);
+    await vi.waitFor(() => expect(page.container.textContent).toContain("Revision 3"));
+    page.dispose();
+    page.fixture.emit("cron", { jobId: "job-planning", action: "updated" });
+    await Promise.resolve();
+    expect(loads).toBe(3);
+  });
 
   it("shares board and detail automation loading and ignores an earlier visit's late response", async () => {
     const page = mountPage({ boardId: "planning" });

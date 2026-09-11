@@ -35,6 +35,7 @@ export type WorkboardProps = {
   scopeControl?: TemplateResult;
   pageError?: string | null;
   overlayOpen?: boolean;
+  presented?: boolean;
   detailBoardAutomation?: BoardAutomationState;
   host: object;
   client: GatewayBrowserClient | null;

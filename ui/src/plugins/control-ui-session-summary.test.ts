@@ -82,6 +82,10 @@ describe("plugin session summary freshness", () => {
     await element.updateComplete;
     expect(requests).toHaveLength(3);
     expect(element.textContent).toBe("");
+    element.presented = true;
+    await vi.waitFor(() => expect(requests).toHaveLength(4));
+    requests[3]!.resolve(history("Reply received while hidden"));
+    await vi.waitFor(() => expect(element.textContent).toContain("Reply received while hidden"));
   });
 
   it("rejects an old session response and reloads after reconnect without a parent render", async () => {

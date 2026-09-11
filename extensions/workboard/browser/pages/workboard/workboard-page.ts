@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { createWorkboardClient } from "../../api/gateway.ts";
@@ -316,6 +317,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                 : undefined,
             pageError,
             overlayOpen: Boolean(boardDraft),
+            presented: context.presented,
             detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
             host: workboard,
             client: connected ? client : null,
@@ -401,6 +403,18 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         handleWorkboardChanged(workboard, payload);
       }
     });
+    const unsubscribeCron = host.onEvent("cron", (payload) => {
+      if (
+        !disposed &&
+        connected &&
+        context.presented &&
+        isRecord(payload) &&
+        typeof payload.jobId === "string" &&
+        automations.delete(payload.jobId)
+      ) {
+        requestUpdate();
+      }
+    });
     document.addEventListener("visibilitychange", onVisibilityChange);
     update();
     return {
@@ -414,6 +428,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         unsubscribeHost();
         unsubscribeState();
         unsubscribeEvents();
+        unsubscribeCron();
         sessionResolver.dispose();
         document.removeEventListener("visibilitychange", onVisibilityChange);
         stop();

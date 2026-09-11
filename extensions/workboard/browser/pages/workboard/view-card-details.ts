@@ -677,7 +677,10 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                     ${renderSessionHeading("session")}
                     ${
                       activeTab === "session"
-                        ? renderSessionSummary({ session: sessionTarget, presented: true })
+                        ? renderSessionSummary({
+                            session: sessionTarget,
+                            presented: props.presented !== false,
+                          })
                         : nothing
                     }
                   </section>`
