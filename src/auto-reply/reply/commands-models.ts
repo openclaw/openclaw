@@ -628,8 +628,11 @@ export function formatModelsAvailability(data: ModelsProviderData, provider?: st
           recovery = "Try again later or choose another model.";
           break;
         default:
-          label = state.availability === false ? "Unavailable" : "Availability unknown";
-          recovery = "Run /models again or choose another model.";
+          label = state.availability === false ? "Unavailable" : "Connection not confirmed";
+          recovery =
+            state.availability === false
+              ? "Run /models again or choose another model."
+              : `Connect with /login ${id}, or choose another model.`;
       }
       modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
       notices.add(`${id}: ${label}. ${recovery}`);

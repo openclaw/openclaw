@@ -30,6 +30,7 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
 const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
     authenticatedProviders: new Set(["anthropic", "google", "openai"]),
+    availabilityUnknown: false,
     unavailableReason: "missing-auth" as ModelAuthAvailabilityEvaluation["unavailableReason"],
     createProviderAuthChecker: vi.fn(),
     runtimeChoices: new Map<string, string[] | undefined>(),
@@ -63,8 +64,11 @@ const modelProviderAuthMocks = vi.hoisted(() => {
       evaluateModelAuth: vi.fn(async (provider: string, ref?: AuthRef) => {
         const incompatible = hasConflictingRoute(ref);
         return {
-          availability: checker(provider, ref),
-          unavailableReason: checker(provider, ref) ? undefined : state.unavailableReason,
+          availability: state.availabilityUnknown ? undefined : checker(provider, ref),
+          unavailableReason:
+            state.availabilityUnknown || checker(provider, ref)
+              ? undefined
+              : state.unavailableReason,
           routeResolution: incompatible
             ? {
                 kind: "incompatible" as const,
@@ -156,6 +160,7 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   pluginMetadataMocks.getCurrent.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.availabilityUnknown = false;
   modelProviderAuthMocks.unavailableReason = "missing-auth";
   modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.runtimeChoices.clear();
@@ -390,6 +395,16 @@ describe("handleModelsCommand", () => {
       }
     },
   );
+
+  it("offers a connection action when first-run readiness is unconfirmed", async () => {
+    modelProviderAuthMocks.authenticatedProviders.clear();
+    modelProviderAuthMocks.availabilityUnknown = true;
+    const params = buildParams("/models anthropic");
+    const result = await handleModelsCommand(params, true);
+    expect(result?.reply?.text).toContain("Connection not confirmed");
+    expect(result?.reply?.text).toContain("Connect with /login anthropic");
+    expect(result?.reply?.text).not.toContain("Sign-in failed");
+  });
 
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
