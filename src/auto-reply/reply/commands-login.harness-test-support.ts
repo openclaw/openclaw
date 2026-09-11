@@ -31,7 +31,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   };
 });
 
-const { handleLoginCommand } = await import("./commands-login.js");
 const { testing } = await import("./commands-login.test-support.js");
 
 export function buildLoginParams(
@@ -97,7 +96,7 @@ export function blockReplyOpts(): NonNullable<HandleCommandsParams["opts"]> {
   return { onBlockReply: vi.fn(async () => {}) };
 }
 
-export { handleLoginCommand, runModelsAuthLoginFlowMock, patchSessionEntryMock };
+export { runModelsAuthLoginFlowMock, patchSessionEntryMock };
 
 export function setupLoginCommandTests() {
   beforeEach(() => {

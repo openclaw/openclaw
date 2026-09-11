@@ -12,11 +12,12 @@ import type { ReplyPayload } from "../types.js";
 import {
   blockReplyOpts,
   buildLoginParams,
-  handleLoginCommand,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
+
+const { handleLoginCommand } = await import("./commands-login.js");
 
 function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {

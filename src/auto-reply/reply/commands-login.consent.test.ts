@@ -5,11 +5,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   blockReplyOpts,
   buildLoginParams,
-  handleLoginCommand,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
 
+const { handleLoginCommand } = await import("./commands-login.js");
 const { prepareProviderModelAccess } = await import("../../commands/models/auth-model-policy.js");
 const {
   getRuntimeConfigSnapshot,
