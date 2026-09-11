@@ -47,9 +47,8 @@ describe("skills verify process output", () => {
         slug: "weather",
         publisherHandle: "demo-owner",
         version: "2.0.0",
-        security: { status: pass ? "clean" : "suspicious" },
+        security: { status: pass ? "clean" : "suspicious", scannerReports },
         provenance: null,
-        scannerReports,
       };
       const body = JSON.stringify(verification);
       if (reportsAvailable) {

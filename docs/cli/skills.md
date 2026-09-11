@@ -172,8 +172,8 @@ Notes:
 | `curator status --json`          | Reports live Workshop skill usage recorded from trusted `skill.used` events, collection review outcomes per agent, and experience review outcomes per agent and workspace.                                                                                                                                                        |
 | `curator pin`/`unpin`/`restore`  | Retired commands remain registered but return an error explaining that weekly collection review manages the skill collection.                                                                                                                                                                                                     |
 
-Verification JSON includes `scannerReports.aig` (the full upstream SARIF report)
-and `scannerReports.skillspector` (the full upstream JSON report) when ClawHub
+Verification JSON includes `security.scannerReports.aig` (the full upstream SARIF report)
+and `security.scannerReports.skillspector` (the full upstream JSON report) when ClawHub
 has retained them. Nested scanner fields pass through unchanged, including
 coverage and incomplete-analysis details. A report is `null` when unavailable,
 including older scans whose full output was not retained; summaries are not
