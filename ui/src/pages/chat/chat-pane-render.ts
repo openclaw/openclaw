@@ -40,6 +40,7 @@ import {
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   dismissChatError,
+  initialHistorySubmitState,
   resolveAssistantAttachmentAuthToken,
   resolveChatArtifactDownload,
 } from "./chat-pane-state.ts";
@@ -338,7 +339,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             !restartRecoveryTombstoned &&
             !placementComposer.blocksSend &&
             (!sendHoldReason || initialHistoryUnavailable)),
-      submitDisabledReason: initialHistoryUnavailable ? t("chat.thread.loading") : null,
+      ...initialHistorySubmitState(state, initialHistoryUnavailable),
       modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
