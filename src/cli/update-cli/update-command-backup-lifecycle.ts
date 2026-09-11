@@ -23,6 +23,7 @@ import {
 } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -96,7 +97,7 @@ async function assertUpdateBackupWriters(params: UpdateBackupParams): Promise<vo
     return;
   }
   const [
-    { readActiveGatewayLockIdentity },
+    { readActiveGatewayLockIdentity, isSameGatewayLockIdentity },
     { readGatewayServiceState, resolveGatewayService },
     { gatewayServiceCommandUsesRoot },
   ] = await Promise.all([
@@ -109,10 +110,34 @@ async function assertUpdateBackupWriters(params: UpdateBackupParams): Promise<vo
     env: params.env,
     requireEffective: true,
   });
-  const ownsGateway =
+  const runtimePid = service.runtime?.pid;
+  const launcherStart = runtimePid === undefined ? null : getFileLockProcessStartTime(runtimePid);
+  const ownsRoot =
     gateway &&
-    service.runtime?.pid === gateway.pid &&
     (await gatewayServiceCommandUsesRoot({ root: params.root, command: service.command }));
+  let ownsGateway = ownsRoot === true && runtimePid === gateway?.pid;
+  if (gateway && ownsRoot && runtimePid !== undefined && !ownsGateway && launcherStart !== null) {
+    const [{ inspectPortUsage }, { listenerOwnedByRuntimePid }] = await Promise.all([
+      import("../../infra/ports-inspect.js"),
+      import("../daemon-cli/restart-port-ownership.js"),
+    ]);
+    const portUsage = await inspectPortUsage(gateway.port);
+    const currentGateway = await readActiveGatewayLockIdentity({
+      env: params.env,
+      requireInspection: true,
+    });
+    // Native managers can track the CLI launcher while its child owns the listener and stores.
+    ownsGateway =
+      getFileLockProcessStartTime(runtimePid) === launcherStart &&
+      currentGateway !== undefined &&
+      isSameGatewayLockIdentity(gateway, currentGateway) &&
+      currentGateway.pid === gateway.pid &&
+      currentGateway.startTime === gateway.startTime &&
+      portUsage.listeners.some(
+        (listener) =>
+          listener.pid === gateway.pid && listenerOwnedByRuntimePid({ listener, runtimePid }),
+      );
+  }
   const unknown = leases.find(
     (lease) =>
       !gateway ||

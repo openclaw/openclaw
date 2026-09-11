@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as serviceState from "../../daemon/service.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
+import * as portInspection from "../../infra/ports-inspect.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -13,12 +16,19 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as processIdentity from "../../shared/pid-alive.js";
+import {
+  claimOpenClawAgentDatabaseLease,
+  readActiveOpenClawAgentDatabaseLeasesReadOnly,
+  releaseOpenClawAgentDatabaseLease,
+} from "../../state/openclaw-agent-db-lease.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   completeUpdateCommandBackup,
   createUpdateCommandBackup,
+  preflightUpdateCommandBackup,
 } from "./update-command-backup-lifecycle.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -29,6 +39,108 @@ import {
 } from "./update-command-terminal.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  "owned child",
+  "foreign child",
+  "foreign listener",
+  "rebound lock",
+  "reused launcher",
+] as const)("admits only the verified service's Gateway writer: %s", async (scenario) => {
+  await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+    await state.writeConfig({ plugins: { enabled: false } });
+    const root = state.path("install");
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+    );
+    await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+    const temporary = state.path("coordinator");
+    await fs.mkdir(temporary, { mode: 0o700 });
+    vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
+    const startTime = processIdentity.getFileLockProcessStartTime(process.pid);
+    const launcherStart = processIdentity.getFileLockProcessStartTime(process.ppid);
+    if (startTime === null || launcherStart === null) {
+      throw new Error("Writer fixture requires known process start identities");
+    }
+    const lease = claimOpenClawAgentDatabaseLease({
+      agentId: "main",
+      path: state.path("agents", "main", "agent", "openclaw-agent.sqlite"),
+      env: state.env,
+    });
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+      env: state.env,
+    };
+    try {
+      await withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(root);
+        let inspected = false;
+        const originalStartTime = processIdentity.getFileLockProcessStartTime;
+        vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid) =>
+          pid === process.ppid && inspected && scenario === "reused launcher"
+            ? launcherStart + 1
+            : originalStartTime(pid),
+        );
+        vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockImplementation(async () => ({
+          pid: process.pid,
+          startTime,
+          ownerId: inspected && scenario === "rebound lock" ? "replacement" : "original",
+          createdAt: "2026-09-08T00:00:00.000Z",
+          port: 18792,
+        }));
+        vi.spyOn(serviceState, "readGatewayServiceState").mockResolvedValue({
+          installed: true,
+          loadState: { status: "loaded" },
+          running: true,
+          env: state.env,
+          command: {
+            programArguments: [
+              process.execPath,
+              path.join(root, "dist", "index.js"),
+              "gateway",
+              "run",
+            ],
+          },
+          runtime: { status: "running", pid: process.ppid },
+        });
+        vi.spyOn(portInspection, "inspectPortUsage").mockImplementation(async (port) => {
+          inspected = true;
+          return {
+            port,
+            status: "busy",
+            listeners: [
+              {
+                pid: scenario === "foreign listener" ? process.pid + 1 : process.pid,
+                ppid: scenario === "foreign child" ? process.ppid + 1 : process.ppid,
+              },
+            ],
+            hints: [],
+          };
+        });
+        const preflight = preflightUpdateCommandBackup({ opts: { run }, root, env: state.env });
+        if (scenario === "owned child") {
+          await expect(preflight).resolves.toBeUndefined();
+        } else {
+          await expect(preflight).rejects.toThrow("independent or unverified writer");
+        }
+        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([
+          expect.objectContaining({
+            lease_id: lease,
+            owner_pid: process.pid,
+            owner_start_time: startTime,
+          }),
+        ]);
+        await expect(fs.lstat(`${state.stateDir}.update-captures`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+    } finally {
+      releaseOpenClawAgentDatabaseLease(lease, { env: state.env });
+    }
+  });
+});
 
 it.each(["healthy", "readiness-missing", "wrong-version", "settlement-failed"] as const)(
   "retires only the settled, identity-verified capture: %s",
