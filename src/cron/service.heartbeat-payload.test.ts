@@ -96,9 +96,17 @@ describe("heartbeat payload execution", () => {
     {
       label: "disabled skip",
       child: { status: "skipped", reason: "disabled" } as HeartbeatRunResult,
-      expectedStatus: "skipped",
-      expectedCompletion: "failed",
-      expectedError: "heartbeat skipped: disabled",
+      expectedStatus: "ok",
+      expectedCompletion: "succeeded",
+      expectedError: undefined,
+      expectedConsecutiveErrors: 0,
+    },
+    {
+      label: "empty heartbeat file skip",
+      child: { status: "skipped", reason: "empty-heartbeat-file" } as HeartbeatRunResult,
+      expectedStatus: "ok",
+      expectedCompletion: "succeeded",
+      expectedError: undefined,
       expectedConsecutiveErrors: 0,
     },
   ])("records the settled heartbeat child $label", async (testCase) => {

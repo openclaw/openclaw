@@ -213,7 +213,15 @@ export async function executeJobCore(
           }
         : heartbeatResult.status === "failed"
           ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
-          : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
+          : // Designed no-op skips (empty heartbeat file, no pending event, ...)
+            // are successful runs by definition; recording them as skipped
+            // failures inflated `tasks list --status failed` and failure
+            // alerts (gh-144959). The runner's own state keeps the skipped
+            // counters for `system heartbeat last`.
+            {
+              status: "ok" as const,
+              summary: `heartbeat skipped: ${heartbeatResult.reason}`,
+            };
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {
@@ -317,8 +325,12 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text };
     }
     removeQueuedSystemEvent();
+    if (heartbeatResult.status === "skipped") {
+      // Designed no-op skip; see the interval heartbeat path above (gh-144959).
+      return { status: "ok", summary: `heartbeat skipped: ${heartbeatResult.reason}` };
+    }
     return {
-      status: heartbeatResult.status === "skipped" ? "skipped" : "error",
+      status: "error",
       error: heartbeatResult.reason,
       summary: text,
     };
