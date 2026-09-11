@@ -134,6 +134,35 @@ it("does not invent an admission mode when a warm database rejects a different o
 
 const boundaries = ["drain", "presence", "row", "unpublished", "removed-file"] as const;
 
+it("bounds background page reclamation and checks authority before resuming it", async () => {
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  database.db
+    .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
+    .run("cold-proof", "padding", Buffer.alloc(4 * 1024 * 1024), 1);
+  database.db.prepare("DELETE FROM cache_entries WHERE scope = ?").run("cold-proof");
+  const freePages = () =>
+    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  const before = freePages();
+  expect(before).toBeGreaterThan(512);
+  await reclaimSqliteFreePages(options, undefined, { maxPasses: 1 });
+  const remaining = freePages();
+  expect(remaining).toBeGreaterThan(0);
+  expect(remaining).toBeLessThan(before);
+  expect(before - remaining).toBeLessThanOrEqual(512);
+  await expect(
+    reclaimSqliteFreePages(options, undefined, {
+      maxPasses: 1,
+      assertCurrent: () => {
+        throw new Error("maintenance stopped");
+      },
+    }),
+  ).rejects.toThrow("maintenance stopped");
+  expect(freePages()).toBe(remaining);
+  await reclaimSqliteFreePages(options);
+  expect(freePages()).toBe(0);
+});
+
 it.each([
   ...boundaries.flatMap((boundary) =>
     [false, true].map((cold) => ({ boundary, cold, outcome: "complete" as const })),

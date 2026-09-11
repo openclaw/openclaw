@@ -60,6 +60,7 @@ import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-acti
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
@@ -114,6 +115,7 @@ export function startGatewayMaintenanceTimers(params: {
   dedupeCleanup: ReturnType<typeof setInterval>;
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
+  stopSessionColdStorageMaintenance: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillUsageCleanup: () => void;
 } {
@@ -544,12 +546,18 @@ export function startGatewayMaintenanceTimers(params: {
     return stopMediaCleanupPromise;
   };
 
+  const sessionColdStorageMaintenance = startSessionColdStorageMaintenance({
+    getRuntimeConfig: params.getRuntimeConfig,
+    onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
+  });
+
   return {
     tickInterval,
     healthInterval,
     dedupeCleanup,
     startMediaCleanup,
     stopMediaCleanup,
+    stopSessionColdStorageMaintenance: sessionColdStorageMaintenance.stop,
     worktreeCleanup,
     skillUsageCleanup,
   };

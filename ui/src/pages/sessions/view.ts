@@ -72,6 +72,7 @@ type TranscriptSearchState =
       results: SessionsSearchHit[];
       indexing: boolean;
       truncated: boolean;
+      archivedTranscriptsExcluded: number;
     };
 
 export type SessionsProps = {
@@ -480,6 +481,15 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
                   </button>
                 </div>
               `
+            : nothing
+        }
+        ${
+          state.status === "results" && state.archivedTranscriptsExcluded > 0
+            ? html`<div class="sessions-transcript-search__notice">
+                ${t("sessionsView.transcriptSearchArchivedExcluded", {
+                  count: String(state.archivedTranscriptsExcluded),
+                })}
+              </div>`
             : nothing
         }
         ${
