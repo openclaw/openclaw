@@ -165,6 +165,9 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
       ? {
           spawn,
           attachChildProcessBridge,
+          signalSelf: (signal) => {
+            process.kill(process.pid, signal);
+          },
           exit: process.exit.bind(process) as (code?: number) => never,
           writeError,
         }
@@ -178,6 +181,9 @@ function runOpenClawCompileCacheRespawnPlan(
   runtime: OpenClawCompileCacheRespawnRuntime = {
     spawn,
     attachChildProcessBridge,
+    signalSelf: (signal) => {
+      process.kill(process.pid, signal);
+    },
     exit: process.exit.bind(process) as (code?: number) => never,
     writeError: (message: string) => {
       process.stderr.write(message);

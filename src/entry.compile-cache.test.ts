@@ -67,6 +67,7 @@ describe("entry compile cache", () => {
   let argv: string[];
   let child: ChildProcess;
   let kill: Mock<ChildProcess["kill"]>;
+  let signalSelf: MockInstance<typeof process.kill>;
   let exit: MockInstance<typeof process.exit>;
   let writeStderr: MockInstance<typeof process.stderr.write>;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -86,13 +87,14 @@ describe("entry compile cache", () => {
     deleteTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED");
     enableCompileCache.mockReset();
     getCompileCacheDir.mockReset();
-    attachChildProcessBridge.mockReset();
+    attachChildProcessBridge.mockReset().mockReturnValue({ detach: vi.fn() });
     child = new EventEmitter() as ChildProcess;
     kill = vi.fn(() => true);
     child.kill = kill;
     spawn.mockReset().mockReturnValue(child);
     vi.spyOn(process, "argv", "get").mockImplementation(() => argv);
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
+    signalSelf = vi.spyOn(process, "kill").mockReturnValue(true);
     exit = vi.spyOn(process, "exit").mockImplementation(vi.fn<typeof process.exit>());
     writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
@@ -258,10 +260,15 @@ describe("entry compile cache", () => {
     expect(writeStderr).not.toHaveBeenCalled();
   });
 
-  it("marks signal-terminated compile-cache respawn children as failed without forcing another exit", async () => {
+  it("preserves signal-terminated compile-cache respawn children", async () => {
     await markSourceCheckout();
     await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
     child.emit("exit", null, "SIGTERM");
+    if (process.platform === "win32") {
+      expect(signalSelf).not.toHaveBeenCalled();
+    } else {
+      expect(signalSelf).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    }
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 

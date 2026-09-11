@@ -10,6 +10,7 @@ const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 export type RespawnChildRuntime = {
   spawn: typeof spawn;
   attachChildProcessBridge: typeof attachChildProcessBridge;
+  signalSelf: (signal: NodeJS.Signals) => void;
   exit: (code?: number) => never;
 };
 
@@ -96,16 +97,26 @@ export function runRespawnChildWithSignalBridge(params: {
     signalExitTimer.unref?.();
   };
 
-  runtime.attachChildProcessBridge(child, {
+  const bridge = runtime.attachChildProcessBridge(child, {
     onSignal: scheduleParentExit,
   });
 
   child.once("exit", (code, signal) => {
+    bridge.detach();
     if (parentSignalReceived && detachForProcessTree) {
       forceKillChild();
     }
     clearSignalTimers();
     if (signal) {
+      if (process.platform !== "win32") {
+        try {
+          runtime.signalSelf(signal);
+        } catch {
+          // Fall through to a numeric failure when the signal cannot be relayed.
+        }
+        runtime.exit(1);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"

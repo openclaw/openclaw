@@ -151,6 +151,15 @@ export const runRespawnedChild = (command, args, env) => {
   child.once("exit", (code, signal) => {
     detach();
     if (signal) {
+      if (process.platform !== "win32") {
+        try {
+          process.kill(process.pid, signal);
+        } catch {
+          // Fall through to a numeric failure when the signal cannot be relayed.
+        }
+        process.exit(1);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"

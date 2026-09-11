@@ -1327,57 +1327,123 @@ describe("openclaw launcher", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])("exits $exitCode when the respawn child terminates from $signal", async (testCase) => {
+  it.runIf(process.platform !== "win32").each(["SIGINT", "SIGTERM"] as const)(
+    "preserves $signal when the respawn child terminates from the forwarded signal",
+    async (signal) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          'process.title = "openclaw-launcher-default-signal-test-child";',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+        respawnChildPid = childInfo.pid;
+
+        launcher.kill(signal);
+
+        await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+          code: null,
+          signal,
+        });
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves SIGKILL when the respawn child is killed directly",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        respawnChildPid = (await waitForJsonFile<{ pid: number }>(childInfoPath, 5000)).pid;
+        process.kill(respawnChildPid, "SIGKILL");
+
+        await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+          code: null,
+          signal: "SIGKILL",
+        });
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.each([23, 143])("preserves explicit respawn child exit code %s", async (exitCode) => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addGitMarker(fixtureRoot);
-    const childInfoPath = path.join(fixtureRoot, "child-info.json");
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
-      [
-        'import { writeFileSync } from "node:fs";',
-        `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
-        'process.title = "openclaw-launcher-default-signal-test-child";',
-        "setInterval(() => {}, 1000);",
-        "",
-      ].join("\n"),
+      `process.exit(${exitCode});\n`,
       "utf8",
     );
 
-    const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
       cwd: fixtureRoot,
       env: launcherEnv({
         NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
       }),
-      stdio: "ignore",
+      encoding: "utf8",
     });
-    let respawnChildPid: number | undefined;
 
-    try {
-      const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
-      respawnChildPid = childInfo.pid;
-
-      launcher.kill(testCase.signal);
-
-      await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
-        code: testCase.exitCode,
-        signal: null,
-      });
-      expect(isProcessAlive(respawnChildPid)).toBe(false);
-    } finally {
-      if (isProcessAlive(respawnChildPid)) {
-        process.kill(respawnChildPid!, "SIGKILL");
-      }
-      if (isProcessAlive(launcher.pid)) {
-        process.kill(launcher.pid!, "SIGKILL");
-      }
-    }
+    expect(result.status).toBe(exitCode);
+    expect(result.signal).toBeNull();
   });
 
   it.runIf(process.platform !== "win32")(
-    "exits after SIGTERM when the respawn child ignores the forwarded signal",
+    "preserves forced SIGKILL when the respawn child ignores the forwarded signal",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
       await addGitMarker(fixtureRoot);
@@ -1411,8 +1477,8 @@ describe("openclaw launcher", () => {
         launcher.kill("SIGTERM");
 
         await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
-          code: 1,
-          signal: null,
+          code: null,
+          signal: "SIGKILL",
         });
         expect(isProcessAlive(launcher.pid)).toBe(false);
         expect(isProcessAlive(respawnChildPid)).toBe(false);

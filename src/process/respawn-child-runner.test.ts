@@ -42,6 +42,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: spawnChild as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
+        signalSelf: vi.fn(),
         exit: vi.fn<RespawnChildRuntime["exit"]>(),
       },
       onError: vi.fn(),
@@ -57,8 +58,11 @@ describe("runRespawnChildWithSignalBridge", () => {
   it.each([
     { signal: "SIGINT" as const, laterSignal: "SIGTERM" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, laterSignal: "SIGINT" as const, exitCode: 143 },
-  ])("exits $exitCode when the child exits by forwarded $signal", (testCase) => {
+  ])("preserves the child outcome after forwarded $signal", (testCase) => {
     const { child } = createChild(2345);
+    const lifecycle: string[] = [];
+    const detach = vi.fn(() => lifecycle.push("detach"));
+    const signalSelf = vi.fn(() => lifecycle.push("signalSelf"));
     const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
@@ -70,8 +74,9 @@ describe("runRespawnChildWithSignalBridge", () => {
         spawn: vi.fn(() => child) as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn((_child, options) => {
           onSignal = options?.onSignal;
-          return { detach: vi.fn() };
+          return { detach };
         }),
+        signalSelf,
         exit,
       },
       onError: vi.fn(),
@@ -81,7 +86,14 @@ describe("runRespawnChildWithSignalBridge", () => {
     onSignal?.(testCase.laterSignal);
     child.emit("exit", null, testCase.signal);
 
-    expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+    if (process.platform === "win32") {
+      expect(signalSelf).not.toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+    } else {
+      expect(lifecycle).toEqual(["detach", "signalSelf"]);
+      expect(signalSelf).toHaveBeenCalledWith(testCase.signal);
+      expect(exit).toHaveBeenCalledWith(1);
+    }
   });
 
   it("signals detached respawn process groups after forwarded signal grace", () => {
@@ -104,6 +116,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
+          signalSelf: vi.fn(),
           exit,
         },
         onError: vi.fn(),
@@ -159,6 +172,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
+          signalSelf: vi.fn(),
           exit,
         },
         onError: vi.fn(),
@@ -194,6 +208,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: spawnChild as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
+        signalSelf: vi.fn(),
         exit: vi.fn<RespawnChildRuntime["exit"]>(),
       },
       onError: vi.fn(),
@@ -222,6 +237,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       runtime: {
         spawn: vi.fn(() => child) as unknown as typeof spawn,
         attachChildProcessBridge: vi.fn(),
+        signalSelf: vi.fn(),
         exit,
       },
       onError,
@@ -248,6 +264,7 @@ describe("runRespawnChildWithSignalBridge", () => {
         runtime: {
           spawn: vi.fn(() => child) as unknown as typeof spawn,
           attachChildProcessBridge: vi.fn(),
+          signalSelf: vi.fn(),
           exit,
         },
         onError,
@@ -284,6 +301,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             throw error;
           }) as unknown as typeof spawn,
           attachChildProcessBridge: vi.fn(),
+          signalSelf: vi.fn(),
           exit,
         },
         onError,
@@ -311,6 +329,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
+          signalSelf: vi.fn(),
           exit,
         },
         onError,

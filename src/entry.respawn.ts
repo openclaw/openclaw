@@ -170,6 +170,9 @@ export function runCliRespawnPlan(
   const resolvedRuntime: CliRespawnRuntime = runtime ?? {
     spawn,
     attachChildProcessBridge,
+    signalSelf: (signal) => {
+      process.kill(process.pid, signal);
+    },
     exit: process.exit.bind(process) as (code?: number) => never,
     writeError,
   };

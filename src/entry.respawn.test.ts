@@ -402,7 +402,8 @@ describe("runCliRespawnPlan", () => {
   it("spawns and bridges the respawn child", () => {
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
-    const attachChildProcessBridge = vi.fn();
+    const detach = vi.fn();
+    const attachChildProcessBridge = vi.fn(() => ({ detach }));
     const exit = vi.fn<(code?: number) => never>();
     const writeError = vi.fn();
 
@@ -416,6 +417,7 @@ describe("runCliRespawnPlan", () => {
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
         attachChildProcessBridge,
+        signalSelf: vi.fn(),
         exit,
         writeError,
       },
@@ -439,6 +441,7 @@ describe("runCliRespawnPlan", () => {
 
     child.emit("exit", 0, null);
 
+    expect(detach).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledWith(0);
     expect(writeError).not.toHaveBeenCalled();
   });
