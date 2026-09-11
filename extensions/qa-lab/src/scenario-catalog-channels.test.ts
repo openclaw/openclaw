@@ -288,6 +288,7 @@ describe("qa scenario catalog channel contracts", () => {
     );
     expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
     expect(compactionFlow).toContain('"minimumPreviewEvents":2');
+    expect(compactionFlow).toContain("progress: { commentary: true, toolProgress: true }");
     expect(compactionFlow).toContain("config.commentaryOne");
     expect(compactionFlow).toContain("config.commentaryTwo");
     expect(compactionFlow).toContain("Compacting context");
