@@ -13,6 +13,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("tar", async (importOriginal) => {
   const actual = await importOriginal<typeof import("tar")>();
@@ -23,12 +24,6 @@ const actualTar = await vi.importActual<typeof import("tar")>("tar");
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const createBackupVerifyRuntime = () => ({
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-});
 
 function createBackupManifest(
   assetArchivePath: string,
@@ -215,7 +210,7 @@ describe("backupVerifyCommand", () => {
   it("verifies a valid backup archive", async () => {
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-out-"));
     try {
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
       const archiveRoot = buildBackupArchiveRoot(nowMs);
       const archivePath = path.join(archiveDir, "backup.tar.gz");
@@ -282,7 +277,7 @@ describe("backupVerifyCommand", () => {
   ])("reports an actionable failure for $name", async ({ prepare, detail }) => {
     const tempDir = tempDirs.make("openclaw-backup-verify-input-");
     const archivePath = await prepare(tempDir);
-    const runtime = createBackupVerifyRuntime();
+    const runtime = createTestRuntime();
 
     await runCommandWithRuntime(runtime, async () => {
       await backupVerifyCommand(runtime, { archive: archivePath });
@@ -325,7 +320,7 @@ describe("backupVerifyCommand", () => {
         ]),
       ),
     );
-    const runtime = createBackupVerifyRuntime();
+    const runtime = createTestRuntime();
 
     await runCommandWithRuntime(runtime, async () => {
       await backupVerifyCommand(runtime, { archive: archivePath });
@@ -364,7 +359,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
           {
             ok: true,
@@ -452,7 +447,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
           { ok: true },
         );
@@ -523,7 +518,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(error);
       },
     );
@@ -552,7 +547,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
           { ok: true },
         );
@@ -607,7 +602,7 @@ describe("backupVerifyCommand", () => {
 
           const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
           try {
-            const runtime = createBackupVerifyRuntime();
+            const runtime = createTestRuntime();
             await expect(
               backupVerifyCommand(runtime, { archive: archivePath }),
             ).resolves.toMatchObject({ ok: true });
@@ -653,7 +648,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /Backup SQLite snapshot failed verification.*foreign_key_check failed.*children row 1 references parents \(foreign key 0\)/iu,
         );
@@ -686,7 +681,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
           {
             ok: true,
@@ -718,7 +713,7 @@ describe("backupVerifyCommand", () => {
         const verificationTempRoot = tempDirs.make("openclaw-backup-verify-cleanup-");
         const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
         try {
-          const runtime = createBackupVerifyRuntime();
+          const runtime = createTestRuntime();
           await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
             /Backup SQLite snapshot failed verification.*openclaw\.sqlite/iu,
           );
@@ -748,7 +743,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /SQLite snapshot is empty.*empty\.sqlite/iu,
         );
@@ -789,7 +784,7 @@ describe("backupVerifyCommand", () => {
           ],
         },
         async (archivePath) => {
-          const runtime = createBackupVerifyRuntime();
+          const runtime = createTestRuntime();
           await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
             /contains a SQLite snapshot sidecar.*openclaw\.sqlite-wal/iu,
           );
@@ -837,7 +832,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /contains a SQLite snapshot sidecar.*openclaw-agent\.sqlite-wal/iu,
         );
@@ -871,7 +866,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /case-mangled canonical SQLite path.*State\/OpenClaw\.SQLITE/u,
         );
@@ -902,7 +897,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /case-mangled state asset path.*PAYLOAD.*custom\.sqlite-wal/iu,
         );
@@ -942,7 +937,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /Backup SQLite snapshot failed verification.*corrupt\.sqlite/iu,
         );
@@ -982,7 +977,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /Backup SQLite snapshot failed verification.*corrupt\.sqlite/iu,
         );
@@ -1016,7 +1011,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /has role agent; expected global/iu,
         );
@@ -1107,7 +1102,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /has role global; expected agent/iu,
         );
@@ -1142,7 +1137,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /state asset archivePath does not match its sourcePath/iu,
         );
@@ -1223,7 +1218,7 @@ describe("backupVerifyCommand", () => {
           const extract = vi.mocked(tar.x).mockClear();
 
           await expect(
-            backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+            backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
           ).rejects.toThrow(error);
           expect(mkdtemp).not.toHaveBeenCalled();
           expect(extract).not.toHaveBeenCalled();
@@ -1305,7 +1300,7 @@ describe("backupVerifyCommand", () => {
         ],
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
           {
             ok: true,
@@ -1324,7 +1319,7 @@ describe("backupVerifyCommand", () => {
       await fs.writeFile(path.join(root, "payload", "data.txt"), "x\n", "utf8");
       await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, ["root"]);
 
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
         /expected exactly one backup manifest entry/i,
       );
@@ -1361,7 +1356,7 @@ describe("backupVerifyCommand", () => {
       );
       await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
 
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
         /missing payload for manifest asset/i,
       );
@@ -1377,7 +1372,7 @@ describe("backupVerifyCommand", () => {
         manifestContent: '{"schemaVersion":1,',
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           `Backup archive verification failed: ${archivePath}. Backup manifest is not valid JSON.`,
         );
@@ -1430,7 +1425,7 @@ describe("backupVerifyCommand", () => {
         manifestContent: JSON.stringify(manifest),
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(error);
       },
     );
@@ -1443,7 +1438,7 @@ describe("backupVerifyCommand", () => {
         manifestContent: "x".repeat(1024 * 1024 + 1),
       },
       async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
+        const runtime = createTestRuntime();
         await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
           /Backup manifest exceeds 1048576 byte limit/,
         );
@@ -1471,7 +1466,7 @@ describe("backupVerifyCommand", () => {
           payloads: [{ fileName: "payload.txt", contents: "payload\n", archivePath }],
         },
         async (brokenArchivePath) => {
-          const runtime = createBackupVerifyRuntime();
+          const runtime = createTestRuntime();
           await expect(
             backupVerifyCommand(runtime, { archive: brokenArchivePath }),
           ).rejects.toThrow(error);
@@ -1515,7 +1510,7 @@ describe("backupVerifyCommand", () => {
     );
 
     await expect(
-      backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
     ).resolves.toMatchObject({ ok: true, assetCount: 2, symlinkCount: 2 });
 
     archiveEntries.push(
@@ -1530,7 +1525,7 @@ describe("backupVerifyCommand", () => {
       gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
     );
     await expect(
-      backupVerifyCommand(createBackupVerifyRuntime(), { archive: archivePath }),
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
     ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
   });
 
@@ -1557,7 +1552,7 @@ describe("backupVerifyCommand", () => {
       );
       await fs.writeFile(archivePath, archive);
 
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
         /hardlink target.*path traversal segments/i,
       );
@@ -1590,7 +1585,7 @@ describe("backupVerifyCommand", () => {
       );
       await fs.writeFile(archivePath, archive);
 
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
         ok: true,
       });
@@ -1623,7 +1618,7 @@ describe("backupVerifyCommand", () => {
       );
       await fs.writeFile(archivePath, archive);
 
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
         /hardlink target is missing from archive entries/i,
       );
@@ -1635,7 +1630,7 @@ describe("backupVerifyCommand", () => {
   it("ignores payload manifest.json files when locating the backup manifest", async () => {
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-out-"));
     try {
-      const runtime = createBackupVerifyRuntime();
+      const runtime = createTestRuntime();
       const nowMs = Date.UTC(2026, 2, 9, 2, 0, 0);
       const archiveRoot = buildBackupArchiveRoot(nowMs);
       const archivePath = path.join(archiveDir, "backup.tar.gz");
@@ -1748,7 +1743,7 @@ describe("backupVerifyCommand", () => {
           buildTarEntries: options.buildTarEntries,
         },
         async (archivePath) => {
-          const runtime = createBackupVerifyRuntime();
+          const runtime = createTestRuntime();
           await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
             options.error,
           );
