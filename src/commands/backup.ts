@@ -44,7 +44,7 @@ export async function backupCreateCommand(
       result.verified = true;
     }
     if (!opts.dryRun) {
-      recordBackupOutcomeBestEffort(runtime, {
+      await recordBackupOutcomeBestEffort(runtime, {
         kind: "archive",
         archivePath,
         status: "ok",
@@ -58,7 +58,7 @@ export async function backupCreateCommand(
     return result;
   } catch (error) {
     if (!opts.dryRun) {
-      recordBackupOutcomeBestEffort(runtime, {
+      await recordBackupOutcomeBestEffort(runtime, {
         kind: "archive",
         archivePath,
         status: "failed",
