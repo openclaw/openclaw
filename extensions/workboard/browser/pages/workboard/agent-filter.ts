@@ -128,7 +128,7 @@ export function buildAgentFilterOptions(
   return options;
 }
 
-export function buildAssignableAgentOptions(
+function buildAssignableAgentOptions(
   agentsList: WorkboardAgentsList | null,
   currentAgentId: string,
 ) {
