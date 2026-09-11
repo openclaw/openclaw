@@ -46,13 +46,10 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
       },
       { slug: "tools", label: "Tools", description: "Tools", icon: "wrench", order: 1 },
     ],
-    categoriesError: null,
     featured: [plugin("featured")],
     featuredLoading: false,
-    featuredError: null,
     trending: [plugin("trending")],
     trendingLoading: false,
-    trendingError: null,
     loadingMore: false,
     loadMoreError: null,
     intent: "all",
@@ -69,8 +66,6 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     onInstall: vi.fn(),
     onLoadMore: vi.fn(),
     onRetry: vi.fn(),
-    onRetryGrouped: vi.fn(),
-    onRetryCategories: vi.fn(),
     ...overrides,
   };
 }
@@ -143,13 +138,14 @@ describe("renderPluginCatalogResults", () => {
   });
 
   it("keeps a partial ClawHub failure retryable", () => {
-    const onRetryGrouped = vi.fn();
+    const onRetry = vi.fn();
     const container = mount(
       baseProps({
         remoteError: "ClawHub is unavailable; local plugins remain available.",
-        featuredError: "ClawHub is unavailable; local plugins remain available.",
-        trendingError: "ClawHub is unavailable; local plugins remain available.",
-        onRetryGrouped,
+        result: { items: [] },
+        featured: [],
+        trending: [],
+        onRetry,
       }),
     );
 
@@ -157,8 +153,9 @@ describe("renderPluginCatalogResults", () => {
     expect(warnings).toHaveLength(1);
     const warning = warnings.item(0);
     expect(warning?.textContent).toContain("ClawHub is unavailable");
+    expect(container.querySelector(".plugin-catalog-results__empty")).toBeNull();
     warning?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onRetryGrouped).toHaveBeenCalledOnce();
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it.each<{
@@ -263,11 +260,10 @@ describe("renderPluginCatalogResults", () => {
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
-  it("preserves every catalog result under Uncategorized when category metadata is unavailable", () => {
+  it("preserves every catalog result under Uncategorized without category metadata", () => {
     const container = mount(
       baseProps({
         categories: [],
-        categoriesError: "Category metadata unavailable",
         result: {
           items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
         },

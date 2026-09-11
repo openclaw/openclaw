@@ -219,12 +219,32 @@ it("sorts a selected category within its bounded page", async () => {
   ]);
 });
 
-it("surfaces partial ClawHub failures on the Featured shelf", async () => {
+it("preserves category navigation when a filtered view reconnects", async () => {
+  const categories = [
+    {
+      slug: "channels",
+      label: "Channels",
+      description: "Channels",
+      icon: "message-circle",
+      order: 0,
+    },
+  ];
+  const { controller } = setup([{ items: [entry(1)], categories }, { items: [entry(2)] }]);
+
+  await controller.refresh();
+  controller.category = "channels";
+  controller.invalidate();
+  await controller.refresh();
+
+  expect(controller.categories).toEqual(categories);
+});
+
+it("surfaces a partial ClawHub failure once for the overview", async () => {
   const { controller } = setup([
     { items: [], remoteError: "ClawHub is unavailable; local plugins remain available." },
   ]);
 
   await controller.refresh();
 
-  expect(controller.featuredError).toBe("ClawHub is unavailable; local plugins remain available.");
+  expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
 });

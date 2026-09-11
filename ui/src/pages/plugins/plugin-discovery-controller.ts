@@ -67,11 +67,8 @@ export class PluginDiscoveryController {
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
-  categoriesError: string | null = null;
   featured: PluginDiscoveryEntry[] = [];
-  featuredError: string | null = null;
   trending: PluginDiscoveryEntry[] = [];
-  trendingError: string | null = null;
   loadMoreError: string | null = null;
   intent: PluginDiscoveryIntent = "all";
   category: string | null = null;
@@ -116,9 +113,6 @@ export class PluginDiscoveryController {
             0,
             CATALOG_SECTION_SIZE,
           );
-          this.categoriesError = page.remoteError ?? null;
-          this.featuredError = page.remoteError ?? null;
-          this.trendingError = page.remoteError ?? null;
         }
         this.gateway.onEntriesChanged?.();
       },
@@ -227,12 +221,8 @@ export class PluginDiscoveryController {
     this.result = null;
     this.error = null;
     this.remoteError = null;
-    this.categories = [];
-    this.categoriesError = null;
     this.featured = [];
-    this.featuredError = null;
     this.trending = [];
-    this.trendingError = null;
     this.loadMoreError = null;
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
@@ -254,11 +244,6 @@ export class PluginDiscoveryController {
     this.remoteError = null;
     this.loadMoreError = null;
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
-    if (this.isGroupedOverview()) {
-      this.categoriesError = null;
-      this.featuredError = null;
-      this.trendingError = null;
-    }
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
   }
 

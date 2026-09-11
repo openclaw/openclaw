@@ -60,6 +60,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await catalog.locator(".plugin-catalog-section__header h2").allTextContents()).toEqual(
         expect.arrayContaining(["Featured", "Trending", "Channels", "Memory"]),
       );
+      expect(await gateway.getRequests("plugins.catalog.browse")).toHaveLength(1);
+      expect((await gateway.getRequests("plugins.catalog.browse"))[0]?.params).toEqual({
+        intent: "all",
+        pageSize: 100,
+      });
       const grid = catalog.locator(".plugin-catalog-grid").first();
       await expect
         .poll(() =>
@@ -653,6 +658,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         categories: ["missing-category"],
       },
     }));
+    const featured = discoveryResult.items.filter((plugin) => plugin.catalog.featured).slice(0, 2);
     await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
@@ -660,15 +666,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         "plugins.catalog.browse": {
           cases: [
             {
-              match: { intent: "featured", pageSize: 8 },
-              response: { items: discoveryResult.items.slice(0, 2) },
+              match: { intent: "all", pageSize: 100 },
+              response: {
+                items: [...featured, ...uncategorized],
+                categories: discoveryResult.categories,
+              },
             },
-            {
-              match: { intent: "trending", pageSize: 8 },
-              response: { items: discoveryResult.items.slice(0, 8) },
-            },
-            { match: { intent: "all", pageSize: 8 }, response: { items: [] } },
-            { match: { intent: "all" }, response: { items: uncategorized } },
           ],
         },
       },
