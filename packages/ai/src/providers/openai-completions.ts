@@ -231,12 +231,7 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort =
-    clampedReasoning === "off"
-      ? undefined
-      : clampedReasoning === "max"
-        ? "xhigh"
-        : clampedReasoning;
+  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {

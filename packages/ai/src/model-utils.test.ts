@@ -163,10 +163,10 @@ describe("clampThinkingLevel", () => {
     expect(clampThinkingLevel(model, "max")).toBe("high");
   });
 
-  it("normalizes reasoning effort casing, trimming, and aliases", () => {
+  it("normalizes canonical reasoning effort casing and trimming", () => {
     const model = makeModel(undefined, {
       compat: {
-        supportedReasoningEfforts: [" extra-high ", "MAX"],
+        supportedReasoningEfforts: ["  xhigh  ", "MAX"],
       },
     });
 
@@ -175,6 +175,19 @@ describe("clampThinkingLevel", () => {
     expect(levels).toContain("max");
     expect(clampThinkingLevel(model, "max")).toBe("max");
     expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
+  });
+
+  it("does not admit non-canonical aliases without explicit mapping", () => {
+    const model = makeModel(undefined, {
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "extra-high"],
+      },
+    });
+
+    const levels = getSupportedThinkingLevels(model);
+    expect(levels).not.toContain("xhigh");
+    // Unsupported extra-high correctly clamps down to high
+    expect(clampThinkingLevel(model, "xhigh")).toBe("high");
   });
 
   it("never clamps unsupported xhigh upward to max when only max is supported", () => {

@@ -929,6 +929,30 @@ describe("OpenAI-compatible completions params", () => {
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
+  it("preserves declared max in streamSimpleOpenAICompletions when supported by model compat", async () => {
+    const stream = streamSimpleOpenAICompletions(
+      {
+        ...createModel(32_000),
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high", "max"],
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoning: "max",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      reasoning_effort: "max",
+    });
+  });
+
   it("forwards simple stop sequences to request params", async () => {
     let capturedStop: unknown;
     const stream = streamSimpleOpenAICompletions(createModel(32_000), context, {

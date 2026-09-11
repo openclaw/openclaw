@@ -65,17 +65,8 @@ function modelCompatSupportsReasoningEffort<TApi extends Api>(
     if (typeof effort !== "string") {
       return false;
     }
-    const normalized = effort
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
-    if (level === "xhigh") {
-      return normalized === "xhigh" || normalized === "extrahigh";
-    }
-    if (level === "max") {
-      return normalized === "max";
-    }
-    return false;
+    const normalized = effort.trim().toLowerCase();
+    return normalized === level;
   });
 }
 
