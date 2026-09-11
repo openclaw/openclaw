@@ -1,4 +1,3 @@
-// Memory Wiki tests cover obsidian plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { runObsidianDaily, runObsidianSearch } from "./obsidian.js";
@@ -24,15 +23,11 @@ describe("runObsidianSearch", () => {
       calls.push({ command, argv: argv ? [...argv] : [], options });
       return { stdout: "search output\n", stderr: "" };
     };
-    const exec = execImpl as unknown as NonNullable<
-      NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]
-    >;
-
     const result = await runObsidianSearch({
       config,
       query: "agent memory",
       deps: {
-        exec,
+        exec: execImpl,
         resolveCommand: async () => "/usr/local/bin/obsidian",
       },
     });
