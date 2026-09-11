@@ -1,23 +1,36 @@
 // Provider/account summary helpers for `openclaw agents list`.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  projectChannelAccountDisplayState,
+  resolveChannelAccountLinked,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../plugins/official-external-plugin-repair-hints.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
   provider: ChannelId;
   providerLabel?: string;
   accountId: string;
   name?: string;
-  state: "linked" | "not linked" | "configured" | "not configured" | "enabled" | "disabled";
+  state:
+    | "linked"
+    | "not linked"
+    | "configured"
+    | "configured unavailable"
+    | "not configured"
+    | "enabled"
+    | "disabled";
   enabled?: boolean;
   configured?: boolean;
   visibleInConfiguredLists?: boolean;
@@ -30,8 +43,20 @@ type ProviderSummaryMetadata = {
   repairHint?: string;
 };
 
+// Concrete account keys normalize aliases; scope keys must keep "*" distinct from "default".
 function providerAccountKey(provider: ChannelId, accountId?: string) {
-  return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
+  return `${provider}:${normalizeAccountId(accountId)}`;
+}
+
+function recordProviderAccountStatus(
+  index: Map<string, ProviderAccountStatus>,
+  entry: ProviderAccountStatus,
+) {
+  const key = providerAccountKey(entry.provider, entry.accountId);
+  // Exact canonical spelling wins; otherwise keep the first listed alias.
+  if (!index.has(key) || entry.accountId === normalizeAccountId(entry.accountId)) {
+    index.set(key, entry);
+  }
 }
 
 function resolveProviderChannelId(params: {
@@ -69,18 +94,15 @@ export function buildProviderSummaryMetadataIndex(
       },
     ]),
   );
-  for (const channelId of listExplicitConfiguredChannelIdsForConfig(cfg)) {
-    if (metadata.has(channelId)) {
-      continue;
-    }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      channelId,
-    });
-    if (!hint) {
-      continue;
-    }
-    metadata.set(channelId as ChannelId, {
+  const missingChannelIds = listExplicitConfiguredChannelIdsForConfig(cfg).filter(
+    (channelId) => !metadata.has(channelId as ChannelId),
+  );
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: missingChannelIds,
+  });
+  for (const hint of missingHints) {
+    metadata.set(hint.channelId as ChannelId, {
       label: hint.label,
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       visibleInConfiguredLists: true,
@@ -148,11 +170,13 @@ export async function buildProviderStatusIndex(
         if (!isUnresolvedSecretRefResolutionError(error)) {
           throw error;
         }
-        map.set(providerAccountKey(plugin.id, accountId), {
+        recordProviderAccountStatus(map, {
           provider: plugin.id,
+          providerLabel: plugin.meta.label,
           accountId,
-          state: "not configured",
-          configured: false,
+          state: "configured unavailable",
+          configured: true,
+          visibleInConfiguredLists: isChannelVisibleInConfiguredLists(plugin.meta),
         });
         continue;
       }
@@ -170,29 +194,48 @@ export async function buildProviderStatusIndex(
         : snapshot?.configured;
       const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
       const resolvedConfigured = typeof configured === "boolean" ? configured : true;
-      const state =
-        plugin.status?.resolveAccountState?.({
-          account,
-          cfg,
-          configured: resolvedConfigured,
-          enabled: resolvedEnabled,
-        }) ??
-        (typeof snapshot?.linked === "boolean"
-          ? snapshot.linked
-            ? "linked"
-            : "not linked"
-          : resolvedConfigured
-            ? "configured"
-            : "not configured");
+      const inspectedConfigured = (account as { configured?: unknown }).configured;
+      const configuredIntent =
+        typeof inspectedConfigured === "boolean"
+          ? inspectedConfigured
+          : snapshot?.configured === true;
+      // Provider inspection owns which credentials are required. Only an account whose owner
+      // reports complete configured intent but no usable runtime credentials is unavailable.
+      const configuredUnavailable =
+        !resolvedConfigured &&
+        configuredIntent &&
+        (hasConfiguredUnavailableCredentialStatus(snapshot) ||
+          hasConfiguredUnavailableCredentialStatus(account));
+      const linkState =
+        resolvedConfigured && plugin.config.isLinked
+          ? await plugin.config.isLinked(account, cfg)
+          : undefined;
+      const linked = resolveChannelAccountLinked(linkState, snapshot?.linked);
+      const fallbackState = plugin.status?.resolveAccountState?.({
+        account,
+        cfg,
+        configured: resolvedConfigured,
+        enabled: resolvedEnabled,
+      });
+      const state = configuredUnavailable
+        ? "configured unavailable"
+        : projectChannelAccountDisplayState(
+            resolveChannelAccountState({
+              enabled: resolvedEnabled,
+              configured: resolvedConfigured,
+              linked,
+            }),
+            fallbackState,
+          );
       const name = snapshot?.name ?? (account as { name?: string }).name;
-      map.set(providerAccountKey(plugin.id, accountId), {
+      recordProviderAccountStatus(map, {
         provider: plugin.id,
         providerLabel: plugin.meta.label,
         accountId,
         name,
         state,
         enabled,
-        configured,
+        configured: configuredUnavailable || configured,
         visibleInConfiguredLists: isChannelVisibleInConfiguredLists(plugin.meta),
       });
     }
@@ -201,11 +244,9 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(
-  provider: ChannelId,
-  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>,
-): string {
-  return metadataByProvider.get(provider)?.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
+function resolveBindingAccountId(binding: AgentBinding): string {
+  const accountId = binding.match.accountId?.trim();
+  return accountId === "*" ? accountId : normalizeAccountId(accountId);
 }
 
 function shouldShowProviderEntry(params: {
@@ -267,9 +308,8 @@ export function summarizeBindings(
     if (!channel) {
       continue;
     }
-    const accountId =
-      binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
-    const key = providerAccountKey(channel, accountId);
+    const accountId = resolveBindingAccountId(binding);
+    const key = `${channel}:${accountId}`;
     if (!seen.has(key)) {
       const label = formatChannelAccountLabel({
         provider: channel,
@@ -291,11 +331,11 @@ export function listProvidersForAgent(params: {
   providerMetadata?: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
 }): string[] {
   const allProviderEntries = [...params.providerStatus.values()];
-  const providerLines: string[] = [];
   const metadataByProvider =
     params.providerMetadata ?? buildProviderSummaryMetadataIndex(params.cfg);
   if (params.bindings.length > 0) {
-    const seen = new Set<string>();
+    // Keep first-seen account order; empty wildcard scopes retain the existing diagnostic.
+    const linesByAccount = new Map<string, string>();
     for (const binding of params.bindings) {
       const channel = resolveProviderChannelId({
         rawChannelId: binding.match.channel,
@@ -304,29 +344,28 @@ export function listProvidersForAgent(params: {
       if (!channel) {
         continue;
       }
-      const accountId =
-        binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
-      const key = providerAccountKey(channel, accountId);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const status = params.providerStatus.get(key);
-      if (status) {
-        providerLines.push(formatProviderEntry(status));
-      } else {
-        providerLines.push(
-          formatMissingProviderEntry({
-            provider: channel,
-            accountId,
-            metadata: metadataByProvider.get(channel),
-          }),
+      const accountId = resolveBindingAccountId(binding);
+      const statuses =
+        accountId === "*"
+          ? allProviderEntries.filter((entry) => entry.provider === channel)
+          : [params.providerStatus.get(providerAccountKey(channel, accountId))];
+      for (const status of statuses.length > 0 ? statuses : [undefined]) {
+        linesByAccount.set(
+          status ? providerAccountKey(channel, status.accountId) : `${channel}:${accountId}`,
+          status
+            ? formatProviderEntry(status)
+            : formatMissingProviderEntry({
+                provider: channel,
+                accountId,
+                metadata: metadataByProvider.get(channel),
+              }),
         );
       }
     }
-    return providerLines;
+    return [...linesByAccount.values()];
   }
 
+  const providerLines: string[] = [];
   if (params.summaryIsDefault) {
     const seenProviders = new Set<ChannelId>();
     for (const entry of allProviderEntries) {

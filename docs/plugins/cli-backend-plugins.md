@@ -97,7 +97,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     ```
 
     `cliBackends` is the runtime ownership list; it lets OpenClaw auto-load the
-    plugin when config or model selection mentions `acme-cli/...`.
+    plugin when model selection or `agentRuntime.id` mentions `acme-cli`.
 
     `setup.cliBackends` is the descriptor-first setup surface. Add it when
     model discovery, onboarding, or status should recognize the backend
@@ -108,14 +108,9 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
   <Step title="Register the backend">
     ```typescript index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-    function buildAcmeCliBackend(): CliBackendPlugin {
+    function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
         liveTest: {
@@ -129,23 +124,33 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
         },
         config: {
           command: "acme",
-          args: ["chat", "--json"],
-          output: "json",
-          input: "stdin",
+          args: ["chat", "--output-format", "stream-json", "--prompt", "{prompt}"],
+          resumeArgs: [
+            "chat",
+            "--resume",
+            "{sessionId}",
+            "--output-format",
+            "stream-json",
+            "--prompt",
+            "{prompt}",
+          ],
+          output: "jsonl",
+          resumeOutput: "jsonl",
+          jsonlDialect: "gemini-stream-json",
+          input: "arg",
           modelArg: "--model",
-          sessionArg: "--session",
+          modelAliases: {
+            large: "acme-large-2026",
+            fast: "acme-fast-2026",
+          },
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptFileArg: "--system-file",
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
+          imagePathScope: "workspace",
           serialize: true,
         },
       };
@@ -161,16 +166,19 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     });
     ```
 
-    The backend id must match the manifest `cliBackends` entry. The
-    registered `config` is only the default; user config under
-    `agents.defaults.cliBackends.acme-cli` merges over it at runtime.
+    The backend id must match the manifest `cliBackends` entry. The registered
+    adapter is authoritative plugin code; OpenClaw config selects the backend
+    but does not rewrite its command contract.
 
   </Step>
 </Steps>
 
 ## Config shape
 
-`CliBackendConfig` describes how OpenClaw should launch and parse the CLI:
+`CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
+worked example above intentionally exercises the same command, resume, JSONL,
+model-alias, session, and image fields as the bundled
+`google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
 | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -185,7 +193,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `env` / `clearEnv`                                        | Extra env vars to inject, or names to strip before launch                         |
 | `modelArg`                                                | Flag used before the model id                                                     |
 | `modelAliases`                                            | Map OpenClaw model ids to CLI-native ids                                          |
-| `sessionArg` / `sessionArgs`                              | How to pass a session id                                                          |
+| `sessionArgs`                                             | How to pass a session id using `{sessionId}`                                      |
 | `sessionMode`                                             | `always`, `existing`, or `none`                                                   |
 | `sessionIdFields`                                         | JSON fields OpenClaw reads from CLI output                                        |
 | `systemPromptArg` / `systemPromptFileArg`                 | System prompt transport                                                           |
@@ -196,8 +204,28 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
-| `reliability.outputLimits`                                | Max raw JSONL chars/lines retained for one live CLI turn (live-session backends)  |
+| `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+`claude-stream-json` is more than a parser choice: it declares that the backend's `result` records carry Claude Code's terminal semantics, including `terminal_reason`. A reply-less `result` whose `terminal_reason` is `hook_stopped`, `stop_hook_prevented`, `aborted_tools`, `aborted_streaming`, `budget_exhausted`, or `max_turns` is a recorded turn stop: OpenClaw reports that reason to the user and does not replay the turn on a fallback model, because the backend's tool actions may already have run.
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
+
+`freshSessionRecovery` is a backend-owned compatibility contract:
+
+- Leave it undefined or set it to `"replace-binding"` to preserve the legacy
+  clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
+  with a fresh session when the failure is eligible for recovery.
+- Set it to `"invalidated-only"` to suppress fresh replacement unless the
+  canonical invalidation predicate proves the old session is dead. Only
+  `session_expired` does so.
+
+Choose the value from the CLI or SDK session contract, not from a provider id
+or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
+its native session contract does not treat non-expiration failures as proof that the
+conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.
@@ -208,7 +236,7 @@ only for behavior that really belongs to the backend.
 
 | Hook                               | Use                                                                         |
 | ---------------------------------- | --------------------------------------------------------------------------- |
-| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
+| `normalizeConfig(config, context)` | Normalize the registered static adapter with runtime context                |
 | `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
 | `prepareExecution(ctx)`            | Create temporary auth, config, or environment bridges before launch         |
 | `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
@@ -216,9 +244,13 @@ only for behavior that really belongs to the backend.
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
+| `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
+| `projectNativeToolAuthority`       | Map the observed native tool list to canonical capabilities for cron caps   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
-| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
+| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
@@ -226,9 +258,46 @@ a backend hook can express the behavior.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
-budget into their CLI-specific launch contract.
+budget into their CLI-specific launch contract. It also receives the optional
+effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
+applied through launch environment or staged configuration; the same field is
+available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
-`runtimeArtifact` is plugin-owned and is not user-overridable. It is consulted
+`resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
+boolean for this invocation. Core resolves automatic mode after CLI and process
+scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on
+and off remain unchanged. The field follows the session, agent, and model fast-mode
+settings; backends may map it to their native arguments or ignore it. A spawned
+process keeps that decision for the invocation; it does not receive raw `"auto"`.
+
+`prepareExecution(ctx)` may also return an optional `execute` transport when a
+backend owns the installed CLI's protocol or SDK integration. The transport
+receives the exact prepared command, arguments, optional `argv0`, environment,
+prompt, session, and tool availability; it yields the backend's existing structured
+stream records. Preserve the prepared command, `argv0`, and interpreter or script
+prefix in `args` when constructing the CLI invocation. `argv0` preserves
+the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
+them through the native runtime's private context mechanism; never record them as
+operator-authored input. OpenClaw's policy and observation hooks still receive the
+complete logical prompt. Native tool actions must use the provided, run-bound
+`requestToolPermission` callback rather than creating independent approval
+authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
+grant ownership. Paired-node execution and
+manual compaction continue through the existing host-managed process path.
+
+Reusable transports receive a run-bound `liveSession` capability. Before creating
+an initial or replacement process, await `liveSession.restart()` unless the
+current process is reusable. This joins the previous process exit and its
+host-owned resource cleanup; waiting for the child exit alone is insufficient.
+The host rejects restart when the caller is revoked or an exact live generation
+must be preserved. `register()` remains a synchronous admission check and refuses
+replacement while cleanup is unresolved.
+
+`runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
 mint verified CLI setup authority. A `bundled-package-tree` declaration names
@@ -242,7 +311,7 @@ do not make an external implementation graph safe.
 
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain
-unverified even when a user overrides the backend command.
+unverified.
 
 `ctx.executionMode` is `"agent"` for normal turns and `"side-question"` for
 ephemeral `/btw` calls. Use it when the CLI needs different one-shot flags,
@@ -252,24 +321,116 @@ side-question argv reliably disables those tools, also set
 `sideQuestionToolMode: "disabled"`; otherwise OpenClaw fails closed when BTW
 requires a no-tools CLI run.
 
-Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
-every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is an empty tuple and
-`ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags and return argv that enforces both values;
-OpenClaw calls it once with the final fresh or resume argv and fails closed when
-the backend cannot enforce the restriction. MCP names in this context are safe
-to auto-approve only because the host has already limited the generated MCP
-configuration to those servers and tools.
+Set `nativeToolMode: "selectable"` only when the backend can disable every
+backend-native tool for an individual run. Restricted runs receive a canonical
+contract: `ctx.toolAvailability.native` is the exact backend-native list and
+`ctx.toolAvailability.openClaw` is the exact list of OpenClaw tool names. The
+host independently limits the generated MCP configuration and grant to that
+OpenClaw list; plugins must not translate it in core or add transport prefixes.
+
+Declare how the backend enforces that contract:
+
+- `toolAvailabilityEnforcement: "execution-args"` requires
+  `resolveExecutionArgs`. The hook must replace conflicting tool flags, disable
+  customization surfaces that can execute outside the selected tools, and
+  return enforcing argv for both fresh and resumed runs.
+- `toolAvailabilityEnforcement: "prepare-execution"` requires
+  `prepareExecution`. The hook must stage an exact per-run policy and return
+  `toolAvailabilityEnforced: true`; missing acknowledgement fails closed and
+  OpenClaw cleans up the staged resources before launch.
+
+Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
+OpenClaw before this contract is built. Native tools are disabled, and a
+backend without a complete declared enforcement path fails before execution.
+
+Rooted runs such as [Skill Workshop reviews](/tools/skill-workshop) also require
+`isolatesInstructionsWithExactTools: true` on the backend registration. Declare
+this optional capability only when exact-tool execution suppresses ambient
+instruction files, skills, hooks, and plugins for both fresh and resumed runs.
+The host-prepared instruction snapshot must remain authoritative. OpenClaw
+rejects rooted runs when this declaration is absent, even if the backend can
+enforce exact tools. Existing non-rooted runs do not require this field.
+
+The bundled Claude CLI backend declares this capability. Rooted execution
+disables its native tools and serves the selected OpenClaw tools through the
+host-owned MCP grant, which retains the root, filesystem policy, and configured
+sandbox. The declaration does not grant filesystem or approval authority to
+the backend.
+
+A backend whose native tools are model-callable may declare
+`projectNativeToolAuthority(nativeTools)` so that automations created from its
+sessions keep the creator's native capabilities. For Claude stream-JSON, the
+input is the parent turn's `system/init.tools` list, intersected with
+`toolAvailability.native` when a host selection exists. Managed native settings
+can remove tools after CLI argument selection, so defaults are never inferred.
+Each turn starts with pending authority: MCP discovery remains available, but
+tool calls reject visibly until initialization supplies the list. Warm turns
+cannot borrow a previous turn's snapshot. Return only canonical names from the
+core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
+`web_search`, `web_fetch`), each derived from a native tool the host enforces
+through this contract. Core validates the result before updating the active
+loopback grant and again at final creator-cap capture; any other name fails the
+turn. Updating the snapshot invalidates earlier cached tool projections.
+Project only equivalent capabilities: Claude's `Glob` locates paths and
+`NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
+The native list contains tool names, not permission-rule patterns.
+Codex native code mode projects `read` and `exec` after OpenClaw explicitly
+requests the shell and rejects managed requirements or legacy managed settings
+that disable it. The effective setting and its source are checked at each
+preflight; a user-local shell disable is overridden for native mode, while a
+managed denial rejects before capture. It never infers `write`, `edit`,
+`apply_patch`, or `process`. The pinned Codex registry has
+no shell-disabled models; a custom model that disables its shell remains an
+unobservable exception because Codex does not expose that model capability.
+
+Previously saved empty automation caps remain restricted. Recreate the job or
+explicitly edit its tools from a fresh authorized creator turn; an old empty cap
+cannot safely be distinguished from an intentional denial.
+
+### `parseJsonlEvent`: provider-specific JSONL streams
+
+Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not
+match the built-in Claude, Codex, or Gemini dialects. The hook receives one raw
+line plus the resolved backend id and config, and returns one normalized event,
+multiple events, or `null` to let the built-in parser try the line.
+
+Supported events are incremental assistant text, incremental thinking, native
+tool start/result display, session ids, and terminal results. Terminal results
+may include final text, usage, an error, and a successor session id. Session ids
+reported by either event shape participate in resumed-session and fork
+persistence.
+
+Lifecycle events are intentionally separate from this return union so existing
+plugins can continue to match it exhaustively. Use `parseJsonlLifecycleEvent`
+for backend-owned lifecycle records instead.
+
+Tool events describe work the backend already performed. OpenClaw renders and
+summarizes them, but does not treat them as host tool execution, trusted
+diagnostics, loopback correlation, or message-delivery evidence.
+
+### `parseJsonlLifecycleEvent`: provider-native lifecycle records
+
+Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle
+state that is independent of assistant text, tools, sessions, and terminal
+results. The hook receives the same line and context as `parseJsonlEvent` and is
+tried first. Returning a lifecycle event consumes that line; returning `null`
+lets the source-compatible `parseJsonlEvent` hook or built-in parser handle it.
+
+The current lifecycle contract supports native compaction start and end records.
+An end record includes `completed` so channels can distinguish successful and
+incomplete compaction without inferring an outcome from later messages.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
 If your backend runs an agent that compacts its **own** transcript, set
 `ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs
-against its sessions - the CLI compaction lifecycle returns a no-op and the
+against its sessions - automatic CLI compaction defers to the backend and the
 turn proceeds. `claude-cli` declares it because Claude Code compacts
-internally with no harness endpoint. Native-harness sessions such as Codex
-keep routing to their harness compaction endpoint instead.
+internally with no harness endpoint. It also declares
+`manualCompaction`, so an explicit OpenClaw `/compact` resumes the
+bound Claude Code session and invokes its native `/compact` command without
+recording a conversation turn. Native-harness sessions such as Codex keep
+routing to their harness compaction endpoint instead.
 
 **Only declare it when all of the following hold**, or a deferred
 over-budget session can stay over budget or go stale (OpenClaw no longer
@@ -281,6 +442,27 @@ rescues it):
   (for example `--resume` / `--session-id`);
 - it is not a native-harness compaction session - matching `agentHarnessId`
   sessions route to the harness endpoint instead.
+
+If the backend supports an in-place manual command, declare it alongside the
+ownership flag:
+
+```typescript
+manualCompaction: {
+  buildPrompt: (instructions) =>
+    instructions ? `/compact ${instructions}` : "/compact",
+  input: "arg",
+  validateOutput: (rawOutput) =>
+    rawOutput.includes('"type":"compaction_complete"')
+      ? { ok: true }
+      : { ok: false, reason: "CLI did not confirm compaction." },
+},
+```
+
+The builder receives optional `/compact` instructions. The validator receives
+the bounded raw process output and must require a backend-owned positive
+acknowledgement; a zero exit alone is not proof of compaction. Do not declare
+this capability for a command that creates a separate session or requires an
+ordinary model turn.
 
 ## MCP tool bridge
 
@@ -314,23 +496,16 @@ its own built-in tool layer that cannot be disabled, set `nativeToolMode:
 tools. If it can disable every native tool per run, use `"selectable"` with the
 `resolveExecutionArgs` contract above.
 
-## User configuration
+## Selecting the backend
 
-Users can override any backend default:
+Users select a standalone backend through its model-ref prefix. A backend that
+declares a canonical `modelProvider` can instead be selected through that
+provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
 
 ```json5
 {
   agents: {
     defaults: {
-      cliBackends: {
-        "acme-cli": {
-          command: "/opt/acme/bin/acme",
-          args: ["chat", "--json", "--profile", "work"],
-          modelAliases: {
-            large: "acme-large-2026",
-          },
-        },
-      },
       model: {
         primary: "openai/gpt-5.6-sol",
         fallbacks: ["acme-cli/large"],
@@ -340,8 +515,9 @@ Users can override any backend default:
 }
 ```
 
-Document the minimum override users are likely to need - usually only
-`command` when the binary is outside `PATH`.
+Put credentials in OpenClaw auth profiles or plugin-owned config. Ensure the
+registered command is on the gateway service's `PATH`; deployments that need a
+different path or argv should change or wrap the plugin registration.
 
 ## Verification
 
@@ -369,13 +545,13 @@ MCP, or session-resume behavior.
 <Check>`openclaw.plugin.json` declares `cliBackends` and intentional `activation.onStartup`</Check>
 <Check>`setup.cliBackends` is present when setup/model discovery should see the backend cold</Check>
 <Check>`api.registerCliBackend(...)` uses the same backend id as the manifest</Check>
-<Check>User overrides under `agents.defaults.cliBackends.<id>` still win</Check>
+<Check>The backend model prefix or model-scoped `agentRuntime.id` selects the registration</Check>
 <Check>Session, system prompt, image, and output parser settings match the real CLI contract</Check>
 <Check>Targeted tests and at least one live CLI smoke prove the backend path</Check>
 
 ## Related
 
-- [CLI backends](/gateway/cli-backends) - user configuration and runtime behavior
+- [CLI backends](/gateway/cli-backends) - runtime selection and behavior
 - [Building plugins](/plugins/building-plugins) - package and manifest basics
 - [Plugin SDK overview](/plugins/sdk-overview) - registration API reference
 - [Plugin manifest](/plugins/manifest) - `cliBackends` and setup descriptors

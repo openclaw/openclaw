@@ -1,22 +1,15 @@
 import Foundation
+import OpenClawKit
 
-enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
-    case deny
-    case allowlist
-    case full
+typealias ExecSecurity = ExecApprovalsSecurity
+typealias ExecAsk = ExecApprovalsAsk
+typealias ExecAllowlistEntry = ExecApprovalsAllowlistEntry
+typealias ExecApprovalsDefaults = ExecApprovalsDefaultsDocument
+typealias ExecApprovalsAgent = ExecApprovalsAgentDocument
+typealias ExecApprovalsSocketConfig = ExecApprovalsSocketDocument
+typealias ExecApprovalsFile = ExecApprovalsDocument
 
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .deny: "Deny"
-        case .allowlist: "Allowlist"
-        case .full: "Always Allow"
-        }
-    }
-
+extension ExecApprovalsSecurity {
     static func narrower(_ lhs: ExecSecurity, _ rhs: ExecSecurity) -> ExecSecurity {
         if lhs == .deny || rhs == .deny {
             return .deny
@@ -28,68 +21,7 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
-    case deny
-    case ask
-    case allow
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .deny: "Deny"
-        case .ask: "Always Ask"
-        case .allow: "Always Allow"
-        }
-    }
-
-    var security: ExecSecurity {
-        switch self {
-        case .deny: .deny
-        case .ask: .allowlist
-        case .allow: .full
-        }
-    }
-
-    var ask: ExecAsk {
-        switch self {
-        case .deny: .off
-        case .ask: .onMiss
-        case .allow: .off
-        }
-    }
-
-    static func from(security: ExecSecurity, ask _: ExecAsk) -> ExecApprovalQuickMode {
-        switch security {
-        case .deny:
-            .deny
-        case .full:
-            .allow
-        case .allowlist:
-            .ask
-        }
-    }
-}
-
-enum ExecAsk: String, CaseIterable, Codable, Identifiable, Sendable {
-    case off
-    case onMiss = "on-miss"
-    case always
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .off: "Never Ask"
-        case .onMiss: "Ask on Allowlist Miss"
-        case .always: "Always Ask"
-        }
-    }
-
+extension ExecApprovalsAsk {
     static func stricter(_ lhs: ExecAsk, _ rhs: ExecAsk) -> ExecAsk {
         lhs.strictnessRank >= rhs.strictnessRank ? lhs : rhs
     }
@@ -111,101 +43,11 @@ enum ExecApprovalDecision: String, Codable, Equatable {
 
 enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
     case empty
-    case missingPathComponent
-
-    var message: String {
-        switch self {
-        case .empty:
-            "Pattern cannot be empty."
-        case .missingPathComponent:
-            "Path patterns only. Include '/', '~', or '\\\\'."
-        }
-    }
 }
 
 enum ExecAllowlistPatternValidation: Equatable {
     case valid(String)
     case invalid(ExecAllowlistPatternValidationReason)
-}
-
-struct ExecAllowlistRejectedEntry: Equatable {
-    let id: String
-    let pattern: String
-    let reason: ExecAllowlistPatternValidationReason
-}
-
-struct ExecAllowlistEntry: Codable, Hashable, Identifiable, Sendable {
-    var id: String
-    var pattern: String
-    var source: String?
-    var commandText: String?
-    var argPattern: String?
-    var lastUsedAt: Double?
-    var lastUsedCommand: String?
-    var lastResolvedPath: String?
-
-    init(
-        id: String = UUID().uuidString,
-        pattern: String,
-        source: String? = nil,
-        commandText: String? = nil,
-        argPattern: String? = nil,
-        lastUsedAt: Double? = nil,
-        lastUsedCommand: String? = nil,
-        lastResolvedPath: String? = nil)
-    {
-        self.id = id
-        self.pattern = pattern
-        self.source = source
-        self.commandText = commandText
-        self.argPattern = argPattern
-        self.lastUsedAt = lastUsedAt
-        self.lastUsedCommand = lastUsedCommand
-        self.lastResolvedPath = lastResolvedPath
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case pattern
-        case source
-        case commandText
-        case argPattern
-        case lastUsedAt
-        case lastUsedCommand
-        case lastResolvedPath
-    }
-
-    init(from decoder: Decoder) throws {
-        if let container = try? decoder.singleValueContainer(),
-           let legacyPattern = try? container.decode(String.self)
-        {
-            self.init(pattern: legacyPattern.trimmingCharacters(in: .whitespacesAndNewlines))
-            return
-        }
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedID = try container.decodeIfPresent(String.self, forKey: .id)
-        let id = decodedID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
-        try self.init(
-            id: id,
-            pattern: container.decode(String.self, forKey: .pattern),
-            source: container.decodeIfPresent(String.self, forKey: .source),
-            commandText: container.decodeIfPresent(String.self, forKey: .commandText),
-            argPattern: container.decodeIfPresent(String.self, forKey: .argPattern),
-            lastUsedAt: container.decodeIfPresent(Double.self, forKey: .lastUsedAt),
-            lastUsedCommand: container.decodeIfPresent(String.self, forKey: .lastUsedCommand),
-            lastResolvedPath: container.decodeIfPresent(String.self, forKey: .lastResolvedPath))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.id, forKey: .id)
-        try container.encode(self.pattern, forKey: .pattern)
-        try container.encodeIfPresent(self.source, forKey: .source)
-        try container.encodeIfPresent(self.argPattern, forKey: .argPattern)
-        try container.encodeIfPresent(self.lastUsedAt, forKey: .lastUsedAt)
-        try container.encodeIfPresent(self.lastUsedCommand, forKey: .lastUsedCommand)
-        try container.encodeIfPresent(self.lastResolvedPath, forKey: .lastResolvedPath)
-    }
 }
 
 struct ExecAllowlistUse: Sendable {
@@ -221,38 +63,6 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
         self.pattern = Data(pattern.utf8)
         self.argPattern = Data((argPattern ?? "").utf8)
     }
-}
-
-struct ExecApprovalsDefaults: Codable, Sendable {
-    var security: ExecSecurity?
-    var ask: ExecAsk?
-    var askFallback: ExecSecurity?
-    var autoAllowSkills: Bool?
-}
-
-struct ExecApprovalsAgent: Codable, Sendable {
-    var security: ExecSecurity?
-    var ask: ExecAsk?
-    var askFallback: ExecSecurity?
-    var autoAllowSkills: Bool?
-    var allowlist: [ExecAllowlistEntry]?
-
-    var isEmpty: Bool {
-        self.security == nil && self.ask == nil && self.askFallback == nil && self
-            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
-    }
-}
-
-struct ExecApprovalsSocketConfig: Codable, Sendable {
-    var path: String?
-    var token: String?
-}
-
-struct ExecApprovalsFile: Codable, Sendable {
-    var version: Int
-    var socket: ExecApprovalsSocketConfig?
-    var defaults: ExecApprovalsDefaults?
-    var agents: [String: ExecApprovalsAgent]?
 }
 
 struct ExecApprovalsSnapshot: Codable, Sendable {
@@ -272,22 +82,11 @@ enum ExecApprovalsConditionalSaveResult {
 
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
     case invalidPattern(ExecAllowlistPatternValidationReason)
-    case entryNotOwned
     case unavailable
-
-    var message: String {
-        switch self {
-        case let .invalidPattern(reason):
-            reason.message
-        case .entryNotOwned:
-            "This allowlist entry is inherited. Edit its owning scope and retry."
-        case .unavailable:
-            "Could not save exec approvals. Last known settings are shown; retry the change."
-        }
-    }
 }
 
 enum ExecApprovalsReadError: Error, Equatable, Sendable {
+    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
     case unavailable
 }
 
@@ -313,20 +112,6 @@ enum ExecApprovalHelpers {
         let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return .invalid(.empty) }
         return .valid(trimmed)
-    }
-
-    static func isValidAllowlistPattern(_ pattern: String?) -> Bool {
-        switch self.validateAllowlistPattern(pattern) {
-        case .valid:
-            true
-        case .invalid:
-            false
-        }
-    }
-
-    static func isPathPattern(_ pattern: String?) -> Bool {
-        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return self.patternHasPathSelector(trimmed)
     }
 
     static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
@@ -364,38 +149,66 @@ enum ExecApprovalHelpers {
 actor SkillBinsCache {
     static let shared = SkillBinsCache()
 
-    private var bins: Set<String> = []
-    private var trustByName: [String: Set<String>] = [:]
-    private var lastRefresh: Date?
+    nonisolated let gateway: GatewayConnection
+
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
+
+    struct Snapshot: Sendable {
+        let gateway: GatewayConnection
+        let source: GatewayConnection.ServerLease
+        let revision: UInt64?
+        let refreshedAt: Date
+        let index: SkillBinTrustIndex
+
+        /// Approval contexts, execution commits and Settings can outlive the supplying read.
+        var isCurrent: Bool {
+            self.revision == self.gateway.selectedEndpointRevision &&
+                self.gateway.serverLeaseMatchesCurrentRoute(self.source)
+        }
+
+        var bins: Set<String> {
+            self.isCurrent ? self.index.names : []
+        }
+
+        var trustByName: [String: Set<String>] {
+            self.isCurrent ? self.index.pathsByName : [:]
+        }
+    }
+
+    private var cached: Snapshot?
     private let refreshInterval: TimeInterval = 90
 
-    func currentBins(force: Bool = false) async -> Set<String> {
-        if force || self.isStale() {
-            await self.refresh()
+    func current(force: Bool = false) async -> Snapshot? {
+        let previous = self.cached
+        if let previous, previous.isCurrent, !force,
+           Date().timeIntervalSince(previous.refreshedAt) <= self.refreshInterval
+        {
+            return previous
         }
-        return self.bins
-    }
-
-    func currentTrust(force: Bool = false) async -> [String: Set<String>] {
-        if force || self.isStale() {
-            await self.refresh()
-        }
-        return self.trustByName
-    }
-
-    func refresh() async {
-        do {
-            let report = try await GatewayConnection.shared.skillsStatus()
-            let trust = Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths())
-            self.bins = trust.names
-            self.trustByName = trust.pathsByName
-            self.lastRefresh = Date()
-        } catch {
-            if self.lastRefresh == nil {
-                self.bins = []
-                self.trustByName = [:]
+        let revision = self.gateway.selectedEndpointRevision
+        if let source = try? await self.gateway.acquireServerLease(),
+           let report = try? await JSONDecoder().decode(SkillsStatusReport.self, from: self.gateway.request(
+               method: GatewayConnection.Method.skillsStatus.rawValue, params: nil, ifCurrentServerLease: source))
+        {
+            guard !Task.isCancelled else { return nil }
+            if revision == self.gateway.selectedEndpointRevision,
+               self.gateway.serverLeaseMatchesCurrentState(source)
+            {
+                let snapshot = Snapshot(
+                    gateway: self.gateway,
+                    source: source,
+                    revision: revision,
+                    refreshedAt: Date(),
+                    index: Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths()))
+                self.cached = snapshot
+                return snapshot
             }
         }
+        // Failed or retired refreshes keep only their captured, current-route trust.
+        // An old read must not inherit a newer route's cache after suspension.
+        return previous?.isCurrent == true ? previous : nil
     }
 
     static func normalizeSkillBinName(_ value: String) -> String? {
@@ -446,11 +259,6 @@ actor SkillBinsCache {
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
     }
 
-    private func isStale() -> Bool {
-        guard let lastRefresh else { return true }
-        return Date().timeIntervalSince(lastRefresh) > self.refreshInterval
-    }
-
     static func _testBuildTrustIndex(
         report: SkillsStatusReport,
         searchPaths: [String]) -> SkillBinTrustIndex
@@ -459,7 +267,7 @@ actor SkillBinsCache {
     }
 }
 
-struct SkillBinTrustIndex {
+struct SkillBinTrustIndex: Sendable {
     let names: Set<String>
     let pathsByName: [String: Set<String>]
 }

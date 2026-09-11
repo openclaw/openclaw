@@ -1,13 +1,8 @@
 import Foundation
 import OpenClawChatUI
 
-/// Builds the read-only offline chat transcript cache for the macOS app.
-///
-/// The database lives in the per-user Application Support container
-/// (`~/Library/Application Support/OpenClaw/chat-cache.sqlite`), matching the
-/// existing OpenClaw app-support layout. macOS has no per-file Data Protection
-/// classes (the iOS store applies `completeUntilFirstUserAuthentication`);
-/// at-rest protection here is the per-user container permissions plus FileVault.
+/// Builds the gateway-scoped facade over the two installation-wide databases
+/// shared with iOS through OpenClawKit.
 enum MacChatTranscriptCache {
     struct Context {
         let store: OpenClawChatSQLiteTranscriptCache
@@ -17,7 +12,8 @@ enum MacChatTranscriptCache {
     /// Every chat window for one gateway must share the same outbox actor.
     /// Otherwise a newly opened window can mistake another live window's
     /// claimed send for crash residue during its first recovery pass.
-    @MainActor private static var storesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
+    @MainActor private static var databasesByDirectory: [String: OpenClawClientDatabases] = [:]
+    @MainActor private static var storesByKey: [String: OpenClawChatSQLiteTranscriptCache] = [:]
 
     /// Stable identity of the gateway this app talks to, derivable offline
     /// (the cache pre-paints before any connection is up). Keys must not
@@ -85,17 +81,22 @@ enum MacChatTranscriptCache {
     /// command outbox, and callers wire both protocol facets from one instance.
     @MainActor
     static func currentGatewayID() -> String? {
-        let root = OpenClawConfigFile.loadDict()
+        self.gatewayID(root: OpenClawConfigFile.loadDict())
+    }
+
+    @MainActor
+    static func gatewayID(root: [String: Any]) -> String? {
         let mode = ConnectionModeResolver.resolve(root: root).mode
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let sshTarget = CommandResolver.connectionSettings(configRoot: root).target
         // Mirror the tunnel's remote-port resolution (RemotePortTunnel.create)
         // so the identity matches the gateway the forward actually reaches.
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
+        let defaultRemotePort = GatewayEnvironment.gatewayPort(root: root)
         let sshHost = CommandResolver.parseSSHTarget(sshTarget)?.host ?? ""
         let sshRemotePort = RemotePortTunnel.resolveRemotePortOverride(
             defaultRemotePort: defaultRemotePort,
-            for: sshHost) ?? defaultRemotePort
+            for: sshHost,
+            root: root) ?? defaultRemotePort
         return self.gatewayID(
             mode: mode,
             localStateDir: OpenClawConfigFile.stateDirURL(),
@@ -111,25 +112,70 @@ enum MacChatTranscriptCache {
     @MainActor
     static func makeContext() -> Context? {
         guard let gatewayID = currentGatewayID() else { return nil }
+        return self.makeContext(gatewayID: gatewayID)
+    }
+
+    /// Explicit profile context. Browser profiles supply their issuer-verified
+    /// account namespace so token renewal preserves data without crossing accounts.
+    @MainActor
+    static func makeContext(gatewayID: String) -> Context? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         else {
             return nil
         }
-        let databaseURL = base.appendingPathComponent("OpenClaw/chat-cache.sqlite", isDirectory: false)
+        let root = base.appendingPathComponent("OpenClaw", isDirectory: true)
+        let databaseDirectoryURL = root.appendingPathComponent("databases", isDirectory: true)
+        guard let databases = self.databases(
+            directoryURL: databaseDirectoryURL,
+            legacyDirectoryURL: root)
+        else { return nil }
         return Context(
-            store: self.store(databaseURL: databaseURL, gatewayID: gatewayID),
-            routingIdentity: OpenClawChatSQLiteTranscriptCache.loadSessionRoutingIdentity(
-                databaseURL: databaseURL,
-                gatewayID: gatewayID))
+            store: self.store(databases: databases, gatewayID: gatewayID),
+            routingIdentity: databases.loadSessionRoutingIdentity(gatewayID: gatewayID))
     }
 
     @MainActor
-    static func store(databaseURL: URL, gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
-        if let store = storesByGatewayID[gatewayID] {
+    static func store(databaseDirectoryURL: URL, gatewayID: String) -> OpenClawChatSQLiteTranscriptCache? {
+        guard let databases = self.databases(
+            directoryURL: databaseDirectoryURL,
+            legacyDirectoryURL: databaseDirectoryURL)
+        else { return nil }
+        return self.store(databases: databases, gatewayID: gatewayID)
+    }
+
+    @MainActor
+    private static func store(
+        databases: OpenClawClientDatabases,
+        gatewayID: String) -> OpenClawChatSQLiteTranscriptCache
+    {
+        let key = "\(databases.directoryURL.standardizedFileURL.path)|\(gatewayID)"
+        if let store = storesByKey[key] {
             return store
         }
-        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
-        self.storesByGatewayID[gatewayID] = store
+        let store = databases.store(gatewayID: gatewayID)
+        self.storesByKey[key] = store
         return store
+    }
+
+    @MainActor
+    private static func databases(
+        directoryURL: URL,
+        legacyDirectoryURL: URL) -> OpenClawClientDatabases?
+    {
+        let key = directoryURL.standardizedFileURL.path
+        if let databases = databasesByDirectory[key] {
+            // macOS does not yet have a complete multi-gateway pairing
+            // registry. Unknown ownership imports all non-forgotten legacy
+            // gateways and never commits a cancelable staged removal.
+            databases.resolvePendingGatewayRemovals()
+            databases.retryLegacyImport()
+            return databases
+        }
+        guard let databases = try? OpenClawClientDatabases(
+            directoryURL: directoryURL,
+            legacyDirectoryURLs: [legacyDirectoryURL])
+        else { return nil }
+        self.databasesByDirectory[key] = databases
+        return databases
     }
 }

@@ -6,10 +6,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { hasModelExtraParams } from "./model-extra-params.js";
-import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+  resolveAgentScopedRuntimeOverride,
+} from "./agent-runtime-id.js";
+import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
+import {
+  resolveAgentRuntimePolicyAgentId,
+  resolveModelRuntimePolicy,
+  type AgentRuntimePolicyScope,
+} from "./model-runtime-policy.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
@@ -31,32 +38,32 @@ export function canonicalizeOpenAIModelId(provider: string | undefined, modelId:
 }
 
 /** Resolves the provider-owned implicit runtime for one concrete OpenAI route. */
-export function resolveOpenAIImplicitAgentRuntime(params: {
-  provider?: string;
-  modelId?: string;
-  api?: string | null;
-  baseUrl?: unknown;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: Readonly<Record<string, string | undefined>>;
-  requestTransportOverrides?: ProviderRouteOverridePresence;
-}): "codex" | "openclaw" | null {
+export function resolveOpenAIImplicitAgentRuntime(
+  params: {
+    provider?: string;
+    modelId?: string;
+    api?: string | null;
+    baseUrl?: unknown;
+    config?: OpenClawConfig;
+    env?: Readonly<Record<string, string | undefined>>;
+    requestTransportOverrides?: ProviderRouteOverridePresence;
+  } & AgentRuntimePolicyScope,
+): "codex" | "openclaw" | null {
   if (!isOpenAIProvider(params.provider)) {
     return null;
   }
   const modelId = params.modelId;
-  const agentId =
-    params.agentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-  const hasConfiguredParams = hasModelExtraParams({
+  const agentId = resolveAgentRuntimePolicyAgentId(params);
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider ?? OPENAI_PROVIDER_ID,
     modelId,
     agentId,
   });
   const requestTransportOverrides =
-    params.requestTransportOverrides === "present" || hasConfiguredParams ? "present" : "none";
+    params.requestTransportOverrides === "present" || hasConfiguredProviderRequestParams
+      ? "present"
+      : "none";
   const resolution = resolveOpenAIModelRoutes({
     provider: params.provider,
     modelId,
@@ -101,16 +108,26 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
   const modelRef = params.model?.trim();
   const slashIndex = modelRef?.indexOf("/") ?? -1;
   const modelId = slashIndex >= 0 ? modelRef?.slice(slashIndex + 1) : undefined;
-  const configuredRuntime = normalizeOptionalAgentRuntimeId(
-    resolveModelRuntimePolicy({
-      config: params.config,
-      provider,
-      modelId,
-      agentId: params.agentId,
-    }).policy?.id,
-  );
+  const configuredPolicy = resolveModelRuntimePolicy({
+    config: params.config,
+    provider,
+    modelId,
+    agentId: params.agentId,
+  }).policy;
+  const configuredRuntime = normalizeOptionalAgentRuntimeId(configuredPolicy?.id);
   if (configuredRuntime && !isDefaultAgentRuntimeId(configuredRuntime)) {
     return configuredRuntime === "codex";
+  }
+  if (!configuredPolicy) {
+    const agentRuntime = resolveAgentScopedRuntimeOverride({
+      config: params.config,
+      agentId: params.agentId,
+    });
+    // Any explicit model policy wins; without one, the shipped whole-agent
+    // opt-out still suppresses implicit Codex installation despite retirement.
+    if (agentRuntime && !isDefaultAgentRuntimeId(agentRuntime)) {
+      return agentRuntime === "codex";
+    }
   }
   return (
     resolveOpenAIImplicitAgentRuntime({

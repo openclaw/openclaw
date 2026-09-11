@@ -1,14 +1,15 @@
 // Fal provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -59,7 +60,6 @@ const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
 );
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const FAL_VIDEO_MALFORMED_RESPONSE = "fal video generation response malformed";
 const FAL_VIDEO_PENDING_STATUSES = new Set([
@@ -96,12 +96,6 @@ type FalQueueResponse = {
     message?: string;
   };
 };
-
-let falFetchGuard = fetchWithSsrFGuard;
-
-export function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
 
 function normalizeFalVideoUrl(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
@@ -197,20 +191,12 @@ function extractFalVideoEntry(payload: FalVideoResponse) {
   return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
 }
 
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
 async function downloadFalVideo(
   url: string,
   policy: SsrFPolicy | undefined,
   maxBytes: number,
 ): Promise<GeneratedVideoAsset> {
-  const { response, release } = await falFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url,
     timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
     policy,
@@ -223,7 +209,9 @@ async function downloadFalVideo(
     let exceededMaxBytes = false;
     let buffer: Buffer;
     try {
-      buffer = await readResponseWithLimit(response, maxBytes, {
+      buffer = await readProviderBinaryResponse(response, "fal generated video download", "video", {
+        maxBytes,
+        chunkTimeoutMs: 0,
         onOverflow: ({ maxBytes: maxBytesLocal }) => {
           exceededMaxBytes = true;
           return new Error(`fal generated video download exceeds ${maxBytesLocal} bytes`);
@@ -470,7 +458,7 @@ async function fetchFalJson(params: {
   auditContext: string;
   errorContext: string;
 }): Promise<unknown> {
-  const { response, release } = await falFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,
@@ -600,11 +588,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/text-to-video",
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -697,7 +681,11 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
-      const video = await downloadFalVideo(url, policy, resolveGeneratedVideoMaxBytes(req));
+      const video = await downloadFalVideo(
+        url,
+        policy,
+        resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+      );
       return {
         videos: [video],
         model,

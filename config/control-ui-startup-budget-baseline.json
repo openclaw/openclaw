@@ -1,0 +1,5 @@
+{
+  "startupJsGzipBytes": 352531,
+  "reason": "Plugin discovery shell adds the canonical /plugins workspace route and navigation metadata; measured 352531 B startup gzip on Linux-equivalent local build. Fixed 358400 B cap retained.",
+  "updatedAt": "2026-09-09"
+}

@@ -7,7 +7,7 @@ describe("restoreEnvVarRefs", () => {
     ANTHROPIC_API_KEY: "sk-ant-api03-real-key",
     OPENAI_API_KEY: "sk-openai-real-key",
     MY_TOKEN: "tok-12345",
-  } as unknown as NodeJS.ProcessEnv;
+  };
 
   it("restores a simple ${VAR} reference when value matches", () => {
     const incoming = { apiKey: "sk-ant-api03-real-key" };
@@ -79,7 +79,7 @@ describe("restoreEnvVarRefs", () => {
   });
 
   it("handles missing env var (cannot verify match)", () => {
-    const envMissing = {} as unknown as NodeJS.ProcessEnv;
+    const envMissing = {};
     const incoming = { apiKey: "some-value" };
     const parsed = { apiKey: "${MISSING_VAR}" };
     // Can't resolve the template, so keep incoming as-is
@@ -95,7 +95,7 @@ describe("restoreEnvVarRefs", () => {
   });
 
   it("restores partially resolved templates when missing vars remain literal", () => {
-    const partialEnv = { API_TOKEN: "secret" } as unknown as NodeJS.ProcessEnv;
+    const partialEnv = { API_TOKEN: "secret" };
     const incoming = { value: "secret:${OPTIONAL_SUFFIX}" };
     const parsed = { value: "${API_TOKEN}:${OPTIONAL_SUFFIX}" };
 
@@ -108,7 +108,7 @@ describe("restoreEnvVarRefs", () => {
     const duplicateEnv = {
       PLUGIN_A: "same-plugin",
       PLUGIN_B: "same-plugin",
-    } as unknown as NodeJS.ProcessEnv;
+    };
 
     expect(() =>
       restoreEnvVarRefs(["same-plugin"], ["${PLUGIN_A}", "${PLUGIN_B}"], duplicateEnv),
@@ -116,11 +116,7 @@ describe("restoreEnvVarRefs", () => {
   });
 
   it("allows array edits when placeholders are escaped literals", () => {
-    const result = restoreEnvVarRefs(
-      ["${ESCAPED}", "changed"],
-      ["$${ESCAPED}", "literal"],
-      {} as NodeJS.ProcessEnv,
-    );
+    const result = restoreEnvVarRefs(["${ESCAPED}", "changed"], ["$${ESCAPED}", "literal"], {});
 
     expect(result).toEqual(["$${ESCAPED}", "changed"]);
   });
@@ -128,7 +124,7 @@ describe("restoreEnvVarRefs", () => {
   it("restores escaped literals beside real environment-backed array entries", () => {
     const result = restoreEnvVarRefs(["secret", "${ESCAPED}"], ["${TOKEN}", "$${ESCAPED}"], {
       TOKEN: "secret",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["${TOKEN}", "$${ESCAPED}"]);
   });
@@ -136,7 +132,7 @@ describe("restoreEnvVarRefs", () => {
   it("allows appending after stable environment-backed array entries", () => {
     const result = restoreEnvVarRefs(["base-plugin", "extra-plugin"], ["${BASE_PLUGIN}"], {
       BASE_PLUGIN: "base-plugin",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["${BASE_PLUGIN}", "extra-plugin"]);
   });
@@ -144,7 +140,7 @@ describe("restoreEnvVarRefs", () => {
   it("allows removing a unique environment-backed array entry", () => {
     const result = restoreEnvVarRefs([], ["${BASE_PLUGIN}"], {
       BASE_PLUGIN: "base-plugin",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual([]);
   });
@@ -166,7 +162,7 @@ describe("restoreEnvVarRefs", () => {
       {
         BASE_PLUGIN: "base-plugin",
         DENIED_PLUGIN: "demo",
-      } as unknown as NodeJS.ProcessEnv,
+      },
     );
 
     expect(result).toEqual({
@@ -180,7 +176,7 @@ describe("restoreEnvVarRefs", () => {
   it("allows replacing a unique environment-backed array entry", () => {
     const result = restoreEnvVarRefs(["replacement"], ["${BASE_PLUGIN}"], {
       BASE_PLUGIN: "base-plugin",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["replacement"]);
   });
@@ -189,7 +185,7 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       [{ id: "main", workspace: "/workspace/main", name: "new" }],
       [{ id: "main", workspace: "${WORKSPACE}", name: "old" }],
-      { WORKSPACE: "/workspace/main" } as unknown as NodeJS.ProcessEnv,
+      { WORKSPACE: "/workspace/main" },
     );
 
     expect(result).toEqual([{ id: "main", workspace: "${WORKSPACE}", name: "new" }]);
@@ -199,7 +195,7 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       [{ name: "new", token: "secret" }],
       [{ name: "old", token: "${TOKEN}" }],
-      { TOKEN: "secret" } as unknown as NodeJS.ProcessEnv,
+      { TOKEN: "secret" },
     );
 
     expect(result).toEqual([{ name: "new", token: "${TOKEN}" }]);
@@ -209,7 +205,7 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       [{ match: { peer: { id: "peer-1" } } }, { match: { peer: { id: "peer-2" } } }],
       [{ match: { peer: { id: "${PEER_ID}" } } }],
-      { PEER_ID: "peer-1" } as unknown as NodeJS.ProcessEnv,
+      { PEER_ID: "peer-1" },
     );
 
     expect(result).toEqual([
@@ -226,7 +222,7 @@ describe("restoreEnvVarRefs", () => {
           { name: "second", token: "literal" },
         ],
         [{ name: "old", token: "${TOKEN}" }],
-        { TOKEN: "secret" } as unknown as NodeJS.ProcessEnv,
+        { TOKEN: "secret" },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -245,7 +241,7 @@ describe("restoreEnvVarRefs", () => {
         {
           TOKEN_A: "secret-a",
           TOKEN_B: "secret-b",
-        } as unknown as NodeJS.ProcessEnv,
+        },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -264,7 +260,7 @@ describe("restoreEnvVarRefs", () => {
         {
           TOKEN_A: "secret-a",
           TOKEN_B: "secret-b",
-        } as unknown as NodeJS.ProcessEnv,
+        },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -282,7 +278,7 @@ describe("restoreEnvVarRefs", () => {
       {
         PEER_A: "peer-a",
         PEER_B: "peer-b",
-      } as unknown as NodeJS.ProcessEnv,
+      },
     );
 
     expect(result).toEqual([
@@ -295,7 +291,7 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       [{ agentId: "main", match: { accountId: "next" }, token: "secret" }],
       [{ agentId: "main", match: { accountId: "old" }, token: "${TOKEN}" }],
-      { TOKEN: "secret" } as unknown as NodeJS.ProcessEnv,
+      { TOKEN: "secret" },
     );
 
     expect(result).toEqual([{ agentId: "main", match: { accountId: "next" }, token: "${TOKEN}" }]);
@@ -305,7 +301,7 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       [{ accountId: "next", to: "user@example.com" }],
       [{ accountId: "old", to: "${APPROVAL_TARGET}" }],
-      { APPROVAL_TARGET: "user@example.com" } as unknown as NodeJS.ProcessEnv,
+      { APPROVAL_TARGET: "user@example.com" },
     );
 
     expect(result).toEqual([{ accountId: "next", to: "${APPROVAL_TARGET}" }]);
@@ -324,7 +320,7 @@ describe("restoreEnvVarRefs", () => {
       {
         APPROVAL_TARGET_A: "user-a@example.com",
         APPROVAL_TARGET_B: "user-b@example.com",
-      } as unknown as NodeJS.ProcessEnv,
+      },
     );
 
     expect(result).toEqual([
@@ -346,7 +342,7 @@ describe("restoreEnvVarRefs", () => {
       {
         TOKEN_A: "secret-a",
         TOKEN_B: "secret-b",
-      } as unknown as NodeJS.ProcessEnv,
+      },
     );
 
     expect(result).toEqual([
@@ -362,7 +358,7 @@ describe("restoreEnvVarRefs", () => {
         { agentId: "first", match: { peer: { id: "${PEER_A}" } } },
         { agentId: "second", match: { peer: { id: "peer-b" } } },
       ],
-      { PEER_A: "peer-a" } as unknown as NodeJS.ProcessEnv,
+      { PEER_A: "peer-a" },
     );
 
     expect(result).toEqual([{ agentId: "second", match: { peer: { id: "peer-b" } } }]);
@@ -379,7 +375,7 @@ describe("restoreEnvVarRefs", () => {
       {
         PEER_A: "peer-a",
         PEER_B: "peer-b",
-      } as unknown as NodeJS.ProcessEnv,
+      },
     );
 
     expect(result).toEqual([{ agentId: "retained", match: { peer: { id: "peer-c" } } }]);
@@ -399,7 +395,7 @@ describe("restoreEnvVarRefs", () => {
         {
           WORKSPACE_A: "/workspace/a",
           WORKSPACE_B: "/workspace/b",
-        } as unknown as NodeJS.ProcessEnv,
+        },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -415,7 +411,7 @@ describe("restoreEnvVarRefs", () => {
         {
           SESSION_A: "same",
           SESSION_B: "same",
-        } as unknown as NodeJS.ProcessEnv,
+        },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -427,7 +423,7 @@ describe("restoreEnvVarRefs", () => {
         { id: "duplicate", sessionKey: "${SESSION_KEY}" },
         { id: "duplicate", sessionKey: "literal" },
       ],
-      { SESSION_KEY: "secret" } as unknown as NodeJS.ProcessEnv,
+      { SESSION_KEY: "secret" },
     );
 
     expect(result).toEqual([{ id: "duplicate", sessionKey: "literal" }]);
@@ -437,7 +433,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs([{ id: "new", token: "secret" }], [{ id: "old", token: "${TOKEN}" }], {
         TOKEN: "secret",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -448,7 +444,7 @@ describe("restoreEnvVarRefs", () => {
         { id: "main", workspace: "/workspace/main" },
         { id: "ops", workspace: "${OPS_WORKSPACE}" },
       ],
-      { OPS_WORKSPACE: "/workspace/ops" } as unknown as NodeJS.ProcessEnv,
+      { OPS_WORKSPACE: "/workspace/ops" },
     );
 
     expect(result).toEqual([{ id: "main", workspace: "/workspace/main" }]);
@@ -461,7 +457,7 @@ describe("restoreEnvVarRefs", () => {
         { id: "ops", workspace: "${OPS_WORKSPACE}" },
         { id: "main", name: "old" },
       ],
-      { OPS_WORKSPACE: "/workspace/ops" } as unknown as NodeJS.ProcessEnv,
+      { OPS_WORKSPACE: "/workspace/ops" },
     );
 
     expect(result).toEqual([{ id: "main", name: "new" }]);
@@ -471,7 +467,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["same"], ["${PLUGIN_PATH}", "same"], {
         PLUGIN_PATH: "same",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -479,14 +475,14 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["tail", "secret"], ["old", "${TOKEN}", "tail"], {
         TOKEN: "secret",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
   it("allows trailing sibling edits beside a scalar environment reference", () => {
     const result = restoreEnvVarRefs(["base-plugin", "replacement"], ["${BASE_PLUGIN}", "old"], {
       BASE_PLUGIN: "base-plugin",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["${BASE_PLUGIN}", "replacement"]);
   });
@@ -494,17 +490,13 @@ describe("restoreEnvVarRefs", () => {
   it("allows prefix edits before a same-index scalar environment reference", () => {
     const result = restoreEnvVarRefs(["new", "base-plugin"], ["old", "${BASE_PLUGIN}"], {
       BASE_PLUGIN: "base-plugin",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["new", "${BASE_PLUGIN}"]);
   });
 
   it("restores escaped literal moves without activating the reference", () => {
-    const result = restoreEnvVarRefs(
-      ["literal", "${TOKEN}"],
-      ["$${TOKEN}", "literal"],
-      {} as NodeJS.ProcessEnv,
-    );
+    const result = restoreEnvVarRefs(["literal", "${TOKEN}"], ["$${TOKEN}", "literal"], {});
 
     expect(result).toEqual(["literal", "$${TOKEN}"]);
   });
@@ -513,29 +505,21 @@ describe("restoreEnvVarRefs", () => {
     const result = restoreEnvVarRefs(
       ["secret", "literal", "${ESCAPED}"],
       ["${TOKEN}", "$${ESCAPED}", "literal"],
-      { TOKEN: "secret" } as unknown as NodeJS.ProcessEnv,
+      { TOKEN: "secret" },
     );
 
     expect(result).toEqual(["${TOKEN}", "literal", "$${ESCAPED}"]);
   });
 
   it("preserves duplicate escaped literals when their positions stay stable", () => {
-    const result = restoreEnvVarRefs(
-      ["${TOKEN}", "${TOKEN}"],
-      ["$${TOKEN}", "$${TOKEN}"],
-      {} as NodeJS.ProcessEnv,
-    );
+    const result = restoreEnvVarRefs(["${TOKEN}", "${TOKEN}"], ["$${TOKEN}", "$${TOKEN}"], {});
 
     expect(result).toEqual(["$${TOKEN}", "$${TOKEN}"]);
   });
 
   it("rejects ambiguous escaped literal moves beside a new active reference", () => {
     expect(() =>
-      restoreEnvVarRefs(
-        ["literal", "${TOKEN}", "${TOKEN}"],
-        ["$${TOKEN}", "literal"],
-        {} as NodeJS.ProcessEnv,
-      ),
+      restoreEnvVarRefs(["literal", "${TOKEN}", "${TOKEN}"], ["$${TOKEN}", "literal"], {}),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -549,7 +533,7 @@ describe("restoreEnvVarRefs", () => {
         { id: "escaped", token: "$${TOKEN}", enabled: false },
         { id: "literal", token: "plain" },
       ],
-      {} as NodeJS.ProcessEnv,
+      {},
     );
 
     expect(result).toEqual([
@@ -633,7 +617,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["${B}", "changed"], ["${A}", "$${B}", "tail"], {
         A: "x",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -656,7 +640,7 @@ describe("restoreEnvVarRefs", () => {
   it("preserves intentional real references beside same-name escaped literals", () => {
     const result = restoreEnvVarRefs(["secret", "${TOKEN}"], ["${TOKEN}", "$${TOKEN}"], {
       TOKEN: "secret",
-    } as unknown as NodeJS.ProcessEnv);
+    });
 
     expect(result).toEqual(["${TOKEN}", "$${TOKEN}"]);
   });
@@ -665,7 +649,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["${TOKEN}", "secret"], ["${TOKEN}", "$${TOKEN}"], {
         TOKEN: "secret",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -695,7 +679,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["changed-${TOKEN}"], ["${TOKEN}-$${TOKEN}"], {
         TOKEN: "secret",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -726,7 +710,7 @@ describe("restoreEnvVarRefs", () => {
           { id: "literal", token: "$${TOKEN}" },
           { id: "active", token: "${TOKEN}" },
         ],
-        { TOKEN: "secret" } as unknown as NodeJS.ProcessEnv,
+        { TOKEN: "secret" },
       ),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
@@ -735,7 +719,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["replacement", "admin"], ["${ADMIN_ID}", "old"], {
         ADMIN_ID: "admin",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -743,7 +727,7 @@ describe("restoreEnvVarRefs", () => {
     expect(() =>
       restoreEnvVarRefs(["old", "replacement", "admin"], ["${ADMIN_ID}", "old"], {
         ADMIN_ID: "admin",
-      } as unknown as NodeJS.ProcessEnv),
+      }),
     ).toThrow("Config write would reorder or modify an array containing environment references");
   });
 
@@ -762,14 +746,14 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ apiKey: "sk-ant-api03-real-key" });
   });
 
-  // Edge case: env mutation between read and write (Greptile comment #1)
+  // Edge case: env mutation between read and write
   // Scenario: config.env sets FOO=bar, which gets applied to process.env during loadConfig.
   // Later writeConfigFile runs — the env has changed since the original read.
   it("does not incorrectly restore when env var value changed between read and write", () => {
     // At read time, MY_VAR was "original-value" and resolved ${MY_VAR} → "original-value"
     // Then config.env or external mutation changed MY_VAR to "mutated-value"
     // Caller is writing back "original-value" (the value they got from the read)
-    const mutatedEnv = { MY_VAR: "mutated-value" } as unknown as NodeJS.ProcessEnv;
+    const mutatedEnv = { MY_VAR: "mutated-value" };
     const incoming = { key: "original-value" };
     const parsed = { key: "${MY_VAR}" };
 
@@ -780,7 +764,7 @@ describe("restoreEnvVarRefs", () => {
   });
 
   it("correctly restores when env var value hasn't changed", () => {
-    const stableEnv = { MY_VAR: "stable-value" } as unknown as NodeJS.ProcessEnv;
+    const stableEnv = { MY_VAR: "stable-value" };
     const incoming = { key: "stable-value" };
     const parsed = { key: "${MY_VAR}" };
 
@@ -793,7 +777,7 @@ describe("restoreEnvVarRefs", () => {
     // With env snapshots: at read time MY_VAR was "old-value", so incoming is "old-value".
     // Caller changed it to "new-value". Live env also changed to "new-value".
     // But using the READ-TIME snapshot ("old-value"), we correctly see mismatch and keep incoming.
-    const readTimeEnv = { MY_VAR: "old-value" } as unknown as NodeJS.ProcessEnv;
+    const readTimeEnv = { MY_VAR: "old-value" };
     const incoming = { key: "new-value" }; // caller intentionally changed this
     const parsed = { key: "${MY_VAR}" };
 
@@ -803,7 +787,7 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ key: "new-value" });
   });
 
-  // Edge case: $${VAR} escape sequence (Greptile comment #2)
+  // Edge case: $${VAR} escape sequence
   it("handles $${VAR} escape sequence (literal ${VAR} in output)", () => {
     // In the config file: $${ANTHROPIC_API_KEY}
     // substituteString resolves this to literal "${ANTHROPIC_API_KEY}"
@@ -831,6 +815,18 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({
       literal: "$${MY_TOKEN}", // should restore escape
       resolved: "${MY_TOKEN}", // should restore ref
+    });
+  });
+
+  it("does not restore env refs from inherited parsed properties", () => {
+    // isPlainObject accepts custom prototypes, but only own properties represent authored config.
+    const parsed = Object.create({
+      toString: "${TEST_VALUE}",
+    }) as Record<string, unknown>;
+    const testEnv = { TEST_VALUE: "resolved-value" };
+
+    expect(restoreEnvVarRefs({ toString: "resolved-value" }, parsed, testEnv)).toEqual({
+      toString: "resolved-value",
     });
   });
 });

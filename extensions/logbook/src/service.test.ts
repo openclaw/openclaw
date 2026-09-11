@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,10 +51,10 @@ const framePayload = {
 };
 
 describe("LogbookService capture node selection", () => {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {
-      cleanup();
+      await cleanup();
     }
   });
 
@@ -67,13 +66,14 @@ describe("LogbookService capture node selection", () => {
       ],
       invoke: async () => framePayload,
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
     await tick();
     expect(invoked).toEqual([{ nodeId: "b-mac-app", command: "screen.snapshot" }]);
+    expect(service.status()).toMatchObject({ pendingFrames: 1, lastCaptureError: undefined });
   });
 
   it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
@@ -89,8 +89,8 @@ describe("LogbookService capture node selection", () => {
         return framePayload;
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -99,13 +99,35 @@ describe("LogbookService capture node selection", () => {
     expect(invoked.map((call) => call.nodeId)).toEqual(["a-broken", "b-working"]);
     expect(service.status().lastCaptureError).toBeUndefined();
   });
+
+  it.each([
+    ["malformed string", "not-base64!"],
+    ["object", { encoded: "ZmFrZQ==" }],
+    ["array", ["ZmFrZQ=="]],
+  ])("rejects a %s snapshot payload before storing a frame", async (_label, base64) => {
+    const { service, tick, dataDir } = makeService({
+      nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
+      invoke: async () => ({ payload: { format: "jpeg", base64 } }),
+    });
+    cleanups.push(async () => {
+      await service.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    await tick();
+
+    expect(service.status()).toMatchObject({
+      pendingFrames: 0,
+      lastCaptureError: "logbook.snapshot returned invalid image payload",
+    });
+  });
 });
 
 describe("LogbookService vision model selection", () => {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {
-      cleanup();
+      await cleanup();
     }
   });
 
@@ -116,18 +138,16 @@ describe("LogbookService vision model selection", () => {
       fullConfig: {
         tools: {
           media: {
-            image: {
-              models: [
-                { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
-                { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
-              ],
-            },
+            models: [
+              { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+              { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
+            ],
           },
         },
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -149,8 +169,8 @@ describe("LogbookService vision model selection", () => {
         },
       },
     });
-    cleanups.push(() => {
-      service.stop();
+    cleanups.push(async () => {
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     });
 
@@ -162,7 +182,7 @@ describe("LogbookService vision model selection", () => {
 });
 
 describe("LogbookService status", () => {
-  it("returns the capture-host timezone without exposing the state path", () => {
+  it("returns the capture-host timezone without exposing the state path", async () => {
     const { service, dataDir } = makeService({
       nodes: [],
       invoke: async () => framePayload,
@@ -174,7 +194,7 @@ describe("LogbookService status", () => {
       });
       expect(service.status()).not.toHaveProperty("dataDir");
     } finally {
-      service.stop();
+      await service.stop();
       rmSync(dataDir, { recursive: true, force: true });
     }
   });

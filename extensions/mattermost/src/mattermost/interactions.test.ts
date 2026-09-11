@@ -1,12 +1,13 @@
 // Mattermost tests cover interactions plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
 import {
-  buildButtonAttachments,
+  buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   resolveInteractionCallbackPath,
@@ -15,9 +16,39 @@ import {
   setInteractionSecret,
 } from "./interactions.js";
 
-type ButtonAttachments = ReturnType<typeof buildButtonAttachments>;
-type ButtonAttachment = ButtonAttachments[number];
-type ButtonAction = NonNullable<ButtonAttachment["actions"]>[number];
+type ButtonAction = {
+  id: string;
+  type: "button";
+  name: string;
+  style?: "default" | "primary" | "danger";
+  integration: { url: string; context: Record<string, unknown> };
+};
+type ButtonAttachment = { text: string; actions?: ButtonAction[] };
+type ButtonAttachments = ButtonAttachment[];
+type ButtonPropsInput = {
+  callbackUrl: string;
+  accountId?: string;
+  buttons: Array<{
+    id: string;
+    name: string;
+    style?: "default" | "primary" | "danger";
+    context?: Record<string, unknown>;
+  }>;
+  text?: string;
+};
+
+function buildButtonAttachmentsForTest(params: ButtonPropsInput): ButtonAttachments {
+  const signedChannelId = params.buttons[0]?.context?.["__openclaw_channel_id"];
+  const props = buildButtonProps({
+    ...params,
+    channelId: typeof signedChannelId === "string" ? signedChannelId : "test-channel",
+  });
+  const attachments = props?.attachments;
+  if (!Array.isArray(attachments)) {
+    throw new Error("Expected button attachments");
+  }
+  return attachments as ButtonAttachments;
+}
 
 function requireFirstAttachment(attachments: ButtonAttachments): ButtonAttachment {
   const [attachment] = attachments;
@@ -45,7 +76,7 @@ function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction 
 
 function generateInteractionToken(context: Record<string, unknown>, accountId?: string): string {
   const actionId = typeof context.action_id === "string" ? context.action_id : "test";
-  const attachments = buildButtonAttachments({
+  const attachments = buildButtonAttachmentsForTest({
     callbackUrl: "https://gateway.example.com/mattermost/interactions/test",
     accountId,
     buttons: [{ id: actionId, name: "Test", context }],
@@ -281,7 +312,6 @@ describe("resolveInteractionCallbackUrl", () => {
     const account = resolveMattermostAccount({
       cfg,
       accountId: "acct",
-      allowUnresolvedSecretRef: true,
     });
     const url = resolveInteractionCallbackUrl(account.accountId, {
       gateway: cfg.gateway,
@@ -323,15 +353,15 @@ describe("resolveInteractionCallbackPath", () => {
   });
 });
 
-// ── buildButtonAttachments ───────────────────────────────────────────
+// ── buildButtonProps attachments ────────────────────────────────────
 
-describe("buildButtonAttachments", () => {
+describe("buildButtonProps attachments", () => {
   beforeEach(() => {
     setInteractionSecret("test-bot-token");
   });
 
   it("returns an array with one attachment containing all buttons", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/mattermost/interactions/default",
       buttons: [
         { id: "btn1", name: "Click Me" },
@@ -344,7 +374,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("sets type to 'button' on every action", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
       buttons: [{ id: "a", name: "A" }],
     });
@@ -353,7 +383,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("includes HMAC _token in integration context", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
       buttons: [{ id: "test", name: "Test" }],
     });
@@ -363,7 +393,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("includes sanitized action_id in integration context", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
       buttons: [{ id: "my_action", name: "Do It" }],
     });
@@ -375,7 +405,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("merges custom context into integration context", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
       buttons: [{ id: "btn", name: "Go", context: { tweet_id: "123", batch: true } }],
     });
@@ -389,7 +419,7 @@ describe("buildButtonAttachments", () => {
 
   it("passes callback URL to each button integration", () => {
     const url = "http://localhost:18789/mattermost/interactions/default";
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: url,
       buttons: [
         { id: "a", name: "A" },
@@ -403,7 +433,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("preserves button style", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost/cb",
       buttons: [
         { id: "ok", name: "OK", style: "primary" },
@@ -416,7 +446,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("uses provided text for the attachment", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost/cb",
       buttons: [{ id: "x", name: "X" }],
       text: "Choose an action:",
@@ -426,7 +456,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("defaults to empty string text when not provided", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost/cb",
       buttons: [{ id: "x", name: "X" }],
     });
@@ -435,7 +465,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("generates verifiable tokens", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost/cb",
       buttons: [{ id: "verify_me", name: "V", context: { extra: "data" } }],
     });
@@ -447,7 +477,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("generates tokens that verify even when Mattermost reorders context keys", () => {
-    const result = buildButtonAttachments({
+    const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost/cb",
       buttons: [{ id: "do_action", name: "Do", context: { tweet_id: "42", category: "ai" } }],
     });
@@ -950,5 +980,52 @@ describe("createMattermostInteractionHandler", () => {
       post: originalPost,
     });
     expect(dispatchButtonClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("createMattermostInteractionHandler body limits", () => {
+  // The 10s read deadline makes the sibling 408 case too slow to drive here; slash-http
+  // and Synology Chat cover that half of the same branch.
+  it("delivers 413 for an over-limit callback body and then closes the connection", async () => {
+    const handleInteraction = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: {} as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+      handleInteraction,
+    });
+    const server = createServer((req, res) => {
+      void handler(req, res);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected the interaction test server to have a TCP address");
+      }
+
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${address.port}/mattermost/interactions`,
+        body: "x".repeat(64 * 1024 + 1),
+        headers: { "content-type": "application/json" },
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+      expect(result.closedByServer).toBe(true);
+      expect(handleInteraction).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

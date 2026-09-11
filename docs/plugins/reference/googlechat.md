@@ -2,22 +2,25 @@
 summary: "OpenClaw Google Chat channel plugin for spaces and direct messages."
 read_when:
   - You are installing, configuring, or auditing the googlechat plugin
-title: "Google Chat plugin"
+title: "Google Chat plugin reference"
 ---
 
-# Google Chat plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw Google Chat channel plugin for spaces and direct messages.
 
 ## Distribution
 
 - Package: `@openclaw/googlechat`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub
 
 ## Surface
 
-channels: googlechat
+- Channels: `googlechat`
 
 ## Related docs
 
-- [googlechat](/channels/googlechat)
+- [Google Chat](/channels/googlechat)

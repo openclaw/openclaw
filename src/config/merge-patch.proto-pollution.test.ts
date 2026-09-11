@@ -1,6 +1,7 @@
 // Verifies config merge patches reject prototype pollution inputs.
 import { describe, it, expect } from "vitest";
 import { applyMergePatch } from "./merge-patch.js";
+import { collectBaseArrayPaths } from "./patch-replace-paths.js";
 
 describe("applyMergePatch prototype pollution guard", () => {
   it("ignores __proto__ keys in patch", () => {
@@ -28,6 +29,42 @@ describe("applyMergePatch prototype pollution guard", () => {
     const result = applyMergePatch(base, patch) as Record<string, unknown>;
     expect(result.b).toBe(2);
     expect(Object.hasOwn(result, "prototype")).toBe(false);
+  });
+
+  it("preserves accessor method names as schema-owned auth profile ids", () => {
+    const profileIds = [
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+    ] as const;
+    const profile = {
+      provider: "openai",
+      mode: "api_key",
+      constructor: { polluted: true },
+      prototype: { polluted: true },
+    };
+    const result = applyMergePatch(
+      { auth: { profiles: {} } },
+      {
+        auth: {
+          profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, profile])),
+        },
+      },
+    ) as { auth?: { profiles?: Record<string, Record<string, unknown>> } };
+
+    const profiles = result.auth?.profiles ?? {};
+    for (const profileId of profileIds) {
+      expect(profiles[profileId]?.provider).toBe("openai");
+      expect(profiles[profileId]?.mode).toBe("api_key");
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "constructor")).toBe(false);
+      expect(Object.hasOwn(profiles[profileId] ?? {}, "prototype")).toBe(false);
+    }
+    const removed = applyMergePatch(result, {
+      auth: { profiles: Object.fromEntries(profileIds.map((profileId) => [profileId, null])) },
+    }) as { auth?: { profiles?: Record<string, unknown> } };
+    expect(Object.keys(removed.auth?.profiles ?? {})).toEqual([]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("ignores __proto__ in nested patches", () => {
@@ -73,5 +110,49 @@ describe("applyMergePatch prototype pollution guard", () => {
     }) as { browser?: { profiles?: Record<string, unknown> } };
     expect(Object.keys(removed.browser?.profiles ?? {})).toEqual([]);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("merge-patch array deletion intent", () => {
+  it("collects exact paths in property order, including empty arrays, without descending into entries", () => {
+    const base = { nested: { values: [{ inner: [1] }], empty: [] }, last: [2] };
+    expect(collectBaseArrayPaths(base, "settings")).toEqual([
+      "settings.nested.values",
+      "settings.nested.empty",
+      "settings.last",
+    ]);
+    expect(collectBaseArrayPaths(base.nested.values, "settings.nested.values")).toEqual([
+      "settings.nested.values",
+    ]);
+  });
+
+  it.each([null, undefined, "value", 1, new Date(0), new Map([["values", []]])])(
+    "ignores non-object config values (%s)",
+    (value) => expect(collectBaseArrayPaths(value, "settings")).toEqual([]),
+  );
+
+  it("uses own properties of object-tagged records, not their prototype", () => {
+    const base = Object.assign(Object.create({ inherited: [1] }), { values: [] });
+    expect(collectBaseArrayPaths(base, "")).toEqual(["values"]);
+  });
+
+  it("shares the exact browser-profile reserved-key exception with merge patches", () => {
+    const base = JSON.parse(`{
+      "__proto__": [], "constructor": [], "prototype": [],
+      "browser": {
+        "constructor": [],
+        "profiles": {
+          "__proto__": [],
+          "constructor": { "values": [], "constructor": [], "prototype": [], "__proto__": [] },
+          "prototype": { "values": [] },
+          "regular": { "nested": { "constructor": [], "values": [] } }
+        }
+      }
+    }`);
+    expect(collectBaseArrayPaths(base, "")).toEqual([
+      "browser.profiles.constructor.values",
+      "browser.profiles.prototype.values",
+      "browser.profiles.regular.nested.values",
+    ]);
   });
 });

@@ -1,4 +1,3 @@
-// CI live command retry tests cover transient provider failure classification.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +15,21 @@ function writeCommand(
   tempDirs.push(dir);
   const commandPath = path.join(dir, "command.sh");
   const counterPath = path.join(dir, "attempts.txt");
-  writeFileSync(commandPath, ["#!/bin/bash", "set -euo pipefail", ...lines, ""].join("\n"));
+  writeFileSync(
+    commandPath,
+    [
+      "#!/bin/bash",
+      "set -euo pipefail",
+      "attempts=0",
+      'if [[ -f "$OPENCLAW_RETRY_TEST_COUNTER" ]]; then',
+      '  attempts="$(<"$OPENCLAW_RETRY_TEST_COUNTER")"',
+      "fi",
+      'attempts="$((attempts + 1))"',
+      'printf "%s" "$attempts" > "$OPENCLAW_RETRY_TEST_COUNTER"',
+      ...lines,
+      "",
+    ].join("\n"),
+  );
   chmodSync(commandPath, 0o755);
   return { commandPath, counterPath };
 }
@@ -48,9 +61,6 @@ afterEach(() => {
 describe("scripts/ci-live-command-retry.sh", () => {
   it("retries a provider-internal RPC timeout", () => {
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-rpc-timeout-", [
-      'attempts="$(cat "$OPENCLAW_RETRY_TEST_COUNTER" 2>/dev/null || printf 0)"',
-      'attempts="$((attempts + 1))"',
-      'printf "%s" "$attempts" > "$OPENCLAW_RETRY_TEST_COUNTER"',
       'if [[ "$attempts" -eq 1 ]]; then',
       '  echo "MiniMax image generation API error (1000): rpc timeout: timeout=1m0s" >&2',
       "  exit 42",
@@ -66,11 +76,27 @@ describe("scripts/ci-live-command-retry.sh", () => {
     );
   });
 
+  it.each([
+    ["provider HTTP 500", "xAI image edit failed (HTTP 500): Please try again later"],
+    ["live test timeout", "Error: Test timed out in 45000ms."],
+    ["live terminal timeout", "Error: terminal timeout after 300000ms"],
+  ])("retries a transient %s", (_label, message) => {
+    const { commandPath, counterPath } = writeCommand("openclaw-ci-live-transient-", [
+      'if [[ "$attempts" -eq 1 ]]; then',
+      `  echo ${JSON.stringify(message)} >&2`,
+      "  exit 42",
+      "fi",
+    ]);
+
+    const result = runRetryHelper(commandPath, counterPath);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(counterPath, "utf8")).toBe("2");
+    expect(result.stderr).toContain("retrying (1/2)");
+  });
+
   it("does not retry a MiniMax authentication failure", () => {
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-auth-failure-", [
-      'attempts="$(cat "$OPENCLAW_RETRY_TEST_COUNTER" 2>/dev/null || printf 0)"',
-      'attempts="$((attempts + 1))"',
-      'printf "%s" "$attempts" > "$OPENCLAW_RETRY_TEST_COUNTER"',
       'echo "MiniMax image generation API error (1004): authentication failed" >&2',
       "exit 42",
     ]);

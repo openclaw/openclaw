@@ -25,6 +25,7 @@ const CONVEX_BROKER_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const CHUNKED_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const CHUNKED_PAYLOAD_MAX_CHUNKS_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
+const HEARTBEAT_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
@@ -73,6 +74,7 @@ type QaCredentialLeaseHeartbeat = {
   getFailure(): Error | null;
   stop(): Promise<void>;
   throwIfFailed(): void;
+  whenFailed: Promise<Error>;
 };
 
 type QaCredentialRole = "ci" | "maintainer";
@@ -407,6 +409,18 @@ function assertConvexOk(payload: unknown, actionLabel: string) {
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
 
+function isTransientBrokerTransportError(error: unknown) {
+  if (error instanceof QaCredentialBrokerError) {
+    return false;
+  }
+  const message = formatErrorMessage(error);
+  return (
+    /fetch failed|connect timeout error|UND_ERR_[A-Z_]+|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT/iu.test(
+      message,
+    ) || /failed with HTTP 5\d\d\b/iu.test(message)
+  );
+}
+
 export async function acquireQaCredentialLease<TPayload>(
   opts: AcquireQaCredentialLeaseOptions<TPayload>,
 ): Promise<QaCredentialLease<TPayload>> {
@@ -535,18 +549,21 @@ export async function acquireQaCredentialLease<TPayload>(
         },
       };
     } catch (error) {
-      if (error instanceof QaCredentialBrokerError && RETRYABLE_ACQUIRE_CODES.has(error.code)) {
+      const retryablePoolError =
+        error instanceof QaCredentialBrokerError && RETRYABLE_ACQUIRE_CODES.has(error.code);
+      const transientTransportError = isTransientBrokerTransportError(error);
+      if (retryablePoolError || transientTransportError) {
         const elapsed = timeImpl() - startedAt;
         if (elapsed >= config.acquireTimeoutMs) {
-          throw new Error(
-            `Convex credential pool exhausted for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`,
-            { cause: error },
-          );
+          const message = retryablePoolError
+            ? `Convex credential pool exhausted for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`
+            : `Convex credential broker remained unreachable for kind "${opts.kind}" after ${config.acquireTimeoutMs}ms.`;
+          throw new Error(message, { cause: error });
         }
         const delayMs = Math.min(
           computeAcquireBackoffMs({
             attempt,
-            retryAfterMs: error.retryAfterMs,
+            retryAfterMs: retryablePoolError ? error.retryAfterMs : undefined,
             randomImpl,
           }),
           Math.max(0, config.acquireTimeoutMs - elapsed),
@@ -574,6 +591,7 @@ export function startQaCredentialLeaseHeartbeat(
   lease: Pick<QaCredentialLease<unknown>, "heartbeat" | "heartbeatIntervalMs" | "kind" | "source">,
   opts?: {
     intervalMs?: number;
+    retryDelaysMs?: readonly number[];
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
   },
@@ -583,6 +601,7 @@ export function startQaCredentialLeaseHeartbeat(
       getFailure: () => null,
       async stop() {},
       throwIfFailed() {},
+      whenFailed: new Promise<Error>(() => {}),
     };
   }
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
@@ -591,17 +610,24 @@ export function startQaCredentialLeaseHeartbeat(
       getFailure: () => null,
       async stop() {},
       throwIfFailed() {},
+      whenFailed: new Promise<Error>(() => {}),
     };
   }
 
   const setTimeoutImpl = opts?.setTimeoutImpl ?? setTimeout;
   const clearTimeoutImpl = opts?.clearTimeoutImpl ?? clearTimeout;
+  const retryDelaysMs = opts?.retryDelaysMs ?? HEARTBEAT_RETRY_DELAYS_MS;
   let failure: Error | null = null;
+  let retryAttempt = 0;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
+  let resolveFailure: (error: Error) => void = () => undefined;
+  const whenFailed = new Promise<Error>((resolve) => {
+    resolveFailure = resolve;
+  });
 
-  const schedule = () => {
+  const schedule = (delayMs = intervalMs) => {
     if (stopped || failure) {
       return;
     }
@@ -613,22 +639,34 @@ export function startQaCredentialLeaseHeartbeat(
       inFlight = (async () => {
         try {
           await lease.heartbeat();
+          retryAttempt = 0;
         } catch (error) {
+          if (isTransientBrokerTransportError(error) && retryAttempt < retryDelaysMs.length) {
+            const retryDelayMs = expectDefined(
+              retryDelaysMs[retryAttempt],
+              "QA credential heartbeat retry delay",
+            );
+            retryAttempt += 1;
+            schedule(resolveTimerTimeoutMs(retryDelayMs, 1_000, 0));
+            return;
+          }
           failure = new Error(
             `Credential lease heartbeat failed for kind "${lease.kind}": ${formatErrorMessage(error)}`,
           );
+          resolveFailure(failure);
           return;
         } finally {
           inFlight = null;
         }
         schedule();
       })();
-    }, intervalMs);
+    }, delayMs);
   };
 
   schedule();
 
   return {
+    whenFailed,
     getFailure() {
       return failure;
     },

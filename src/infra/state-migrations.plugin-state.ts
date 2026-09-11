@@ -4,15 +4,15 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import {
   countPluginStateLiveEntries,
   createPluginStateKeyedStore,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  registerMigratedPluginStateEntry,
+  resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
-import { hashJson } from "../plugins/installed-plugin-index-hash.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
+import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndexSync,
 } from "../plugins/installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -20,7 +20,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ensureMigrationDir, fileExists } from "./state-migrations.fs.js";
+import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
   archiveLegacyImportSource,
@@ -41,24 +41,11 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
-function hasCanonicalInstallRecord(current: InstalledPluginIndex, pluginId: string): boolean {
-  const installRecord = current.installRecords[pluginId];
-  if (!installRecord) {
-    return false;
-  }
-  // A manifest record bound to this exact install record proves SQLite owns the plugin,
-  // even when disabled. Keep all other conflicts blocking so stale metadata is not accepted.
-  return current.plugins.some(
-    (plugin) =>
-      plugin.pluginId === pluginId && plugin.installRecordHash === hashJson(installRecord),
-  );
-}
-
 export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -111,7 +98,11 @@ export async function migrateLegacyPluginStateSidecar(params: {
           const legacyExpired = isLegacyPluginStateRowExpired(row, now);
           if (existing) {
             if (!legacyPluginStateRowsMatch(existing, row)) {
-              if (legacyExpired) {
+              const existingCreatedAt = normalizeLegacySqliteInteger(existing.created_at) ?? 0;
+              const rowCreatedAt = normalizeLegacySqliteInteger(row.created_at) ?? 0;
+              if (existingCreatedAt > rowCreatedAt) {
+                // Canonical row is strictly newer — migration already satisfied
+              } else if (legacyExpired) {
                 skippedExpired += 1;
               } else {
                 conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
@@ -156,7 +147,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
         ],
       };
     }
@@ -180,12 +171,23 @@ export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
 }): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     return { changes: [], warnings: [] };
   }
 
   const changes: string[] = [];
   const warnings: string[] = [];
+  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync({
+    stateDir: params.stateDir,
+  });
+  if (persistedState.status === "invalid") {
+    return {
+      changes,
+      warnings: [
+        `Left plugin install index in place because persisted install records in ${params.stateDir} are invalid`,
+      ],
+    };
+  }
   const legacy = readLegacyInstalledPluginIndex(sourcePath);
   if (!legacy) {
     return {
@@ -212,28 +214,15 @@ export async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
-      const acknowledged = merged.conflicts.filter((pluginId) =>
-        hasCanonicalInstallRecord(current, pluginId),
-      );
-      const unresolved = merged.conflicts.filter((pluginId) => !acknowledged.includes(pluginId));
-      if (unresolved.length === 0) {
-        archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
-      }
+      // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
+      // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
+      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
       return {
         changes,
-        warnings:
-          unresolved.length > 0
-            ? [
-                `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${unresolved.join(", ")}`,
-              ]
-            : [],
-        ...(acknowledged.length > 0
-          ? {
-              notices: [
-                `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${acknowledged.join(", ")}`,
-              ],
-            }
-          : {}),
+        warnings,
+        notices: [
+          `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${merged.conflicts.join(", ")}`,
+        ],
       };
     }
   }
@@ -257,6 +246,20 @@ export async function migrateLegacyInstalledPluginIndex(params: {
   return { changes, warnings };
 }
 
+export function preflightLegacyInstalledPluginIndexMigration(params: {
+  stateDir: string;
+}): string | null {
+  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
+  if (persistedState.status === "invalid") {
+    return `State dir migration skipped because persisted plugin install records in ${params.stateDir} are invalid`;
+  }
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
+  if (migrationFileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
+    return `State dir migration skipped because plugin install index ${sourcePath} is invalid`;
+  }
+  return null;
+}
+
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
   return scopeKey ? `${scopeKey}:${key}` : key;
 }
@@ -270,15 +273,26 @@ function findMissingKey(expected: Set<string>, actual: Set<string>): string | un
   return undefined;
 }
 
-async function withPluginStateImportEnv<T>(
-  plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (!plan.stateDir) {
+function compareImportEntriesNewestFirst(
+  a: { ttlMs?: number; timestamp?: number },
+  b: { ttlMs?: number; timestamp?: number },
+): number {
+  if (a.timestamp !== undefined && b.timestamp !== undefined) {
+    return b.timestamp - a.timestamp;
+  }
+  // Remaining TTL is monotone with recency for fixed-TTL caches.
+  if (a.ttlMs !== undefined && b.ttlMs !== undefined) {
+    return b.ttlMs - a.ttlMs;
+  }
+  return 0;
+}
+
+async function withPluginStateImportEnv(stateDir: string | undefined, run: () => Promise<void>) {
+  if (!stateDir) {
     return await run();
   }
   const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = plan.stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   try {
     return await run();
   } finally {
@@ -292,163 +306,252 @@ async function withPluginStateImportEnv<T>(
 
 export async function runLegacyMigrationPlans(
   plans: ChannelLegacyStateMigrationPlan[],
-): Promise<{ changes: string[]; warnings: string[] }> {
+): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const plan of plans) {
-    if (plan.kind === "plugin-state-import") {
-      await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string; value: unknown }>;
-        let pluginEntryCount;
-        const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
-          namespace: plan.namespace,
-          maxEntries: plan.maxEntries,
-          ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
-        });
-        try {
-          storeEntries = await store.entries();
-          pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
-        } catch (err) {
-          warnings.push(
-            `Failed reading ${plan.label} plugin state before migration: ${String(err)}`,
-          );
-          return;
-        }
-        const existingKeys = new Set(storeEntries.map(({ key }) => key));
-        const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
-        const expectedKeys = new Set(existingKeys);
-        let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
-        let entries: Awaited<ReturnType<typeof plan.readEntries>>;
-        try {
-          entries = await plan.readEntries();
-        } catch (err) {
-          warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
-          return;
-        }
-        const candidateEntries: Array<{
-          key: string;
-          targetKey: string;
-          value: unknown;
-          ttlMs?: number;
-          existedBefore: boolean;
-        }> = [];
-        const failedTargetKeys = new Set<string>();
-        let missingEntryCount = 0;
-        for (const entry of entries) {
-          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
-          const existingValue = existingValuesByKey.get(targetKey);
-          if (existingKeys.has(targetKey)) {
-            const shouldReplace =
-              existingValue !== undefined &&
-              (await plan.shouldReplaceExistingEntry?.({
-                key: entry.key,
-                existingValue,
-                incomingValue: entry.value,
-              }));
-            if (shouldReplace) {
-              candidateEntries.push({ ...entry, targetKey, existedBefore: true });
-            }
-            continue;
-          }
-          candidateEntries.push({ ...entry, targetKey, existedBefore: false });
-          missingEntryCount++;
-        }
-        const pluginRemainingCapacity = Math.max(
-          0,
-          MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
+  let hasRefusal = false;
+  // The declared source may feed several imports. Retire it after its last consumer,
+  // while keeping unrelated sources in order and unique-source cleanup immediate.
+  const lastConsumers = new Map(plans.map((plan, index) => [plan.sourcePath, index]));
+  const cleanups = new Map<string, Array<() => Promise<void>>>();
+  const incompleteSources = new Set<string>();
+  for (const [index, plan] of plans.entries()) {
+    const recordIncomplete = (message: string) => {
+      hasRefusal = true;
+      incompleteSources.add(plan.sourcePath);
+      warnings.push(message);
+    };
+    let operation = `migrating ${plan.label} (${plan.sourcePath})`;
+    try {
+      if (incompleteSources.has(plan.sourcePath)) {
+        recordIncomplete(
+          `Deferred ${plan.label}: another migration of ${plan.sourcePath} did not complete.`,
         );
-        if (missingEntryCount > pluginRemainingCapacity) {
-          warnings.push(
-            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
-          );
-          return;
-        }
-        let imported = 0;
-        const changedKeys: string[] = [];
-        for (const entry of candidateEntries) {
-          if (!entry.existedBefore && remainingCapacity <= 0) {
-            break;
+        continue;
+      }
+      if (plan.kind === "plugin-state-import") {
+        const stateDir = plan.stateDir;
+        await withPluginStateImportEnv(stateDir, async () => {
+          const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
+            namespace: plan.namespace,
+            maxEntries: plan.maxEntries,
+            ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
+          });
+          operation = `reading ${plan.label} plugin state before migration`;
+          const storeEntries = await store.entries();
+          const pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
+          const existingEntriesByKey = new Map(storeEntries.map((entry) => [entry.key, entry]));
+          const expectedKeys = new Set(existingEntriesByKey.keys());
+          const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
+          operation = `reading ${plan.label} legacy source`;
+          const entries = await plan.readEntries();
+          operation = `migrating ${plan.label} (${plan.sourcePath})`;
+          type CandidateEntry = (typeof entries)[number] & { targetKey: string };
+          const replacementEntries: CandidateEntry[] = [];
+          let newEntries: CandidateEntry[] = [];
+          for (const entry of entries) {
+            const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
+            const existing = existingEntriesByKey.get(targetKey);
+            if (existing) {
+              const shouldReplace =
+                existing.value !== undefined &&
+                (await plan.shouldReplaceExistingEntry?.({
+                  key: entry.key,
+                  existingValue: existing.value,
+                  incomingValue: entry.value,
+                }));
+              if (shouldReplace) {
+                replacementEntries.push({ ...entry, targetKey });
+              }
+              continue;
+            }
+            newEntries.push({ ...entry, targetKey });
           }
-          try {
-            await store.register(
-              entry.targetKey,
-              entry.value,
-              entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
+          const missingEntryCount = newEntries.length;
+          const pluginRemainingCapacity = Math.max(
+            0,
+            resolveMaxPluginStateEntriesPerPlugin() - pluginEntryCount,
+          );
+          // Capacity limits must never turn the import into a permanent no-op: import the
+          // newest entries that fit and defer the rest to a later startup (the legacy source
+          // stays in place until every entry is covered).
+          const importBudget = Math.min(namespaceRemainingCapacity, pluginRemainingCapacity);
+          if (missingEntryCount > importBudget) {
+            newEntries = newEntries
+              .toSorted(compareImportEntriesNewestFirst)
+              .slice(0, importBudget);
+            const constraint =
+              namespaceRemainingCapacity <= pluginRemainingCapacity
+                ? `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`
+                : `plugin state has room for ${pluginRemainingCapacity}`;
+            recordIncomplete(
+              newEntries.length > 0
+                ? `Partially migrating ${plan.label} because ${constraint} of ${missingEntryCount} missing entries; importing the newest ${newEntries.length} and deferring the rest in the legacy source`
+                : `Deferring ${plan.label} migration because ${constraint} of ${missingEntryCount} missing entries; left legacy source in place to retry when capacity frees`,
             );
-            const nextExpectedKeys = new Set(expectedKeys);
-            nextExpectedKeys.add(entry.targetKey);
-            const liveKeys = new Set((await store.entries()).map(({ key }) => key));
-            const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
-            if (missingKey) {
-              for (const changedKey of changedKeys.toReversed()) {
-                if (existingValuesByKey.has(changedKey)) {
-                  await store.register(changedKey, existingValuesByKey.get(changedKey));
-                } else {
-                  await store.delete(changedKey);
-                }
-              }
-              if (existingValuesByKey.has(entry.targetKey)) {
-                await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
-              } else {
-                await store.delete(entry.targetKey);
-              }
-              warnings.push(
-                `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
+          }
+          // Eviction removes the smallest created_at first, so imported rows must
+          // keep their legacy creation time; writing them through the normal
+          // register path would stamp them "now" and let later live writes evict
+          // fresher pre-existing rows before the migrated ones.
+          const registerPreservingCreatedAt = async (params: {
+            key: string;
+            value: unknown;
+            ttlMs?: number;
+            createdAtMs?: number;
+          }) => {
+            if (
+              params.createdAtMs === undefined ||
+              !Number.isFinite(params.createdAtMs) ||
+              params.createdAtMs < 0
+            ) {
+              await store.register(
+                params.key,
+                params.value,
+                params.ttlMs != null ? { ttlMs: params.ttlMs } : undefined,
               );
               return;
             }
-            expectedKeys.add(entry.targetKey);
-            existingKeys.add(entry.targetKey);
-            changedKeys.push(entry.targetKey);
-            if (!entry.existedBefore) {
-              remainingCapacity--;
+            registerMigratedPluginStateEntry({
+              pluginId: plan.pluginId,
+              namespace: plan.namespace,
+              maxEntries: plan.maxEntries,
+              ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
+              key: params.key,
+              value: params.value,
+              ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+              createdAtMs: params.createdAtMs,
+            });
+          };
+          const restoreExistingEntry = async (key: string) => {
+            const existing = existingEntriesByKey.get(key);
+            await registerPreservingCreatedAt({
+              key,
+              value: existing?.value,
+              createdAtMs: existing?.createdAt,
+            });
+          };
+          let imported = 0;
+          const changedKeys = new Set<string>();
+          for (const entry of [...replacementEntries, ...newEntries]) {
+            try {
+              await registerPreservingCreatedAt({
+                key: entry.targetKey,
+                value: entry.value,
+                ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
+                ...(entry.timestamp !== undefined ? { createdAtMs: entry.timestamp } : {}),
+              });
+              const nextExpectedKeys = new Set(expectedKeys);
+              nextExpectedKeys.add(entry.targetKey);
+              const liveKeys = new Set((await store.entries()).map(({ key }) => key));
+              const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
+              if (missingKey) {
+                // A concurrent write pushed the store over a cap and evicted a row. Roll back
+                // only the entry whose write triggered the eviction, restore the evicted live
+                // row when we still hold its value, and keep everything imported so far —
+                // deferred entries stay in the legacy source for the next startup.
+                if (existingEntriesByKey.has(entry.targetKey)) {
+                  await restoreExistingEntry(entry.targetKey);
+                } else {
+                  await store.delete(entry.targetKey);
+                }
+                if (changedKeys.has(missingKey)) {
+                  changedKeys.delete(missingKey);
+                  expectedKeys.delete(missingKey);
+                  imported = Math.max(0, imported - 1);
+                } else if (existingEntriesByKey.has(missingKey)) {
+                  try {
+                    await restoreExistingEntry(missingKey);
+                  } catch (restoreErr) {
+                    recordIncomplete(
+                      `Failed restoring ${plan.label} entry ${missingKey} after cap eviction: ${String(restoreErr)}`,
+                    );
+                  }
+                }
+                recordIncomplete(
+                  `Paused migrating ${plan.label} because plugin state cap evicted ${missingKey}; imported ${imported} of ${missingEntryCount} missing entries and deferred the rest in the legacy source`,
+                );
+                break;
+              }
+              expectedKeys.add(entry.targetKey);
+              changedKeys.add(entry.targetKey);
+              imported++;
+            } catch (err) {
+              recordIncomplete(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
             }
-            imported++;
-          } catch (err) {
-            failedTargetKeys.add(entry.targetKey);
-            warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
           }
-        }
-        if (imported > 0) {
-          changes.push(
-            `Migrated ${imported} ${plan.label} ${imported === 1 ? "entry" : "entries"} → plugin state`,
-          );
-        }
-        let cleanupKeys = existingKeys;
-        if (plan.cleanupSource === "rename") {
-          cleanupKeys = expectedKeys;
-        }
-        const allEntriesCovered =
-          (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
-          (entries.length > 0 &&
-            entries.every(
-              ({ key }) =>
-                cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
-                !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-            ));
-        if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
-          archiveLegacyImportSource({
-            sourcePath: plan.sourcePath,
-            label: plan.label,
-            changes,
-            warnings,
+          if (imported > 0) {
+            changes.push(
+              `Migrated ${imported} ${plan.label} ${imported === 1 ? "entry" : "entries"} → plugin state`,
+            );
+          }
+          // Entry failures fence cleanup for the whole source through recordIncomplete.
+          const allEntriesCovered =
+            (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
+            (entries.length > 0 &&
+              entries.every(({ key }) =>
+                expectedKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+              ));
+          if (!allEntriesCovered || (!plan.cleanupSource && !plan.removeSource)) {
+            return;
+          }
+          const pending = cleanups.get(plan.sourcePath) ?? [];
+          pending.push(async () => {
+            const cleanupWarnings: string[] = [];
+            try {
+              // Deferred callbacks may open stores implicitly; re-enter the import's owner scope.
+              await withPluginStateImportEnv(stateDir, async () => {
+                if (plan.cleanupSource === "rename" && migrationFileExists(plan.sourcePath)) {
+                  archiveLegacyImportSource({
+                    sourcePath: plan.sourcePath,
+                    label: plan.label,
+                    changes,
+                    warnings: cleanupWarnings,
+                  });
+                }
+                if (plan.cleanupSource === "remove" && migrationFileExists(plan.sourcePath)) {
+                  try {
+                    fs.unlinkSync(plan.sourcePath);
+                    changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+                  } catch (err) {
+                    cleanupWarnings.push(
+                      `Failed removing ${plan.label} legacy source: ${String(err)}`,
+                    );
+                  }
+                }
+                if (plan.removeSource) {
+                  await plan.removeSource();
+                  changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+                }
+              });
+            } catch (err) {
+              cleanupWarnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+            }
+            // Shared-source cleanup is advisory only when every consumer permits it.
+            const recoverable = plans.every(
+              (consumer) =>
+                consumer.sourcePath !== plan.sourcePath ||
+                (consumer.kind === "plugin-state-import" &&
+                  consumer.cleanupWarningDisposition === "recoverable"),
+            );
+            if (recoverable && cleanupWarnings.length > 0) {
+              incompleteSources.add(plan.sourcePath);
+              warnings.push(
+                ...cleanupWarnings.map(
+                  (warning) => `Run openclaw doctor --fix to retry legacy cleanup. ${warning}`,
+                ),
+              );
+            } else {
+              cleanupWarnings.forEach(recordIncomplete);
+            }
           });
-        }
-        if (allEntriesCovered && plan.removeSource) {
-          try {
-            await plan.removeSource();
-            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
-          } catch (err) {
-            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
-          }
-        }
-      });
-      continue;
-    }
-    if (fileExists(plan.targetPath)) {
-      continue;
-    }
-    try {
+          cleanups.set(plan.sourcePath, pending);
+        });
+        continue;
+      }
+      if (migrationFileExists(plan.targetPath)) {
+        continue;
+      }
       ensureMigrationDir(path.dirname(plan.targetPath));
       if (plan.kind === "move") {
         fs.renameSync(plan.sourcePath, plan.targetPath);
@@ -458,8 +561,23 @@ export async function runLegacyMigrationPlans(
         changes.push(`Copied ${plan.label} → ${plan.targetPath}`);
       }
     } catch (err) {
-      warnings.push(`Failed migrating ${plan.label} (${plan.sourcePath}): ${String(err)}`);
+      recordIncomplete(`Failed ${operation}: ${String(err)}`);
+    } finally {
+      if (lastConsumers.get(plan.sourcePath) === index) {
+        const pending = cleanups.get(plan.sourcePath) ?? [];
+        cleanups.delete(plan.sourcePath);
+        for (const cleanup of pending) {
+          if (incompleteSources.has(plan.sourcePath)) {
+            break;
+          }
+          await cleanup();
+        }
+      }
     }
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
+  };
 }

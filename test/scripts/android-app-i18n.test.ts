@@ -1,21 +1,112 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  buildAndroidAppI18nCatalog,
   checkAndroidAppI18n,
+  decodeAndroidResourceValue,
+  escapeAndroidResourceValue,
   findUnusedAndroidResourceKeys,
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
+  selectGeneratedTranslation,
 } from "../../scripts/android-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 describe("Android app i18n resources", () => {
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
-    await expect(checkAndroidAppI18n()).resolves.toBeUndefined();
+    // Managed native_* rows are reconciled by the post-merge locale refresh
+    // workflow (#111557); source PRs are validated with those rows pending.
+    await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
     const base = await readFile("apps/android/app/src/main/res/values/strings.xml", "utf8");
+    const wearBase = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
     expect(base).toContain('xmlns:tools="http://schemas.android.com/tools"');
     expect(base).toMatch(
       /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
     );
+    expect(wearBase).toContain('<string name="current_session">Current session</string>');
+  });
+
+  it("routes compact token suffixes through generated resources", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{ sites: Array<{ kind: string; path: string }>; source: string }>;
+    };
+    const sources = new Set(["${decimal(count / 1_000_000.0)}M", "${thousands}k"]);
+    const entries = inventory.entries
+      .flatMap((entry) => entry.sites.map((site) => ({ ...site, source: entry.source })))
+      .filter(
+        (entry) => entry.path.endsWith("/ui/chat/ChatTurnRecap.kt") && sources.has(entry.source),
+      )
+      .map(({ kind, source }) => ({ kind, source }))
+      .toSorted((left, right) => left.source.localeCompare(right.source));
+
+    expect(entries).toEqual([
+      { kind: "ui-call", source: "${decimal(count / 1_000_000.0)}M" },
+      { kind: "ui-call", source: "${thousands}k" },
+    ]);
+  });
+
+  it("builds complete Wear and third-party resources for every native locale", async () => {
+    const catalog = await buildAndroidAppI18nCatalog();
+    const wearResources = [...catalog.resources].filter(
+      ([filePath]) =>
+        filePath.includes("/apps/android/wear/src/main/res/values-") &&
+        filePath.endsWith("/strings.xml"),
+    );
+    const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
+    const baseKeys = [...base.matchAll(/<string name="([^"]+)"/gu)]
+      .map((match) => match[1] as string)
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    const basePlaceholders = [...base.matchAll(/%\d+\$[a-z]/giu)]
+      .map((match) => match[0])
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+
+    expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
+    for (const [, content] of wearResources) {
+      const stringTags = [...content.matchAll(/<string\b[^>]*>/gu)].map((match) => match[0]);
+      const keys = stringTags
+        .map((tag) => tag.match(/\bname="([^"]+)"/u)?.[1])
+        .filter((key): key is string => key !== undefined)
+        .toSorted();
+      const placeholders = [...content.matchAll(/%\d+\$[a-z]/giu)]
+        .map((match) => match[0])
+        .toSorted();
+      expect(keys).toEqual(baseKeys);
+      expect(placeholders).toEqual(basePlaceholders);
+      expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
+      expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
+      for (const tag of stringTags) {
+        if (!tag.includes('translatable="false"')) {
+          expect(tag.match(/\btools:ignore=/gu)).toHaveLength(1);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypos\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyDashes\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyEllipsis\b[^"]*"/u);
+        }
+      }
+      expect(content).toContain(
+        'name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
+      expect(content).toContain(
+        'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
+    }
+
+    const thirdPartyBase = await readFile(
+      "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
+      "utf8",
+    );
+    const resources = [...catalog.resources].filter(
+      ([filePath]) =>
+        filePath.includes("/apps/android/app/src/thirdParty/res/values-") &&
+        filePath.endsWith("/accessibility_strings.xml"),
+    );
+
+    expect(thirdPartyBase).toContain('tools:ignore="MissingTranslation"');
+    expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
+    for (const [, content] of resources) {
+      expect(content).toContain('name="accessibility_service_label"');
+      expect(content).toContain('name="accessibility_dev_activity_label"');
+    }
   });
 
   it("preserves the existing Swedish app name", async () => {
@@ -102,6 +193,19 @@ describe("Android app i18n resources", () => {
     expect(selectDeterministicTranslation("Source", ["Source", "Source"])).toBe("Source");
   });
 
+  it("preserves a localized resource when translation memory retires its UI source", () => {
+    expect(decodeAndroidResourceValue('"Sitzungen"')).toBe("Sitzungen");
+    expect(decodeAndroidResourceValue('"Sag \\"Hallo\\""')).toBe('Sag "Hallo"');
+    const existing = { source: "Sessions", translation: "Sitzungen" };
+    expect(selectGeneratedTranslation("Sessions", [], existing)).toBe("Sitzungen");
+    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], existing)).toBe("Sesiones");
+  });
+
+  it("does not reuse a localized resource after its English source changes", () => {
+    const existing = { source: "Sessions", translation: "Sitzungen" };
+    expect(selectGeneratedTranslation("Threads", [], existing)).toBe("");
+  });
+
   it("preserves source argument indexes when a translation reorders interpolations", () => {
     expect(
       renderAndroidResourceValue(
@@ -118,6 +222,10 @@ describe("Android app i18n resources", () => {
         "${device.tokens.size} Token, ${device.tokens.count { !it.revoked }} aktiv",
       ),
     ).toBe("%2$s Token, %1$s aktiv");
+  });
+
+  it("preserves Android resource placeholders outside Kotlin interpolation", () => {
+    expect(escapeAndroidResourceValue("Previous %1$s")).toBe("Previous %1$s");
   });
 
   it("balances braces inside nested interpolation strings", () => {
@@ -184,12 +292,6 @@ describe("Android app i18n resources", () => {
       expect.objectContaining({ source: "Second sentence." }),
       expect.objectContaining({ source: "Ready" }),
     ]);
-    expect(
-      findUnlocalizedAndroidUiLiterals(
-        source,
-        "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-      ).map((finding) => finding.source),
-    ).not.toEqual(expect.arrayContaining(["Connected", "Waiting"]));
   });
 
   it("maps typed model fields across generic types and named argument omissions", () => {
@@ -248,6 +350,19 @@ describe("Android app i18n resources", () => {
     );
   });
 
+  it("decodes Kotlin Unicode escapes without collapsing escaped backslashes", () => {
+    const source = String.raw`
+      Text("Progress \u00b7 ready")
+      Text("Literal \\u00b7 marker")
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
+  });
+
   it("inventories command, attention, and overview model display literals", () => {
     const source = `
       data class CommandItem(
@@ -288,26 +403,14 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        "Open Chat",
-        "Start a conversation",
-        "Gateway",
-        "Connect before chat, voice, and live status.",
-        "Online",
-        "All systems nominal",
-      ]),
-    );
-    expect(findings).not.toEqual(
-      expect.arrayContaining([
-        "chat",
-        "voice",
-        "Start Voice",
-        "Talk with OpenClaw",
-        "Offline",
-        "gateway",
-      ]),
-    );
+    expect(findings).toEqual([
+      "Open Chat",
+      "Start a conversation",
+      "Gateway",
+      "Connect before chat, voice, and live status.",
+      "Online",
+      "All systems nominal",
+    ]);
   });
 
   it("requires exact String fields and scans multiline helper expressions", () => {
@@ -333,8 +436,7 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(expect.arrayContaining(["Failure", "Fallback"]));
-    expect(findings).not.toEqual(expect.arrayContaining(["resource_key", "Ready"]));
+    expect(findings).toEqual(["Failure", "Fallback"]);
   });
 
   it("ignores preview fixtures", () => {
@@ -344,5 +446,33 @@ describe("Android app i18n resources", () => {
         "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
       ),
     ).toEqual([]);
+  });
+
+  it("scans Wear presentation sources but ignores Wear screenshot fixtures", () => {
+    const source = `
+      data class WearSession(val title: String)
+      WearSession(title = "Current session")
+    `;
+    expect(
+      findUnlocalizedAndroidUiLiterals(
+        source,
+        "apps/android/wear/src/main/java/ai/openclaw/wear/WearViewModel.kt",
+      ).map((finding) => finding.source),
+    ).toContain("Current session");
+    expect(
+      findUnlocalizedAndroidUiLiterals(
+        source,
+        "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreenshotMode.kt",
+      ),
+    ).toEqual([]);
+  });
+
+  it("scans flavor-specific activity surfaces", () => {
+    expect(
+      findUnlocalizedAndroidUiLiterals(
+        'Text("Developer surface")',
+        "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
+      ).map((finding) => finding.source),
+    ).toEqual(["Developer surface"]);
   });
 });

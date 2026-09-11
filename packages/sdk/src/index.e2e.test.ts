@@ -1,11 +1,14 @@
-// OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
-import { rawDataToString } from "../../../src/infra/ws.js";
+import { emitAgentEvent } from "../../../src/infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -58,7 +61,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       type: "event",
       event: "connect.challenge",
       seq: seq++,
-      payload: { nonce: "sdk-e2e-nonce" },
+      payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
     });
 
     socket.on("message", (raw) => {
@@ -425,6 +428,10 @@ describe("OpenClaw SDK websocket e2e", () => {
       );
       expect(updateAgent.method).toBe("agents.update");
       expect(updateAgent.params).toEqual({ agentId: "sdk-agent", name: "Renamed SDK Agent" });
+      const clearAgentModel = expectJsonObject(
+        await oc.agents.update({ agentId: "sdk-agent", model: null }),
+      );
+      expect(clearAgentModel.params).toEqual({ agentId: "sdk-agent", model: null });
       const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
       expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });
@@ -493,6 +500,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "agent.identity.get",
         "agents.create",
         "agents.update",
+        "agents.update",
         "agents.delete",
         "sessions.list",
         "sessions.create",
@@ -554,7 +562,7 @@ describe("OpenClaw SDK websocket e2e", () => {
 describe("OpenClaw SDK real Gateway e2e", () => {
   installGatewayTestHooks({ scope: "test" });
 
-  it("streams real Gateway agent events", async () => {
+  it("streams real Gateway agent events and preserves late replay order", async () => {
     const token = "sdk-real-gateway-token";
     const started = await startServer(token, { controlUiEnabled: false });
     const transport = new GatewayClientTransport({
@@ -565,6 +573,7 @@ describe("OpenClaw SDK real Gateway e2e", () => {
     });
     const oc = new OpenClaw({ transport });
     const runId = "sdk-real-gateway-run";
+    const replayRunId = "sdk-real-gateway-replay";
 
     try {
       await oc.connect();
@@ -613,7 +622,59 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         "agent:main:dashboard:sdk-real-gateway",
         "agent:main:dashboard:sdk-real-gateway",
       ]);
+
+      registerAgentRunContext(replayRunId, {
+        sessionKey: "agent:main:dashboard:sdk-real-gateway",
+        verboseLevel: "off",
+      });
+      const observedReplay = (async () => {
+        for await (const event of oc.events((eventLocal) => eventLocal.runId === replayRunId)) {
+          if (expectJsonObject(event.raw?.payload).seq === 600) {
+            return;
+          }
+        }
+        throw new Error("Gateway stream ended before the replay tail arrived");
+      })();
+      emitAgentEvent({
+        runId: replayRunId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 333 },
+      });
+      for (let seq = 2; seq <= 600; seq += 1) {
+        emitAgentEvent({
+          runId: replayRunId,
+          stream: "plan",
+          data: { phase: "update", steps: [], explanation: `step ${seq}` },
+        });
+      }
+      await withTimeout(observedReplay, 2_000, {
+        message: "timed out waiting for real Gateway replay setup",
+      });
+
+      const replayRun = await oc.runs.get(replayRunId);
+      const replayed = (async () => {
+        const sequences: unknown[] = [];
+        for await (const event of replayRun.events()) {
+          sequences.push(expectJsonObject(event.raw?.payload).seq);
+          if (sequences.length === 1) {
+            emitAgentEvent({
+              runId: replayRunId,
+              stream: "lifecycle",
+              data: { phase: "end", endedAt: 444 },
+            });
+          }
+          if (event.type === "run.completed") {
+            return sequences;
+          }
+        }
+        throw new Error("Gateway stream ended before the live completion arrived");
+      })();
+      await expect(
+        withTimeout(replayed, 2_000, { message: "timed out draining real Gateway SDK replay" }),
+      ).resolves.toEqual(Array.from({ length: 501 }, (_, index) => index + 101));
     } finally {
+      clearAgentRunContext(runId);
+      clearAgentRunContext(replayRunId);
       await oc.close();
       await started.server.close();
       started.envSnapshot.restore();

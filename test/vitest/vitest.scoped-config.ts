@@ -1,10 +1,12 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 import {
   intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
+  relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
@@ -16,28 +18,6 @@ import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
-}
-
-function relativizeScopedPattern(value: string, dir: string): string {
-  const normalizedValue = normalizePathPattern(value);
-  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
-  if (!normalizedDir) {
-    return normalizedValue;
-  }
-  if (normalizedValue === normalizedDir) {
-    return ".";
-  }
-  const prefix = `${normalizedDir}/`;
-  return normalizedValue.startsWith(prefix)
-    ? normalizedValue.slice(prefix.length)
-    : normalizedValue;
-}
-
-function relativizeScopedPatterns(values: string[], dir?: string): string[] {
-  if (!dir) {
-    return values.map(normalizePathPattern);
-  }
-  return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
 function globRoot(pattern: string): string | null {
@@ -67,7 +47,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }
@@ -86,18 +66,15 @@ export function shouldPassWithNoTestsForCliIncludes(
   );
 }
 
-export function resolveVitestIsolation(
-  _env: Record<string, string | undefined> = process.env,
-): boolean {
-  return false;
-}
-
 const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
   [
     "acp",
     "agents",
     "agents-core",
     "agents-embedded-agent",
+    "agents-embedded-agent-incomplete-turn",
+    "agents-embedded-agent-overflow-compaction",
+    "agents-embedded-agent-run",
     "agents-support",
     "agents-tools",
     "auto-reply",
@@ -107,6 +84,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "boundary",
     "bundled",
     "channels",
+    "cli-process",
     "cli",
     "commands",
     "commands-light",
@@ -138,6 +116,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",
@@ -207,6 +186,7 @@ export function createScopedVitestConfig(
     isolate?: boolean;
     name?: string;
     fileParallelism?: boolean;
+    hookTimeout?: number;
     intersectIncludeFile?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
@@ -214,7 +194,9 @@ export function createScopedVitestConfig(
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
   },
-) {
+  // Explicit nameable return type: inference otherwise reaches vite-internal
+  // names (TS4058/TS4082) in every downstream scoped-config creator.
+): ViteUserConfig {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
   const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
@@ -242,7 +224,7 @@ export function createScopedVitestConfig(
     ? relativizeScopedPatterns(includeFromEnv, scopedDir)
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
-  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const isolate = options?.isolate ?? false;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),
@@ -271,6 +253,7 @@ export function createScopedVitestConfig(
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),
+      ...(options?.hookTimeout === undefined ? {} : { hookTimeout: options.hookTimeout }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {

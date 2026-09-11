@@ -59,7 +59,7 @@ title: "Hugging Face (inference)"
 ### Non-interactive setup
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice huggingface-api-key \
   --huggingface-api-key "$HF_TOKEN"
@@ -71,15 +71,14 @@ Sets `huggingface/deepseek-ai/DeepSeek-R1` as the default model.
 
 Model refs use the form `huggingface/<org>/<model>` (Hub-style IDs). OpenClaw's built-in catalog:
 
-| Model                        | Ref (prefix with `huggingface/`)          |
-| ---------------------------- | ----------------------------------------- |
-| DeepSeek R1                  | `deepseek-ai/DeepSeek-R1`                 |
-| DeepSeek V3.1                | `deepseek-ai/DeepSeek-V3.1`               |
-| GPT-OSS 120B                 | `openai/gpt-oss-120b`                     |
-| Llama 3.3 70B Instruct Turbo | `meta-llama/Llama-3.3-70B-Instruct-Turbo` |
+| Model         | Ref (prefix with `huggingface/`) |
+| ------------- | -------------------------------- |
+| DeepSeek R1   | `deepseek-ai/DeepSeek-R1`        |
+| DeepSeek V3.1 | `deepseek-ai/DeepSeek-V3.1`      |
+| GPT-OSS 120B  | `openai/gpt-oss-120b`            |
 
 <Tip>
-When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the four models above. You can append `:fastest` or `:cheapest` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
+When your token is valid, OpenClaw also discovers any other model from **GET** `https://router.huggingface.co/v1/models` at onboarding time and Gateway startup, so your catalog can include far more than the three models above. You can append `:fastest` or `:cheapest` to any model id; HF's router routes to the matching inference provider. Set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers).
 </Tip>
 
 ## Advanced configuration
@@ -88,14 +87,14 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Accordion title="Model discovery and onboarding dropdown">
     OpenClaw discovers models with:
 
-    ```bash
+    ```http
     GET https://router.huggingface.co/v1/models
     Authorization: Bearer $HUGGINGFACE_HUB_TOKEN   # or $HF_TOKEN
     ```
 
     The response is OpenAI-style: `{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`.
 
-    With a configured key (onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), the **Default Hugging Face model** dropdown during interactive setup is populated from this endpoint. Gateway startup repeats the same call to refresh the catalog. Discovered models are merged with the built-in catalog above (used for metadata like context window and cost when an id matches). If the request fails, returns no data, or no key is set, OpenClaw falls back to the built-in catalog only.
+    With a configured key (onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), the **Default Hugging Face model** dropdown during interactive setup is populated from this endpoint. Gateway startup repeats the same call to refresh the catalog. Matching built-in models supply metadata such as context window and cost. Failed discovery produces a catalog failure outcome; a successful empty response stays empty. Without a key, the static catalog remains available without starting discovery.
 
     Disable discovery without removing the provider:
 
@@ -172,21 +171,17 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
     ```
   </Accordion>
 
-  <Accordion title="Config: DeepSeek + Llama + GPT-OSS with aliases">
+  <Accordion title="Config: DeepSeek + GPT-OSS with aliases">
     ```json5
     {
       agents: {
         defaults: {
           model: {
             primary: "huggingface/deepseek-ai/DeepSeek-V3.1",
-            fallbacks: [
-              "huggingface/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-              "huggingface/openai/gpt-oss-120b",
-            ],
+            fallbacks: ["huggingface/openai/gpt-oss-120b"],
           },
           models: {
             "huggingface/deepseek-ai/DeepSeek-V3.1": { alias: "DeepSeek V3.1" },
-            "huggingface/meta-llama/Llama-3.3-70B-Instruct-Turbo": { alias: "Llama 3.3 70B Turbo" },
             "huggingface/openai/gpt-oss-120b": { alias: "GPT-OSS 120B" },
           },
         },
@@ -202,7 +197,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
-  <Card title="Model selection" href="/concepts/models" icon="brain">
+  <Card title="Models" href="/concepts/models" icon="brain">
     How to choose and configure models.
   </Card>
   <Card title="Inference Providers docs" href="https://huggingface.co/docs/inference-providers" icon="book">

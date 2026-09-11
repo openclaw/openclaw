@@ -1,17 +1,50 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
   assertGatewaySuspendingError,
   assertReadySuspensionResponse,
   assertSuspendedProbes,
+  prepareReadySuspension,
   runGatewayNetworkClient,
-} from "../../scripts/e2e/lib/gateway-network/client.mjs";
-import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
-import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
+  runGatewaySuspensionPostRestartClient,
+  runGatewaySuspensionPreRestartClient,
+} from "../../scripts/e2e/lib/gateway-network/client.mts";
+import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mts";
+import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-describe("gateway network WebSocket open guard", () => {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("gateway network client", () => {
+  function expectDeadlineBudgets(calls: Array<[number]>) {
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [timeoutMs] of calls) {
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(25);
+    }
+  }
+
+  function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
+    expect(signal).toBeInstanceOf(AbortSignal);
+    const requestSignal = signal as AbortSignal;
+    return new Promise((_, reject) => {
+      const rejectWithReason = () => reject(requestSignal.reason as Error);
+      if (requestSignal.aborted) {
+        rejectWithReason();
+        return;
+      }
+      requestSignal.addEventListener("abort", rejectWithReason, { once: true });
+    });
+  }
+
   function healthResponse() {
     return {
       ok: true,
@@ -24,6 +57,21 @@ describe("gateway network WebSocket open guard", () => {
         ok: true,
         sessions: { count: 0, path: "/state/sessions", recent: [] },
         ts: Date.now(),
+      },
+    };
+  }
+
+  function connectResponse(
+    methods: unknown = [
+      "gateway.suspend.prepare",
+      "gateway.suspend.status",
+      "gateway.suspend.resume",
+    ],
+  ) {
+    return {
+      ok: true,
+      payload: {
+        features: { methods },
       },
     };
   }
@@ -58,6 +106,177 @@ describe("gateway network WebSocket open guard", () => {
         OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "3000",
       }),
     ).toBe(3000);
+  });
+
+  it("retries busy suspension preparation using the server delay", async () => {
+    const expiresAtMs = Date.now() + 10_000;
+    const rpc = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          ok: true,
+          payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          ok: true,
+          payload: {
+            status: "ready",
+            suspensionId: "lease-1",
+            expiresAtMs,
+            activeCount: 0,
+            blockers: [],
+          },
+        },
+      });
+    const delayImpl = vi.fn(async () => undefined);
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: Date.now() + 5_000, requestId: "request-1", rpc },
+        { delayImpl },
+      ),
+    ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", {
+      requestId: "request-1",
+    });
+    expect(delayImpl).toHaveBeenCalledWith(250);
+  });
+
+  it("stops busy suspension retries at the client deadline", async () => {
+    let nowMs = 1_000;
+    const rpc = vi.fn(async () => ({
+      status: 200,
+      body: {
+        ok: true,
+        payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
+      },
+    }));
+    const delayImpl = vi.fn(async (ms: number) => {
+      nowMs += ms;
+    });
+
+    await expect(
+      prepareReadySuspension(
+        { deadline: 1_250, requestId: "request-busy", rpc },
+        { delayImpl, now: () => nowMs },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(delayImpl).toHaveBeenCalledWith(250);
+  });
+
+  it("bounds a stalled suspension admin request by the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      requestSignal = init?.signal;
+      return rejectWhenAborted(requestSignal);
+    });
+
+    await expect(
+      runGatewaySuspensionPreRestartClient(
+        {
+          statePath: "/tmp/unused-gateway-network-state.json",
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a stalled suspension response body inside the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    let callCount = 0;
+    let bodySignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      callCount += 1;
+      if (callCount === 1) {
+        return Response.json({
+          ok: true,
+          payload: {
+            status: "ready",
+            suspensionId: "lease-1",
+            expiresAtMs: Date.now() + 10_000,
+            activeCount: 0,
+            blockers: [],
+          },
+        });
+      }
+      bodySignal = init?.signal;
+      const response = new Response(null, { status: 200 });
+      vi.spyOn(response, "json").mockImplementation(() => rejectWhenAborted(bodySignal));
+      return response;
+    });
+
+    await expect(
+      runGatewaySuspensionPreRestartClient(
+        {
+          statePath: "/tmp/unused-gateway-network-state.json",
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
+    expect(bodySignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const request = fetchImpl.mock.calls[1]?.[0];
+    const requestUrl =
+      request instanceof Request
+        ? request.url
+        : request instanceof URL
+          ? request.href
+          : (request ?? "");
+    expect(requestUrl).toContain("/healthz");
+  });
+
+  it("bounds a stalled post-restart admin request by the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const workDir = tempDirs.make("openclaw-gateway-network-post-restart-");
+    const statePath = join(workDir, "suspension.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        requestId: "gateway-network-restart-contract",
+        suspensionId: "lease-before-restart",
+        expiresAtMs: Date.now() + 10_000,
+      }),
+    );
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      requestSignal = init?.signal;
+      return rejectWhenAborted(requestSignal);
+    });
+
+    await expect(
+      runGatewaySuspensionPostRestartClient(
+        {
+          statePath,
+          token: "x",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 25,
+        },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("resolves matching frames and ignores unrelated frames", async () => {
@@ -108,9 +327,7 @@ describe("gateway network WebSocket open guard", () => {
     await expect(frame).rejects.toThrow();
   });
 
-  function createNetworkClientHarness(
-    responses: Array<{ error?: { message?: string }; ok: boolean }>,
-  ) {
+  function createNetworkClientHarness(responses: GatewayFrame[]) {
     const frames = [...responses];
     const sentMethods: string[] = [];
     const stdout: string[] = [];
@@ -137,10 +354,13 @@ describe("gateway network WebSocket open guard", () => {
           predicate: (frame: GatewayFrame) => boolean,
           _timeoutMs?: number,
         ) => {
+          const response = frames.shift();
           const frame = {
             type: "res",
             id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
-            ...frames.shift(),
+            ...(sentMethods.at(-1) === "connect" && response?.ok && !response.payload
+              ? connectResponse()
+              : response),
           };
           expect(predicate(frame)).toBe(true);
           return frame;
@@ -165,6 +385,52 @@ describe("gateway network WebSocket open guard", () => {
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.stdout).toEqual(["ok"]);
     expect(harness.closeCount).toBe(1);
+  });
+
+  it.each([
+    {
+      methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
+      expected: "supported",
+    },
+    { methods: ["health", "status"], expected: "unsupported" },
+  ])("records $expected suspension support from connect hello methods", async (testCase) => {
+    const workDir = tempDirs.make("openclaw-gateway-network-capabilities-");
+    const capabilitiesPath = join(workDir, "capabilities.json");
+    const harness = createNetworkClientHarness([
+      connectResponse(testCase.methods),
+      healthResponse(),
+    ]);
+
+    await expect(
+      runGatewayNetworkClient(
+        {
+          capabilitiesPath,
+          token: "test-token",
+          url: "ws://127.0.0.1:12345",
+          timeoutMs: 1000,
+        },
+        harness.deps,
+      ),
+    ).resolves.toEqual({ suspension: testCase.expected });
+    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({
+      suspension: testCase.expected,
+    });
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
+  });
+
+  it.each([
+    ["partial", ["gateway.suspend.prepare", "gateway.suspend.status"]],
+    ["malformed", "gateway.suspend.prepare"],
+  ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
+    const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
+
+    await expect(
+      runGatewayNetworkClient(
+        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+        harness.deps,
+      ),
+    ).rejects.toThrow(/suspension methods/u);
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
   });
 
   it("bounds socket and frame waits by the client deadline", async () => {

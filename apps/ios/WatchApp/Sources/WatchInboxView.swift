@@ -17,6 +17,7 @@ private enum WatchTextValue {
 }
 
 struct WatchInboxView: View {
+    @Binding var navigationPath: [WatchDestination]
     var store: WatchInboxStore
     var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
@@ -24,10 +25,10 @@ struct WatchInboxView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> String?)?
+    var onSendChatMessage: ((String, Bool) async -> String?)?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: self.$navigationPath) {
             WatchControlSurfaceView(
                 store: self.store,
                 directNode: self.directNode,
@@ -38,6 +39,12 @@ struct WatchInboxView: View {
                 onAppCommand: self.onAppCommand,
                 onSendChatMessage: self.onSendChatMessage)
                 .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: WatchDestination.self) { destination in
+                    switch destination {
+                    case .standaloneVoice:
+                        WatchRealtimeCallView(directNode: self.directNode)
+                    }
+                }
         }
     }
 }
@@ -50,7 +57,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> String?)?
+    var onSendChatMessage: ((String, Bool) async -> String?)?
     @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
@@ -109,6 +116,13 @@ private struct WatchControlSurfaceView: View {
             }
             .buttonStyle(.plain)
 
+            NavigationLink(value: WatchDestination.standaloneVoice) {
+                WatchPrimaryLabel(title: "Talk on Watch")
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens standalone voice without starting the microphone")
+            .accessibilityIdentifier("watch-standalone-voice")
+
             NavigationLink {
                 self.chatTimelineDestination
             } label: {
@@ -145,6 +159,15 @@ private struct WatchControlSurfaceView: View {
                 }
                 self.inboxPromptBlock
             } else {
+                // The decorative mascot belongs only to the empty or waiting inbox surface.
+                WatchMascot(
+                    mood: watchInboxMascotMood(
+                        hasSnapshot: self.store.hasAppSnapshot,
+                        hasApprovals: self.approvalCount > 0,
+                        hasChats: self.chatCount > 0),
+                    size: 72)
+                    .frame(maxWidth: .infinity)
+
                 WatchHeroCard(
                     label: .localized("Clear"),
                     title: .localized("Caught up"),
@@ -220,6 +243,9 @@ private struct WatchControlSurfaceView: View {
 
             if let replyStatusText = store.replyStatusText, !replyStatusText.isEmpty {
                 WatchTinyStatus(text: replyStatusText)
+            }
+            if let receipt = self.store.savedPromptDeliveryReceipt {
+                WatchChatDeliveryReceiptView(receipt: receipt)
             }
         }
     }
@@ -355,7 +381,8 @@ private struct WatchControlSurfaceView: View {
             WatchDetailText(
                 text: .verbatim(String(localized: """
                 Direct mode supports device info, status, and notifications. \
-                Chat, Talk, and approvals still use the iPhone.
+                Voice is included when you connect from iPhone Settings → Apple Watch. \
+                Chat and approvals still use the iPhone.
                 """)))
 
             if self.directNode.isConfigured {
@@ -386,15 +413,15 @@ private struct WatchControlSurfaceView: View {
 
     private var chatTimelineDestination: some View {
         WatchChatTimelineView(
+            store: self.store,
             items: self.chatItems,
             statusText: self.chatStatusText,
             sendStatusText: self.chatSendStatusText,
             avatarImageSource: self.avatarImageSource,
             avatarText: self.avatarText,
-            completedChatCommandId: self.store.chatCompletion?.commandId,
-            completedChatReplyText: self.store.chatCompletion?.replyText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
+            .id(self.store.appSnapshot?.chatSessionIdentity)
     }
 
     @ViewBuilder private var primaryDestination: some View {
@@ -867,38 +894,6 @@ private struct WatchCompactMetric: View {
     }
 }
 
-private struct WatchPrimaryLabel: View {
-    let title: LocalizedStringKey
-
-    var body: some View {
-        HStack(spacing: 7) {
-            WatchVoiceGlyph()
-            Text(self.title)
-                .font(WatchClawType.captionBold)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 7)
-        .background {
-            Capsule(style: .continuous)
-                .fill(WatchClawStyle.hotGradient)
-        }
-    }
-}
-
-private struct WatchVoiceGlyph: View {
-    var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach([7.0, 13.0, 18.0, 12.0, 8.0], id: \.self) { height in
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(0.82))
-                    .frame(width: 2, height: height)
-            }
-        }
-        .frame(width: 20, height: 20)
-    }
-}
-
 private struct WatchPageRail: View {
     let selectedIndex: Int
     let pageCount: Int
@@ -1167,18 +1162,18 @@ private struct WatchChatBubble: View {
 }
 
 private struct WatchChatTimelineView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    var store: WatchInboxStore
     let items: [WatchChatItem]
     let statusText: String
     let sendStatusText: String?
     var avatarImageSource: String?
     var avatarText: String?
-    var completedChatCommandId: String?
-    var completedChatReplyText: String?
     var onRefresh: (() -> Void)?
-    var onSendMessage: ((String) -> String?)?
-    @State private var voiceTurnTracker = WatchVoiceTurnTracker()
+    var onSendMessage: ((String, Bool) async -> String?)?
     @State private var speechPlayback = WatchSpeechPlayback()
     @State private var voiceReplyTimeout: Task<Void, Never>?
+    @State private var isVisible = false
 
     var body: some View {
         VStack(spacing: 7) {
@@ -1199,6 +1194,10 @@ private struct WatchChatTimelineView: View {
                         WatchTinyStatus(text: sendStatusText)
                     }
 
+                    if let receipt = self.store.savedChatDeliveryReceipt {
+                        WatchChatDeliveryReceiptView(receipt: receipt)
+                    }
+
                     if let voiceStatusText = self.voiceStatusText {
                         VStack(alignment: .leading, spacing: 3) {
                             // Watch TTS runs through AVSpeechSynthesizer, which has no
@@ -1209,6 +1208,10 @@ private struct WatchChatTimelineView: View {
                                 .accessibilityHidden(true)
                             WatchTinyStatus(text: voiceStatusText)
                         }
+                    }
+
+                    if let errorText = self.speechPlayback.errorText {
+                        WatchTinyStatus(text: errorText)
                     }
 
                     WatchSecondaryButton(title: "Refresh") {
@@ -1223,13 +1226,13 @@ private struct WatchChatTimelineView: View {
             .scrollIndicators(.hidden)
 
             WatchChatComposer(
-                onSendMessage: { text in
-                    _ = self.sendMessage(text)
+                onComposeMessage: {
+                    self.presentMessageInput(spokenReply: false)
                 },
                 onStartVoiceTurn: {
-                    self.startVoiceTurn()
+                    self.presentMessageInput(spokenReply: true)
                 },
-                isAwaitingVoiceReply: self.voiceTurnTracker.isAwaitingReply,
+                isAwaitingVoiceReply: self.store.isAwaitingVoiceReply,
                 onCancelVoiceTurn: {
                     self.cancelVoiceTurn()
                 },
@@ -1242,61 +1245,84 @@ private struct WatchChatTimelineView: View {
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
-        .onChange(of: self.completedChatCommandId) { _, commandId in
-            self.handleCompletedVoiceTurn(commandId: commandId)
+        .onChange(of: self.store.chatCompletion) { _, _ in
+            self.handleCompletedVoiceTurn()
+        }
+        .onChange(of: self.scenePhase) { _, phase in
+            if phase == .active {
+                self.handleCompletedVoiceTurn()
+                self.scheduleVoiceReplyTimeout()
+            } else if phase == .background {
+                self.voiceReplyTimeout?.cancel()
+                self.speechPlayback.stop()
+            }
+        }
+        .onAppear {
+            self.isVisible = true
+            self.handleCompletedVoiceTurn()
+            self.scheduleVoiceReplyTimeout()
         }
         .onDisappear {
-            self.cancelVoiceTurn()
+            self.isVisible = false
+            self.voiceReplyTimeout?.cancel()
             self.speechPlayback.stop()
         }
-    }
-
-    private func sendMessage(_ text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return self.onSendMessage?(trimmed)
     }
 
     private var voiceStatusText: String? {
         if self.speechPlayback.isSpeaking {
             return String(localized: "Speaking reply…")
         }
-        if self.voiceTurnTracker.isAwaitingReply {
+        if self.store.isAwaitingVoiceReply {
             return String(localized: "Waiting for spoken reply…")
         }
         return nil
     }
 
-    private func startVoiceTurn() {
+    private func presentMessageInput(spokenReply: Bool) {
+        let chatSession = self.store.appSnapshot?.chatSessionIdentity
+        self.speechPlayback.stop()
         WatchNativeTextInput.present(suggestions: []) { text in
-            guard let commandId = self.sendMessage(text) else { return }
-            self.voiceTurnTracker.begin(commandId: commandId)
-            self.scheduleVoiceReplyTimeout()
+            guard self.store.appSnapshot?.chatSessionIdentity == chatSession else {
+                self.store.markAppCommandBlocked(
+                    .sendChat,
+                    reason: String(localized: "Chat changed on iPhone. Your message was not sent."))
+                return
+            }
+            Task { @MainActor in
+                guard self.store.appSnapshot?.chatSessionIdentity == chatSession,
+                      await self.onSendMessage?(text, spokenReply) != nil
+                else { return }
+                // The durable command keeps its original owner if iPhone changes chat while saving.
+                guard self.store.appSnapshot?.chatSessionIdentity == chatSession else { return }
+                if spokenReply {
+                    self.handleCompletedVoiceTurn()
+                    self.scheduleVoiceReplyTimeout()
+                }
+            }
         }
     }
 
-    private func handleCompletedVoiceTurn(commandId: String?) {
-        guard let reply = voiceTurnTracker.takeReply(
-            completedCommandId: commandId,
-            text: completedChatReplyText)
-        else {
-            return
-        }
+    private func handleCompletedVoiceTurn() {
+        guard self.isVisible, self.scenePhase == .active,
+              let reply = self.store.takeVoiceReply()
+        else { return }
         self.voiceReplyTimeout?.cancel()
         self.speechPlayback.speak(reply)
     }
 
     private func cancelVoiceTurn() {
         self.voiceReplyTimeout?.cancel()
-        self.voiceTurnTracker.cancel()
+        self.store.cancelVoiceTurn()
     }
 
     private func scheduleVoiceReplyTimeout() {
         self.voiceReplyTimeout?.cancel()
+        guard let delayNanoseconds = self.store.voiceReplyTimeoutNanoseconds() else { return }
         self.voiceReplyTimeout = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(90))
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
-            self.voiceTurnTracker.cancel()
+            self.scheduleVoiceReplyTimeout()
         }
     }
 }
@@ -1346,7 +1372,7 @@ private struct WatchMiniUserDot: View {
 }
 
 private struct WatchChatComposer: View {
-    let onSendMessage: (String) -> Void
+    let onComposeMessage: () -> Void
     let onStartVoiceTurn: () -> Void
     let isAwaitingVoiceReply: Bool
     let onCancelVoiceTurn: () -> Void
@@ -1356,9 +1382,7 @@ private struct WatchChatComposer: View {
     var body: some View {
         HStack(spacing: 6) {
             Button {
-                WatchNativeTextInput.present(
-                    suggestions: [],
-                    onSubmit: self.onSendMessage)
+                self.onComposeMessage()
             } label: {
                 HStack(spacing: 5) {
                     Text("Message OpenClaw")
@@ -1422,40 +1446,9 @@ private struct WatchChatComposer: View {
             return String(localized: "Stop speaking")
         }
         if self.isAwaitingVoiceReply {
-            return String(localized: "Cancel voice turn")
+            return String(localized: "Cancel spoken reply")
         }
         return String(localized: "Start voice turn")
-    }
-}
-
-private enum WatchNativeTextInput {
-    @MainActor
-    static func present(
-        suggestions: [String],
-        onSubmit: @escaping (String) -> Void)
-    {
-        WKApplication.shared().visibleInterfaceController?.presentTextInputController(
-            withSuggestions: suggestions,
-            allowedInputMode: .allowEmoji)
-        { results in
-            guard let text = results?.compactMap(stringValue).first?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !text.isEmpty
-            else {
-                return
-            }
-            onSubmit(text)
-        }
-    }
-
-    private static func stringValue(_ result: Any) -> String? {
-        if let string = result as? String {
-            return string
-        }
-        if let attributed = result as? NSAttributedString {
-            return attributed.string
-        }
-        return nil
     }
 }
 

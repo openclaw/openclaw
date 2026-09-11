@@ -68,12 +68,68 @@ describe("scanNodeHostedSkills", () => {
     ]);
   });
 
-  it("loads descriptors and preserves the full SKILL.md content", () => {
+  it("treats a missing skills directory as an empty fresh-node inventory", () => {
+    const warn = vi.fn();
+
+    expect(scanNodeHostedSkills({ skillsDir: path.join(createRoot(), "missing"), warn })).toEqual(
+      [],
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("loads complete descriptors in skill-name order", () => {
     const root = createRoot();
     const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");
+    const prefixContent = writeSkill(root, "release", "Release", "# Prefix skill");
 
     expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
+      { name: "release", description: "Release", content: prefixContent },
       { name: "release-helper", description: "Prepare a release", content },
+    ]);
+  });
+
+  it("publishes the same bounded content that supplied the skill metadata", () => {
+    const root = createRoot();
+    const original = writeSkill(root, "a-stable", "Original description", "# Original");
+    const invalidDir = path.join(root, "b-invalid");
+    fs.mkdirSync(invalidDir);
+    const invalidFile = path.join(invalidDir, "SKILL.md");
+    fs.writeFileSync(invalidFile, "# Missing frontmatter\n");
+    const warn = vi.fn((message: string) => {
+      if (message.includes(invalidFile)) {
+        writeSkill(root, "a-stable", "Replacement description", "# Replacement");
+      }
+    });
+
+    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([
+      { name: "a-stable", description: "Original description", content: original },
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(invalidFile));
+  });
+
+  it("loads JSON5-style metadata frontmatter", () => {
+    const root = createRoot();
+    const skillDir = path.join(root, "json5-metadata");
+    fs.mkdirSync(skillDir);
+    const content = `---
+name: json5-metadata
+description: JSON5-style metadata
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "env": ["EXAMPLE_VAR"],
+          },
+      },
+  }
+---
+`;
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), content);
+
+    expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
+      { name: "json5-metadata", description: "JSON5-style metadata", content },
     ]);
   });
 
@@ -83,6 +139,13 @@ describe("scanNodeHostedSkills", () => {
     const invalidDir = path.join(root, "invalid");
     fs.mkdirSync(invalidDir);
     fs.writeFileSync(path.join(invalidDir, "SKILL.md"), "# Missing frontmatter");
+    const malformedDir = path.join(root, "malformed");
+    fs.mkdirSync(malformedDir);
+    const malformedFile = path.join(malformedDir, "SKILL.md");
+    fs.writeFileSync(
+      malformedFile,
+      "---\nname: [malformed\ndescription: Malformed frontmatter\n---\n",
+    );
     writeSkill(root, "oversized", "Oversized", "x".repeat(64 * 1024));
     const mismatchedDir = path.join(root, "folder-name");
     fs.mkdirSync(mismatchedDir);
@@ -95,9 +158,28 @@ describe("scanNodeHostedSkills", () => {
     const skills = scanNodeHostedSkills({ skillsDir: root, warn });
 
     expect(skills.map((skill) => skill.name)).toEqual(["valid-skill"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid or missing frontmatter"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("description is required"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(malformedFile));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("BAD_INDENT"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeds 65536 bytes"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("directory, name, and frontmatter"));
+  });
+
+  it("does not inspect nested skills after rejecting the named candidate", () => {
+    const root = createRoot();
+    const candidateDir = path.join(root, "candidate");
+    fs.mkdirSync(path.join(candidateDir, "nested"), { recursive: true });
+    const candidateFile = path.join(candidateDir, "SKILL.md");
+    fs.writeFileSync(candidateFile, "# Missing frontmatter\n");
+    const nestedFile = path.join(candidateDir, "nested", "SKILL.md");
+    fs.writeFileSync(nestedFile, "---\nname: [nested\ndescription: Malformed nested skill\n---\n");
+    const warn = vi.fn();
+
+    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([]);
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(nestedFile));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`${candidateFile}): description is required`),
+    );
   });
 
   it("rejects a root-level skill because its node locator is not representable", () => {

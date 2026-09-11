@@ -1,21 +1,20 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.ChatCacheDatabase
-import ai.openclaw.app.chat.RoomChatCommandOutbox
-import ai.openclaw.app.gateway.DeviceAuthStore
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
+import ai.openclaw.app.wear.GoogleWearMessageSender
+import ai.openclaw.app.wear.GoogleWearPeerResolver
+import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearRealtimeChannelRegistry
 import android.app.Application
 import android.content.res.Configuration
 import android.os.StrictMode
-import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Android Application singleton that owns process-wide secure prefs and lazy NodeRuntime startup.
@@ -26,25 +25,73 @@ class NodeApp : Application() {
   // System share senders can create overlapping Activity tasks; keep one bounded process queue.
   internal val chatShareDraftSeq = AtomicLong()
   internal val chatShareDraftQueue = ChatShareDraftQueue()
+  internal val conversationNotificationLaunchStore = ConversationNotificationLaunchStore()
+  internal val permissionRequester by lazy { PermissionRequester(this) }
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+  private val nodeServiceControlLock = Any()
+
+  private class NodeServiceIntent
+
+  private val nodeServiceIntent = AtomicReference<NodeServiceIntent?>(NodeServiceIntent())
+  internal val nodeServiceStartAllowed: Boolean get() = nodeServiceIntent.get() != null
+
+  internal val wearProxyBridge: WearProxyBridge by lazy {
+    WearProxyBridge(
+      scope = runtimeScope,
+      sender = GoogleWearMessageSender(this),
+      peerResolver = GoogleWearPeerResolver(this),
+      handleRequest = { sourceNodeId, request ->
+        ensureBackgroundRuntime().handleWearProxyRequest(sourceNodeId, request)
+      },
+    )
+  }
+
+  internal val wearRealtimeChannels: WearRealtimeChannelRegistry by lazy {
+    WearRealtimeChannelRegistry(this, runtimeScope)
+  }
 
   /**
    * Returns the single NodeRuntime for this process, creating it on first use.
    */
-  fun ensureRuntime(): NodeRuntime =
-    synchronized(runtimeLock) {
-      runtimeInstance ?: NodeRuntime(this, prefs).also { runtimeInstance = it }
-    }
+  fun ensureRuntime(): NodeRuntime = ensureRuntime(initialForeground = true)
 
   /** Creates a cold-process runtime with foreground-only capabilities disabled before publication. */
-  internal fun ensureBackgroundRuntime(): NodeRuntime =
+  internal fun ensureBackgroundRuntime(): NodeRuntime = ensureRuntime(initialForeground = false)
+
+  private fun ensureRuntime(initialForeground: Boolean): NodeRuntime =
     synchronized(runtimeLock) {
       runtimeInstance
-        ?: NodeRuntime(this, prefs, initialForeground = false).also { runtimeInstance = it }
+        ?: NodeRuntime(this, prefs, initialForeground = initialForeground).also {
+          runtimeInstance = it
+          disconnectIfStopped(it)
+        }
     }
+
+  internal fun updateNodeServiceIntent(
+    allowStart: Boolean,
+    updateService: () -> Unit,
+  ): () -> Boolean {
+    val intent =
+      synchronized(nodeServiceControlLock) {
+        val intent = if (allowStart) nodeServiceIntent.get() ?: NodeServiceIntent() else null
+        nodeServiceIntent.set(intent)
+        if (!allowStart) runtimeScope.launch { peekRuntime()?.let(::disconnectIfStopped) }
+        updateService()
+        intent
+      }
+    return { intent != null && nodeServiceIntent.get() === intent }
+  }
+
+  private fun disconnectIfStopped(runtime: NodeRuntime) {
+    synchronized(nodeServiceControlLock) {
+      // Resume wins over cleanup waiting for construction. Read the singleton before
+      // taking this lock; voice callbacks read only the atomic intent, never this lock.
+      if (!nodeServiceStartAllowed) runtime.disconnect()
+    }
+  }
 
   internal fun ensureScreenshotFixtureRuntime(): NodeRuntime =
     synchronized(runtimeLock) {
@@ -61,46 +108,18 @@ class NodeApp : Application() {
    */
   fun peekRuntime(): NodeRuntime? = synchronized(runtimeLock) { runtimeInstance }
 
-  /** Disconnects the current or concurrently constructing runtime without blocking the caller. */
-  internal fun disconnectRuntimeAsync() {
-    // The process-owned scope outlives a stopping service, so cancellation cannot
-    // strand an Activity-created runtime that the service has not observed yet.
-    runtimeScope.launch { peekRuntime()?.disconnect() }
+  internal fun launchRuntimeTask(block: suspend () -> Unit) {
+    runtimeScope.launch { block() }
   }
 
   /** Clears pairing auth without racing lazy process-runtime construction. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =
       synchronized(runtimeLock) {
-        runtimeInstance?.let { return@synchronized it }
-        // Keep runtime construction blocked through the direct purge: a runtime built from the old
-        // credentials could otherwise reconnect and rewrite device auth after this reset returns.
-        return runCatching { resetGatewaySetupAuthBeforeRuntime(stableId) }.getOrDefault(false)
+        runtimeInstance
+          ?: NodeRuntime.forGatewayAuthReset(this, prefs).also { runtimeInstance = it }
       }
     return runtime.resetGatewaySetupAuth(stableId)
-  }
-
-  private fun resetGatewaySetupAuthBeforeRuntime(stableId: String): Boolean {
-    val gatewayId = stableId.trim().takeIf { it.isNotEmpty() } ?: return false
-    val database = ChatCacheDatabase.open(this)
-    try {
-      runBlocking {
-        database.withTransaction {
-          database.dao().deleteMessages(gatewayId)
-          database.dao().deleteSessions(gatewayId)
-          // The outbox owns command/attachment cascade deletes; nested transactions join this one.
-          RoomChatCommandOutbox(database).clearGateway(gatewayId)
-        }
-      }
-    } finally {
-      database.close()
-    }
-    prefs.clearGatewayCredentials(gatewayId)
-    val deviceId = DeviceIdentityStore(this).loadOrCreate().deviceId
-    val deviceAuthStore = DeviceAuthStore(prefs)
-    deviceAuthStore.clearToken(gatewayId, deviceId, "node")
-    deviceAuthStore.clearToken(gatewayId, deviceId, "operator")
-    return true
   }
 
   override fun onCreate() {
@@ -126,8 +145,8 @@ class NodeApp : Application() {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
-    // The process runtime survives Activity recreation, so retained text and
-    // serialized Home Canvas state need an explicit locale refresh signal.
+    // The process runtime survives Activity recreation, so retained text needs an
+    // explicit locale refresh signal.
     NativeStringResources.setConfigurationLocales(newConfig)
     notifyNativeLocaleChanged()
   }

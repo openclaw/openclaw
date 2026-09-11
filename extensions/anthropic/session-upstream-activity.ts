@@ -1,18 +1,19 @@
 import fs from "node:fs/promises";
+import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   classifyClaudeCliHistoryMessage,
   classifyClaudeCliHistoryLine,
+  isExternalUserText,
   type SessionCatalogContinueProviderResult,
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
-export const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
+const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 
-export async function link(
+async function link(
   sessionKey: string,
   hostId: string,
   threadId: string,
@@ -40,7 +41,7 @@ export async function link(
   }
 }
 
-export function linkRemote(
+function linkRemote(
   sessionKey: string,
   nodeId: string,
   threadId: string,
@@ -101,19 +102,10 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
     return undefined;
   }
   const offset = probe.marker.offset ?? probe.marker.size;
-  return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
+  return asSafeIntegerInRange(offset, { min: 0 });
 }
 
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
-function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
-  const normalized = text === undefined ? "" : normalizeUserText(text);
-  return !probe.ownRecentUserTexts.includes(normalized);
-}
-
-export async function checkClaudeSessionUpstreamActivity(
+async function checkClaudeSessionUpstreamActivity(
   probe: SessionUpstreamProbe,
 ): Promise<SessionUpstreamActivity | undefined> {
   if (probe.upstreamKind !== "claude-cli") {
@@ -141,9 +133,7 @@ export async function checkClaudeSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
-    const buffer = Buffer.allocUnsafe(readLength);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, markerOffset);
-    const tail = buffer.subarray(0, bytesRead);
+    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
     const lastNewline = tail.lastIndexOf(0x0a);
     if (lastNewline < 0) {
       // Cursor movement requires a complete classified row. A row beyond the

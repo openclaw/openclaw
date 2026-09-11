@@ -1,29 +1,58 @@
 package ai.openclaw.app.chat
 
-import android.content.Context
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
-import androidx.room.withTransaction
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.room3.Dao
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.withWriteTransaction
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
-/** Upper bound of cached session rows per gateway; oldest list positions are evicted on write. */
+/** Upper bound of cached session rows per gateway across every agent owner. */
 internal const val MAX_CACHED_SESSIONS = 50
-
-internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
 
 /** Upper bound of cached transcript rows per session; only the newest messages are kept. */
 internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
+
+@Serializable
+private data class CachedMessageContent(
+  val type: String,
+  val text: String? = null,
+  val mimeType: String? = null,
+  val fileName: String? = null,
+  val artifactId: String? = null,
+  val url: String? = null,
+  val openUrl: String? = null,
+  val alt: String? = null,
+  val width: Int? = null,
+  val height: Int? = null,
+  val sizeBytes: Long? = null,
+  val durationMs: Long? = null,
+  val playback: String? = null,
+  val toolActivity: ChatToolActivity? = null,
+)
+
+@Serializable
+private data class CachedMessagePayload(
+  val content: List<CachedMessageContent>,
+  val provenance: ChatMessageProvenance? = null,
+  @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
+  val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
+)
 
 /**
  * Read-only offline cache of chat sessions and transcripts.
@@ -33,28 +62,43 @@ internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
  * session-list window so its transcript remains available offline.
  */
 interface ChatTranscriptCache {
-  suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry>
+  suspend fun loadLastDefaultAgentId(gatewayId: String): String?
+
+  suspend fun saveLastDefaultAgentId(
+    gatewayId: String,
+    agentId: String,
+  )
+
+  suspend fun loadSessions(
+    gatewayId: String,
+    agentId: String,
+  ): List<ChatSessionEntry>
 
   suspend fun loadTranscript(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   ): List<ChatMessage>
 
   suspend fun saveSessions(
     gatewayId: String,
+    agentId: String,
     sessions: List<ChatSessionEntry>,
     retainedSessionKey: String? = null,
   )
 
   suspend fun saveTranscript(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
   suspend fun deleteSession(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   )
 
@@ -62,171 +106,161 @@ interface ChatTranscriptCache {
   suspend fun clearGateway(gatewayId: String)
 }
 
-@Entity(tableName = "cached_sessions", primaryKeys = ["gatewayId", "sessionKey"])
+@Entity(tableName = "cached_sessions", primaryKeys = ["gatewayId", "agentId", "sessionKey"])
 internal data class CachedSessionEntity(
   val gatewayId: String,
+  val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
+  val status: String?,
+  val startedAt: Long?,
+  val endedAt: Long?,
+  val runtimeMs: Long?,
+  val outputTokens: Long?,
+  val hasRunMetadata: Boolean,
   // Preserves gateway list order so offline session rows render in the familiar order.
   val rowOrder: Int,
 )
 
-@Entity(tableName = "cached_messages", primaryKeys = ["gatewayId", "sessionKey", "rowOrder"])
+@Entity(tableName = "cached_messages", primaryKeys = ["gatewayId", "agentId", "sessionKey", "rowOrder"])
 internal data class CachedMessageEntity(
   val gatewayId: String,
+  val agentId: String,
   val sessionKey: String,
   val rowOrder: Int,
   val role: String,
-  // JSON array of text part strings; attachments/binary parts are never persisted.
+  // JSON array of text and managed-media references; attachment bytes are never persisted.
   val textPartsJson: String,
   val timestampMs: Long?,
   // Kept so live history reconciliation can match cached rows by identity key.
   val idempotencyKey: String?,
 )
 
+@Entity(tableName = "cached_gateway_owners", primaryKeys = ["gatewayId"])
+internal data class CachedGatewayOwnerEntity(
+  val gatewayId: String,
+  val agentId: String,
+)
+
 @Dao
 internal interface ChatCacheDao {
-  @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId ORDER BY rowOrder ASC")
-  suspend fun sessions(gatewayId: String): List<CachedSessionEntity>
+  @Query("SELECT agentId FROM cached_gateway_owners WHERE gatewayId = :gatewayId")
+  suspend fun lastDefaultAgentId(gatewayId: String): String?
 
-  @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertGatewayOwner(row: CachedGatewayOwnerEntity)
+
+  @Query("DELETE FROM cached_gateway_owners WHERE gatewayId = :gatewayId")
+  suspend fun deleteGatewayOwner(gatewayId: String)
+
+  @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId ORDER BY rowOrder ASC")
+  suspend fun sessions(
+    gatewayId: String,
+    agentId: String,
+  ): List<CachedSessionEntity>
+
+  @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey = :sessionKey")
   suspend fun session(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   ): CachedSessionEntity?
 
   @Query(
-    "SELECT * FROM cached_messages WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey ORDER BY rowOrder ASC",
+    "SELECT * FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId " +
+      "AND sessionKey = :sessionKey ORDER BY rowOrder ASC",
   )
   suspend fun messages(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   ): List<CachedMessageEntity>
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertSessions(rows: List<CachedSessionEntity>)
 
-  @Insert(onConflict = OnConflictStrategy.IGNORE)
-  suspend fun insertSessionStub(row: CachedSessionEntity)
-
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertMessages(rows: List<CachedMessageEntity>)
 
+  @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId")
+  suspend fun deleteSessions(
+    gatewayId: String,
+    agentId: String,
+  )
+
   @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId")
-  suspend fun deleteSessions(gatewayId: String)
+  suspend fun deleteSessionsForGateway(gatewayId: String)
 
   @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId")
   suspend fun deleteMessages(gatewayId: String)
 
-  @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
+  @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey = :sessionKey")
   suspend fun deleteSessionRow(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   )
 
-  @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
+  @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey = :sessionKey")
   suspend fun deleteTranscript(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   )
 
-  @Query("SELECT COALESCE(MAX(rowOrder), -1) + 1 FROM cached_sessions WHERE gatewayId = :gatewayId")
-  suspend fun nextSessionRowOrder(gatewayId: String): Int
+  @Query("SELECT COALESCE(MAX(rowOrder), -1) + 1 FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId")
+  suspend fun nextSessionRowOrder(
+    gatewayId: String,
+    agentId: String,
+  ): Int
 
   // Keeps the just-written session even when the cache is full: without the exclusion, a stub
   // inserted at the highest rowOrder would be evicted immediately and deep-session transcripts
   // could never be cached once MAX_CACHED_SESSIONS rows exist.
   @Query(
-    "DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey != :keepSessionKey AND sessionKey NOT IN " +
-      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey != :keepSessionKey " +
+    "DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId " +
+      "AND sessionKey != :keepSessionKey AND sessionKey NOT IN " +
+      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey != :keepSessionKey " +
       "ORDER BY rowOrder ASC LIMIT :keep)",
   )
   suspend fun evictSessionsBeyondKeeping(
     gatewayId: String,
+    agentId: String,
     keepSessionKey: String,
     keep: Int,
   )
 
-  // Transcripts must never outlive their session row; this keeps total cache size bounded
-  // by MAX_CACHED_SESSIONS * MAX_CACHED_MESSAGES_PER_SESSION rows per gateway.
+  // Owner-local cleanup runs before the gateway-wide bound below; transcripts never outlive
+  // their corresponding session row.
   @Query(
-    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND sessionKey NOT IN " +
-      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId)",
+    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey NOT IN " +
+      "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId)",
   )
-  suspend fun evictOrphanedTranscripts(gatewayId: String)
-}
+  suspend fun evictOrphanedTranscripts(
+    gatewayId: String,
+    agentId: String,
+  )
 
-@Database(
-  entities = [
-    CachedSessionEntity::class,
-    CachedMessageEntity::class,
-    OutboxCommandEntity::class,
-    OutboxAttachmentEntity::class,
-    OutboxAttachmentChunkEntity::class,
-  ],
-  version = 4,
-  exportSchema = false,
-)
-internal abstract class ChatCacheDatabase : RoomDatabase() {
-  abstract fun dao(): ChatCacheDao
+  // A gateway can expose many agent owners. Cap their aggregate cache by recent writes so
+  // switching owners cannot grow the disposable session/transcript tables without bound.
+  @Query(
+    "DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND rowid NOT IN " +
+      "(SELECT rowid FROM cached_sessions WHERE gatewayId = :gatewayId ORDER BY rowid DESC LIMIT :keep)",
+  )
+  suspend fun evictGatewaySessionsBeyond(
+    gatewayId: String,
+    keep: Int,
+  )
 
-  abstract fun outboxDao(): ChatOutboxDao
-
-  companion object {
-    internal val MIGRATION_2_3 =
-      object : Migration(2, 3) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
-          // already have run, so upgrading must park them alongside crash-interrupted sends.
-          db.execSQL(
-            "UPDATE outbox_commands SET status = ?, lastError = ? " +
-              "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
-            arrayOf<Any?>(
-              ChatOutboxStatus.Failed.dbValue,
-              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-              ChatOutboxStatus.Sending.dbValue,
-              ChatOutboxStatus.Queued.dbValue,
-            ),
-          )
-        }
-      }
-
-    internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
-          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
-          // them park for explicit retry instead of silently replaying on the next reconnect.
-          db.execSQL(
-            "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
-            arrayOf<Any?>(OUTBOX_GATED_EPOCH_NEVER, ChatOutboxStatus.Queued.dbValue),
-          )
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
-              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
-              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-          )
-          db.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
-          db.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
-              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-          )
-        }
-      }
-
-    fun open(
-      context: Context,
-      name: String = CHAT_TRANSCRIPT_CACHE_DB_NAME,
-    ): ChatCacheDatabase =
-      Room
-        .databaseBuilder(context, ChatCacheDatabase::class.java, name)
-        .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
-        // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
-        // supported bump needs an explicit migration; destructive fallback remains for v1 only.
-        .fallbackToDestructiveMigrationFrom(true, 1)
-        .build()
-  }
+  @Query(
+    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND NOT EXISTS " +
+      "(SELECT 1 FROM cached_sessions WHERE cached_sessions.gatewayId = cached_messages.gatewayId " +
+      "AND cached_sessions.agentId = cached_messages.agentId " +
+      "AND cached_sessions.sessionKey = cached_messages.sessionKey)",
+  )
+  suspend fun evictGatewayOrphanedTranscripts(gatewayId: String)
 }
 
 /**
@@ -234,154 +268,318 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
  * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
-  private val database: ChatCacheDatabase,
+  private val database: GatewayCacheDatabase,
 ) : ChatTranscriptCache {
-  private val json = Json
-  private val textPartsSerializer = ListSerializer(String.serializer())
+  private val json = Json { ignoreUnknownKeys = true }
+  private val cachedPayloadSerializer = CachedMessagePayload.serializer()
+  private val cachedContentSerializer = ListSerializer(CachedMessageContent.serializer())
+  private val legacyTextPartsSerializer = ListSerializer(String.serializer())
 
-  override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> {
+  override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
+    val gateway = scopedGatewayId(gatewayId) ?: return null
+    return database
+      .dao()
+      .lastDefaultAgentId(gateway)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+  }
+
+  override suspend fun saveLastDefaultAgentId(
+    gatewayId: String,
+    agentId: String,
+  ) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
+    val agent = scopedAgentId(agentId) ?: return
+    database.dao().upsertGatewayOwner(CachedGatewayOwnerEntity(gatewayId = gateway, agentId = agent))
+  }
+
+  override suspend fun loadSessions(
+    gatewayId: String,
+    agentId: String,
+  ): List<ChatSessionEntry> {
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
-    return database.dao().sessions(gateway).map { row ->
+    val agent = scopedAgentId(agentId) ?: return emptyList()
+    return database.dao().sessions(gateway, agent).map { row ->
       ChatSessionEntry(
         key = row.sessionKey,
         updatedAtMs = row.updatedAtMs,
+        ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
+        status = row.status,
+        startedAt = row.startedAt,
+        endedAt = row.endedAt,
+        runtimeMs = row.runtimeMs,
+        outputTokens = row.outputTokens,
+        hasRunMetadata = row.hasRunMetadata,
       )
     }
   }
 
   override suspend fun loadTranscript(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   ): List<ChatMessage> {
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
+    val agent = scopedAgentId(agentId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
-    return database.dao().messages(gateway, key).mapNotNull { row ->
+    return database.dao().messages(gateway, agent, key).mapNotNull { row ->
       val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
+      val payload = decodeCachedMessage(row.textPartsJson)
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
-        content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
+        content =
+          payload.content.map { part ->
+            ChatMessageContent(
+              type = part.type,
+              text = part.text,
+              mimeType = part.mimeType,
+              fileName = part.fileName,
+              artifactId = part.artifactId,
+              url = part.url,
+              openUrl = part.openUrl,
+              alt = part.alt,
+              width = part.width,
+              height = part.height,
+              sizeBytes = part.sizeBytes,
+              durationMs = part.durationMs,
+              playback = part.playback,
+              toolActivity = part.toolActivity,
+            )
+          },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
+        // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
+        entryId = null,
+        provenance = payload.provenance,
+        transcriptMarker = payload.transcriptMarker,
+        senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
+        runId = payload.runId,
+        steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
       )
     }
   }
 
   override suspend fun saveSessions(
     gatewayId: String,
+    agentId: String,
     sessions: List<ChatSessionEntry>,
     retainedSessionKey: String?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
+    val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
       val retainedRow =
         if (needsRetainedRow) {
-          retainedEntry?.let { entry ->
-            CachedSessionEntity(
-              gatewayId = gateway,
-              sessionKey = entry.key,
-              displayName = entry.displayName,
-              updatedAtMs = entry.updatedAtMs,
-              rowOrder = 0,
-            )
-          } ?: dao.session(gateway, retainedKey)
+          retainedEntry?.toCachedSession(gateway, agent, rowOrder = 0)
+            ?: dao.session(gateway, agent, retainedKey)
         } else {
           null
         }
       val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
       val rows =
         sessions.take(listedSessionLimit).mapIndexed { index, session ->
-          CachedSessionEntity(
-            gatewayId = gateway,
-            sessionKey = session.key,
-            displayName = session.displayName,
-            updatedAtMs = session.updatedAtMs,
-            rowOrder = index,
-          )
+          session.toCachedSession(gateway, agent, rowOrder = index)
         }
-      dao.deleteSessions(gateway)
+      dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
       retainedRow?.let { dao.insertSessions(listOf(it.copy(rowOrder = rows.size))) }
-      dao.evictOrphanedTranscripts(gateway)
+      dao.evictOrphanedTranscripts(gateway, agent)
+      dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
+      dao.evictGatewayOrphanedTranscripts(gateway)
     }
   }
 
   override suspend fun saveTranscript(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
+    val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
-    // Text rows only: attachment/binary parts are dropped, and messages without any text are skipped.
+    // Persist small managed-media references, never attachment bytes. Cards remain visible offline
+    // even though their short-lived download capability must be reacquired after reconnecting.
     val rows =
       messages
         .mapNotNull { message ->
           val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
-          val textParts = message.content.filter { it.type == "text" }.mapNotNull { it.text }
-          if (textParts.isEmpty()) return@mapNotNull null
-          Triple(message, role, textParts)
+          val content =
+            message.content.mapNotNull { part ->
+              val isImage = part.type == "image"
+              when {
+                part.type == "text" && !part.text.isNullOrBlank() -> {
+                  CachedMessageContent(type = "text", text = part.text)
+                }
+
+                part.toolActivity != null -> {
+                  CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
+                }
+
+                (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
+                  part.type == "audio" || part.type == "video" || part.type == "file" -> {
+                  CachedMessageContent(
+                    type = part.type,
+                    mimeType = part.mimeType,
+                    fileName = part.fileName,
+                    artifactId = part.artifactId,
+                    url = part.url,
+                    openUrl = part.openUrl,
+                    alt = part.alt,
+                    width = part.width,
+                    height = part.height,
+                    sizeBytes = part.sizeBytes,
+                    durationMs = part.durationMs.takeUnless { isImage },
+                    playback = part.playback.takeUnless { isImage },
+                  )
+                }
+
+                else -> {
+                  null
+                }
+              }
+            }
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null || message.turnBoundary
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
+          val payload =
+            CachedMessagePayload(
+              content = content,
+              provenance = message.provenance,
+              transcriptMarker = message.transcriptMarker,
+              senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
+              runId = message.runId,
+              steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
+            )
+          Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
-        .mapIndexed { index, (message, role, textParts) ->
+        .mapIndexed { index, (message, role, payload) ->
           CachedMessageEntity(
             gatewayId = gateway,
+            agentId = agent,
             sessionKey = key,
             rowOrder = index,
             role = role,
-            textPartsJson = json.encodeToString(textPartsSerializer, textParts),
+            textPartsJson = json.encodeToString(cachedPayloadSerializer, payload),
             timestampMs = message.timestampMs,
             idempotencyKey = message.idempotencyKey,
           )
         }
     val dao = database.dao()
-    database.withTransaction {
-      dao.deleteTranscript(gateway, key)
+    database.withWriteTransaction {
+      dao.deleteTranscript(gateway, agent, key)
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
       // switch); keep a stub row so the transcript stays reachable, then re-apply the bounds.
-      dao.insertSessionStub(
-        CachedSessionEntity(
-          gatewayId = gateway,
-          sessionKey = key,
-          displayName = null,
-          updatedAtMs = null,
-          rowOrder = dao.nextSessionRowOrder(gateway),
+      val currentSession = dao.session(gateway, agent, key)
+      // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
+      // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
+      dao.insertSessions(
+        listOf(
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
-      dao.evictSessionsBeyondKeeping(gateway, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
-      dao.evictOrphanedTranscripts(gateway)
+      dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
+      dao.evictOrphanedTranscripts(gateway, agent)
+      dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
+      dao.evictGatewayOrphanedTranscripts(gateway)
     }
   }
 
   override suspend fun clearGateway(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteMessages(gateway)
-      dao.deleteSessions(gateway)
+      dao.deleteSessionsForGateway(gateway)
+      dao.deleteGatewayOwner(gateway)
     }
   }
 
   override suspend fun deleteSession(
     gatewayId: String,
+    agentId: String,
     sessionKey: String,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
+    val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
-    database.withTransaction {
-      dao.deleteSessionRow(gateway, key)
-      dao.deleteTranscript(gateway, key)
+    database.withWriteTransaction {
+      dao.deleteSessionRow(gateway, agent, key)
+      dao.deleteTranscript(gateway, agent, key)
     }
   }
 
   private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }
 
-  private fun decodeTextParts(encoded: String): List<String> = runCatching { json.decodeFromString(textPartsSerializer, encoded) }.getOrDefault(emptyList())
+  private fun scopedAgentId(agentId: String): String? = agentId.trim().takeIf { it.isNotEmpty() }
+
+  private fun decodeCachedMessage(encoded: String): CachedMessagePayload =
+    runCatching { json.decodeFromString(cachedPayloadSerializer, encoded) }.getOrElse {
+      // Offline transcript browsing is shipped behavior. Keep the previous string-array rows
+      // readable until a live history refresh naturally rewrites this disposable cache entry.
+      val content =
+        runCatching { json.decodeFromString(cachedContentSerializer, encoded) }.getOrElse {
+          runCatching { json.decodeFromString(legacyTextPartsSerializer, encoded) }
+            .getOrDefault(emptyList())
+            .map { CachedMessageContent(type = "text", text = it) }
+        }
+      CachedMessagePayload(content = content)
+    }
 }
+
+private fun ChatSessionEntry.toCachedSession(
+  gatewayId: String,
+  agentId: String,
+  rowOrder: Int,
+): CachedSessionEntity =
+  CachedSessionEntity(
+    gatewayId = gatewayId,
+    agentId = agentId,
+    sessionKey = key,
+    displayName = displayName,
+    color = color,
+    updatedAtMs = updatedAtMs,
+    status = status,
+    startedAt = startedAt,
+    endedAt = endedAt,
+    runtimeMs = runtimeMs,
+    outputTokens = outputTokens,
+    hasRunMetadata = hasRunMetadata,
+    rowOrder = rowOrder,
+  )

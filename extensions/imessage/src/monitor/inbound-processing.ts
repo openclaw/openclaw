@@ -1,7 +1,8 @@
 // Imessage plugin module implements inbound processing behavior.
 import {
-  buildMentionRegexes,
   buildChannelInboundEventContext,
+  buildMentionRegexes,
+  formatMediaPlaceholderText,
   type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
   formatInboundEnvelope,
@@ -10,7 +11,10 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
-  toInboundMediaFacts,
+  resolveInboundSupplementalSenderAllowed,
+  toInboundMediaFactsWithMetadata,
+  type ChannelInboundMediaInput,
+  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelIngressResolver,
@@ -18,19 +22,21 @@ import {
   type ChannelIngressIdentityDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveIMessageAccount } from "../accounts.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   isKnownFromMeIMessageMessageId,
@@ -41,6 +47,7 @@ import {
   isAllowedIMessageReplyContextSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
+  type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
 import {
@@ -176,7 +183,9 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   if (!body) {
     return null;
   }
-  const id = normalizeReplyField(message.reply_to_id);
+  const id =
+    normalizeReplyField(message.thread_originator_guid) ??
+    normalizeReplyField(message.reply_to_guid);
   const sender = normalizeReplyField(message.reply_to_sender);
   return { body, id, sender };
 }
@@ -248,12 +257,13 @@ function hasIMessageEchoMatch(params: {
   echoCache: {
     has: (
       scope: string,
-      lookup: { text?: string; messageId?: string },
+      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
       options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
   scope: string | readonly string[];
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageIds: string[];
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
@@ -277,13 +287,13 @@ function hasIMessageEchoMatch(params: {
       }
     }
     const fallbackMessageId = params.messageIds[0];
-    if (!params.text && !fallbackMessageId) {
+    if (!params.text && !params.media && !fallbackMessageId) {
       continue;
     }
     if (
       params.echoCache.has(
         scope,
-        { text: params.text, messageId: fallbackMessageId },
+        { text: params.text, media: params.media, messageId: fallbackMessageId },
         {
           skipIdShortCircuit: params.skipIdShortCircuit,
           includePendingText: params.includePendingText,
@@ -344,6 +354,7 @@ function resolveIMessageGroupSystemPrompt(params: {
 
 type IMessageInboundDispatchDecision = {
   kind: "dispatch";
+  channelIngress?: Awaited<ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>>;
   isGroup: boolean;
   chatId?: number;
   chatGuid?: string;
@@ -353,6 +364,7 @@ type IMessageInboundDispatchDecision = {
   sender: string;
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
+  bindingResolution: ConfiguredBindingRouteResult["bindingResolution"];
   bodyText: string;
   agentBodyText?: string;
   createdAt?: number;
@@ -394,6 +406,7 @@ export async function resolveIMessageInboundDecision(params: {
   opts?: Pick<MonitorIMessageOpts, "requireMention">;
   messageText: string;
   bodyText: string;
+  mediaFacts?: readonly MediaPlaceholderTextFact[];
   allowFrom: string[];
   groupAllowFrom: string[];
   allowLegacyConversationAllowFromForGroup?: boolean;
@@ -405,7 +418,7 @@ export async function resolveIMessageInboundDecision(params: {
   echoCache?: {
     has: (
       scope: string,
-      lookup: { text?: string; messageId?: string },
+      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
       options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
@@ -427,6 +440,7 @@ export async function resolveIMessageInboundDecision(params: {
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
+  const mediaFacts = params.mediaFacts ?? [];
   const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
@@ -503,11 +517,12 @@ export async function resolveIMessageInboundDecision(params: {
       });
       if (
         params.echoCache &&
-        (bodyText || inboundMessageId) &&
+        (bodyText || inboundMessageId || mediaFacts.length > 0) &&
         hasIMessageEchoMatch({
           echoCache: params.echoCache,
           scope: echoScope,
           text: bodyText || undefined,
+          media: mediaFacts[0],
           messageIds: inboundMessageIds,
           skipIdShortCircuit: !hasInboundGuid,
           includePendingText: true,
@@ -529,6 +544,14 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
+  const { route, bindingResolution } = resolveIMessageConversationRoute({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    isGroup,
+    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    sender,
+    chatId,
+  });
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
     accountId: params.accountId,
@@ -550,6 +573,15 @@ export async function resolveIMessageInboundDecision(params: {
         ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
         : normalizeIMessageHandle(sender),
     },
+    ...(reactionContext
+      ? {}
+      : {
+          contextBinding: {
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            inboundEventKind: "user_request",
+          },
+        }),
     dmPolicy: normalizeDmPolicy(params.dmPolicy),
     groupPolicy: normalizeGroupPolicy(params.groupPolicy),
     policy: { groupAllowFromFallbackToAllowFrom: false },
@@ -600,14 +632,6 @@ export async function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
-  const route = resolveIMessageConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    isGroup,
-    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
-    sender,
-    chatId,
-  });
   if (reactionContext) {
     const notificationMode = params.reactionNotifications ?? "own";
     if (notificationMode === "off") {
@@ -674,7 +698,7 @@ export async function resolveIMessageInboundDecision(params: {
     };
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
-  if (!bodyText) {
+  if (!bodyText && mediaFacts.length === 0) {
     return { kind: "drop", reason: "empty body" };
   }
 
@@ -692,7 +716,7 @@ export async function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  if (params.echoCache && (messageText || inboundMessageId)) {
+  if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
       isGroup,
@@ -706,6 +730,7 @@ export async function resolveIMessageInboundDecision(params: {
         echoCache: params.echoCache,
         scope: echoScope,
         text: bodyText || undefined,
+        media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
       })
@@ -737,18 +762,21 @@ export async function resolveIMessageInboundDecision(params: {
   const replyContextAllowFrom = Array.from(
     new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
   );
-  const replySenderAllowed =
-    !isGroup || replyContextAllowFrom.length === 0
-      ? true
-      : replyContext?.sender
+  const replySenderAllowed = resolveInboundSupplementalSenderAllowed({
+    isGroup,
+    groupPolicy: replyContextAllowFrom.length === 0 ? "open" : "allowlist",
+    allowFrom: replyContextAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      replyContext?.sender
         ? isAllowedIMessageReplyContextSender({
-            allowFrom: replyContextAllowFrom,
+            allowFrom: [...allowFrom],
             sender: replyContext.sender,
             chatId,
             chatGuid,
             chatIdentifier,
           })
-        : false;
+        : false,
+  });
   const visibleReply = filterChannelInboundQuoteContext(
     contextVisibilityMode,
     replyContext
@@ -777,11 +805,9 @@ export async function resolveIMessageInboundDecision(params: {
     : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
-  const requireMention = resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "imessage",
-    accountId: params.accountId,
-    groupId,
+  const requireMention = resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
+    path: groupId ? [groupId] : [],
     requireMentionOverride: params.opts?.requireMention,
     overrideOrder: "before-config",
   });
@@ -824,7 +850,7 @@ export async function resolveIMessageInboundDecision(params: {
       entry: historyKey
         ? {
             sender: senderNormalized,
-            body: bodyText,
+            body: [bodyText, formatMediaPlaceholderText(mediaFacts)].filter(Boolean).join("\n"),
             timestamp: createdAt,
             messageId: params.message.id ? String(params.message.id) : undefined,
           }
@@ -847,6 +873,7 @@ export async function resolveIMessageInboundDecision(params: {
 
   return {
     kind: "dispatch",
+    channelIngress: accessDecision,
     isGroup,
     chatId,
     chatGuid,
@@ -856,6 +883,7 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     senderNormalized,
     route,
+    bindingResolution,
     bodyText,
     createdAt,
     replyContext: filteredReplyContext,
@@ -869,20 +897,19 @@ export async function resolveIMessageInboundDecision(params: {
 
 export async function buildIMessageInboundContext(params: {
   cfg: OpenClawConfig;
+  accountService: IMessageService | undefined;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
   envelopeOptions?: EnvelopeFormatOptions;
   previousTimestamp?: number;
   remoteHost?: string;
   media?: {
-    path?: string;
-    type?: string;
-    paths?: string[];
-    types?: Array<string | undefined>;
+    facts?: readonly ChannelInboundMediaInput[];
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmHistory?: IMessageDmHistoryContext;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   ctxPayload: FinalizedMsgContext;
   fromLabel: string;
@@ -921,12 +948,21 @@ export async function buildIMessageInboundContext(params: {
       }]\n${decision.replyContext.body}\n[/Replying]`
     : "";
 
+  const senderDisplayName = normalizeNonEmpty(params.message.sender_name ?? "");
+  const directConversationName =
+    senderDisplayName ??
+    normalizeNonEmpty(params.message.chat_name ?? "") ??
+    decision.senderNormalized;
+  const conversationName = decision.isGroup
+    ? (normalizeNonEmpty(params.message.chat_name ?? "") ?? undefined)
+    : directConversationName;
+
   const fromLabel = formatInboundFromLabel({
     isGroup: decision.isGroup,
     groupLabel: params.message.chat_name ?? undefined,
     groupId: chatId !== undefined ? String(chatId) : "unknown",
     groupFallback: "Group",
-    directLabel: decision.senderNormalized,
+    directLabel: directConversationName,
     directId: decision.sender,
   });
 
@@ -936,7 +972,7 @@ export async function buildIMessageInboundContext(params: {
     timestamp: decision.createdAt,
     body: `${decision.agentBodyText ?? decision.bodyText}${replySuffix}`,
     chatType: decision.isGroup ? "group" : "direct",
-    sender: { name: decision.senderNormalized, id: decision.sender },
+    sender: { name: senderDisplayName ?? decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
     envelope: envelopeOptions,
   });
@@ -964,17 +1000,21 @@ export async function buildIMessageInboundContext(params: {
     });
   }
 
+  const directService =
+    resolveIMessageDirectChatService(params.accountService, decision.chatGuid) ?? "auto";
   const imessageTo = decision.isGroup
     ? chatTarget || `imessage:${decision.sender}`
-    : buildDirectIMessageReplyTarget({
-        cfg: params.cfg,
-        accountId: decision.route.accountId,
-        sender: decision.sender,
-      });
-  // Async follow-ups can resume from the stored origin instead of the immediate
-  // reply target. Keep direct SMS origins service-qualified the same way as To,
-  // or the final resumed message can fall back to imessage:<phone>.
+    : `${directService}:${decision.sender}`;
+  // Async follow-ups need a service-qualified durable origin. Immediate direct replies use the
+  // provider's exact chat ID instead, so service auto-detection cannot erase the current binding.
   const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
+  const replyTarget = decision.isGroup
+    ? imessageTo
+    : chatId != null
+      ? `chat_id:${chatId}`
+      : decision.chatGuid
+        ? `chat_guid:${decision.chatGuid}`
+        : imessageTo;
   const inboundHistory =
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
@@ -985,18 +1025,11 @@ export async function buildIMessageInboundContext(params: {
           })
         : undefined;
 
-  const mediaInput =
-    params.media?.paths && params.media.paths.length > 0
-      ? params.media.paths.map((path, index) => ({
-          path,
-          url: path,
-          contentType: params.media?.types?.[index],
-        }))
-      : params.media?.path
-        ? [{ path: params.media.path, url: params.media.path, contentType: params.media.type }]
-        : undefined;
-  const media = toInboundMediaFacts(mediaInput);
-  const ctxPayload = buildChannelInboundEventContext({
+  const media = await toInboundMediaFactsWithMetadata(
+    params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
+  );
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: decision.channelIngress,
     channel: "imessage",
     supplemental: {
       quote: decision.replyContext
@@ -1015,20 +1048,30 @@ export async function buildIMessageInboundContext(params: {
     from: imessageFrom,
     sender: {
       id: decision.sender,
-      name: decision.senderNormalized,
+      name: senderDisplayName ?? decision.senderNormalized,
+      isSelf: params.message.is_from_me === true,
     },
     conversation: {
       kind: decision.isGroup ? "group" : "direct",
       id: chatId != null ? String(chatId) : decision.sender,
-      label: fromLabel,
+      ...(decision.isGroup && chatId == null
+        ? {}
+        : {
+            routePeer: {
+              kind: decision.isGroup ? ("group" as const) : ("direct" as const),
+              id: decision.isGroup ? String(chatId) : decision.senderNormalized,
+            },
+          }),
+      label: conversationName,
     },
     route: {
       agentId: decision.route.agentId,
+      dmScope: decision.route.dmScope,
       accountId: decision.route.accountId,
       routeSessionKey: decision.route.sessionKey,
     },
     reply: {
-      to: imessageTo,
+      to: replyTarget,
     },
     message: {
       body: combinedBody,
@@ -1037,6 +1080,7 @@ export async function buildIMessageInboundContext(params: {
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,
     },
+    sessionTranscript: { historyLimit: decision.isGroup ? params.historyLimit : 0 },
     access: {
       mentions: {
         canDetectMention: decision.isGroup,
@@ -1092,19 +1136,6 @@ function buildIMessageEchoScope(params: {
     scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
   }
   return scopes;
-}
-
-export function buildDirectIMessageReplyTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  sender: string;
-}): string {
-  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
-  const configuredService = account.config.service;
-  if (configuredService === "sms") {
-    return `sms:${params.sender}`;
-  }
-  return `imessage:${params.sender}`;
 }
 
 function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {

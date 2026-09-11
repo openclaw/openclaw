@@ -1,12 +1,12 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
-import { expectDefined, safeParseJson } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
-type CanvasSurface = "assistant_message";
+type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";
 
 type McpAppPreviewDescriptor = {
@@ -15,6 +15,7 @@ type McpAppPreviewDescriptor = {
   toolName?: string;
   uiResourceUri?: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 };
 
@@ -29,6 +30,7 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
+  boardWidgetName?: string;
   mcpApp?: McpAppPreviewDescriptor;
 };
 
@@ -67,6 +69,7 @@ function coerceMcpAppDescriptor(
   const toolName = getRecordStringField(record, "toolName");
   const uiResourceUri = getRecordStringField(record, "uiResourceUri");
   const toolCallId = getRecordStringField(record, "toolCallId");
+  const originSessionKey = getRecordStringField(record, "originSessionKey");
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -85,13 +88,14 @@ function coerceMcpAppDescriptor(
         toolName,
         uiResourceUri,
         toolCallId,
+        ...(originSessionKey && originSessionKey.length <= 512 ? { originSessionKey } : {}),
         ...(resultMetaState ? { resultMetaState } : {}),
       }
     : { viewId };
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" ? value : undefined;
+  return value === "assistant_message" || value === "node_panel" ? value : undefined;
 }
 
 function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
@@ -102,6 +106,10 @@ function normalizePreferredHeight(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
     : undefined;
+}
+
+export function isCanvasBoardWidgetName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
 function coerceCanvasPreview(
@@ -140,6 +148,10 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+  const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
+    ? requestedBoardWidgetName
+    : undefined;
   if (mcpAppViewId && viewId === mcpAppViewId) {
     return {
       kind: "canvas",
@@ -164,6 +176,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(boardWidgetName ? { boardWidgetName } : {}),
       ...(mcpApp ? { mcpApp } : {}),
     };
   }
@@ -249,7 +262,7 @@ export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = outputText ? asOptionalRecord(safeParseJson(outputText)) : undefined;
+  const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
   return coerceCanvasPreview(parsed);
 }
 
@@ -274,10 +287,17 @@ export function extractCanvasShortcodes(text: string | undefined): {
   const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
+    // Each regex starts a new ascending pass over the ordered fence spans.
+    let fenceIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(text))) {
       const start = match.index ?? 0;
-      if (fenceSpans.some((span) => start >= span.start && start < span.end)) {
+      let fence = fenceSpans[fenceIndex];
+      while (fence && start >= fence.end) {
+        fenceIndex += 1;
+        fence = fenceSpans[fenceIndex];
+      }
+      if (fence && start >= fence.start) {
         // Literal embed examples in code blocks must remain visible text.
         continue;
       }
@@ -313,7 +333,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
   }
   stripped += text.slice(cursor);
   return {
-    text: stripped.replace(/\n{3,}/g, "\n\n").trim(),
+    text: stripped,
     previews,
   };
 }

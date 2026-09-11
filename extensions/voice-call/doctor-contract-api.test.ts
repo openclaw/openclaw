@@ -12,7 +12,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
 import {
@@ -21,7 +21,7 @@ import {
   writeLegacyCallsJsonl,
 } from "./src/manager.test-harness.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./src/manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./src/runtime-state.js";
+import { setVoiceCallStateRuntime } from "./src/runtime-state.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -45,6 +45,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call doctor tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call doctor tests");
       }) as never,
     },
   });
@@ -109,7 +112,6 @@ describe("voice-call doctor state migration", () => {
         historyCallIds: history.map((entry) => entry.callId),
       };
     } finally {
-      clearVoiceCallStateRuntime();
       resetPluginStateStoreForTests();
       await fs.rm(warmStateDir, { recursive: true, force: true });
       await fs.rm(warmStorePath, { recursive: true, force: true });
@@ -125,7 +127,6 @@ describe("voice-call doctor state migration", () => {
   });
 
   afterEach(async () => {
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(storePath, { recursive: true, force: true });
@@ -219,7 +220,7 @@ describe("voice-call doctor state migration", () => {
       expect.stringContaining("Archived Voice Call call-log legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${sourcePath}.migrated`);
 
     const restored = loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-doctor")?.providerCallId).toBe("provider-doctor");
@@ -228,6 +229,76 @@ describe("voice-call doctor state migration", () => {
     const history = await getCallHistoryFromStore(storePath);
     expect(history).toHaveLength(1);
     expect(history[0]?.callId).toBe("call-doctor");
+  });
+
+  it("honors OPENCLAW_STATE_DIR for the default store", async () => {
+    const defaultStorePath = path.join(stateDir, "voice-calls");
+    const call = makePersistedCall({
+      callId: "call-isolated-state",
+      providerCallId: "provider-isolated-state",
+    });
+    writeLegacyCallsJsonl(defaultStorePath, [call]);
+
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            "voice-call": { config: {} },
+          },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("1 record")],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [
+        expect.stringContaining("Migrated 1 Voice Call call-log record"),
+        expect.stringContaining("Archived Voice Call call-log legacy source"),
+      ],
+      warnings: [],
+    });
+
+    expect(loadActiveCallsFromStore(defaultStorePath).activeCalls.has("call-isolated-state")).toBe(
+      true,
+    );
+  });
+
+  it("keeps literal $ patterns in home when resolving a tilde-configured store", async () => {
+    const dollarHome = path.join(stateDir, "home$&d");
+    const dollarStorePath = path.join(dollarHome, "dollar-store");
+    const call = makePersistedCall({
+      callId: "call-dollar-home",
+      providerCallId: "provider-dollar-home",
+    });
+    await fs.mkdir(dollarStorePath, { recursive: true });
+    writeLegacyCallsJsonl(dollarStorePath, [call]);
+    const dollarEnv = { ...process.env, HOME: dollarHome, OPENCLAW_STATE_DIR: stateDir };
+
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+    const params = {
+      config: {
+        plugins: {
+          entries: {
+            "voice-call": { config: { store: "~/dollar-store" } },
+          },
+        },
+      },
+      env: dollarEnv,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(dollarEnv),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("1 record")],
+    });
   });
 
   it("repairs the plugin-local SQLite schema without a legacy call log", async () => {
@@ -281,11 +352,15 @@ describe("voice-call doctor state migration", () => {
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: [
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
+        "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],
     });
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
+        expect.stringMatching(
+          /^Migrated Voice Call SQLite tables to SQLite STRICT typing \(\d+\)$/,
+        ),
       ],
       warnings: [],
     });
@@ -345,7 +420,7 @@ describe("voice-call doctor state migration", () => {
       "Skipped malformed Voice Call call-log line 2",
       "Left Voice Call call-log source in place because migration was incomplete",
     ]);
-    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await fs.access(sourcePath);
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
     expect(loadActiveCallsFromStore(storePath).activeCalls.has("call-valid")).toBe(true);
   });

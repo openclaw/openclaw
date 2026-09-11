@@ -1,6 +1,6 @@
 /** Tests bundle-MCP resume hash stability across loopback endpoint changes. */
 import { describe, expect, it } from "vitest";
-import { buildCrestodianToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
@@ -83,14 +83,14 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await second.cleanup?.();
   });
 
-  it("keeps Crestodian approval state out of the resume identity", async () => {
-    const prepare = async (options: Parameters<typeof buildCrestodianToolsMcpServerConfig>[0]) =>
+  it("keeps OpenClaw approval state out of the resume identity", async () => {
+    const prepare = async (options: Parameters<typeof buildSystemAgentToolsMcpServerConfig>[0]) =>
       await prepareCliBundleMcpConfig({
         enabled: true,
         mode: "claude-config-file",
         backend: { command: "node", args: ["./fake-claude.mjs"] },
         workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-        exclusiveConfig: buildCrestodianToolsMcpServerConfig(options),
+        exclusiveConfig: buildSystemAgentToolsMcpServerConfig(options),
       });
     const proposed = "proposal-sha256";
     const first = await prepare({ surface: "cli", proposalRef: {} });
@@ -108,6 +108,14 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     expect(first.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(first.mcpResumeHash).toBe(approval.mcpResumeHash);
     expect(approval.mcpResumeHash).not.toBe(otherSurface.mcpResumeHash);
+    const delegated = await prepare({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+    expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
+    expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
     const binding = {
       sessionId: "native-cli-session",
       authProfileId: "claude-cli:ops",
@@ -142,5 +150,6 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await first.cleanup?.();
     await approval.cleanup?.();
     await otherSurface.cleanup?.();
+    await delegated.cleanup?.();
   });
 });

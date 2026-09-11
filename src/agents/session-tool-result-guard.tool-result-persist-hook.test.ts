@@ -508,6 +508,11 @@ describe("tool_result_persist hook", () => {
         fullOutputPath: "/tmp/".concat("output/".repeat(400)),
         spilledChars: 2_000_000,
         spillTruncated: true,
+        spill: {
+          path: "/tmp/web-fetch-output",
+          chars: 2_000_000,
+          truncated: true,
+        },
         aggregated: "x".repeat(120_000),
         tail: "tail ".repeat(800),
         sessions: Array.from({ length: 10 }, (_, i) => ({
@@ -526,6 +531,11 @@ describe("tool_result_persist hook", () => {
     expect(details.status).toMatchObject({ token: "***" });
     expect(details.spilledChars).toBe(2_000_000);
     expect(details.spillTruncated).toBe(true);
+    expect(details.spill).toEqual({
+      path: "/tmp/web-fetch-output",
+      chars: 2_000_000,
+      truncated: true,
+    });
     expect(serialized).not.toContain(tokenValue);
   });
 
@@ -878,6 +888,30 @@ describe("tool_result_persist hook", () => {
 });
 
 describe("before_message_write hook", () => {
+  it("refreshes skipped write hooks when reusing a session manager", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-reuse-",
+      id: "before-write-reuse",
+      body: `export default { id: "before-write-reuse", register(api) {
+  api.on("before_message_write", (event) => ({
+    message: { ...event.message, content: "hooked" },
+  }));
+} };`,
+    });
+    const sm = SessionManager.inMemory();
+    for (const skipBeforeMessageWriteHooks of [true, false, true]) {
+      guardSessionManager(sm, { skipBeforeMessageWriteHooks });
+      sm.appendMessage({ role: "user", content: "original", timestamp: Date.now() });
+    }
+    expect(
+      sm
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
+        ),
+    ).toEqual(["original", "hooked", "original"]);
+  });
+
   it("continues persistence when a before_message_write hook throws", () => {
     initializeTempPlugin({
       tmpPrefix: "openclaw-before-write-",

@@ -1,8 +1,50 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { AgentSession } from "./agent-session.js";
 
 describe("AgentSession context usage", () => {
+  it("reports unknown usage after a provider checkpoint until a later measured response", () => {
+    const owner = makeAgentAssistantMessage({ content: [{ type: "text", text: "covered" }] });
+    owner.usage = {
+      ...owner.usage,
+      input: 90_000,
+      totalTokens: 90_000,
+      contextUsage: { state: "available", promptTokens: 90_000, totalTokens: 90_000 },
+    };
+    owner.providerReplay = {
+      v: 1,
+      type: "openai-responses-retained-compaction",
+      data: "opaque",
+      provider: owner.provider,
+      api: owner.api,
+      model: owner.model,
+      baseUrlHash: "hash",
+    };
+    const messages: AgentMessage[] = [owner];
+    const branchEntries = [{ type: "message", id: "checkpoint-owner", message: owner }];
+    const session = {
+      model: { contextWindow: 100_000 },
+      messages,
+      sessionManager: { getBranch: () => branchEntries },
+    } as unknown as AgentSession;
+    expect(AgentSession.prototype.getContextUsage.call(session)).toEqual({
+      tokens: null,
+      contextWindow: 100_000,
+      percent: null,
+    });
+    const later = makeAgentAssistantMessage({ content: [{ type: "text", text: "later" }] });
+    later.usage = {
+      ...later.usage,
+      input: 8_000,
+      totalTokens: 8_000,
+      contextUsage: { state: "available", promptTokens: 8_000, totalTokens: 8_000 },
+    };
+    messages.push(later);
+    branchEntries.push({ type: "message", id: "later", message: later });
+    expect(AgentSession.prototype.getContextUsage.call(session)?.tokens).toBe(8_000);
+  });
+
   it("preserves an earlier exact snapshot when unavailable usage precedes any compaction", () => {
     const messages = [
       {
@@ -186,6 +228,79 @@ describe("AgentSession context usage", () => {
       {
         type: "message",
         id: "assistant-unavailable",
+        parentId: "assistant-exact",
+        timestamp: "2026-07-05T00:00:02.000Z",
+        message: messages[2],
+      },
+    ];
+
+    const usage = AgentSession.prototype.getContextUsage.call({
+      model: { contextWindow: 200_000 },
+      messages,
+      sessionManager: { getBranch: () => branchEntries },
+    } as unknown as AgentSession);
+
+    expect(usage?.tokens).toBeGreaterThan(190_000);
+  });
+
+  it("preserves an earlier exact post-compaction snapshot before zero usage", () => {
+    const exactUsage = {
+      input: 180_000,
+      output: 10_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 190_000,
+      contextUsage: {
+        state: "available" as const,
+        promptTokens: 180_000,
+        totalTokens: 190_000,
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "exact post-compaction answer" }],
+        stopReason: "stop",
+        usage: exactUsage,
+      },
+      { role: "user", content: "small follow-up" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        usage: zeroUsage,
+      },
+    ] as unknown as AgentMessage[];
+    const branchEntries = [
+      {
+        type: "compaction",
+        id: "compact-1",
+        parentId: null,
+        timestamp: "2026-07-05T00:00:00.000Z",
+        summary: "summary",
+        firstKeptEntryId: "assistant-exact",
+        tokensBefore: 120_000,
+      },
+      {
+        type: "message",
+        id: "assistant-exact",
+        parentId: "compact-1",
+        timestamp: "2026-07-05T00:00:01.000Z",
+        message: messages[0],
+      },
+      {
+        type: "message",
+        id: "assistant-zero",
         parentId: "assistant-exact",
         timestamp: "2026-07-05T00:00:02.000Z",
         message: messages[2],

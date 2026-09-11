@@ -15,20 +15,20 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
 - Skills list (metadata only; instructions load on demand with `read`). Native
-  Codex turns get the compact skills block as turn-scoped collaboration
-  developer instructions; other harnesses get it in the normal prompt surface.
+  Codex turns on the managed bundled app-server get the compact skills block
+  in parent-local model request instructions; other harnesses get it in the normal prompt surface.
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
-  override at `agents.list[].skillsLimits.maxSkillsPromptChars`.
+  override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-  `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
   injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default:
   `60000`).
   - Native Codex turns do not paste raw `MEMORY.md` when memory tools are
     available for that workspace; they get a small memory pointer in
-    turn-scoped collaboration developer instructions instead and use memory
+    parent-local request instructions instead and use memory
     tools on demand. If tools are disabled, memory search is unavailable, or
     the active workspace differs from the agent memory workspace, `MEMORY.md`
     falls back to the normal bounded turn-context path.
@@ -40,8 +40,9 @@ OpenClaw assembles its own system prompt on every run. It includes:
     daily memory for that first turn, controlled by
     `agents.defaults.startupContext`. Bare chat `/new` and `/reset` are
     acknowledged without invoking the model.
-  - Post-compaction `AGENTS.md` excerpts are separate and require explicit
-    `agents.defaults.compaction.postCompactionSections` opt-in.
+  - Post-compaction `AGENTS.md` excerpts require explicit
+    `agents.defaults.compaction.postCompactionSections` opt-in; plugins can add
+    other context through `before_prompt_build`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -65,24 +66,30 @@ Everything the model receives counts toward the context limit:
 
 Runtime-heavy surfaces have their own explicit caps under
 `agents.defaults.contextLimits` (per-agent overrides under
-`agents.list[].contextLimits`):
+`agents.entries.*.contextLimits`):
 
 | Key                      | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
 | `memoryGetMaxChars`      | Max characters `memory_get` returns before truncation.                   |
-| `memoryGetDefaultLines`  | Default `memory_get` line window when a request omits `lines`.           |
-| `toolResultMaxChars`     | Advanced ceiling for a single live tool result (up to `1000000` chars).  |
 | `postCompactionMaxChars` | Max characters retained from `AGENTS.md` during post-compaction refresh. |
 
 These are bounded runtime excerpts and injected runtime-owned blocks,
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is unset by default, so OpenClaw derives the live
-tool-result cap from the effective model context window: `16000` chars below
+OpenClaw derives the live tool-result cap from the effective model context
+window: `16000` chars below
 100K tokens, `32000` chars at 100K+ tokens, `64000` chars at 200K+ tokens.
-The runtime context-share guard still caps a single tool result at 30% of the
-context window even when a larger explicit ceiling is configured.
+The runtime context-share guard also caps a single tool result at 30% of the
+context window.
+
+Large provider windows are not enabled automatically when they materially
+change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
+publish a `1050000` token total window, but OpenClaw defaults their active
+runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
+full `128000` output allowance, and OpenAI applies higher long-context pricing
+to the entire request once input exceeds `272000` tokens. See
+[OpenAI context window defaults](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
 
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
@@ -100,27 +107,33 @@ prompt size), use `/context list` or `/context detail`. See
 In chat:
 
 - `/status` -> emoji-rich status card with the session model, context usage,
-  last response input/output tokens, and estimated cost when local pricing is
-  configured for the active model.
+  last response input/output tokens, and cost from recorded billing or local
+  pricing for the active model.
 - `/usage off|tokens|full` -> appends a per-response usage footer to every
   reply. Persists per session (stored as `responseUsage`).
   - `/usage reset` (aliases: `inherit`, `clear`, `default`) clears the
     session override so it re-inherits the configured default.
   - `/usage tokens` shows turn token/cache details.
-  - `/usage full` shows compact model/context/cost details; estimated cost
-    appears only when OpenClaw has usage metadata and local pricing for the
-    active model. Custom `messages.usageTemplate` layouts can include
-    token/cache fields.
+  - `/usage full` shows compact model/context/cost details. Cost comes from a
+    recorded amount or usage metadata with local pricing for the active model.
+    Custom `messages.usageTemplate` layouts can include token/cache fields.
 - `/usage cost` -> local cost summary from OpenClaw session logs.
 
 Other surfaces:
 
+- **Control UI:** the working indicator and completed-run recap show cumulative
+  **output tokens** for that run, including its model calls across tool use and
+  retries. Counts update when the runtime reports completed-response usage, not
+  on every streamed text fragment. Reloading an active run restores its latest
+  count. This counter excludes input tokens and is separate from the composer
+  context-window meter and persisted billing summaries.
 - **TUI/Web TUI:** `/status` and `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
-  Current usage-window providers: Claude (Anthropic), ClawRouter, Copilot
-  (GitHub), DeepSeek, Gemini (Google Gemini CLI), MiniMax, OpenAI, Xiaomi,
-  Xiaomi Token Plan, and z.ai.
+  Usage-window providers, checked against 2026.9.3: Claude (Anthropic),
+  ClawRouter, Copilot (GitHub), DeepSeek, MiniMax, OpenAI, OpenRouter, Venice,
+  xAI, Xiaomi, Xiaomi Token Plan, and z.ai. Provider plugins supply these
+  snapshots, so an installed plugin can add one.
 
 Usage surfaces normalize common provider-native field aliases before
 display. For OpenAI-family Responses traffic, that includes both
@@ -148,8 +161,8 @@ OpenClaw falls back to matching OAuth/API-key credentials from auth
 profiles, env, or config.
 
 Assistant transcript entries persist the same normalized usage shape,
-including `usage.cost` when the active model has pricing configured and the
-provider returns usage metadata. This gives `/usage cost` and
+including `usage.cost` when the runtime calculates an estimate or the provider
+reports a billed amount. This gives `/usage cost` and
 transcript-backed session status a stable source even after the live
 runtime state is gone.
 
@@ -160,6 +173,11 @@ can overstate the live context window. Context displays and diagnostics use
 the latest prompt snapshot (`promptTokens`, or the last model call when no
 prompt snapshot is available) for `context.used`.
 
+Native Codex turn usage sums the reported counts from each unique completed
+model response, including responses before a retry or cancellation. Missing
+response counts stay unknown; they do not erase already observed usage. A
+missing final response snapshot leaves context usage unavailable.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:
@@ -169,19 +187,50 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, `/usage full` omits cost; use
-`/usage tokens` or a custom `messages.usageTemplate` when you need
+`cacheWrite`. If both pricing and a recorded amount are missing, `/usage full`
+omits cost; use `/usage tokens` or a custom `messages.usageTemplate` when you need
 token/cache details in every reply. Cost display is not limited to API-key
 auth: non-API-key providers such as `aws-sdk` can show estimated cost when
 their configured model entry includes local pricing and the provider
 returns usage metadata.
 
-After sidecars and channels reach the Gateway ready path, OpenClaw starts an
-optional background pricing bootstrap for configured model refs that do not
-already have local pricing. That bootstrap fetches remote OpenRouter and
-LiteLLM pricing catalogs. Set `models.pricing.enabled: false` to skip those
-catalog fetches on offline or restricted networks; explicit
-`models.providers.*.models[].cost` entries still drive local cost estimates.
+When a model publishes `tieredPricing`, each request selects one tier using its
+total prompt input: uncached input plus cache reads and cache writes. Output
+tokens do not select the tier. The selected rates apply to every token bucket
+in that request, rather than only to tokens above a threshold. Ranges are
+half-open `[start, end)`; an open-ended final range uses `[start]`.
+
+Turn totals sum costs calculated for each model request, retaining tier and
+model boundaries across tool loops and retries. If an older or external runtime
+provides only aggregate tokens, flat-rate estimates remain available. A tiered
+aggregate without complete per-request costs omits the cost instead of treating
+the summed tokens as one large request. Provider-billed totals, including zero,
+take precedence over catalog estimates and remain visible even when token counts
+are unavailable. Unknown token counts are not inferred from a billed amount.
+
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
+
+Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
+Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
+Omitted flat-rate fields can still inherit catalog defaults. An explicit
+`tieredPricing` schedule takes precedence over the catalog schedule.
+
+Pricing updates ship in the hosted model catalog alongside model metadata. Its
+publisher reads public pricing sources, including OpenCode's official catalog
+and Venice's public model API when the provider declares the native source.
+Base rates and context tiers come from the same source; usage rendering makes no
+network requests. Hosted updates activate after
+the next Gateway restart. Set `models.catalogRefresh.enabled: false` to disable
+hosted catalog traffic on offline or restricted networks; bundled pricing still
+works. Agent-local `models.json` prices take precedence over explicit
+`models.providers.*.models[].cost` entries, and both override catalog estimates,
+including explicit flat and zero rates.
+
+OpenRouter `:nitro` and `:floor` routing shortcuts use the base model's catalog
+estimate when the exact shortcut has no price. Recorded costs and explicit
+prices keep their precedence. Private endpoints and other model variants do not
+use this fallback. Priority and flex billing can differ from the base estimate.
 
 ## Cache TTL and pruning impact
 
@@ -199,14 +248,14 @@ TTL is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can
 avoid re-caching the full prompt, reducing cache write costs.
 
 In multi-agent setups, you can keep one shared model config and tune cache
-behavior per agent with `agents.list[].params.cacheRetention`.
+behavior per agent with `agents.entries.*.params.cacheRetention`.
 
 For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
-[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+[https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
 ### Example: keep 1h cache warm with heartbeat
 
@@ -244,7 +293,7 @@ agents:
         cacheRetention: "none" # avoid cache writes for bursty notifications
 ```
 
-`agents.list[].params` merges on top of the selected model's `params`, so you
+`agents.entries.*.params` merges on top of the selected model's `params`, so you
 can override only `cacheRetention` and inherit other model defaults
 unchanged.
 

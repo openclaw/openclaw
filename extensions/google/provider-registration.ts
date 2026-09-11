@@ -1,19 +1,25 @@
-// Google provider module implements model/runtime integration.
 import type {
   OpenClawPluginApi,
   ProviderReasoningOutputModeContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import {
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
-import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import {
+  isGoogleNativeVideoModelId,
+  isModernGoogleModel,
+  resolveGoogleGeminiForwardCompatModel,
+} from "./provider-models.js";
+import {
+  isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
@@ -22,7 +28,19 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
-import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
+import { resolveGoogleVertexConfigApiKey } from "./vertex-adc-config.js";
+
+function normalizeGoogleVideoInput(
+  ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
+) {
+  const input = (ctx.model.input as string[]).filter((type) => type !== "video");
+  const supportsVideo =
+    ctx.provider === "google" &&
+    ctx.model.api === "google-generative-ai" &&
+    isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
+    isGoogleNativeVideoModelId(ctx.modelId);
+  return { ...ctx.model, input: supportsVideo ? [...input, "video"] : input } as typeof ctx.model;
+}
 
 function resolveGoogleReasoningOutputMode(
   ctx: ProviderReasoningOutputModeContext,
@@ -47,21 +65,21 @@ export function buildGoogleProvider(): ProviderPlugin {
       createProviderApiKeyAuthMethod({
         providerId: "google",
         methodId: "api-key",
-        label: "Google Gemini API key",
-        hint: "AI Studio / Gemini API key",
+        label: "Google AI Studio API key",
+        hint: "Supported API-key access from aistudio.google.com/apikey",
         optionKey: "geminiApiKey",
         flagName: "--gemini-api-key",
         envVar: "GEMINI_API_KEY",
-        promptMessage: "Enter Gemini API key",
+        promptMessage: "Enter Google AI Studio API key",
         defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
         expectedProviders: ["google"],
         applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
         wizard: {
           choiceId: "gemini-api-key",
-          choiceLabel: "Google Gemini API key",
+          choiceLabel: "Google AI Studio API key",
           groupId: "google",
           groupLabel: "Google",
-          groupHint: "Gemini API key + OAuth",
+          groupHint: "Supported API-key setup",
         },
       }),
     ],
@@ -80,7 +98,33 @@ export function buildGoogleProvider(): ProviderPlugin {
         },
       }),
     },
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes("google")) {
+          return null;
+        }
+        const auth = ctx.resolveProviderApiKey("google");
+        if (!auth.apiKey) {
+          return null;
+        }
+        return await runLiveProviderCatalog({
+          providerId: "google",
+          profileId: auth.profileId,
+          run: async () => ({
+            providers: {
+              google: await buildGoogleLiveCatalogProvider({
+                discoveryMode: "strict",
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+              }),
+            },
+          }),
+        });
+      },
+    },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
+    normalizeResolvedModel: normalizeGoogleVideoInput,
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: ctx.provider,

@@ -1,7 +1,7 @@
 // Slack type declarations define plugin contracts.
 import type { MessageMetadata } from "@slack/types";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackSendIdentity } from "../../send.js";
@@ -16,6 +16,7 @@ export type PreparedSlackMessage = {
   message: SlackMessageEvent;
   relayIdentity?: SlackSendIdentity;
   eventScope?: SlackEventScope;
+  turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
   route: ResolvedAgentRoute;
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;
@@ -32,6 +33,7 @@ export type PreparedSlackMessage = {
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;
+  sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
   requireMention: boolean;
   isDirectMessage: boolean;

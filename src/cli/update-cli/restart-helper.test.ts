@@ -1,36 +1,51 @@
 // Restart helper tests cover update restart helper process selection and error handling.
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      spawn: vi.fn(),
-    },
-  );
-});
+vi.mock("../../process/exec-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec-spawn.js")>()),
+  spawnCommand: vi.fn(),
+}));
 
 describe("restart-helper", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
+  const originalGetEuid = process.geteuid;
 
-  async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
-    const scriptPath = await prepareRestartScript(env, gatewayPort);
+  const mockLinuxUserBusSocket = () =>
+    vi
+      .spyOn(fs, "stat")
+      .mockResolvedValue({ isSocket: () => true } as Awaited<ReturnType<typeof fs.stat>>);
+
+  async function prepareAndReadScript(
+    env: NodeJS.ProcessEnv,
+    gatewayPort = 18789,
+    windowsGatewayArgv: readonly string[] = [],
+  ) {
+    const scriptPath = await prepareRestartScript(env, gatewayPort, windowsGatewayArgv);
     if (scriptPath == null) {
       throw new Error("expected restart script path");
     }
-    const content = await fs.readFile(scriptPath, "utf-8");
+    const wrapper = await fs.readFile(scriptPath, "utf-8");
+    const content = scriptPath.endsWith(".cmd")
+      ? `${wrapper}\n${await fs.readFile(scriptPath.replace(/\.cmd$/u, ".ps1"), "utf8")}`
+      : wrapper;
     return { scriptPath, content };
   }
 
   async function cleanupScript(scriptPath: string) {
+    if (scriptPath.endsWith(".cmd")) {
+      await fs.unlink(scriptPath.replace(/\.cmd$/u, ".ps1"));
+      await fs.unlink(`${scriptPath}.vbs`);
+    }
     await fs.unlink(scriptPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -43,10 +58,6 @@ describe("restart-helper", () => {
     });
   }
 
-  async function makeTempDir(prefix: string) {
-    return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  }
-
   async function writeFakeLaunchctl(
     fakeBinDir: string,
     content = `#!/bin/sh
@@ -57,9 +68,21 @@ case "$1" in
 esac
 exit 0
 `,
+    systemOwnership: "absent" | "loaded" = "absent",
   ) {
     const launchctlPath = path.join(fakeBinDir, "launchctl");
-    await fs.writeFile(launchctlPath, content, { mode: 0o755 });
+    const body = content.replace(/^#!\/bin\/sh\r?\n/, "");
+    await fs.writeFile(
+      launchctlPath,
+      `#!/bin/sh
+if [ "$1" = "print" ]; then
+  case "$2" in
+    system/*) ${systemOwnership === "loaded" ? "exit 0" : "printf 'Could not find service\\n' >&2; exit 113"} ;;
+  esac
+fi
+${body}`,
+      { mode: 0o755 },
+    );
   }
 
   async function writeFakeSleep(fakeBinDir: string) {
@@ -88,9 +111,11 @@ exit 0
       'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10';
     const skipEndLog = "openclaw restart skipped schtasks end";
     const pollLoop = "for ($attempt = 1; $attempt -le 10; $attempt++)";
-    const pollCall = `Get-OpenClawListenerPids -Port $port`;
+    const pollCall = `Get-OpenClawListenerSnapshot -Port $port`;
     const forceKillBranch = "if ($attempt -eq 10)";
-    const forceKillCommand = "Stop-Process -Id $listenerPid -Force";
+    const ownerCheckFunction = "function Invoke-OpenClawVerifiedListenerKill";
+    const ownerCheckCall = "Invoke-OpenClawVerifiedListenerKill -ProcessId $listenerPid";
+    const forceKillCommand = "$lease.Kill()";
     const runCommand =
       'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30';
     const portAssignment = `$port = ${port}`;
@@ -102,8 +127,10 @@ exit 0
     const pollLoopIndex = content.indexOf(pollLoop, skipEndLogIndex);
     const pollCallIndex = content.indexOf(pollCall, pollLoopIndex);
     const forceKillBranchIndex = content.indexOf(forceKillBranch, pollCallIndex);
-    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillBranchIndex);
-    const runIndex = content.indexOf(runCommand, forceKillCommandIndex);
+    const ownerCheckFunctionIndex = content.indexOf(ownerCheckFunction);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, ownerCheckFunctionIndex);
+    const ownerCheckCallIndex = content.indexOf(ownerCheckCall, forceKillBranchIndex);
+    const runIndex = content.indexOf(runCommand, ownerCheckCallIndex);
 
     expect(stateCheckIndex).toBeGreaterThanOrEqual(0);
     expect(runningGuardIndex).toBeGreaterThan(stateCheckIndex);
@@ -113,11 +140,13 @@ exit 0
     expect(pollLoopIndex).toBeGreaterThan(skipEndLogIndex);
     expect(pollCallIndex).toBeGreaterThan(pollLoopIndex);
     expect(forceKillBranchIndex).toBeGreaterThan(pollCallIndex);
-    expect(forceKillCommandIndex).toBeGreaterThan(forceKillBranchIndex);
-    expect(runIndex).toBeGreaterThan(forceKillCommandIndex);
+    expect(ownerCheckFunctionIndex).toBeGreaterThanOrEqual(0);
+    expect(forceKillCommandIndex).toBeGreaterThan(ownerCheckFunctionIndex);
+    expect(ownerCheckCallIndex).toBeGreaterThan(forceKillBranchIndex);
+    expect(runIndex).toBeGreaterThan(ownerCheckCallIndex);
 
     expect(content).not.toContain("timeout /t 3 /nobreak >nul");
-    expect(content).not.toContain("findstr");
+    expect(content).not.toContain("netstat.exe -ano -p tcp | findstr");
     expect(content).not.toContain("netstat -ano |");
     expect(content).not.toContain("schtasks /End /TN");
   }
@@ -129,6 +158,7 @@ exit 0
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.getuid = originalGetUid;
+    process.geteuid = originalGetEuid;
   });
 
   describe("prepareRestartScript", () => {
@@ -146,11 +176,177 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
+    it("repairs a mismatched inherited user bus before running systemctl --user", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 2000;
+      process.geteuid = () => 1000;
+      const statSpy = mockLinuxUserBusSocket();
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const callsPath = path.join(tmpDir, "systemctl-calls.log");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
+      await fs.writeFile(
+        path.join(fakeBinDir, "systemctl"),
+        `#!/bin/sh
+printf 'runtime=%s bus=%s args=%s\n' "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$*" >> "$OPENCLAW_SYSTEMCTL_CALLS"
+case "$2" in
+  is-active|restart) exit 0 ;;
+esac
+exit 1
+`,
+        { mode: 0o755 },
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "state"),
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_SYSTEMCTL_CALLS: callsPath,
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const calls = await fs.readFile(callsPath, "utf-8");
+
+      expect(result.code).toBeNull();
+      expect(statSpy).toHaveBeenCalledWith("/run/user/1000/bus");
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user is-active --quiet openclaw-gateway.service",
+      );
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user restart openclaw-gateway.service",
+      );
+      expect(calls).not.toContain("runtime=/run/user/0");
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ["an abstract bus", "unix:abstract=/openclaw-user-bus"],
+      ["a genuinely absent bus", undefined],
+      ["an explicitly empty bus", ""],
+      ["a whitespace-only bus", "   "],
+      ["a cross-user standard bus", "unix:path=/run/user/0/bus"],
+      ["a fallback bus", "unix:path=/run/user/0/bus;unix:abstract=/openclaw-user-bus"],
+    ])("does not rewrite a custom user runtime with %s", async (_name, busAddress) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      const statSpy = mockLinuxUserBusSocket();
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/srv/openclaw-runtime",
+        DBUS_SESSION_BUS_ADDRESS: busAddress,
+      });
+
+      const shouldClearBusAddress = busAddress !== undefined && !busAddress.trim();
+      expect(statSpy.mock.calls).toEqual(
+        shouldClearBusAddress ? [["/srv/openclaw-runtime/bus"]] : [],
+      );
+      expect(content.includes("unset DBUS_SESSION_BUS_ADDRESS")).toBe(shouldClearBusAddress);
+      expect(content).not.toContain("export XDG_RUNTIME_DIR=");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it.each([
+      ["abstract transport", "unix:abstract=/openclaw-user-bus"],
+      ["path-looking abstract transport", "unix:abstract=/run/user/0/bus"],
+      ["multi-address transport", "unix:path=/run/user/0/bus;unix:abstract=/custom-openclaw-bus"],
+      ["malformed escaped path", "unix:path=%2Frun%2Fuser%2F0%2Fbus%ZZ"],
+    ])("preserves a custom %s when the runtime directory is missing", async (_name, busAddress) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: busAddress,
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it.each([
+      ["path first", "unix:path=/run/user/0/bus,guid=0123456789abcdef", "/run/user/0"],
+      ["guid first", "unix:guid=0123456789abcdef,path=/run/user/0/bus", "/run/user/0"],
+      ["escaped path", "unix:guid=0123456789abcdef,path=%2Frun%2Fuser%2F0%2Fbus", "/run/user/0"],
+      ["trailing-slash runtime", "unix:path=/run/user/0/bus", "/run/user/0/"],
+      ["missing runtime", "unix:path=/run/user/0/bus", ""],
+    ])("repairs the canonical D-Bus bus (%s)", async (_name, address, runtimeDir) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: runtimeDir,
+        DBUS_SESSION_BUS_ADDRESS: address,
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("repairs both missing standard user bus values", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: "",
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps a valid standard user bus environment", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      const statSpy = vi.spyOn(fs, "stat");
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/1000",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      });
+
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(content).not.toContain("export XDG_RUNTIME_DIR=");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps the inherited environment when the effective user bus is unavailable", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      vi.spyOn(fs, "stat").mockRejectedValue(
+        Object.assign(new Error("missing bus"), { code: "ENOENT" }),
+      );
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+
+      expect(content).not.toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      await cleanupScript(scriptPath);
+    });
+
     it("creates restart scripts in a private temp directory with exclusive creation", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const timestamp = 1_727_201_234_567;
       const oldCandidatePath = path.join(os.tmpdir(), `openclaw-restart-${timestamp}.sh`);
-      const victimDir = await makeTempDir("openclaw-restart-helper-victim-");
+      const victimDir = tempDirs.make("openclaw-restart-helper-victim-");
       const victimPath = path.join(victimDir, "restart.sh");
       await fs.rm(oldCandidatePath, { force: true });
       await fs.writeFile(victimPath, "preexisting script\n", "utf-8");
@@ -211,7 +407,7 @@ exit 0
 
     it("fails with sudo systemd guidance when the gateway unit is system-scoped", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const callsPath = path.join(tmpDir, "systemctl-calls.log");
       await fs.mkdir(fakeBinDir, { recursive: true });
@@ -310,7 +506,7 @@ exit 1
     it("returns the final macOS launchctl kickstart failure after logging cleanup", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateDir = path.join(tmpDir, "state");
       await fs.mkdir(fakeBinDir, { recursive: true });
@@ -349,7 +545,7 @@ exit 0
     it("continues the macOS restart path when log setup fails", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateFile = path.join(tmpDir, "state-file");
       const markerPath = path.join(tmpDir, "launchctl-ran");
@@ -379,30 +575,13 @@ exit 0
       await expect(fs.readFile(markerPath, "utf-8")).resolves.toBe("ran");
     });
 
-    it("logs custom macOS launchd labels without shell expansion", async () => {
+    it("rejects custom macOS launchd labels with shell metacharacters", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
-      const fakeBinDir = path.join(tmpDir, "bin");
-      const stateDir = path.join(tmpDir, "state");
-      await fs.mkdir(fakeBinDir, { recursive: true });
-      await writeFakeSleep(fakeBinDir);
-      await writeFakeLaunchctl(fakeBinDir);
 
-      const { scriptPath } = await prepareAndReadScript({
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.$(echo injected)",
-        HOME: path.join(tmpDir, "home"),
-        OPENCLAW_STATE_DIR: stateDir,
-      });
-
-      const result = await executeScript(scriptPath, {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
-
-      expect(result.code).toBeNull();
-      expect(log).toContain("target=ai.openclaw.$(echo injected)");
-      expect(log).not.toContain("target=ai.openclaw.injected");
+      await expect(
+        prepareRestartScript({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.$(echo injected)" }),
+      ).resolves.toBeNull();
     });
 
     it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
@@ -425,23 +604,61 @@ exit 0
       });
       expect(scriptPath.endsWith(".cmd")).toBe(true);
       expect(content).toContain("@echo off");
-      expect(content).toContain("powershell -NoProfile -ExecutionPolicy Bypass -Command");
-      expect(content).not.toContain("powershell -NoProfile -ExecutionPolicy Bypass -File");
+      expect(content).toContain(
+        'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command - < "%~dpn0.ps1"',
+      );
+      expect(content).not.toMatch(/Add-Type|Invoke-Expression|\biex\b|-EncodedCommand/iu);
       expect(content).toContain('$ErrorActionPreference = "Continue"');
       expect(content).toContain("gateway-restart.log");
       expect(content).toContain("$taskName = 'OpenClaw Gateway'");
       expect(content).toContain("function Invoke-OpenClawSchtasksWithTimeout");
       expect(content).toContain("function Get-OpenClawScheduledTaskState");
+      expect(content).toContain("function Get-OpenClawListenerKillDecision");
+      expect(content).toContain("function Invoke-OpenClawVerifiedListenerKill");
       expect(content).toContain("function Invoke-OpenClawStartupLauncher");
       expect(content).toContain("Get-ScheduledTask -TaskName $TaskName");
       expect(content).toContain("openclaw restart skipped schtasks end");
-      expect(content).toContain(
-        '$launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"',
-      );
+      expect(content).toContain("$gatewayScriptPath = ");
+      expect(content).toContain("$expectedGatewayArgv = @()");
       expect(content).toContain("openclaw restart launched startup fallback");
       expectWindowsRestartWaitOrdering(content);
       expect(content).toContain('del "%~f0" >nul 2>&1');
       expect(content).toContain('rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1');
+      await cleanupScript(scriptPath);
+    });
+
+    it("holds and rechecks the exact installed gateway process before killing on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const expectedArgv = [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Users\\O'Brien\\openclaw\\dist\\entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ];
+      const { scriptPath, content } = await prepareAndReadScript(
+        { OPENCLAW_PROFILE: "default" },
+        18789,
+        expectedArgv,
+      );
+
+      expect(content).toContain(
+        "$expectedGatewayArgv = @('C:\\Program Files\\nodejs\\node.exe', 'C:\\Users\\O''Brien\\openclaw\\dist\\entry.js', 'gateway', '--port', '18789')",
+      );
+      expect(content).not.toMatch(/Add-Type|Invoke-Expression|\biex\b/iu);
+      expect(content).toContain("$creationTimeFileTime -= $creationTimeFileTime % 10");
+      expect(content).toContain("$heldCreationTime -= $heldCreationTime % 10");
+      expect(content).toContain("[void]$lease.Handle");
+      expect(content).toContain("Get-OpenClawListenerKillDecision");
+      expect(content).toContain("$recheckedListeners = & $ListenerQuery $Port");
+      expect(content).toContain("$recheckedProcess = & $ProcessQuery $ProcessId");
+      expect(content).toContain("$lease.Kill()");
+      expect(content).toContain("$lease.Dispose()");
+      expect(content).toContain('return "listener-query-unavailable"');
+      expect(content).not.toContain("Stop-Process -Id");
+      expect(content).not.toContain("openclaw-gateway(\\.exe)?");
+      expect(content).not.toContain("Get-Content -LiteralPath $ScriptPath");
       await cleanupScript(scriptPath);
     });
 
@@ -457,7 +674,9 @@ exit 0
       expect(content).toContain(
         'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/End", "/TN", $taskName) -TimeoutSeconds 10',
       );
-      expect(content).toContain("$status = Invoke-OpenClawStartupLauncher");
+      expect(content).toContain(
+        "$status = Invoke-OpenClawStartupLauncher -LauncherPath $gatewayScriptPath",
+      );
       expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
@@ -473,41 +692,27 @@ exit 0
         customPort,
       );
       expect(content).toContain(`$port = ${customPort}`);
-      expect(content).toContain("Get-NetTCPConnection -LocalPort $Port -State Listen");
+      expect(content).toContain("Get-NetTCPConnection -State Listen -ErrorAction Stop");
       expect(content).toContain("& netstat.exe -ano -p tcp");
-      expect(content).not.toContain("findstr");
+      expect(content).not.toContain("netstat.exe -ano -p tcp | findstr");
       expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
 
-    it("uses custom profile in service names", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("openclaw-gateway-production.service");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in macOS launchd label", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin" });
-      process.getuid = () => 502;
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "staging",
-      });
-      expect(content).toContain("gui/502/ai.openclaw.staging");
-      await cleanupScript(scriptPath);
-    });
-
-    it("uses custom profile in Windows task name", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "production",
-      });
-      expect(content).toContain("$taskName = 'OpenClaw Gateway (production)'");
-      expectWindowsRestartWaitOrdering(content);
+    it.each([
+      ["linux", "production", "openclaw-gateway-production.service"],
+      ["darwin", "staging", "gui/502/ai.openclaw.staging"],
+      ["win32", "production", "$taskName = 'OpenClaw Gateway (production)'"],
+    ])("uses the %s service identity for profile %s", async (platform, profile, expected) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      if (platform === "darwin") {
+        process.getuid = () => 502;
+      }
+      const { scriptPath, content } = await prepareAndReadScript({ OPENCLAW_PROFILE: profile });
+      expect(content).toContain(expected);
+      if (platform === "win32") {
+        expectWindowsRestartWaitOrdering(content);
+      }
       await cleanupScript(scriptPath);
     });
 
@@ -568,17 +773,16 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
-    it("shell-escapes the label in the plist path on macOS", async () => {
+    it("rejects a launchd label that the lifecycle path cannot use", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
 
-      const { scriptPath, content } = await prepareAndReadScript({
-        HOME: "/Users/testuser",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
-      });
-      // The plist path must also shell-escape the label to prevent injection
-      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
-      await cleanupScript(scriptPath);
+      await expect(
+        prepareRestartScript({
+          HOME: "/Users/testuser",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
+        }),
+      ).resolves.toBeNull();
     });
 
     it("rejects unsafe batch profile names on Windows", async () => {
@@ -592,85 +796,58 @@ exit 0
   });
 
   describe("runRestartScript", () => {
-    it("spawns the script as a detached process on Linux", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+    it.each([
+      { platform: "linux", script: "/tmp/fake-script.sh" },
+      { platform: "win32", script: "C:\\Temp\\fake-script.bat" },
+      { platform: "win32", script: "C:\\Temp\\me&(ow)\\fake-script.bat" },
+    ])("observes detached completion for $platform $script", async ({ platform, script }) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      vi.mocked(spawnCommand).mockResolvedValue({ failed: false } as Awaited<
+        ReturnType<typeof spawnCommand>
+      >);
 
-      await runRestartScript(scriptPath);
+      await expect(runRestartScript(script, 1_000)).resolves.toBe(true);
 
-      expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
+      const argv =
+        platform === "win32"
+          ? [getWindowsSystem32ExePath("wscript.exe"), "//B", "//Nologo", `${script}.vbs`]
+          : ["/bin/sh", script];
+      expect(spawnCommand).toHaveBeenCalledWith(argv, {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
+        timeout: 1_000,
+        forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
       });
-      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
-    it("uses cmd.exe on Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+    it.each([false, true])(
+      "does not grant activation on a spawn error (async=%s)",
+      async (asyncError) => {
+        const error = Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
+        if (asyncError) {
+          vi.mocked(spawnCommand).mockRejectedValue(error);
+        } else {
+          vi.mocked(spawnCommand).mockImplementation(() => {
+            throw error;
+          });
+        }
+        await expect(runRestartScript("/tmp/fake-script.sh", 1_000)).resolves.toBe(false);
+      },
+    );
 
-      await runRestartScript(scriptPath);
-
-      expect(spawn).toHaveBeenCalledWith(getWindowsCmdExePath(), ["/d", "/s", "/c", scriptPath], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(mockChild.unref).toHaveBeenCalledTimes(1);
-    });
-
-    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { on: vi.fn(), unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
-
-      await runRestartScript(scriptPath);
-
-      expect(spawn).toHaveBeenCalledWith(
-        getWindowsCmdExePath(),
-        ["/d", "/s", "/c", `"${scriptPath}"`],
-        {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-        },
+    it.skipIf(process.platform === "win32").each([
+      { name: "completed activation", body: "exit 0", accepted: true, timeout: 1_000 },
+      { name: "native refusal", body: "exit 78", accepted: false, timeout: 1_000 },
+      { name: "interrupted activation", body: "kill -TERM $$", accepted: false, timeout: 1_000 },
+      { name: "activation timeout", body: "exec sleep 10", accepted: false, timeout: 100 },
+    ])("uses the actual process result for $name", async ({ body, accepted, timeout }) => {
+      const actual = await vi.importActual<typeof import("../../process/exec-spawn.js")>(
+        "../../process/exec-spawn.js",
       );
-    });
-
-    it("does not throw when spawn fails synchronously", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      vi.mocked(spawn).mockImplementation(() => {
-        throw Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
-      });
-
-      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
-    });
-
-    it("handles child process spawn errors after the detached handoff", async () => {
-      Object.defineProperty(process, "platform", { value: "linux" });
-      let errorHandler: ((error: Error) => void) | undefined;
-      const mockChild = {
-        on: vi.fn((event: string, handler: (error: Error) => void) => {
-          if (event === "error") {
-            errorHandler = handler;
-          }
-          return mockChild;
-        }),
-        unref: vi.fn(),
-      };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
-
-      await runRestartScript("/tmp/fake-script.sh");
-      expect(errorHandler).toBeDefined();
-      expect(() => errorHandler?.(new Error("spawn /bin/sh ENOENT"))).not.toThrow();
+      vi.mocked(spawnCommand).mockImplementation(actual.spawnCommand);
+      const script = path.join(tempDirs.make("openclaw-restart-result-"), "restart.sh");
+      await fs.writeFile(script, `#!/bin/sh\n${body}\n`);
+      await expect(runRestartScript(script, timeout)).resolves.toBe(accepted);
     });
   });
 });

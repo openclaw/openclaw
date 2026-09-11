@@ -14,17 +14,13 @@ const dockerfilePaths = [
   "scripts/docker/install-sh-smoke/Dockerfile",
   "scripts/docker/install-sh-e2e/Dockerfile",
   "scripts/docker/install-sh-nonroot/Dockerfile",
-  "scripts/e2e/Dockerfile",
   "scripts/e2e/Dockerfile.qr-import",
 ] as const;
 const aptCacheDockerfilePaths = dockerfilePaths.filter(
-  (path) => path !== "scripts/e2e/Dockerfile.qr-import" && path !== "scripts/e2e/Dockerfile",
+  (path) => path !== "scripts/e2e/Dockerfile.qr-import",
 );
 const shellContinuationDockerfilePaths = dockerfilePaths.filter(
-  (path) =>
-    path !== "Dockerfile" &&
-    path !== "scripts/e2e/Dockerfile" &&
-    path !== "scripts/e2e/Dockerfile.qr-import",
+  (path) => path !== "Dockerfile" && path !== "scripts/e2e/Dockerfile.qr-import",
 );
 const repoFileCache = new Map<string, Promise<string>>();
 
@@ -46,9 +42,9 @@ describe("docker build cache layout", () => {
     await Promise.all(dockerfilePaths.map((path) => readRepoFile(path)));
   });
 
-  it("keeps the root dependency layer independent from scripts changes", async () => {
+  it("keeps both dependency installs independent from the full source copy", async () => {
     const dockerfile = await readRepoFile("Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.lastIndexOf("pnpm install --frozen-lockfile");
     const copyAllIndex = dockerfile.indexOf("COPY . .");
     const scriptsCopyIndex = dockerfile.indexOf("COPY scripts ./scripts");
 
@@ -94,9 +90,21 @@ describe("docker build cache layout", () => {
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
     expect(dockerfile).toContain("ARG INSTALL_NODE=1");
     expect(dockerfile).toContain("ARG NODE_MAJOR=24");
-    expect(dockerfile).toContain('curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x"');
+    expect(
+      dockerfile.match(/curl -fsSL --connect-timeout 10 --max-time 120 -o "\$installer"/gu),
+    ).toHaveLength(3);
+    expect(dockerfile.match(/installer="\$\(mktemp\)"/gu)).toHaveLength(3);
+    expect(dockerfile.match(/bash "\$installer" \|\| exit 1/gu)).toHaveLength(2);
+    expect(dockerfile.match(/rm -f "\$installer"/gu)).toHaveLength(3);
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends nodejs");
+    expect(dockerfile).toContain('ln -sf "${BUN_INSTALL_DIR}/bin/bun"');
+    expect(dockerfile).toMatch(
+      /chmod 0644 "\$installer"; \\\n\s+su - linuxbrew -c "NONINTERACTIVE=1 CI=1 \/bin\/bash '\$installer'" \|\| exit 1/u,
+    );
+    expect(dockerfile).not.toMatch(/curl[^\n]+\|\s*(?:bash|sh)/u);
+    expect(dockerfile).toContain("source=package.json,target=/tmp/openclaw-package.json");
     expect(dockerfile).toContain(
-      'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm && pnpm --version; fi',
+      'npm install -g "$pnpm_spec" "--allow-scripts=$pnpm_spec" && pnpm --version;',
     );
   });
 
@@ -108,25 +116,6 @@ describe("docker build cache layout", () => {
         `${path} should not have blank lines after a trailing backslash`,
       ).not.toMatch(/\\\n\s*\n/);
     }
-  });
-
-  it("keeps the shared e2e image on the packaged tarball install path", async () => {
-    const dockerfile = await readRepoFile("scripts/e2e/Dockerfile");
-
-    expect(dockerfile).not.toContain("pnpm install --frozen-lockfile");
-    expect(dockerfile).not.toContain("COPY . .");
-    expect(dockerfile).toMatch(
-      /^COPY --from=openclaw_package --chown=appuser:appuser openclaw-current\.tgz \/tmp\/openclaw-current\.tgz$/m,
-    );
-    expect(dockerfile).toContain(
-      "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
-    );
-    expect(dockerfile).not.toContain(
-      "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
-    );
-    expect(dockerfile).toContain("cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/");
-    expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
-    expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
   });
 
   it("copies manifests before install in the qr-import image", async () => {

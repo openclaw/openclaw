@@ -1,20 +1,31 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
-import { normalizeAssistantReplayContent } from "./replay-history.js";
+import type { StreamFn } from "../runtime/index.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { normalizeAssistantReplayContent, validateReplayTurns } from "./replay-history.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-replay-sanitization.js";
+
+// Preface of carriers persisted before the stable system prompt explained the markers.
+const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
-const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
-\`\`\`json
-{"message_id":"msg-abc","sender":"+1555000"}
-\`\`\``;
+const COPIED_INBOUND_METADATA_ONLY_TEXT = [
+  markInboundContextLabel("Conversation info:"),
+  "```json",
+  '{"message_id":"msg-abc","sender":"+1555000"}',
+  "```",
+].join("\n");
 
 function bedrockAssistant(
   content: unknown,
@@ -54,32 +65,141 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
     api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
     provider: "openclaw",
     model,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   } as unknown as AgentMessage;
 }
 
 describe("normalizeAssistantReplayContent", () => {
-  it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
-    // Mid-turn failure sentinels preserve request turn ordering without
-    // pretending the failed assistant generated useful content.
-    const messages = [userMessage("hello"), bedrockAssistant([], "error"), userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-    // Trailing user is preserved so request still ends with user.
-    expect(out).toHaveLength(3);
-    expect((out[2] as { role: string }).role).toBe("user");
+  it("removes persisted attachment display blocks before model replay", () => {
+    const damaged = bedrockAssistant(
+      [
+        { type: "text", text: "Slides ready" },
+        { type: "attachment", attachment: { label: "slides.pptx" } },
+        { type: "attachment_error", attachment: { label: "missing.txt" } },
+      ],
+      "stop",
+      { output: 1, totalTokens: 1 },
+    );
+
+    expect(normalizeAssistantReplayContent([damaged, userMessage("continue")])).toEqual([
+      { ...damaged, content: [{ type: "text", text: "Slides ready" }] },
+      userMessage("continue"),
+    ]);
   });
+
+  it("preserves unknown assistant blocks outside the managed display contract", () => {
+    const unknown = { customType: "legacy_data", data: "preserve me" };
+    const message = bedrockAssistant([unknown], "stop", { output: 1, totalTokens: 1 });
+
+    expect(normalizeAssistantReplayContent([message])).toEqual([message]);
+  });
+
+  it("keeps bare marked late-media turns alive while rejecting whitespace-only media fields", () => {
+    const blankString = {
+      role: "user",
+      content: "",
+      __openclaw: { lateMedia: true, media: [{ path: "/tmp/late.png" }] },
+    } as unknown as AgentMessage;
+    const blankArray = {
+      role: "user",
+      content: [{ type: "text", text: "  " }],
+      __openclaw: { lateMedia: true, media: [{}, { path: "/tmp/late-array.png" }] },
+    } as unknown as AgentMessage;
+    const whitespaceOnlyPath = {
+      role: "user",
+      content: "",
+      __openclaw: { lateMedia: true, media: [{ path: "   " }] },
+    } as unknown as AgentMessage;
+    const urlOnly = {
+      role: "user",
+      content: "",
+      __openclaw: {
+        lateMedia: true,
+        media: [{ url: "https://example.test/late.png", kind: "image" }],
+      },
+    } as unknown as AgentMessage;
+    const legacyOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/legacy-late.png",
+      __openclaw: { lateMedia: true },
+    } as unknown as AgentMessage;
+
+    const out = normalizeAssistantReplayContent([
+      blankString,
+      blankArray,
+      whitespaceOnlyPath,
+      urlOnly,
+      legacyOnly,
+    ]);
+
+    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);
+  });
+
+  it.each([{ content: [] }, { content: [{ type: "text", text: FALLBACK_TEXT }] }])(
+    "drops failed attempt content $content before a later reply and across user turns",
+    async ({ content }) => {
+      const before = userMessage("hello");
+      const reply = bedrockAssistant([{ type: "text", text: "recovered" }], "stop");
+      const after = userMessage("continue");
+      expect(
+        normalizeAssistantReplayContent([
+          before,
+          bedrockAssistant(content, "error"),
+          bedrockAssistant(content, "error"),
+          reply,
+          after,
+        ]),
+      ).toEqual([before, reply, after]);
+      for (const api of ["bedrock-converse-stream", "anthropic-messages"] as const) {
+        const history = await validateReplayTurns({
+          messages: normalizeAssistantReplayContent([before, bedrockAssistant(content, "error")]),
+          modelApi: api,
+        });
+        const messages = [...history, after];
+        if (!messages.every((message) => message.role === "user")) {
+          throw new Error("Expected repaired history and the current prompt to contain only users");
+        }
+        const baseFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+        const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+          baseFn,
+          undefined,
+          {
+            validateAnthropicTurns: true,
+            validateGeminiTurns: false,
+            preserveSignatures: true,
+            dropThinkingBlocks: false,
+            appendOnlyRuntimeContext: true,
+          },
+          api === "bedrock-converse-stream" ? "amazon-bedrock" : "anthropic",
+        );
+        void wrapped(
+          makeProviderModelFixture({
+            id: "claude-sonnet-4-6",
+            provider: api === "bedrock-converse-stream" ? "amazon-bedrock" : "anthropic",
+            api,
+            baseUrl: "https://example.test",
+          }),
+          { messages },
+        );
+        expect(baseFn.mock.calls[0]?.[1].messages).toEqual(
+          api === "anthropic-messages"
+            ? messages
+            : [
+                {
+                  ...after,
+                  content: [
+                    { type: "text", text: "hello" },
+                    { type: "text", text: "continue" },
+                  ],
+                },
+              ],
+        );
+      }
+    },
+  );
 
   it("drops blank user text messages from replay", () => {
     const messages = [
@@ -120,7 +240,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
-    // run.empty-error-retry.test.ts treats `stopReason:"stop"` + `content:[]`
+    // run.shared-integration.test.ts treats `stopReason:"stop"` + `content:[]`
     // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the
     // failure sentinel here would inject a fabricated "[assistant turn failed
     // before producing content]" into the next provider request and change
@@ -132,23 +252,17 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out[1]).toBe(silentStop);
   });
 
-  it("converts mid-turn zero-usage empty stop turns to a replay sentinel", () => {
-    const falseSuccessStop = bedrockAssistant([], "stop");
-    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-  });
-
-  it("converts mid-turn zero-usage null stop turns to a replay sentinel", () => {
-    const falseSuccessStop = bedrockAssistant(null, "stop");
-    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).not.toBe(messages);
-    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
-  });
+  it.each([{ content: [] }, { content: null }])(
+    "drops mid-turn zero-usage empty stop content $content",
+    ({ content }) => {
+      const messages = [
+        userMessage("hello"),
+        bedrockAssistant(content, "stop"),
+        userMessage("retry"),
+      ];
+      expect(normalizeAssistantReplayContent(messages)).toEqual([messages[0], messages[2]]);
+    },
+  );
 
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
@@ -276,6 +390,76 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out).toEqual([messages[0], messages[2]]);
   });
 
+  it.each([
+    [
+      "directly",
+      "NO_REPLY",
+      { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
+    ],
+    [
+      "after metadata removal",
+      `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nNO_REPLY`,
+      { type: "redacted_thinking", data: "redacted-yield" },
+    ],
+  ])("drops thinking-only silent replies %s (#99620)", (_label, text, reasoning) => {
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant([reasoning, { type: "text", text }], "stop"),
+    ];
+
+    expect(normalizeAssistantReplayContent(messages)).toStrictEqual([messages[0]]);
+  });
+
+  it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
+    const nextToolTurn = bedrockAssistant(
+      [
+        { type: "thinking", thinking: "next reasoning", thinkingSignature: "sig_next" },
+        { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+      ],
+      "toolUse",
+    );
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+      nextToolTurn,
+      userMessage("tool result"),
+    ];
+
+    expect(normalizeAssistantReplayContent(messages)).toEqual([
+      messages[0],
+      nextToolTurn,
+      messages[3],
+    ]);
+  });
+
+  it("preserves silent-reply turns with tool calls", () => {
+    const companion = { type: "toolCall", id: "call_1", name: "exec", arguments: {} };
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
+          companion,
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+    ];
+
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(2);
+    expect((out[1] as { content: unknown[] }).content).toEqual([
+      { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
+      companion,
+    ]);
+  });
+
   it("strips copied runtime context from assistant replay text", () => {
     const messages = [
       userMessage("first"),
@@ -287,7 +471,7 @@ describe("normalizeAssistantReplayContent", () => {
             INTERNAL_RUNTIME_CONTEXT_BEGIN,
             "keep this internal",
             INTERNAL_RUNTIME_CONTEXT_END,
-            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
             OPENCLAW_RUNTIME_CONTEXT_NOTICE,
             "",
             "Visible after",
@@ -331,6 +515,77 @@ describe("normalizeAssistantReplayContent", () => {
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
   });
 
+  it.each(["channel-final", "channel-final-suppressed", "message-tool-source-reply"] as const)(
+    "filters a stripped delivery mirror identified by %s",
+    (kind) => {
+      const strippedMirror = {
+        ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
+        provider: undefined,
+        model: undefined,
+        openclawDeliveryMirror: { kind },
+      } as unknown as AgentMessage;
+      const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+      });
+
+      expect(
+        normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
+      ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
+    },
+  );
+
+  it("preserves an assistant carrying an invalid delivery-mirror marker", () => {
+    const assistant = {
+      ...bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+      }),
+      openclawDeliveryMirror: { kind: "unknown" },
+    } as unknown as AgentMessage;
+    const messages = [userMessage("hello"), assistant];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
+  it("filters an adjacent marker-free zero-usage delivery mirror", () => {
+    const content = [{ type: "text", text: "real reply" }];
+    const realReply = bedrockAssistant(content, "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
+    const bareMirror = bedrockAssistant([{ text: "real reply", type: "text" }], "stop");
+
+    expect(normalizeAssistantReplayContent([userMessage("hello"), realReply, bareMirror])).toEqual([
+      expect.objectContaining({ role: "user" }),
+      realReply,
+    ]);
+  });
+
+  it("preserves adjacent identical assistant turns with nonzero usage", () => {
+    const content = [{ type: "text", text: "intentional repeat" }];
+    const first = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
+    const second = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
+    const messages = [userMessage("repeat"), first, second];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
+  it("preserves adjacent zero-usage assistant turns with tool calls", () => {
+    const content = [
+      { type: "text", text: "checking" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
+    ];
+    const first = bedrockAssistant(content, "stop");
+    const second = bedrockAssistant(content, "stop");
+    const messages = [userMessage("check"), first, second];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
   it("returns the original array reference when nothing needs to change", () => {
     const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
     const out = normalizeAssistantReplayContent(messages);
@@ -357,8 +612,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
-    // Covers the case where session-file-repair persisted the sentinel to
-    // disk; on the next turn the loaded transcript ends with a non-empty
+    // Covers a doctor-imported legacy sentinel; on the next turn the loaded transcript ends with a non-empty
     // assistant turn whose only content is the sentinel text. Provider
     // request must still end with user.
     const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");

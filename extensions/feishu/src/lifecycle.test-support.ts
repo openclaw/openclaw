@@ -8,9 +8,6 @@ type BoundConversation = {
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
-type FinalizeInboundContextMock = Mock<
-  (ctx: Record<string, unknown>, opts?: unknown) => Record<string, unknown>
->;
 type DispatchReplyCounts = {
   final: number;
   block?: number;
@@ -21,12 +18,14 @@ type DispatchReplyContext = Record<string, unknown> & {
 };
 type DispatchReplyDispatcher = {
   sendFinalReply: (payload: { text: string }) => unknown;
+  waitForIdle?: () => Promise<void>;
+  markComplete?: () => void;
   getFailedCounts?: UnknownMock;
 };
 type FeishuReplyDispatcherMockValue = {
-  dispatcher: DispatchReplyDispatcher;
+  dispatcherOptions: Record<string, never>;
+  delivery: { deliver: AsyncUnknownMock };
   replyOptions: Record<string, never>;
-  markDispatchIdle: () => unknown;
   ensureNoVisibleReplyFallback?: AsyncUnknownMock;
 };
 type CreateFeishuReplyDispatcherMock = Mock<(params?: unknown) => FeishuReplyDispatcherMockValue>;
@@ -34,6 +33,11 @@ type DispatchReplyFromConfigMock = Mock<
   (params: {
     ctx: DispatchReplyContext;
     dispatcher: DispatchReplyDispatcher;
+    replyOptions?: {
+      turnAdoptionLifecycle?: {
+        onAdopted: () => void | Promise<void>;
+      };
+    };
   }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
 >;
 type WithReplyDispatcherMock = Mock<
@@ -56,34 +60,30 @@ type FeishuLifecycleTestMocks = {
   ensureConfiguredBindingRouteReadyMock: UnknownMock;
   dispatchReplyFromConfigMock: DispatchReplyFromConfigMock;
   withReplyDispatcherMock: WithReplyDispatcherMock;
-  finalizeInboundContextMock: FinalizeInboundContextMock;
   getMessageFeishuMock: AsyncUnknownMock;
   listFeishuThreadMessagesMock: AsyncUnknownMock;
   sendMessageFeishuMock: AsyncUnknownMock;
   sendCardFeishuMock: AsyncUnknownMock;
 };
 
-const feishuLifecycleTestMocks = vi.hoisted(
-  (): FeishuLifecycleTestMocks => ({
-    createEventDispatcherMock: vi.fn(),
-    monitorWebSocketMock: vi.fn(async () => {}),
-    monitorWebhookMock: vi.fn(async () => {}),
-    createFeishuThreadBindingManagerMock: vi.fn(() => ({ stop: vi.fn() })),
-    createFeishuReplyDispatcherMock: vi.fn(),
-    resolveBoundConversationMock: vi.fn<(ref?: unknown) => BoundConversation | null>(() => null),
-    touchBindingMock: vi.fn(),
-    resolveAgentRouteMock: vi.fn(),
-    resolveConfiguredBindingRouteMock: vi.fn(),
-    ensureConfiguredBindingRouteReadyMock: vi.fn(),
-    dispatchReplyFromConfigMock: vi.fn(),
-    withReplyDispatcherMock: vi.fn(),
-    finalizeInboundContextMock: vi.fn((ctx) => ctx),
-    getMessageFeishuMock: vi.fn(async () => null),
-    listFeishuThreadMessagesMock: vi.fn(async () => []),
-    sendMessageFeishuMock: vi.fn(async () => ({ messageId: "om_sent", chatId: "chat_default" })),
-    sendCardFeishuMock: vi.fn(async () => ({ messageId: "om_card", chatId: "chat_default" })),
-  }),
-);
+const feishuLifecycleTestMocks = vi.hoisted((): FeishuLifecycleTestMocks => ({
+  createEventDispatcherMock: vi.fn(),
+  monitorWebSocketMock: vi.fn(async () => {}),
+  monitorWebhookMock: vi.fn(async () => {}),
+  createFeishuThreadBindingManagerMock: vi.fn(() => ({ stop: vi.fn() })),
+  createFeishuReplyDispatcherMock: vi.fn(),
+  resolveBoundConversationMock: vi.fn<(ref?: unknown) => BoundConversation | null>(() => null),
+  touchBindingMock: vi.fn(),
+  resolveAgentRouteMock: vi.fn(),
+  resolveConfiguredBindingRouteMock: vi.fn(),
+  ensureConfiguredBindingRouteReadyMock: vi.fn(),
+  dispatchReplyFromConfigMock: vi.fn(),
+  withReplyDispatcherMock: vi.fn(),
+  getMessageFeishuMock: vi.fn(async () => null),
+  listFeishuThreadMessagesMock: vi.fn(async () => []),
+  sendMessageFeishuMock: vi.fn(async () => ({ messageId: "om_sent", chatId: "chat_default" })),
+  sendCardFeishuMock: vi.fn(async () => ({ messageId: "om_card", chatId: "chat_default" })),
+}));
 
 export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
   return feishuLifecycleTestMocks;
@@ -98,7 +98,20 @@ export function resetFeishuLifecycleTestMocks(): void {
   feishuLifecycleTestMocks.monitorWebhookMock.mockResolvedValue(undefined);
   feishuLifecycleTestMocks.createFeishuThreadBindingManagerMock.mockReturnValue({ stop: vi.fn() });
   feishuLifecycleTestMocks.resolveBoundConversationMock.mockReturnValue(null);
-  feishuLifecycleTestMocks.finalizeInboundContextMock.mockImplementation((ctx) => ctx);
+  feishuLifecycleTestMocks.withReplyDispatcherMock.mockImplementation(
+    async ({ dispatcher, onSettled, run }) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher?.markComplete?.();
+        try {
+          await dispatcher?.waitForIdle?.();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
   feishuLifecycleTestMocks.getMessageFeishuMock.mockResolvedValue(null);
   feishuLifecycleTestMocks.listFeishuThreadMessagesMock.mockResolvedValue([]);
   feishuLifecycleTestMocks.sendMessageFeishuMock.mockResolvedValue({

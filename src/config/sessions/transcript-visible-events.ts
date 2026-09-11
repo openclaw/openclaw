@@ -3,7 +3,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-export type VisibleTranscriptEventEntry<T> = {
+type VisibleTranscriptEventEntry<T> = {
   event: T;
   /** Parent id after active-branch normalization; null when no visible parent exists. */
   parentId: string | null;
@@ -36,4 +36,15 @@ export function selectVisibleTranscriptEvents<T>(events: readonly T[]): T[] {
 /** Resolves the parent id that the next active transcript append should use. */
 export function resolveVisibleTranscriptAppendParentId(events: readonly unknown[]): string | null {
   return scanSessionTranscriptTree(events).appendParentId;
+}
+
+/** Checks membership in the normalized selected path, not raw storage ancestry. */
+export function isTranscriptEntryOnVisiblePath(
+  events: readonly unknown[],
+  entryId: string,
+): boolean {
+  const tree = scanSessionTranscriptTree(events);
+  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).some(
+    (node) => node.id === entryId,
+  );
 }

@@ -20,7 +20,7 @@ const PENDING_UPLOAD_META_MAX_ENTRIES = MAX_PENDING_UPLOADS + 100;
 
 const PENDING_UPLOAD_META_NAMESPACE = "pending-uploads";
 const PENDING_UPLOAD_CHUNKS_NAMESPACE = "pending-upload-chunks";
-const PENDING_UPLOAD_LOCK_FILENAME = "msteams-pending-uploads.sqlite.lock";
+const PENDING_UPLOAD_MUTATION_KEY = "pending-uploads";
 
 type PendingUploadFsRecord = {
   id: string;
@@ -175,7 +175,7 @@ async function withPendingUploadLock<T>(
   options: PendingUploadsFsOptions | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_LOCK_FILENAME, run);
+  return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_MUTATION_KEY, run);
 }
 
 async function readUploadRows(
@@ -187,9 +187,24 @@ async function readUploadRows(
   if (!meta) {
     return undefined;
   }
+  if (
+    !Number.isSafeInteger(meta.chunkCount) ||
+    meta.chunkCount < 1 ||
+    meta.chunkCount > MAX_CHUNKS_PER_UPLOAD
+  ) {
+    return undefined;
+  }
+  // Published Teams packages retain support for hosts with point reads only.
+  const records = await chunkStore.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(id, index)),
+  );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = await chunkStore.lookup(buildChunkKey(id, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : await chunkStore.lookup(buildChunkKey(id, index));
     if (!chunk || chunk.id !== id || chunk.index !== index) {
       return undefined;
     }

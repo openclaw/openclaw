@@ -15,6 +15,7 @@ export type RunMediaUnderstandingFileParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -42,6 +43,7 @@ export type DescribeImageFileParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -55,6 +57,7 @@ export type DescribeImageFileWithModelParams = {
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -129,6 +132,9 @@ export type TranscribeAudioFileParams = {
 };
 
 export type MediaUnderstandingRuntime = {
+  resolveAudioInputBudget: (params: {
+    cfg: OpenClawConfig;
+  }) => Promise<{ enabled: false } | { enabled: true; maxBytes: number }>;
   runMediaUnderstandingFile: (
     params: RunMediaUnderstandingFileParams,
   ) => Promise<RunMediaUnderstandingFileResult>;

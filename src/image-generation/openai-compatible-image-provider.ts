@@ -1,7 +1,9 @@
 /** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -11,9 +13,7 @@ import {
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+} from "../plugin-sdk/provider-http.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
@@ -162,11 +162,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
       ? { defaultTimeoutMs: options.defaultTimeoutMs }
       : {}),
     models: [...options.models],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: options.id,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: options.id, ...ctx }),
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];
@@ -245,36 +241,24 @@ export function createOpenAiCompatibleImageGenerationProvider(
       const timeoutMs = resolveRequestTimeoutMs({ options, req, mode });
       // Multipart requests must let FormData set its own boundary header, while
       // JSON requests need an explicit content type after configured headers.
+      const requestOptions = {
+        url: appendImagesPath(baseUrl, mode),
+        headers: new Headers(headers),
+        timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork: resolvedAllowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
+        dispatcherPolicy,
+      };
+      if (requestBody.kind === "multipart") {
+        requestOptions.headers.delete("Content-Type");
+      } else {
+        requestOptions.headers.set("Content-Type", "application/json");
+      }
       const request =
         requestBody.kind === "multipart"
-          ? postMultipartRequest({
-              url: appendImagesPath(baseUrl, mode),
-              headers: (() => {
-                const multipartHeaders = new Headers(headers);
-                multipartHeaders.delete("Content-Type");
-                return multipartHeaders;
-              })(),
-              body: requestBody.form,
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
-            })
-          : postJsonRequest({
-              url: appendImagesPath(baseUrl, mode),
-              headers: (() => {
-                const jsonHeaders = new Headers(headers);
-                jsonHeaders.set("Content-Type", "application/json");
-                return jsonHeaders;
-              })(),
-              body: requestBody.body,
-              timeoutMs,
-              fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
-              ssrfPolicy: req.ssrfPolicy,
-              dispatcherPolicy,
-            });
+          ? postMultipartRequest({ ...requestOptions, body: requestBody.form })
+          : postJsonRequest({ ...requestOptions, body: requestBody.body });
 
       const { response, release } = await request;
       try {

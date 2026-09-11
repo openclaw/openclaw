@@ -1,7 +1,13 @@
-// Tests core command dispatch, aliases, authorization, and handler outcomes.
+// Tests core command dispatch, reset hooks, authorization, and send policy.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import type {
+  CommandDispatchParams,
+  CommandHandler,
+  HandleCommandsParams,
+} from "./commands-types.js";
+
+// Tests core command dispatch, aliases, authorization, and handler outcomes.
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -36,7 +42,12 @@ function firstBeforeResetCall() {
 }
 
 describe("emitResetCommandHooks", () => {
-  async function runBeforeResetContext(sessionKey?: string) {
+  async function runBeforeResetContext(
+    sessionKey?: string,
+    cfg: HandleCommandsParams["cfg"] = {
+      agents: { entries: { main: { default: true } } },
+    },
+  ) {
     const command = {
       surface: "discord",
       senderId: "rai",
@@ -49,7 +60,7 @@ describe("emitResetCommandHooks", () => {
     await emitResetCommandHooks({
       action: "new",
       ctx: {} as HandleCommandsParams["ctx"],
-      cfg: {} as HandleCommandsParams["cfg"],
+      cfg,
       command,
       sessionKey,
       previousSessionEntry: {
@@ -85,9 +96,11 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("falls back to main when the reset hook has no session key", async () => {
-    const ctx = await runBeforeResetContext(undefined);
-    expect(ctx?.agentId).toBe("main");
+  it("uses the configured default when the reset hook has no session key", async () => {
+    const ctx = await runBeforeResetContext(undefined, {
+      agents: { entries: { ops: { default: true } } },
+    });
+    expect(ctx?.agentId).toBe("ops");
     expect(ctx?.sessionKey).toBeUndefined();
     expect(ctx?.sessionId).toBe("prev-session");
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
@@ -207,4 +220,172 @@ describe("emitResetCommandHooks", () => {
       { role: "assistant", content: "active tail" },
     ]);
   });
+});
+
+// Tests command send policy behavior for visible replies and message-tool routing.
+
+const loadCommandHandlersMock = vi.hoisted((): ReturnType<typeof vi.fn<() => CommandHandler[]>> =>
+  vi.fn<() => CommandHandler[]>(() => []),
+);
+
+vi.mock("./commands-handlers.runtime.js", () => ({
+  loadCommandHandlers: () => loadCommandHandlersMock(),
+}));
+
+vi.mock("./commands-reset.js", () => ({
+  maybeHandleResetCommand: vi.fn(async () => null),
+}));
+
+vi.mock("../commands-registry.js", () => ({
+  shouldHandleTextCommands: vi.fn(() => true),
+}));
+
+function makeParams(): CommandDispatchParams {
+  return {
+    cfg: {
+      commands: { text: true },
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { channel: "telegram" } }],
+        },
+      },
+    },
+    ctx: {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandSource: "text",
+    },
+    command: {
+      commandBodyNormalized: "/unknown",
+      rawBodyNormalized: "/unknown",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      senderId: "owner",
+      channel: "whatsapp",
+      channelId: "whatsapp",
+      surface: "whatsapp",
+      ownerList: [],
+      from: "owner",
+      to: "bot",
+    },
+    directives: {},
+    elevated: { enabled: true, allowed: true, failures: [] },
+    sessionKey: "agent:target:main",
+    agentId: "target",
+    sessionEntry: {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      channel: "whatsapp",
+      chatType: "direct",
+    },
+    sessionStore: {
+      "agent:target:main": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        channel: "telegram",
+        chatType: "direct",
+      },
+    },
+    workspaceDir: "/tmp/workspace",
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolveModelLevels: async () => ({
+      resolvedThinkLevel: undefined,
+      resolvedReasoningLevel: "off",
+    }),
+    resolveDefaultThinkingLevel: async () => undefined,
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    isGroup: false,
+  } as unknown as CommandDispatchParams;
+}
+
+describe("handleCommands send policy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    loadCommandHandlersMock.mockReturnValue([]);
+  });
+
+  it("allows processing to continue even when send policy is deny (#53328)", async () => {
+    const { handleCommands } = await import("./commands-core.js");
+    // sendPolicy deny now only suppresses outbound delivery, not inbound processing.
+    // The deny gate moved to dispatch-from-config.ts where it suppresses delivery
+    // after the agent has processed the message.
+    const result = await handleCommands(makeParams());
+
+    expect(result).toEqual({ shouldContinue: true });
+  });
+
+  it("marks command replies as non-threaded", async () => {
+    const { handleCommands } = await import("./commands-core.js");
+    loadCommandHandlersMock.mockReturnValue([
+      vi.fn(async () => ({
+        shouldContinue: false,
+        reply: {
+          text: "done",
+          replyToId: "msg-123",
+          replyToCurrent: true,
+        },
+      })),
+    ]);
+
+    const result = await handleCommands(makeParams());
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "done",
+        replyToId: undefined,
+        replyToCurrent: false,
+      },
+    });
+  });
+
+  it.each([
+    { sessionKey: "agent:target:main", expectedAgentId: "target" },
+    { sessionKey: "global", expectedAgentId: "caller" },
+  ])("dispatches $sessionKey with its selected owner", async ({ sessionKey, expectedAgentId }) => {
+    const { handleCommands } = await import("./commands-core.js");
+    const handler = vi.fn<CommandHandler>(async (params) => ({
+      shouldContinue: false,
+      reply: { text: params.agentId },
+    }));
+    loadCommandHandlersMock.mockReturnValue([handler]);
+    const params = makeParams();
+    params.cfg.agents = {
+      ownership: "explicit",
+      entries: { caller: {}, target: { agentDir: "/tmp/target-agent" } },
+    };
+    params.agentId = "caller";
+    params.agentDir = "/tmp/caller-agent";
+    params.sessionKey = sessionKey;
+
+    expect((await handleCommands(params)).reply?.text).toBe(expectedAgentId);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: `/tmp/${expectedAgentId}-agent` }),
+      true,
+    );
+  });
+
+  it.each([true, false])(
+    "preserves literal input when command interpretation is suppressed (%s)",
+    async (suppressed) => {
+      const { handleCommands } = await import("./commands-core.js");
+      const { maybeHandleResetCommand } = await import("./commands-reset.js");
+      const handler = vi.fn<CommandHandler>(async () => ({ shouldContinue: false }));
+      loadCommandHandlersMock.mockReturnValue([handler]);
+      const params = makeParams();
+      params.ctx.CommandInterpretationSuppressed = suppressed;
+      params.command.commandBodyNormalized = "/stop";
+      params.command.rawBodyNormalized = "/stop";
+
+      expect(await handleCommands(params)).toEqual({ shouldContinue: suppressed });
+      expect(maybeHandleResetCommand).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+      expect(handler).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+      expect(params.command.commandBodyNormalized).toBe("/stop");
+    },
+  );
 });

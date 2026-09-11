@@ -9,9 +9,12 @@ const probeMock = vi.hoisted(() => ({
 
 const runtimeMock = vi.hoisted(() => ({
   resolveIMessageMessageId: vi.fn((id: string) => id),
+  authorizeMessageReference: vi.fn(),
   resolveChatGuidForTarget: vi.fn(),
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
+  editMessage: vi.fn(),
+  unsendMessage: vi.fn(),
   sendAttachment: vi.fn(),
   renameGroup: vi.fn(),
   setGroupIcon: vi.fn(),
@@ -23,6 +26,10 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
+const remoteHostMock = vi.hoisted(() => ({
+  resolve: vi.fn(),
+  getCached: vi.fn(),
+}));
 
 const loggerMock = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -62,6 +69,11 @@ vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
 }));
 
+vi.mock("./remote-host.js", () => ({
+  resolveIMessageRemoteHost: remoteHostMock.resolve,
+  getCachedIMessageRemoteHost: remoteHostMock.getCached,
+}));
+
 vi.mock("./monitor-reply-cache.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor-reply-cache.js")>(
     "./monitor-reply-cache.js",
@@ -90,6 +102,7 @@ function imsgOptions(chatGuid = "") {
   return {
     cliPath: "imsg",
     dbPath: "/tmp/messages.db",
+    remoteHost: undefined,
     timeoutMs: undefined,
     chatGuid,
   };
@@ -99,9 +112,12 @@ describe("imessage message actions", () => {
   beforeEach(() => {
     runtimeMock.resolveIMessageMessageId.mockClear();
     runtimeMock.resolveIMessageMessageId.mockImplementation((id: string) => id);
+    runtimeMock.authorizeMessageReference.mockReset();
     runtimeMock.resolveChatGuidForTarget.mockReset();
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
+    runtimeMock.editMessage.mockReset();
+    runtimeMock.unsendMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
     runtimeMock.renameGroup.mockReset();
     runtimeMock.setGroupIcon.mockReset();
@@ -113,6 +129,8 @@ describe("imessage message actions", () => {
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
+    remoteHostMock.resolve.mockReset().mockResolvedValue(undefined);
+    remoteHostMock.getCached.mockReset().mockReturnValue(undefined);
     loggerMock.warn.mockReset();
   });
 
@@ -286,6 +304,54 @@ describe("imessage message actions", () => {
     expect(result).toMatchObject({ details: { ok: true, messageId: "poll-guid" } });
   });
 
+  it("dispatches a current-conversation poll without a model-supplied target", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+    });
+    runtimeMock.sendPoll.mockResolvedValue({ messageId: "poll-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "poll",
+      cfg: cfg(),
+      params: {
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      toolContext: { currentChannelId: "chat_guid:iMessage;+;chat0000" },
+    } as never);
+
+    expect(runtimeMock.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({ chatGuid: "iMessage;+;chat0000" }),
+    );
+  });
+
+  it.each(["target", "to", "chatGuid", "chatIdentifier"])(
+    "rejects a redacted %s with current-conversation remediation",
+    async (targetAlias) => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: { pollPayloadMessage: true },
+      });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "poll",
+          cfg: cfg(),
+          params: {
+            [targetAlias]: "***",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+          },
+          toolContext: { currentChannelId: "chat_guid:iMessage;+;chat0000" },
+        } as never),
+      ).rejects.toThrow("Omit the target to use the current conversation");
+      expect(runtimeMock.sendPoll).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a poll send when the bridge lacks the poll payload selector", async () => {
     const staleStatus = {
       available: true,
@@ -378,6 +444,7 @@ describe("imessage message actions", () => {
     const result = await imessageMessageActions.handleAction?.({
       action: "poll-vote",
       cfg: cfg(),
+      conversationReadOrigin: "delegated",
       params: {
         chatGuid: "iMessage;+;chat0000",
         pollId: "3",
@@ -397,6 +464,13 @@ describe("imessage message actions", () => {
         },
       ],
     ]);
+    expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        messageId: "poll-full-guid",
+        conversationReadOrigin: "delegated",
+      }),
+    );
     expect(result).toMatchObject({
       details: { ok: true, messageId: "vote-guid", pollVotedOption: "Blue" },
     });
@@ -640,6 +714,76 @@ describe("imessage message actions", () => {
     },
   );
 
+  it("routes a wrapper-only private action through the detected remote transport", async () => {
+    const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { editMessage: true },
+    });
+    remoteHostMock.resolve.mockResolvedValue("bot@messages-mac");
+    runtimeMock.editMessage.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "edit",
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/gateway/imsg-ssh",
+            dbPath: "~/Library/Messages/chat.db",
+          },
+        },
+      },
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text,
+      },
+    } as never);
+
+    expect(remoteHostMock.resolve).toHaveBeenCalledWith({
+      cliPath: "/gateway/imsg-ssh",
+      remoteHost: undefined,
+    });
+    expect(runtimeMock.editMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text,
+        options: expect.objectContaining({
+          cliPath: "/gateway/imsg-ssh",
+          dbPath: "~/Library/Messages/chat.db",
+          remoteHost: "bot@messages-mac",
+        }),
+      }),
+    );
+  });
+
+  it("fails closed before a private action can use an ambiguous SSH wrapper", async () => {
+    const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
+    remoteHostMock.resolve.mockRejectedValue(
+      new Error(
+        "iMessage SSH cliPath wrapper is not the simple transparent form; configure channels.imessage.remoteHost explicitly.",
+      ),
+    );
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "edit",
+        cfg: {
+          channels: {
+            imessage: { cliPath: "/gateway/imsg-proxy-wrapper" },
+          },
+        },
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          text,
+        },
+      } as never),
+    ).rejects.toThrow("configure channels.imessage.remoteHost explicitly");
+
+    expect(runtimeMock.editMessage).not.toHaveBeenCalled();
+  });
+
   it("allows owner and operator.admin group management", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
@@ -734,6 +878,7 @@ describe("imessage message actions", () => {
     await imessageMessageActions.handleAction?.({
       action: "react",
       cfg: cfg(),
+      conversationReadOrigin: "delegated",
       params: {
         chatGuid: "iMessage;+;chat0000",
         messageId: "message-guid",
@@ -753,7 +898,196 @@ describe("imessage message actions", () => {
         },
       ],
     ]);
+    expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledWith({
+      accountId: "default",
+      chatContext: {
+        chatGuid: "iMessage;+;chat0000",
+      },
+      cliPath: "imsg",
+      dbPath: "/tmp/messages.db",
+      hasExclusiveLocalDatabase: true,
+      remoteHost: undefined,
+      messageId: "message-guid",
+      conversationReadOrigin: "delegated",
+    });
   });
+
+  it("rejects an unbound message before invoking the bridge", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
+      throw new Error("iMessage message reference does not belong to the selected conversation.");
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        conversationReadOrigin: "delegated",
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "foreign-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow("does not belong to the selected conversation");
+
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects before resolving provider metadata for an unbound target alias", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
+      throw new Error("iMessage message reference belongs to a different conversation.");
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        conversationReadOrigin: "delegated",
+        params: {
+          chatIdentifier: "foreign-chat",
+          messageId: "foreign-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow("different conversation");
+
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it("authorizes a provider-resolved GUID independently of its input alias", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;foreign");
+    runtimeMock.authorizeMessageReference.mockImplementation(({ chatContext }) => {
+      if (chatContext.chatGuid) {
+        throw new Error("iMessage message reference belongs to a different conversation.");
+      }
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        conversationReadOrigin: "delegated",
+        params: {
+          chatIdentifier: "trusted-alias",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow("different conversation");
+
+    expect(runtimeMock.authorizeMessageReference.mock.calls).toEqual([
+      [expect.objectContaining({ chatContext: { chatIdentifier: "trusted-alias" } })],
+      [expect.objectContaining({ chatContext: { chatGuid: "iMessage;+;foreign" } })],
+    ]);
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it("uses one canonical selector when explicit and fallback targets disagree", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.sendReaction.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "react",
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;selected",
+        target: "chat_identifier:ignored",
+        messageId: "message-guid",
+        emoji: "👍",
+      },
+    } as never);
+
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledTimes(2);
+    for (const [authorization] of runtimeMock.authorizeMessageReference.mock.calls) {
+      expect(authorization.chatContext).toStrictEqual({ chatGuid: "iMessage;+;selected" });
+    }
+  });
+
+  it("rejects conflicting explicit chat aliases before provider reads", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;one",
+          chatIdentifier: "two",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow("conflicting delivery target aliases");
+
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.authorizeMessageReference).not.toHaveBeenCalled();
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["edit", { messageId: "message-guid", text: "updated" }, runtimeMock.editMessage],
+    ["unsend", { messageId: "message-guid" }, runtimeMock.unsendMessage],
+  ] as const)(
+    "authorizes %s references before native mutation",
+    async (action, params, mutation) => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: { editMessage: true, retractMessagePart: true },
+      });
+      mutation.mockResolvedValue(undefined);
+
+      await imessageMessageActions.handleAction?.({
+        action,
+        cfg: cfg(),
+        conversationReadOrigin: "direct-operator",
+        params: { chatGuid: "iMessage;+;chat0000", ...params },
+      } as never);
+
+      expect(runtimeMock.resolveIMessageMessageId.mock.calls).toHaveLength(2);
+      expect(runtimeMock.resolveIMessageMessageId.mock.calls[0]).toEqual([
+        "message-guid",
+        expect.objectContaining({ requireFromMe: true }),
+      ]);
+      expect(runtimeMock.resolveIMessageMessageId.mock.calls[1]).toEqual([
+        "message-guid",
+        expect.not.objectContaining({ requireFromMe: expect.anything() }),
+      ]);
+      expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId: "default",
+          messageId: "message-guid",
+          conversationReadOrigin: "direct-operator",
+        }),
+      );
+      expect(mutation).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("resolves chat_id targets before invoking bridge actions", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
@@ -779,6 +1113,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_id", chatId: 42 },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -865,8 +1200,6 @@ describe("imessage message actions", () => {
       requireKnownShortId: true,
       chatContext: {
         chatGuid: "iMessage;+;chat0000",
-        chatIdentifier: undefined,
-        chatId: undefined,
       },
     });
     expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
@@ -895,6 +1228,7 @@ describe("imessage message actions", () => {
     await imessageMessageActions.handleAction?.({
       action: "reply",
       cfg: cfg(),
+      conversationReadOrigin: "delegated",
       params: {
         chatIdentifier: "team-thread",
         messageId: "message-guid",
@@ -907,6 +1241,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -922,6 +1257,13 @@ describe("imessage message actions", () => {
         },
       ],
     ]);
+    expect(runtimeMock.authorizeMessageReference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        messageId: "message-guid",
+        conversationReadOrigin: "delegated",
+      }),
+    );
     expect(rememberIMessageReplyCacheMock).toHaveBeenCalledWith({
       accountId: "default",
       messageId: "reply-guid",
@@ -953,6 +1295,35 @@ describe("imessage message actions", () => {
         | undefined;
       return call?.attachment;
     }
+
+    it("rejects an unbound reference before processing attachment params", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.authorizeMessageReference.mockImplementationOnce(() => {
+        throw new Error("iMessage message reference belongs to a different conversation.");
+      });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "reply",
+          cfg: cfg(),
+          conversationReadOrigin: "delegated",
+          params: {
+            chatIdentifier: "foreign-chat",
+            messageId: "foreign-guid",
+            text: "reply",
+            filePath: stringPath,
+          },
+        } as never),
+      ).rejects.toThrow("different conversation");
+
+      expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
 
     it("threads a hydrated buffer attachment through to sendRichMessage when imsg supports send-rich --file", async () => {
       probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
@@ -1079,7 +1450,7 @@ describe("imessage message actions", () => {
   });
 
   describe("phone-number target end-to-end (regressions caught the hard way)", () => {
-    it("synthesizes iMessage;-;<phone> chat_identifier from a handle target and sends through to sendReaction", async () => {
+    it("lets a direct operator resolve an auto handle before sending a reaction", async () => {
       // Scenario from prod: agent calls react with `target:"+12069106512"` and a
       // known-cached short messageId. resolveChatGuid synthesizes
       // `iMessage;-;+12069106512` and asks the runtime to look it up. The
@@ -1097,6 +1468,7 @@ describe("imessage message actions", () => {
       await imessageMessageActions.handleAction?.({
         action: "react",
         cfg: cfg(),
+        conversationReadOrigin: "direct-operator",
         params: {
           target: "+12069106512",
           messageId: "5",
@@ -1114,17 +1486,20 @@ describe("imessage message actions", () => {
               chatIdentifier: "iMessage;-;+12069106512",
             },
             options: imsgOptions(),
+            conversationReadOrigin: "direct-operator",
           },
         ],
       ]);
-      // The cache lookup uses the synthesized chat_identifier as scope so
-      // cross-chat checks have something to match against.
-      expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith("5", {
+      expect(runtimeMock.resolveIMessageMessageId).toHaveBeenNthCalledWith(1, "5", {
+        requireKnownShortId: true,
+        chatContext: {},
+      });
+      // The second phase rechecks the resolved id against the canonical GUID
+      // before mutation, so provider alias resolution cannot change authority.
+      expect(runtimeMock.resolveIMessageMessageId).toHaveBeenLastCalledWith("full-guid", {
         requireKnownShortId: true,
         chatContext: {
-          chatGuid: undefined,
-          chatIdentifier: "iMessage;-;+12069106512",
-          chatId: undefined,
+          chatGuid: "any;-;+12069106512",
         },
       });
       // sendReaction lands on the real registered chat guid, not the
@@ -1401,5 +1776,119 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it.each([
+    ["upload-file", "-_8="],
+    ["upload-file", "-_8"],
+    ["setGroupIcon", "-_8="],
+    ["setGroupIcon", "-_8"],
+    ["reply", "-_8="],
+    ["reply", "-_8"],
+  ])("preserves URL-safe base64 for %s (%s)", async (action, buffer) => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action,
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text: "attachment",
+        filename: "photo.jpg",
+        buffer,
+      },
+      senderIsOwner: true,
+    } as never);
+
+    const expectedBuffer = Uint8Array.from([0xfb, 0xff]);
+    if (action === "reply") {
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachment: expect.objectContaining({ buffer: expectedBuffer }),
+        }),
+      );
+    } else {
+      const nativeAction =
+        action === "setGroupIcon" ? runtimeMock.setGroupIcon : runtimeMock.sendAttachment;
+      expect(nativeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: expectedBuffer }),
+      );
+    }
+  });
+
+  it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: "!!!not-base64!!!",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 buffer for setGroupIcon instead of setting a garbage icon", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "setGroupIcon",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "icon.png",
+          buffer: "!!!not-base64!!!",
+        },
+        senderIsOwner: true,
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.setGroupIcon).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 reply attachment instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "here it is",
+          buffer: "!!!not-base64!!!",
+          filename: "card.png",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

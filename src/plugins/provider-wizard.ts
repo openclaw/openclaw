@@ -8,8 +8,9 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
-import { resolvePluginSetupProvider } from "./setup-registry.js";
+import type { ProviderAuthChoiceMetadata } from "./provider-auth-choices.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { resolvePluginSetupProviderCore } from "./setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -42,6 +43,7 @@ type ProviderWizardProvidersResolver = (params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }) => ProviderPlugin[];
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
@@ -134,15 +136,17 @@ function resolveProviderWizardProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): ProviderPlugin[] {
   if (providerWizardProvidersResolverForTest) {
     return providerWizardProvidersResolverForTest(params);
   }
-  return resolvePluginProviders({
+  return resolvePluginProvidersCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
 }
 
@@ -240,9 +244,13 @@ export function resolveProviderModelPickerEntries(params: {
   return entries;
 }
 
-export function resolveProviderPluginChoice(params: {
+export function resolveProviderPluginChoiceCore(params: {
   providers: ProviderPlugin[];
   choice: string;
+  manifestChoice?: Pick<
+    ProviderAuthChoiceMetadata,
+    "pluginId" | "providerId" | "methodId" | "choiceId"
+  >;
 }): {
   provider: ProviderPlugin;
   method: ProviderAuthMethod;
@@ -266,6 +274,25 @@ export function resolveProviderPluginChoice(params: {
     }
     const method = resolveMethodById(provider, methodId);
     return method ? { provider, method } : null;
+  }
+
+  // The manifest owns dispatch; runtime wizard metadata need not repeat its choice ID.
+  if (params.manifestChoice) {
+    const declared = params.manifestChoice;
+    if (declared.choiceId !== choice) {
+      return null;
+    }
+    const provider = params.providers.find(
+      (entry) =>
+        entry.pluginId === declared.pluginId &&
+        normalizeProviderId(entry.id) === normalizeProviderId(declared.providerId),
+    );
+    const methodId = normalizeOptionalLowercaseString(declared.methodId);
+    if (!provider || !methodId) {
+      return null;
+    }
+    const method = resolveMethodById(provider, methodId);
+    return method ? { provider, method, wizard: method.wizard } : null;
   }
 
   for (const provider of params.providers) {
@@ -301,13 +328,14 @@ export function resolveProviderPluginChoice(params: {
   return null;
 }
 
-export async function runProviderModelSelectedHook(params: {
+export async function runProviderModelSelectedHookCore(params: {
   config: OpenClawConfig;
   model: string;
   prompter: WizardPrompter;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  preparedProvider?: ProviderPlugin;
 }): Promise<void> {
   const rawModel = params.model.trim();
   if (!rawModel) {
@@ -322,18 +350,26 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
-  const setupProvider = resolvePluginSetupProvider({
-    provider: selectedProviderId,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const preparedProvider =
+    params.preparedProvider &&
+    normalizeProviderId(params.preparedProvider.id) === selectedProviderId
+      ? params.preparedProvider
+      : undefined;
+  const setupProvider =
+    preparedProvider ??
+    resolvePluginSetupProviderCore({
+      provider: selectedProviderId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
   const provider =
     setupProvider ??
     resolveProviderWizardProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      providerRefs: [selectedProviderId],
     }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;

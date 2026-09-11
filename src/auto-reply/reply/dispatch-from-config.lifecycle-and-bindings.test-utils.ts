@@ -1,7 +1,10 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { AsyncResource } from "node:async_hooks";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
@@ -15,8 +18,9 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { MsgContext } from "../templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -42,12 +46,50 @@ import {
   firstMockArg,
   firstFinalReplyPayload,
   installThreadingTestPlugin,
-  requireBlockReplyHandler,
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function mockPendingPluginClaim(params: {
+  bindingId: string;
+  targetSessionKey: string;
+  conversationId: string;
+}) {
+  setNoAbort();
+  hookMocks.runner.hasHooks.mockImplementation(
+    ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+  );
+  hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+  let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+  hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+    async () =>
+      await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+        resolveClaim = resolve;
+      }),
+  );
+  sessionBindingMocks.resolveByConversation.mockReturnValue({
+    bindingId: params.bindingId,
+    targetSessionKey: params.targetSessionKey,
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: params.conversationId,
+    },
+    status: "active",
+    boundAt: 1710000000000,
+    metadata: {
+      pluginBindingOwner: "plugin",
+      pluginId: "test-plugin",
+      pluginRoot: "/tmp/test-plugin",
+    },
+  } satisfies SessionBindingRecord);
+  return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -391,9 +433,9 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("audits setup failures without replacing the dispatch error", async () => {
+  it("audits registry-load failures without exposing the setup error", async () => {
     setNoAbort();
-    runtimePluginMocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
       throw new Error("setup failed");
     });
 
@@ -721,8 +763,29 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
+  it("resolves one matching inbound claim pair for a plugin-owned binding", async () => {
     setNoAbort();
+    let resolveCalls = 0;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            messaging: {
+              resolveInboundConversation: () => {
+                resolveCalls += 1;
+                return {
+                  conversationId: `conversation-${resolveCalls}`,
+                  parentConversationId: `parent-${resolveCalls}`,
+                };
+              },
+            },
+          },
+        },
+      ]),
+    );
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
@@ -781,7 +844,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -791,20 +858,24 @@ describe("dispatchReplyFromConfig", () => {
             channel?: unknown;
             content?: unknown;
             conversationId?: unknown;
+            parentConversationId?: unknown;
             senderIsOwner?: unknown;
           },
           {
             accountId?: unknown;
             channelId?: unknown;
             conversationId?: unknown;
-            pluginBinding?: { data?: Record<string, unknown> };
+            parentConversationId?: unknown;
+            pluginBinding?: { bindingId?: string; data?: Record<string, unknown> };
           },
         ]
       | undefined;
+    expect(resolveCalls).toBe(1);
     expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
     expect(inboundClaimCall?.[1]?.channel).toBe("discord");
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[1]?.conversationId).toBe("conversation-1");
+    expect(inboundClaimCall?.[1]?.parentConversationId).toBe("parent-1");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
     // Context OwnerAllowFrom authorizes commands but no longer grants owner status;
     // only commands.ownerAllowFrom or operator.admin does (operator.write here does not).
@@ -812,43 +883,331 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[1]).not.toHaveProperty("gatewayClientScopes");
     expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[2]?.conversationId).toBe(inboundClaimCall?.[1]?.conversationId);
+    expect(inboundClaimCall?.[2]?.parentConversationId).toBe(
+      inboundClaimCall?.[1]?.parentConversationId,
+    );
+    expect(inboundClaimCall?.[2]?.pluginBinding?.bindingId).toBe("binding-1");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
+  it("preserves explicit inbound claim rejection for a plugin-owned binding", async () => {
     setNoAbort();
+    const resolveInboundConversation = vi.fn(() => null);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            messaging: { resolveInboundConversation },
+          },
+        },
+      ]),
+    );
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
     );
     hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-lifecycle-race",
-      targetSessionKey: "plugin-binding:test:race",
+      bindingId: "binding-null-rejection",
+      targetSessionKey: "plugin-binding:test:null-rejection",
       targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
-        conversationId: "channel:lifecycle-race",
+        conversationId: "channel:null-rejection",
       },
       status: "active",
       boundAt: 1710000000000,
       metadata: {
         pluginBindingOwner: "plugin",
         pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
+        pluginRoot: "/plugins/test-plugin",
       },
     } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:null-rejection",
+      To: "discord:channel:null-rejection",
+      AccountId: "default",
+      Body: "keep the rejection",
+      MessageSid: "msg-claim-null-rejection",
+      SessionKey: "agent:main:discord:channel:null-rejection",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(resolveInboundConversation).toHaveBeenCalledTimes(1);
+    const [, event, context] = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "targeted inbound claim",
+    ) as [
+      string,
+      { conversationId?: string; parentConversationId?: string },
+      {
+        conversationId?: string;
+        parentConversationId?: string;
+        pluginBinding?: { bindingId?: string };
+      },
+    ];
+    expect(event.conversationId).toBeUndefined();
+    expect(event.parentConversationId).toBeUndefined();
+    expect(context.conversationId).toBeUndefined();
+    expect(context.parentConversationId).toBeUndefined();
+    expect(context.pluginBinding?.bindingId).toBe("binding-null-rejection");
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("looks up plugin bindings with the canonical conversation target", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "codex", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    const binding = {
+      bindingId: "binding-slack-user",
+      targetSessionKey: "plugin-binding:codex:slack-user",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "codex",
+        pluginRoot: "/tmp/codex",
+      },
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockImplementation((conversation) =>
+      conversation.conversationId === "user:U123" ? binding : null,
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "openclaw",
+      Surface: "openclaw",
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      From: "user:U123",
+      To: "user:U123",
+      AccountId: "default",
+      Body: "hello",
+      SessionKey: "main",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+      parentConversationId: undefined,
+    });
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Object),
+      expect.objectContaining({
+        conversationId: "U123",
+        pluginBinding: expect.objectContaining({ bindingId: "binding-slack-user" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it.each(["fresh owner", "hook-only admission"] as const)(
+    "retains cancelled plugin media staging until cleanup settles with %s",
+    async (ownership) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "inbound_claim");
+      hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+        status: "handled",
+        result: { handled: true, reply: { text: "must not send" } },
+      });
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: "binding-staging-cancellation",
+        targetSessionKey: "plugin-binding:test:staging-cancellation",
+        targetKind: "session",
+        conversation: {
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "chat:staging-cancellation",
+        },
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "test-plugin",
+          pluginRoot: "/tmp/test-plugin",
+        },
+      } satisfies SessionBindingRecord);
+      const sessionKey = "agent:main:imessage:direct:staging-cancellation";
+      const sessionId = "staging-cancellation-session";
+      sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+      const existingOperation =
+        ownership === "hook-only admission"
+          ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+          : undefined;
+      const abort = new AbortController();
+      const cancellation = new Error("attachment request cancelled");
+      const cleanup = createDeferred();
+      let cleanupStarted = false;
+      let cleanupFinished = false;
+      stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async () => {
+        await waitForAbortSignal(abort.signal);
+        try {
+          throw cancellation;
+        } finally {
+          cleanupStarted = true;
+          await cleanup.promise;
+          cleanupFinished = true;
+        }
+      });
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+      const externalLifecycleRequest = new AsyncResource("external-staging-cancellation");
+      const dispatchResult = vi.fn();
+      const dispatchFailure = vi.fn();
+      const dispatch = withDispatchProcessedOutcomeSink(() =>
+        dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "imessage",
+            Surface: "imessage",
+            To: "imessage:chat:staging-cancellation",
+            AccountId: "default",
+            SessionKey: sessionKey,
+            Body: "inspect this attachment",
+            MessageSid: "message-staging-cancellation",
+            media: [{ path: "/remote/photo.jpg", contentType: "image/jpeg" }],
+            MediaRemoteHost: "user@gateway-host",
+          }),
+          cfg: emptyConfig,
+          dispatcher,
+          replyOptions: { abortSignal: abort.signal },
+          replyResolver,
+        }),
+      );
+      const dispatchSettled = dispatch.then(dispatchResult, dispatchFailure);
+      let mutation: Promise<void> | undefined;
+      let mutationPrepared = false;
+      let mutationRan = false;
+      try {
+        await vi.waitFor(() => {
+          expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
+        });
+        const operation = replyRunRegistry.get(sessionKey);
+        expect(operation).toBeDefined();
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        if (existingOperation) {
+          expect(operation).toBe(existingOperation);
+          existingOperation.complete();
+          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        }
+        abort.abort(cancellation);
+        mutation = externalLifecycleRequest.runInAsyncScope(async () =>
+          runExclusiveSessionLifecycleMutation({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              mutationPrepared = true;
+              await interruptSessionWorkAdmissions({
+                scope: "/tmp/mock-sessions.json",
+                identities: [sessionKey, sessionId],
+              });
+            },
+            run: async () => {
+              mutationRan = true;
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(cleanupStarted).toBe(true);
+          expect(mutationPrepared).toBe(true);
+          expect(dispatchFailure).not.toHaveBeenCalled();
+          expect(dispatchResult).toHaveBeenCalledWith({
+            result: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+            processedOutcome: { outcome: "skipped", reason: "reply_operation_aborted" },
+          });
+        });
+        expect(cleanupFinished).toBe(false);
+        expect(mutationRan).toBe(false);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(true);
+        expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation ? undefined : operation);
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+
+        cleanup.resolve();
+        await mutation;
+        await dispatchSettled;
+        expect(cleanupFinished).toBe(true);
+        expect(mutationRan).toBe(true);
+        expect(
+          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+        ).toBe(false);
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(dispatchResult).toHaveBeenCalledOnce();
+        expect(dispatchFailure).not.toHaveBeenCalled();
+        expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+        expect(messageAuditEvents()[0]).toMatchObject({
+          status: "blocked",
+          outcome: "skipped",
+          reasonCode: "reply_operation_aborted",
+        });
+        expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
+        expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(mocks.routeReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+        expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } finally {
+        abort.abort(cancellation);
+        cleanup.resolve();
+        existingOperation?.complete();
+        await Promise.allSettled([dispatchSettled, mutation]);
+        externalLifecycleRequest.emitDestroy();
+      }
+    },
+  );
+
+  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
+    const resolveClaim = mockPendingPluginClaim({
+      bindingId: "binding-lifecycle-race",
+      targetSessionKey: "plugin-binding:test:race",
+      conversationId: "channel:lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:lifecycle-race";
     const sessionId = "plugin-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -909,111 +1268,12 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
-  it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:channel:owned-resolver-race";
-    const sessionId = "owned-resolver-session";
-    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      signalResolverEntered();
-      await resolverGate;
-      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
-      return { text: "stale late final" } satisfies ReplyPayload;
-    });
-    const dispatch = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        To: "discord:channel:owned-resolver-race",
-        AccountId: "default",
-        SessionKey: sessionKey,
-        Body: "hold this resolver",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    await resolverEntered;
-
-    const externalLifecycleRequest = new AsyncResource("external-owned-resolver-lifecycle");
-    let mutationRan = false;
-    const mutation = externalLifecycleRequest.runInAsyncScope(
-      async () =>
-        await runExclusiveSessionLifecycleMutation({
-          scope: "/tmp/mock-sessions.json",
-          identities: [sessionKey, sessionId],
-          prepare: async () => {
-            await interruptSessionWorkAdmissions({
-              scope: "/tmp/mock-sessions.json",
-              identities: [sessionKey, sessionId],
-            });
-          },
-          run: async () => {
-            mutationRan = true;
-          },
-        }),
-    );
-
-    try {
-      const result = await dispatch;
-      expect(result.queuedFinal).toBe(false);
-      expect(mutationRan).toBe(false);
-      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-        true,
-      );
-
-      releaseResolver();
-      await mutation;
-
-      expect(mutationRan).toBe(true);
-      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    } finally {
-      releaseResolver();
-      await mutation;
-      externalLifecycleRequest.emitDestroy();
-    }
-  });
-
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:active-lifecycle-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:active-lifecycle-race",
+    });
     const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
     const sessionId = "plugin-active-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1084,35 +1344,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("does not abort the active owner when its in-band mutation interrupts borrowed work", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
-    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
-      async () =>
-        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
-          resolveClaim = resolve;
-        }),
-    );
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-owner-mutation-race",
       targetSessionKey: "plugin-binding:test:owner-mutation-race",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:owner-mutation-race",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      conversationId: "channel:owner-mutation-race",
+    });
     const sessionKey = "agent:main:discord:channel:owner-mutation-race";
     const sessionId = "owner-mutation-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
@@ -1211,10 +1447,12 @@ describe("dispatchReplyFromConfig", () => {
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let resolveNotice: ((result: { ok: true; messageId: string }) => void) | undefined;
+    let resolveNotice:
+      | ((result: { ok: true; delivered: true; messageId: string }) => void)
+      | undefined;
     mocks.routeReply.mockImplementationOnce(
       async () =>
-        await new Promise<{ ok: true; messageId: string }>((resolve) => {
+        await new Promise<{ ok: true; delivered: true; messageId: string }>((resolve) => {
           resolveNotice = resolve;
         }),
     );
@@ -1264,7 +1502,7 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(mutationRan).toBe(false);
 
-    resolveNotice?.({ ok: true, messageId: "fallback-notice" });
+    resolveNotice?.({ ok: true, delivered: true, messageId: "fallback-notice" });
     const result = await dispatch;
     await mutation;
 
@@ -1304,17 +1542,11 @@ describe("dispatchReplyFromConfig", () => {
         remoteMediaMode?: string;
       };
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
-      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      expect(params.workspaceDir).toContain(path.join(".openclaw", "workspace"));
       expect(params.remoteMediaMode).toBe("cache");
-      params.ctx.MediaPath = stagedPath;
-      params.ctx.MediaPaths = [stagedPath];
-      params.ctx.MediaUrl = stagedPath;
-      params.ctx.MediaUrls = [stagedPath];
-      params.sessionCtx.MediaPath = stagedPath;
-      params.sessionCtx.MediaPaths = [stagedPath];
-      params.sessionCtx.MediaUrl = stagedPath;
-      params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[rawPath, stagedPath]]) };
+      params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
+      params.sessionCtx.media = params.ctx.media;
+      return { staged: new Map([[0, stagedPath]]) };
     });
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -1374,12 +1606,7 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-claim-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
@@ -1388,11 +1615,15 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(order).toEqual(["stage", "claim"]);
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-imessage-codex-media",
+      undefined,
+      expect.objectContaining({ channel: "imessage", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -1420,18 +1651,13 @@ describe("dispatchReplyFromConfig", () => {
       Body: "what is this?",
       MessageSid: "msg-ordinary-imessage-media",
       SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
       MediaRemoteHost: "user@gateway-host",
     });
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
@@ -1440,9 +1666,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("does not cache-stage remote iMessage media for message_received-only hooks", async () => {
@@ -1453,41 +1679,50 @@ describe("dispatchReplyFromConfig", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:ordinary-hook",
-      To: "imessage:chat:ordinary-hook",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-ordinary-imessage-hook-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      MediaPath: rawPath,
-      MediaPaths: [rawPath],
-      MediaUrl: rawPath,
-      MediaUrls: [rawPath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = finalizeInboundContextForSdk(
+      buildTestCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:chat:ordinary-hook",
+        To: "imessage:chat:ordinary-hook",
+        AccountId: "default",
+        SenderId: "user-9",
+        CommandAuthorized: true,
+        WasMentioned: false,
+        CommandBody: "what is this?",
+        RawBody: "what is this?",
+        Body: "what is this?",
+        MessageSid: "msg-ordinary-imessage-hook-media",
+        SessionKey: "agent:main:imessage:direct:user",
+        media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
+        MediaRemoteHost: "user@gateway-host",
+      }),
+    );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
-      expect(receivedCtx.MediaStaged).not.toBe(true);
-      expect(receivedCtx.MediaPath).toBe(rawPath);
-      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      expect(receivedCtx.media).toEqual([
+        expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+      ]);
       return { text: "agent reply" } satisfies ReplyPayload;
     });
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
-      | [{ metadata?: Record<string, unknown> }]
+      | [
+          {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
+            metadata?: Record<string, unknown>;
+          },
+        ]
       | [];
+    expect(event?.media).toBeUndefined();
+    expect(event?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(event?.mediaStagingPending).toBe(true);
     expect(event?.metadata?.mediaPath).toBeUndefined();
     expect(event?.metadata?.mediaPaths).toBeUndefined();
     expect(event?.metadata?.mediaUrl).toBeUndefined();
@@ -1509,6 +1744,9 @@ describe("dispatchReplyFromConfig", () => {
           unknown,
           unknown,
           {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
             metadata?: Record<string, unknown>;
           },
         ]
@@ -1517,11 +1755,16 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
     expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
     expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(internalHookCall?.[3]?.media).toBeUndefined();
+    expect(internalHookCall?.[3]?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(internalHookCall?.[3]?.mediaStagingPending).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
-    expect(ctx.MediaStaged).not.toBe(true);
-    expect(ctx.MediaPath).toBe(rawPath);
-    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
   });
 
   it("routes Discord thread plugin-owned bindings by raw thread id", async () => {
@@ -1701,22 +1944,27 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: { abortSignal: abortController.signal },
-      replyResolver,
-    });
+    const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver,
+      }),
+    );
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    // The aborted skip queues nothing; the sink must name the branch so the
+    // kernel's zero-count warning is attributable to a benign abort.
+    expect(processedOutcome).toEqual({ outcome: "skipped", reason: "reply_operation_aborted" });
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("lets authorized plugin-owned binding commands fall through to command processing", async () => {
+  it("lets authorized gateway-style plugin commands escape plugin-owned bindings", async () => {
     setNoAbort();
     expect(
       registerPluginCommand(
@@ -1775,10 +2023,10 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
-      CommandSource: "text",
       CommandAuthorized: true,
       WasMentioned: false,
       CommandBody: "/codex detach",
+      BodyForCommands: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",
@@ -1786,10 +2034,23 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
 
+    expect(
+      shouldBypassPluginOwnedBindingForCommand(
+        { ...ctx, CommandAuthorized: "false" } as unknown as Parameters<
+          typeof shouldBypassPluginOwnedBindingForCommand
+        >[0],
+        cfg,
+      ),
+    ).toBe(false);
+
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -1849,7 +2110,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-unknown-slash",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/notes keep this with the bound plugin" }),

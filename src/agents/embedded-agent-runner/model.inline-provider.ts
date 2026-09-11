@@ -1,13 +1,19 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -16,8 +22,9 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow"> & {
   api?: Api;
+  contextWindow?: number;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -27,8 +34,6 @@ export type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  contextWindow?: ModelProviderConfig["contextWindow"];
-  contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
   headers?: unknown;
@@ -138,9 +143,10 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
-/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
+/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
+  options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {
     const trimmed = providerId.trim();
@@ -151,18 +157,26 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
+    // Provider defaults must not mask omissions before exact duplicate rows merge.
+    const models = resolveMergedModelProviderModels({
+      models: entry?.models,
+      normalizeModelId: (modelId) => modelId.trim(),
+    });
+    return Array.from(models.values()).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
-        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
+        baseUrl: model.baseUrl ?? entry?.baseUrl,
       });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+      const modelHeaders = sanitizeModelHeaders(model.headers, {
         stripSecretRefMarkers: true,
       });
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
         api: transport.api ?? model.api,
         baseUrl: transport.baseUrl,
+        ...(options.providerMetadataOwners
+          ? { providerMetadataOwners: options.providerMetadataOwners }
+          : {}),
         providerHeaders,
         modelHeaders,
         authHeader: entry?.authHeader,
@@ -170,28 +184,55 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderLocalService(
-        attachModelProviderRequestTransport(
-          {
-            ...model,
-            contextWindow: model.contextWindow ?? entry?.contextWindow,
-            contextTokens: model.contextTokens ?? entry?.contextTokens,
-            maxTokens: model.maxTokens ?? entry?.maxTokens,
-            input: resolveProviderModelInput({
+      const maxTokens = model.maxTokens ?? entry?.maxTokens;
+      return attachModelProviderRequestRouteFacts(
+        attachModelProviderLocalService(
+          attachModelProviderRequestTransport(
+            {
+              ...model,
+              ...(maxTokens !== undefined ? { maxTokens } : {}),
+              input: resolveProviderModelInput({
+                provider: trimmed,
+                modelId: model.id,
+                modelName: model.name,
+                input: model.input,
+              }),
               provider: trimmed,
-              modelId: model.id,
-              modelName: model.name,
-              input: model.input,
-            }),
-            provider: trimmed,
-            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-            api: requestConfig.api ?? model.api,
-            headers: requestConfig.headers,
-          },
-          providerRequest,
+              baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+              api: requestConfig.api ?? model.api,
+              headers: requestConfig.headers,
+            },
+            providerRequest,
+          ),
+          entry?.localService,
         ),
-        entry?.localService,
+        options.providerMetadataOwners,
       );
     });
   });
+}
+
+/** Completes captured inline definitions with the same contract used by static catalogs. */
+export function completeInlineProviderModel(
+  model: InlineModelEntry,
+  providerConfig: ModelProviderConfig,
+): ProviderRuntimeModel {
+  return {
+    ...model,
+    name: model.name || model.id,
+    api: model.api ?? providerConfig.api ?? "openai-responses",
+    baseUrl: model.baseUrl ?? "",
+    reasoning: model.reasoning ?? false,
+    input: resolveProviderModelInput({
+      provider: model.provider,
+      modelId: model.id,
+      modelName: model.name,
+      input: model.input,
+    }),
+    cost: model.cost ?? normalizeResolvedPricing({}),
+    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model.contextTokens,
+    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
+  };
 }

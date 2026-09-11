@@ -1,20 +1,26 @@
 // Mattermost helper module supports config schema core behavior.
 import {
   BlockStreamingCoalesceSchema,
+  ChannelImplicitMentionsSchema,
+  ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
-const MattermostGroupSchema = z
-  .object({
-    /** Whether mentions are required to trigger the bot in this group. */
-    requireMention: z.boolean().optional(),
-  })
-  .strict();
+const MattermostGroupSchema = buildGroupEntrySchema().omit({
+  tools: true,
+  toolsBySender: true,
+  skills: true,
+  enabled: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
 
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
@@ -87,11 +93,13 @@ const MattermostStreamingProgressSchema = z
     maxLines: z.number().int().positive().optional(),
     maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingPreviewSchema = z
   .object({
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingBlockSchema = z
@@ -119,7 +127,7 @@ const MattermostReplyToModeByChatTypeSchema = z
   })
   .strict();
 
-const MattermostAccountSchemaBase = z
+export const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
@@ -127,11 +135,15 @@ const MattermostAccountSchemaBase = z
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
+    historyLimit: z.number().int().min(0).optional(),
+    mediaMaxMb: z.number().positive().optional(),
     botToken: buildSecretInputSchema().optional(),
     baseUrl: z.string().optional(),
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -143,6 +155,7 @@ const MattermostAccountSchemaBase = z
     responsePrefix: z.string().optional(),
     actions: z
       .object({
+        messages: z.boolean().optional(),
         reactions: z.boolean().optional(),
       })
       .optional(),
@@ -162,21 +175,13 @@ const MattermostAccountSchemaBase = z
   })
   .strict();
 
-const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
-});
-
-export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
-  accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
+export const MattermostConfigSchema = buildMultiAccountChannelSchema(MattermostAccountSchemaBase, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
+    requireMattermostOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+    });
+  },
 });

@@ -1,13 +1,15 @@
-// Migrate Hermes plugin module implements apply behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  applyMigrationConfigPatchItem,
+  applyMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -18,9 +20,9 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { applyAuthItem } from "./auth.js";
-import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import {
   findHermesModelProviderDependency,
@@ -33,6 +35,25 @@ import { applySecretItem } from "./secrets.js";
 import { resolveTargets } from "./targets.js";
 
 const HERMES_SQLITE_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-sqlite-";
+
+function isHermesMemoryOnlyCopyItem(item: MigrationItem): boolean {
+  return (
+    item.kind === "memory" &&
+    item.action === "copy" &&
+    item.details?.sourceType === "hermes-memory" &&
+    item.details?.collectionId === "hermes"
+  );
+}
+
+function assertConsistentMemoryPlan(plan: MigrationPlan): void {
+  const hasMemoryOnlyCopy = plan.items.some(isHermesMemoryOnlyCopyItem);
+  const hasMemoryAppend = plan.items.some(
+    (item) => item.kind === "memory" && item.action === "append",
+  );
+  if (hasMemoryOnlyCopy && hasMemoryAppend) {
+    throw new Error("Hermes migration plan mixes memory-only copy and append items");
+  }
+}
 
 async function archiveHermesItem(item: MigrationItem, reportDir: string): Promise<MigrationItem> {
   if (!item.source || path.extname(item.source) !== ".db") {
@@ -57,8 +78,7 @@ async function archiveHermesItem(item: MigrationItem, reportDir: string): Promis
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: HERMES_SQLITE_SNAPSHOT_PREFIX },
       async ({ dir: tempDir }) => {
         const snapshotPath = path.join(tempDir, path.basename(sourcePath));
-        const { DatabaseSync } = await import("node:sqlite");
-        const source = new DatabaseSync(sourcePath, { readOnly: true });
+        const source = openNodeSqliteDatabase(sourcePath, { readOnly: true });
         try {
           source.exec("PRAGMA busy_timeout = 30000;");
           source.prepare("VACUUM INTO ?").run(snapshotPath);
@@ -124,6 +144,7 @@ export async function applyHermesPlan(params: {
   runtime?: MigrationProviderContext["runtime"];
 }): Promise<MigrationApplyResult> {
   const plan = params.plan ?? (await buildHermesPlan(params.ctx));
+  assertConsistentMemoryPlan(plan);
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
   // Item ids are report labels, not unique execution keys. Preserve object identity so
@@ -160,15 +181,21 @@ export async function applyHermesPlan(params: {
         appliedItem = await applyModelItem(applyCtx, item);
       }
     } else if (item.kind === "config") {
-      appliedItem = await applyConfigItem(applyCtx, item);
+      appliedItem = await applyMigrationConfigPatchItem(applyCtx, item);
     } else if (item.kind === "manual") {
-      appliedItem = applyManualItem(item);
+      appliedItem = applyMigrationManualItem(item);
     } else if (item.action === "archive") {
       appliedItem = await archiveHermesItem(item, reportDir);
     } else if (item.kind === "auth") {
       appliedItem = await applyAuthItem(applyCtx, item, targets);
     } else if (item.kind === "secret") {
       appliedItem = await applySecretItem(applyCtx, item, targets);
+    } else if (isHermesMemoryOnlyCopyItem(item)) {
+      // Route from the reviewed item shape; ctx.itemKinds is caller metadata and may be absent.
+      appliedItem = await copyMemoryMigrationFileItem(item, reportDir, {
+        workspaceDir: targets.workspaceDir,
+        overwrite: params.ctx.overwrite,
+      });
     } else if (item.action === "append") {
       appliedItem = await appendItem(item);
     } else {

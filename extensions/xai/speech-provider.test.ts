@@ -21,9 +21,9 @@ const {
     release: vi.fn(async () => {}),
   })),
   isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-  resolveApiKeyForProviderMock: vi.fn(
-    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
-  ),
+  resolveApiKeyForProviderMock: vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({
+    apiKey: undefined,
+  })),
 }));
 
 vi.mock("./tts.js", () => ({
@@ -266,6 +266,29 @@ describe("xai speech provider", () => {
       provider: "xai",
       cfg: {},
     });
+  });
+
+  it("treats blank direct credentials as absent across readiness and requests", async () => {
+    process.env.XAI_API_KEY = "   ";
+    const provider = buildXaiSpeechProvider();
+    const providerConfig = { apiKey: "   " };
+
+    expect(provider.isConfigured({ cfg: {}, providerConfig, timeoutMs: 5_000 })).toBe(false);
+    await expect(provider.listVoices?.({ apiKey: "   ", providerConfig })).resolves.toEqual(
+      ["ara", "eve", "leo", "rex", "sal"].map((voice) => ({ id: voice, name: voice })),
+    );
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {},
+        providerConfig,
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("xAI credentials missing for TTS");
+
+    expect(listXaiTtsVoicesMock).not.toHaveBeenCalled();
+    expect(xaiTTSMock).not.toHaveBeenCalled();
   });
 
   it("reports not configured when there is no apiKey, env, or auth profile", () => {

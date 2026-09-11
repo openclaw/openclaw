@@ -39,6 +39,10 @@ export function createCodexTestBindingStateStore(): PluginStateSyncKeyedStore<St
       return value;
     },
     delete: (key) => values.delete(key),
+    deleteIf: (key, predicate) => {
+      const value = values.get(key);
+      return value !== undefined && predicate(value) && values.delete(key);
+    },
     entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
     clear: () => values.clear(),
   };
@@ -116,7 +120,7 @@ export async function readCodexAppServerBinding(
   sessionId: string,
   _lookup?: unknown,
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  return await testCodexAppServerBindingStore.read(testIdentity(sessionId));
+  return testCodexAppServerBindingStore.read(testIdentity(sessionId));
 }
 
 export async function writeCodexAppServerBinding(
@@ -125,10 +129,6 @@ export async function writeCodexAppServerBinding(
   _lookup?: unknown,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testIdentity(sessionId), { kind: "set", binding });
-}
-
-export async function clearCodexAppServerBinding(sessionId: string): Promise<void> {
-  await testCodexAppServerBindingStore.mutate(testIdentity(sessionId), { kind: "clear" });
 }
 
 export async function clearCodexAppServerBindingForThread(

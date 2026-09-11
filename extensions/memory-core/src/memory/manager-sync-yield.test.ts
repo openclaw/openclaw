@@ -7,7 +7,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  ensureMemoryIndexSchema,
+  requireNodeSqlite,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildSessionEntryMock } = vi.hoisted(() => ({
@@ -44,25 +49,19 @@ vi.mock("undici", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-qmd")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
     ...actual,
     buildSessionEntry: buildSessionEntryMock,
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
-    listSessionFilesForAgent: vi.fn(async () => []),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
       sessionId: basename(filePath).replace(/\.jsonl$/, ""),
-    }),
-    resolveSessionFileForSyncTarget: (target: { agentId?: string; sessionId: string }) => ({
-      agentId: target.agentId ?? "main",
-      sessionFile: `/tmp/${target.sessionId}.jsonl`,
-      sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
     sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
@@ -71,13 +70,13 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal
 });
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -89,14 +88,16 @@ type MemoryIndexEntry = {
   content?: string;
 };
 
-function createDbMock(): DatabaseSync {
-  return {
-    prepare: vi.fn(() => ({
-      all: vi.fn(() => []),
-      get: vi.fn(() => undefined),
-      run: vi.fn(),
-    })),
-  } as unknown as DatabaseSync;
+function createDb(): DatabaseSync {
+  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+  const db = new NodeDatabaseSync(":memory:");
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: false,
+    ftsTokenizer: "unicode61",
+  });
+  return db;
 }
 
 class SessionSyncYieldHarness extends MemoryManagerSyncOps {
@@ -119,30 +120,37 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = createDbMock();
+  protected publishedDatabase: MemoryIndexDatabase;
 
   readonly indexedPaths: string[] = [];
+  private corpusFiles: string[] = [];
 
-  constructor(private readonly onIndexFile: (count: number) => void) {
+  constructor(
+    db: DatabaseSync,
+    private readonly onIndexFile: (count: number) => void,
+  ) {
     super();
+    this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
   async syncTargetArchiveFiles(files: string[]): Promise<void> {
-    await (
-      this as unknown as {
-        syncArchiveFiles: (params: {
-          needsFullReindex: boolean;
-          targetArchiveFiles: string[];
-        }) => Promise<void>;
-      }
-    ).syncArchiveFiles({
+    this.corpusFiles = files;
+    await this.syncArchiveFiles({
       needsFullReindex: false,
       targetArchiveFiles: files,
     });
+  }
+
+  protected override async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
+    return this.corpusFiles.map((sessionFile, index) => ({
+      agentId: this.agentId,
+      artifactKind: "archive-artifact",
+      sessionFile,
+      sessionId: `session-${index}`,
+    }));
   }
 
   protected computeProviderKey(): string {
@@ -167,7 +175,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 
@@ -206,7 +214,7 @@ describe("session sync responsiveness", () => {
   it("yields to the event loop between session file batches", async () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl`),
+      path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
     );
     let immediateRan = false;
     const immediate = new Promise<void>((resolve) => {
@@ -216,16 +224,20 @@ describe("session sync responsiveness", () => {
       });
     });
     const observedBeforeLastFile: boolean[] = [];
-    const harness = new SessionSyncYieldHarness((count) => {
+    const db = createDb();
+    const harness = new SessionSyncYieldHarness(db, (count) => {
       if (count === 11) {
         observedBeforeLastFile.push(immediateRan);
       }
     });
 
-    await harness.syncTargetArchiveFiles(files);
-
-    expect(harness.indexedPaths).toHaveLength(files.length);
-    expect(observedBeforeLastFile).toEqual([true]);
-    await immediate;
+    try {
+      await harness.syncTargetArchiveFiles(files);
+      expect(harness.indexedPaths).toHaveLength(files.length);
+      expect(observedBeforeLastFile).toEqual([true]);
+      await immediate;
+    } finally {
+      db.close();
+    }
   });
 });

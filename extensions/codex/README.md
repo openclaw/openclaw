@@ -8,7 +8,7 @@ Install from OpenClaw:
 openclaw plugins install @openclaw/codex
 ```
 
-Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to browse non-archived Codex Desktop and CLI sessions and paginated transcripts across paired computers.
+Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to browse non-archived Codex CLI, VS Code, Atlas, and ChatGPT sessions and paginated transcripts across paired computers.
 
 Guided onboarding attempts to install and enable supervision after it detects a native Codex installation and the selected inference backend passes its live check; Codex does not need to be the primary backend. Supervision activates when that opportunistic plugin setup succeeds. App Server availability is checked when supervision connects. An explicit Codex plugin disable, plugin-policy block, or `supervision.enabled: false` prevents opportunistic enablement. Manual setups enable `plugins.entries.codex.config.supervision.enabled`. Without explicit App Server connection settings, supervision uses a managed user-home stdio connection; explicit `appServer` settings are honored.
 
@@ -28,8 +28,12 @@ Disabling or uninstalling the plugin leaves supervised Chats locked and unavaila
 
 These shell commands differ from the in-chat `/codex` runtime commands. In particular, `/codex sessions --host <node>` lists Codex CLI session files on one node, `/codex threads` uses the current conversation's App Server connection, and `/codex resume` or `/codex bind` changes that conversation's binding. There is no `/codex archive` runtime command.
 
+Native Codex plugin catalogs are discoverable with `/codex plugins available`, including repository marketplaces declared in `.agents/plugins/marketplace.json` in the bound workspace. An owner or `operator.admin` can install and authorize an exact plugin with `/codex plugins install <plugin>@<marketplace>`. The owner-scoped `codex_plugins` agent tool only reads marketplace metadata; installation and policy changes stay on authenticated `/codex` management commands. Explicitly installing a plugin trusts its skills, apps, MCP servers, and hooks.
+
 For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the canonical harness thread with exactly that returned pair. Codex persists the canonical thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.
+
+When settled-turn recovery rejects history, the `codex settled-turn finalization context capture failed` warning includes a stable `reason`, such as `item_limit`, `byte_limit`, `field_limit`, `unsupported_user_image`, or `snapshot_invalidated`. Unknown failures use `history_read_failed`. The warning excludes transcript content and exception text. Rejected history remains unavailable for finalization, and completed actions are never replayed.
 
 See the [Codex harness](https://docs.openclaw.ai/plugins/codex-harness) and [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) guides.

@@ -1,14 +1,8 @@
-// Plugin uninstall command implementation and confirmation-driven removal plan execution.
-import os from "node:os";
-import path from "node:path";
+// Terminal preview and confirmation for the shared plugin uninstall owner.
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  tracePluginLifecyclePhase,
-  tracePluginLifecyclePhaseAsync,
-} from "../plugins/plugin-lifecycle-trace.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
+import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -19,198 +13,126 @@ type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
+  /** True when a Claw lifecycle caller already owns the package lease. */
+  clawManaged?: boolean;
+  /** Synchronous authority guard at each final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
-
-function isPromptInputClosedError(
-  error: unknown,
-  PromptInputClosedError: typeof import("./prompt.js").PromptInputClosedError,
-): error is InstanceType<typeof PromptInputClosedError> {
-  return error instanceof PromptInputClosedError;
-}
 
 export async function runPluginUninstallCommand(
   id: string,
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  // Uninstall mutates config/install records and optionally managed files, so guard write mode first.
-  assertConfigWriteAllowedInCurrentMode();
-
-  const {
-    loadInstalledPluginIndexInstallRecords,
-    removePluginInstallRecordFromRecords,
-    withoutPluginInstallRecords,
-    withPluginInstallRecords,
-  } = await import("../plugins/installed-plugin-index-records.js");
-  const { buildPluginSnapshotReport } = await import("../plugins/status.js");
-  const {
-    applyPluginUninstallDirectoryRemoval,
-    formatUninstallActionLabels,
-    formatUninstallSlotResetPreview,
-    planPluginUninstall,
-    resolveUninstallChannelConfigKeys,
-    UNINSTALL_ACTION_LABELS,
-  } = await import("../plugins/uninstall.js");
-  const { commitPluginInstallRecordsWithConfig } =
-    await import("../plugins/install-record-commit.js");
-  const { refreshPluginRegistryAfterConfigMutation } =
-    await import("../plugins/registry-refresh.js");
-  const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
-  const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
-  const snapshot = await tracePluginLifecyclePhaseAsync(
-    "config read",
-    () => readConfigFileSnapshot(),
-    { command: "uninstall" },
-  );
-  const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const installRecords = await tracePluginLifecyclePhaseAsync(
-    "install records load",
-    () => loadInstalledPluginIndexInstallRecords(),
-    { command: "uninstall" },
-  );
-  const cfg = withPluginInstallRecords(sourceConfig, installRecords);
-  const report = tracePluginLifecyclePhase(
-    "plugin registry snapshot",
-    () => buildPluginSnapshotReport({ config: cfg }),
-    { command: "uninstall" },
-  );
-  const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
-  const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
-
-  if (opts.keepConfig) {
-    runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
+  if (!opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
   }
-
-  const { plugin, pluginId } = resolvePluginUninstallId({
-    rawId: id,
-    config: cfg,
-    plugins: report.plugins,
-  });
-  const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
-  const plan = planPluginUninstall({
-    config: cfg,
-    pluginId,
-    channelIds,
-    deleteFiles: !keepFiles,
-    extensionsDir,
-  });
-  if (!plan.ok) {
-    if (plugin) {
-      runtime.error(
-        `Plugin "${pluginId}" is not managed by plugins config/install records and cannot be uninstalled.`,
-      );
-    } else {
-      runtime.error(plan.error);
+  const { preparePluginUninstall, uninstallPluginWithPolicy } =
+    await import("../plugins/management-uninstall.js");
+  const { formatUninstallActionLabels, resolveUninstallChannelConfigKeys } =
+    await import("../plugins/uninstall.js");
+  const { collectClawPluginUninstallWarnings } =
+    await import("../plugins/uninstall-claw-references.js");
+  const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
+  const request = { pluginId: id, keepFiles: Boolean(opts.keepFiles || opts.keepConfig) };
+  const warnKeepConfig = () => {
+    if (opts.keepConfig) {
+      runtime.log(theme.warn("`--keep-config` is deprecated, use `--keep-files`."));
     }
+  };
+  const printPreview = (preview: PreparedPluginUninstall) => {
+    const channelConfigKeys =
+      preview.plan.actions.channelConfig && Object.hasOwn(preview.installRecords, preview.pluginId)
+        ? resolveUninstallChannelConfigKeys(preview.pluginId, {
+            channelIds: preview.channelIds,
+          }).filter((key) => Object.hasOwn(preview.snapshot.config.channels ?? {}, key))
+        : [];
+    const labels = formatUninstallActionLabels(preview.plan.actions, { channelConfigKeys });
+    if (preview.plan.directoryRemoval) {
+      labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
+    }
+    runtime.log(
+      `Plugin: ${theme.command(preview.name)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+    );
+    if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
+      runtime.log(
+        `Package owner: ${theme.command(preview.pluginId)}; all entries will be removed: ${preview.pluginIds.join(", ")}`,
+      );
+    }
+    runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
+    for (const warning of collectClawPluginUninstallWarnings({
+      pluginId: preview.pluginId,
+      installRecord: preview.installRecords[preview.pluginId],
+    })) {
+      runtime.log(theme.warn(warning));
+    }
+  };
+  const execute = async (skipPreview: boolean) => {
+    warnKeepConfig();
+    // Keep errors/output inside the plugin lease; the owner emits success inside any package lease.
+    const result = await uninstallPluginWithPolicy({
+      ...request,
+      caller: "cli",
+      clawManaged: opts.clawManaged,
+      beforePersistentApply: opts.beforePersistentApply,
+      invalidateRuntimeCache: opts.invalidateRuntimeCache,
+      ...(skipPreview ? {} : { onPreview: printPreview }),
+      onWarning: (message) => runtime.log(theme.warn(message)),
+      onComplete: ({ pluginId, requestedPluginId, pluginIds, removed }) => {
+        const subject =
+          pluginIds.length > 1 || requestedPluginId !== pluginId
+            ? `plugin package "${pluginId}" and entries ${pluginIds.join(", ")}`
+            : `plugin "${pluginId}"`;
+        runtime.log(
+          `Uninstalled ${subject}. Removed: ${removed.length ? removed.join(", ") : "nothing"}.`,
+        );
+        runtime.log("Restart the gateway to apply changes.");
+      },
+    });
+    if (!result.ok) {
+      runtime.error(result.error);
+      runtime.exit(1);
+    }
+  };
+  if (opts.force && !opts.dryRun) {
+    return await withPluginLifecycleLease({}, async () => await execute(false));
+  }
+  if (!opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
+  }
+  const prepared = await preparePluginUninstall({ ...request, caller: "cli" });
+  warnKeepConfig();
+  if (!prepared.ok) {
+    runtime.error(prepared.error);
     runtime.exit(1);
     return;
   }
-  const hasInstall = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
-
-  const preview: string[] = [];
-  if (plan.actions.entry) {
-    preview.push(UNINSTALL_ACTION_LABELS.entry);
-  }
-  if (plan.actions.install) {
-    preview.push(UNINSTALL_ACTION_LABELS.install);
-  }
-  if (plan.actions.allowlist) {
-    preview.push(UNINSTALL_ACTION_LABELS.allowlist);
-  }
-  if (plan.actions.denylist) {
-    preview.push(UNINSTALL_ACTION_LABELS.denylist);
-  }
-  if (plan.actions.loadPath) {
-    preview.push(UNINSTALL_ACTION_LABELS.loadPath);
-  }
-  if (plan.actions.memorySlot) {
-    preview.push(formatUninstallSlotResetPreview("memory"));
-  }
-  if (plan.actions.contextEngineSlot) {
-    preview.push(formatUninstallSlotResetPreview("contextEngine"));
-  }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (plan.actions.channelConfig && hasInstall && channels) {
-    for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
-      if (Object.hasOwn(channels, key)) {
-        preview.push(`${UNINSTALL_ACTION_LABELS.channelConfig} (channels.${key})`);
-      }
-    }
-  }
-  if (plan.directoryRemoval) {
-    preview.push(`directory: ${shortenHomePath(plan.directoryRemoval.target)}`);
-  }
-
-  const pluginName = plugin?.name || pluginId;
-  runtime.log(
-    `Plugin: ${theme.command(pluginName)}${pluginName !== pluginId ? theme.muted(` (${pluginId})`) : ""}`,
-  );
-  runtime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
-
-  const nextConfig = withoutPluginInstallRecords(plan.config);
-
+  const preview = prepared.value;
+  printPreview(preview);
   if (opts.dryRun) {
     runtime.log(theme.muted("Dry run, no changes made."));
     return;
   }
-
-  if (!opts.force) {
-    let confirmed: boolean;
-    try {
-      confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
-    } catch (error) {
-      if (isPromptInputClosedError(error, PromptInputClosedError)) {
-        runtime.error(
-          "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
-        );
-        runtime.exit(1);
-        return;
-      }
+  let confirmed: boolean;
+  try {
+    confirmed = await promptYesNo(
+      preview.pluginIds.length > 1
+        ? `Uninstall plugin package "${preview.pluginId}" and all entries?`
+        : `Uninstall plugin "${preview.pluginId}"?`,
+    );
+  } catch (error) {
+    if (!(error instanceof PromptInputClosedError)) {
       throw error;
     }
-    if (!confirmed) {
-      runtime.log("Cancelled.");
-      return;
-    }
+    runtime.error(
+      "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
+    );
+    runtime.exit(1);
+    return;
   }
-
-  const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
-  await tracePluginLifecyclePhaseAsync(
-    "config mutation",
-    () =>
-      commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: installRecords,
-        nextInstallRecords,
-        nextConfig,
-        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-        writeOptions: {
-          afterWrite: { mode: "restart", reason: "plugin source changed" },
-        },
-      }),
-    { command: "uninstall" },
-  );
-  const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-  for (const warning of directoryResult.warnings) {
-    runtime.log(theme.warn(warning));
+  if (!confirmed) {
+    runtime.log("Cancelled.");
+    return;
   }
-  await refreshPluginRegistryAfterConfigMutation({
-    config: nextConfig,
-    reason: "source-changed",
-    installRecords: nextInstallRecords,
-    invalidateRuntimeCache: opts.invalidateRuntimeCache,
-    traceCommand: "uninstall",
-    logger: {
-      warn: (message) => runtime.log(theme.warn(message)),
-    },
-  });
-
-  const removed = formatUninstallActionLabels({
-    ...plan.actions,
-    directory: directoryResult.directoryRemoved,
-  });
-
-  runtime.log(
-    `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
-  );
-  runtime.log("Restart the gateway to apply changes.");
+  await withPluginLifecycleLease({}, async () => await execute(true));
 }

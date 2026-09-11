@@ -1,5 +1,5 @@
 // Slack-private authored text placement after block compilation.
-import type { InteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { LegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type SlackAuthoredTextPlacement = "none" | "blocks" | "outside-blocks";
@@ -10,7 +10,7 @@ function normalizeComparableSlackText(text: string): string {
 
 function isSlackAuthoredTextRepresentedInInteractive(
   text: string,
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): boolean {
   return isSlackAuthoredTextRepresentedInFragments(
     text,
@@ -24,17 +24,27 @@ function isSlackAuthoredTextRepresentedInFragments(
 ): boolean {
   const target = normalizeComparableSlackText(text);
   const fragments = rawFragments.map(normalizeComparableSlackText).filter(Boolean);
+  let remainingLength = fragments.reduce((length, fragment) => length + fragment.length + 1, -1);
   // Legacy inline controls split surrounding text into multiple interactive text blocks.
-  for (let start = 0; start < fragments.length; start += 1) {
-    let combined = "";
-    for (let end = start; end < fragments.length; end += 1) {
-      combined = normalizeComparableSlackText(`${combined} ${fragments[end]}`);
-      if (combined === target) {
-        return true;
-      }
-      if (combined.length > target.length) {
+  for (const [start, firstFragment] of fragments.entries()) {
+    if (remainingLength < target.length) {
+      break;
+    }
+    remainingLength -= firstFragment.length + 1;
+    let offset = 0;
+    for (let end = start; ; end += 1) {
+      const fragment = fragments[end];
+      if (fragment === undefined || !target.startsWith(fragment, offset)) {
         break;
       }
+      offset += fragment.length;
+      if (offset === target.length) {
+        return true;
+      }
+      if (target[offset] !== " ") {
+        break;
+      }
+      offset += 1;
     }
   }
   return false;
@@ -43,7 +53,7 @@ function isSlackAuthoredTextRepresentedInFragments(
 /** Resolve placement from producer facts, before accessibility text changes the payload text. */
 export function resolveSlackAuthoredTextPlacement(params: {
   text?: string;
-  interactive?: InteractiveReply;
+  interactive?: LegacyInteractiveReply;
   renderedInBlocks?: boolean;
   renderedTextFragments?: readonly string[];
 }): SlackAuthoredTextPlacement {

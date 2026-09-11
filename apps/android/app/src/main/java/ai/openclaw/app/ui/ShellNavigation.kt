@@ -15,10 +15,13 @@ internal class ShellNavigation(
   settingsRoute: SettingsRoute = SettingsRoute.Home,
   returnTab: Tab? = null,
   settingsRouteFromHome: Boolean = false,
+  dashboardSessionKey: String = "main",
 ) {
   var activeTab by mutableStateOf(activeTab)
     private set
   var settingsRoute by mutableStateOf(settingsRoute)
+    private set
+  var dashboardSessionKey by mutableStateOf(dashboardSessionKey)
     private set
 
   // Single-slot origin: Back from a cross-tab detail (settings route, Sessions,
@@ -57,6 +60,12 @@ internal class ShellNavigation(
     activeTab = tab
   }
 
+  /** Opens the web dashboard for the chat session that initiated navigation. */
+  fun openSessionDashboard(sessionKey: String) {
+    dashboardSessionKey = sessionKey
+    openDetailTab(Tab.Dashboard)
+  }
+
   /** Unwinds one Back step: settings detail to Home or origin, otherwise tab to origin or Overview. */
   fun back() {
     if (activeTab == Tab.Settings && settingsRoute != SettingsRoute.Home) {
@@ -66,23 +75,35 @@ internal class ShellNavigation(
         return
       }
     }
+    if (activeTab == Tab.Dashboard) dashboardSessionKey = "main"
     activeTab = returnTab ?: Tab.Overview
     returnTab = null
   }
 
   companion object {
+    // Android may restore a saved Voice destination from before voice moved into
+    // Chat. Normalize it here so runtime navigation only contains live screens.
+    private fun restoreTab(name: String): Tab = if (name == "Voice") Tab.Chat else Tab.valueOf(name)
+
     /** Persists shell navigation across process death for rememberSaveable. */
     val Saver =
       listSaver<ShellNavigation, String>(
         save = { nav ->
-          listOf(nav.activeTab.name, nav.settingsRoute.name, nav.returnTab?.name.orEmpty(), nav.settingsRouteFromHome.toString())
+          listOf(
+            nav.activeTab.name,
+            nav.settingsRoute.name,
+            nav.returnTab?.name.orEmpty(),
+            nav.settingsRouteFromHome.toString(),
+            nav.dashboardSessionKey,
+          )
         },
         restore = { saved ->
           ShellNavigation(
-            activeTab = Tab.valueOf(saved[0]),
+            activeTab = restoreTab(saved[0]),
             settingsRoute = SettingsRoute.valueOf(saved[1]),
-            returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(Tab::valueOf),
+            returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(::restoreTab),
             settingsRouteFromHome = saved[3].toBoolean(),
+            dashboardSessionKey = saved.getOrNull(4) ?: "main",
           )
         },
       )

@@ -1,5 +1,6 @@
 {
   "id": "firecrawl",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
@@ -37,9 +38,6 @@
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["firecrawl", "firecrawl-free"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

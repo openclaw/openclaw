@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isSilentReplyPrefixText,
@@ -19,13 +20,22 @@ import {
   type ToolContentBlock,
 } from "../../chat/tool-content.js";
 import {
+  readSessionTranscriptBoundedMessageTailPage,
+  type SessionTranscriptRuntimeTarget,
+  waitForSessionTranscriptProjection,
+} from "../../config/sessions/session-accessor.js";
+import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "../agent-run-terminal-reply.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
-const SESSION_FILE_MAX_RECORDS = 500;
+const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -56,7 +66,7 @@ async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileSca
           continue;
         }
         recordCount++;
-        if (recordCount > SESSION_FILE_MAX_RECORDS) {
+        if (recordCount > CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS) {
           break;
         }
         let obj: unknown;
@@ -79,21 +89,31 @@ async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileSca
   }
 }
 
-async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
-  return (await scanJsonlFile(filePath)).hasAssistant;
-}
-
-/**
- * Check whether a session transcript file exists and contains at least one
- * assistant message, indicating that the SessionManager has flushed the
- * initial user+assistant exchange to disk.
- */
-export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
-  return await jsonlFileHasAssistantMessage(sessionFile);
+/** Checks whether the active SQLite history contains a persisted assistant turn. */
+export async function sessionTranscriptHasContent(
+  target: SessionTranscriptRuntimeTarget | undefined,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
+  if (!target) {
+    return false;
+  }
+  await waitForSessionTranscriptProjection(target, abortSignal);
+  const { events } = readSessionTranscriptBoundedMessageTailPage(target, {
+    maxBytes: 5 * 1024 * 1024,
+    maxMessages: 500,
+    offset: 0,
+  });
+  return events.some(
+    ({ event }) =>
+      isRecord(event) &&
+      event.type === "message" &&
+      isRecord(event.message) &&
+      event.message.role === "assistant",
+  );
 }
 
 /** Resolves the expected Claude CLI transcript JSONL path for a session. */
-export function claudeCliSessionTranscriptPath(params: {
+function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
   homeDir?: string;
@@ -383,7 +403,7 @@ function formatFallbackTurns(
  * Returns an empty string when neither a summary nor any usable turn fits in
  * the budget; callers can treat that as "no context to seed".
  */
-export function formatClaudeCliFallbackPrelude(
+function formatClaudeCliFallbackPrelude(
   seed: ClaudeCliFallbackSeed,
   options?: { charBudget?: number },
 ): string {
@@ -538,5 +558,17 @@ export function createAcpVisibleTextAccumulator() {
     finalizeRaw(): string {
       return visibleText;
     },
+    finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
+      return buildAgentRunTerminalReplySnapshot({
+        visibleText,
+        rawText: pendingSilentPrefix,
+      });
+    },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
+  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
 }

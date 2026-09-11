@@ -1,16 +1,7 @@
 import Foundation
+import OpenClawKit
+import OSLog
 import WatchConnectivity
-
-struct WatchReplyDraft {
-    var replyId: String
-    var promptId: String
-    var actionId: String
-    var actionLabel: String?
-    var sessionKey: String?
-    var gatewayStableID: String?
-    var note: String?
-    var sentAtMs: Int64
-}
 
 enum WatchReplyDeliveryState: Equatable {
     case delivered
@@ -64,7 +55,6 @@ struct WatchExecApprovalSnapshotRequestToken: Hashable, Sendable {
 }
 
 final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
-    private typealias MessageSendContinuation = CheckedContinuation<Void, Error>
     private static let maxAcceptedExecApprovalSnapshotRequests = 32
 
     private let store: WatchInboxStore
@@ -74,6 +64,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private var acceptedExecApprovalSnapshotRequests: Set<WatchExecApprovalSnapshotRequestToken> = []
     private var acceptedExecApprovalSnapshotRequestOrder: [WatchExecApprovalSnapshotRequestToken] = []
     private let directNodeSetupHandler: @MainActor @Sendable (String, Int64) -> Void
+    @MainActor private var chatDeliveryTask: Task<Void, Never>?
+    @MainActor private var chatDeliveryReplayRequested = false
 
     init(
         store: WatchInboxStore,
@@ -137,7 +129,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let payload = Self.encodeSnapshotRequestPayload(request)
         if session.isReachable {
             do {
-                try await Self.sendMessage(payload, through: session)
+                try await sendReachableWatchMessage(payload, with: session)
                 return token
             } catch {
                 // Fall through to queued delivery.
@@ -158,41 +150,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             requestId: UUID().uuidString,
             sentAtMs: Self.nowMs())
         let payload = Self.encodeAppSnapshotRequestPayload(request)
-        return await self.sendPayload(payload, session: session)
-    }
-
-    func sendReply(_ draft: WatchReplyDraft) async -> WatchReplySendResult {
-        let session: WCSession
-        do {
-            session = try await self.activatedSession()
-        } catch {
-            return Self.unavailableResult(error)
-        }
-
-        var payload: [String: Any] = [
-            "type": WatchPayloadType.reply.rawValue,
-            "replyId": draft.replyId,
-            "promptId": draft.promptId,
-            "actionId": draft.actionId,
-            "sentAtMs": draft.sentAtMs,
-        ]
-        if let actionLabel = draft.actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !actionLabel.isEmpty
-        {
-            payload["actionLabel"] = actionLabel
-        }
-        if let sessionKey = draft.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !sessionKey.isEmpty
-        {
-            payload["sessionKey"] = sessionKey
-        }
-        if let gatewayStableID = WatchGatewayID.exact(draft.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let note = draft.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-            payload["note"] = note
-        }
-
         return await self.sendPayload(payload, session: session)
     }
 
@@ -220,6 +177,10 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     }
 
     func sendAppCommand(_ message: WatchAppCommandMessage) async -> WatchReplySendResult {
+        guard message.command != .sendChat else {
+            return Self.unavailableResult(OpenClawWatchChatDeliveryError(
+                code: "upgrade_required", message: "Save Watch chat through its delivery journal before sending."))
+        }
         let session: WCSession
         do {
             session = try await self.activatedSession()
@@ -229,11 +190,88 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         return await self.sendPayload(Self.encodeAppCommandPayload(message), session: session)
     }
 
-    private func sendPayload(_ payload: [String: Any], session: WCSession) async -> WatchReplySendResult {
+    @MainActor
+    func replayChatDelivery() {
+        self.chatDeliveryReplayRequested = true
+        guard self.chatDeliveryTask == nil else { return }
+        self.chatDeliveryTask = Task { @MainActor in
+            defer {
+                self.chatDeliveryTask = nil
+                // A newer availability event may arrive while this attempt is failing.
+                // Release the old owner before consuming that one retained wake.
+                if self.chatDeliveryReplayRequested { self.replayChatDelivery() }
+            }
+            repeat {
+                self.chatDeliveryReplayRequested = false
+                do {
+                    try await self.store.maintainChatDeliveryJournal()
+                    self.cancelExpiredChatTransfers(nowMs: Self.nowMs())
+                    try await self.store.reloadChatDeliveryEntries()
+                    let commands = try await self.store.chatDeliveryJournal.pendingCommands(nowMs: Self.nowMs())
+                    guard !commands.isEmpty else { continue }
+                    let session = try await self.activatedSession()
+                    for command in commands {
+                        try await self.sendChatCommand(command, session: session)
+                    }
+                } catch {
+                    Logger(subsystem: "ai.openclaw.watch", category: "chat-delivery")
+                        .notice("Saved Watch message replay could not complete")
+                    return
+                }
+            } while self.chatDeliveryReplayRequested
+        }
+    }
+
+    @MainActor
+    private func sendChatCommand(_ command: OpenClawWatchChatDeliveryCommand, session: WCSession) async throws {
+        try Task.checkCancellation()
+        guard try await self.store.chatDeliveryJournal.isPending(command, nowMs: Self.nowMs()) else { return }
+        let payload = try OpenClawWatchChatDeliveryCodec.encode(command)
+        if session.isReachable {
+            do {
+                try await sendReachableWatchMessage(payload, with: session)
+                return // SDK success is not custody; only a typed receipt changes the journal.
+            } catch {
+                // The phone can commit a typed denial before rejecting this interactive attempt.
+                // Re-read the journal before creating a background copy of that same command.
+            }
+        }
+        guard try await self.store.chatDeliveryJournal.isPending(command, nowMs: Self.nowMs()) else { return }
+        try Task.checkCancellation()
+        guard !session.outstandingUserInfoTransfers.contains(where: {
+            (try? OpenClawWatchChatDeliveryCodec.decodeCommandStructure($0.userInfo)) == command
+        }) else { return }
+        _ = session.transferUserInfo(payload)
+    }
+
+    private func cancelExpiredChatTransfers(nowMs: Int64) {
+        for transfer in self.session?.outstandingUserInfoTransfers ?? [] {
+            guard let command = try? OpenClawWatchChatDeliveryCodec.decodeCommandStructure(transfer.userInfo),
+                  command.expiresAtMs <= nowMs
+            else { continue }
+            transfer.cancel()
+        }
+    }
+
+    private func cancelClearedChatTransfers(context: OpenClawWatchChatDeliveryContext) {
+        for transfer in self.session?.outstandingUserInfoTransfers ?? [] {
+            guard let command = try? OpenClawWatchChatDeliveryCodec.decodeCommandStructure(transfer.userInfo),
+                  command.context.gatewayStableID.utf8.elementsEqual(context.gatewayStableID.utf8),
+                  command.context.routeGeneration.utf8.elementsEqual(context.routeGeneration.utf8)
+            else { continue }
+            transfer.cancel()
+        }
+    }
+
+    private func sendPayload(
+        _ payload: [String: Any],
+        session: WCSession,
+        isolation: isolated (any Actor)? = #isolation) async -> WatchReplySendResult
+    {
         var requiresCanonicalReadback = false
         if session.isReachable {
             do {
-                try await Self.sendMessage(payload, through: session)
+                try await sendReachableWatchMessage(payload, with: session, isolation: isolation)
                 return WatchReplySendResult(
                     delivery: .delivered,
                     transport: "sendMessage",
@@ -253,22 +291,6 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             transport: "transferUserInfo",
             errorMessage: nil,
             requiresCanonicalReadback: requiresCanonicalReadback)
-    }
-
-    private static func sendMessage(_ payload: [String: Any], through session: WCSession) async throws {
-        try await withCheckedThrowingContinuation(isolation: nil) { (continuation: MessageSendContinuation) in
-            session.sendMessage(
-                payload,
-                replyHandler: { reply in
-                    do {
-                        try requireAcceptedWatchMessageReply(reply)
-                        continuation.resume(returning: ())
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                },
-                errorHandler: { error in continuation.resume(throwing: error) })
-        }
     }
 
     private static func unavailableResult(_ error: any Error) -> WatchReplySendResult {
@@ -381,8 +403,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let promptId = (payload["promptId"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let sessionKey = (payload["sessionKey"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionKey = payload["sessionKey"] as? String
         let gatewayStableID = WatchGatewayID.exact(payload["gatewayStableID"] as? String)
         let kind = (payload["kind"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -405,7 +426,9 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             details: details,
             expiresAtMs: expiresAtMs,
             risk: risk,
-            actions: actions)
+            actions: actions,
+            chatDeliveryContext: (payload["chatDeliveryContext"] as? [String: Any])
+                .flatMap { try? OpenClawWatchChatDeliveryCodec.decodeContext($0) })
     }
 
     private static func parseExecApprovalDecision(_ value: Any?) -> WatchExecApprovalDecision? {
@@ -665,12 +688,17 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 transport: "receivedApplicationContext")
         }
         Task { @MainActor in
+            self.replayChatDelivery()
             let gatewayStableID = self.store.execApprovalReviewGatewayStableID
             await self.requestExecApprovalSnapshot(
                 gatewayStableID: gatewayStableID,
                 heldApprovals: self.store.execApprovalSnapshotRequestItems(
                     gatewayStableID: gatewayStableID))
         }
+    }
+
+    func sessionReachabilityDidChange(_: WCSession) {
+        Task { @MainActor in self.replayChatDelivery() }
     }
 
     func session(_: WCSession, didReceiveMessage message: [String: Any]) {
@@ -682,11 +710,10 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void)
     {
-        let accepted = self.consumeIncomingPayload(message, transport: "sendMessage")
-        replyHandler(
-            accepted
-                ? ["ok": true]
-                : ["ok": false, "error": "unsupported_payload"])
+        self.consumeIncomingPayload(
+            message,
+            transport: "sendMessage",
+            acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler))
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
@@ -697,8 +724,48 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         self.consumeIncomingPayload(applicationContext, transport: "applicationContext")
     }
 
+    private func consumeChatDeliveryReceipt(
+        _ payload: [String: Any],
+        acknowledgment: WatchMessageAcknowledgment?) -> Bool
+    {
+        let receipt: OpenClawWatchChatDeliveryReceipt
+        do {
+            receipt = try OpenClawWatchChatDeliveryCodec.decodeReceipt(payload)
+        } catch {
+            acknowledgment?.reject(reason: "invalid_payload")
+            return false
+        }
+        Task { @MainActor in
+            do {
+                let receiptAck = try await self.store.recordChatDeliveryReceipt(receipt)
+                if case let .rejected(code, _) = receipt.state,
+                   code == OpenClawWatchChatDeliveryCodec.staleRouteCode
+                {
+                    self.cancelClearedChatTransfers(context: receipt.context)
+                }
+                acknowledgment?.accept()
+                if let receiptAck {
+                    let payload = try OpenClawWatchChatDeliveryCodec.encode(receiptAck)
+                    let session = try await self.activatedSession()
+                    _ = await self.sendPayload(payload, session: session)
+                }
+            } catch {
+                acknowledgment?
+                    .reject(reason: (error as? OpenClawWatchChatDeliveryError)?.code ?? "storage_unavailable")
+            }
+        }
+        return true
+    }
+
     @discardableResult
-    private func consumeIncomingPayload(_ payload: [String: Any], transport: String) -> Bool {
+    private func consumeIncomingPayload(
+        _ payload: [String: Any],
+        transport: String,
+        acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool
+    {
+        if (payload["type"] as? String) == WatchPayloadType.chatDeliveryReceipt.rawValue {
+            return self.consumeChatDeliveryReceipt(payload, acknowledgment: acknowledgment)
+        }
         if let type = payload["type"] as? String,
            type == WatchPayloadType.directNodeSetup.rawValue,
            let setupCode = payload["setupCode"] as? String,
@@ -706,6 +773,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         {
             Task { @MainActor in
                 self.directNodeSetupHandler(setupCode, sentAtMs)
+                acknowledgment?.accept()
             }
             return true
         }
@@ -731,31 +799,37 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                     for snapshot in self.store.replayDeferredGatewayPayloads() {
                         self.recordAcceptedExecApprovalSnapshot(snapshot)
                     }
+                    self.replayChatDelivery()
                 }
+                acknowledgment?.accept()
             }
             return true
         }
         if let incoming = Self.parseNotificationPayload(payload) {
             Task { @MainActor in
                 self.store.consume(message: incoming, transport: transport)
+                acknowledgment?.accept()
             }
             return true
         }
         if let prompt = Self.parseExecApprovalPromptPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalPrompt: prompt, transport: transport)
+                acknowledgment?.accept()
             }
             return true
         }
         if let resolved = Self.parseExecApprovalResolvedPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalResolved: resolved)
+                acknowledgment?.accept()
             }
             return true
         }
         if let expired = Self.parseExecApprovalExpiredPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalExpired: expired)
+                acknowledgment?.accept()
             }
             return true
         }
@@ -764,6 +838,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 if self.store.consume(execApprovalSnapshot: snapshot, transport: transport) {
                     self.recordAcceptedExecApprovalSnapshot(snapshot)
                 }
+                acknowledgment?.accept()
             }
             return true
         }
@@ -775,15 +850,19 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 for snapshot in self.store.replayDeferredGatewayPayloads() {
                     self.recordAcceptedExecApprovalSnapshot(snapshot)
                 }
+                acknowledgment?.accept()
+                self.replayChatDelivery()
             }
             return true
         }
         if let completion = Self.parseChatCompletionPayload(payload) {
             Task { @MainActor in
                 self.store.consume(chatCompletion: completion)
+                acknowledgment?.accept()
             }
             return true
         }
+        acknowledgment?.rejectUnsupportedPayload()
         return false
     }
 }

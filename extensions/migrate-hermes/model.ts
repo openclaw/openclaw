@@ -4,8 +4,12 @@ import {
   resolveDefaultAgentId,
   setAgentEffectiveModelPrimary,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveMigrationConfigRuntime } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { readString } from "./helpers.js";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   HERMES_REASON_ALREADY_CONFIGURED,
   HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE,
@@ -59,9 +63,9 @@ const HERMES_PROVIDER_ALIASES: Record<string, string> = {
   "openai-codex": "openai",
   dashscope: "qwen",
   qwen: "qwen",
-  "qwen-cli": "qwen-oauth",
-  "qwen-oauth": "qwen-oauth",
-  "qwen-portal": "qwen-oauth",
+  "qwen-cli": "qwen",
+  "qwen-oauth": "qwen",
+  "qwen-portal": "qwen",
   "x-ai": "xai",
   "x-ai-oauth": "xai",
   "x.ai": "xai",
@@ -110,7 +114,6 @@ const HERMES_CANONICAL_PROVIDER_IDS = new Set([
   "opencode-go",
   "opencode-zen",
   "openrouter",
-  "qwen-oauth",
   "stepfun",
   "tencent-tokenhub",
   "xai",
@@ -125,6 +128,7 @@ const HERMES_DYNAMIC_KIMI_PROVIDER_IDS = new Set([
   "kimi-for-coding",
   "moonshot",
 ]);
+const HERMES_RETIRED_QWEN_PROVIDER_IDS = new Set(["qwen-cli", "qwen-oauth", "qwen-portal"]);
 
 export function normalizeHermesProviderId(provider: string): string {
   const normalized = normalizeHermesCustomProviderId(provider);
@@ -139,18 +143,31 @@ export function normalizeHermesCustomProviderId(provider: string): string {
   return withoutCustomPrefix.replaceAll(" ", "-");
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function isRetiredHermesQwenProviderValue(value: string): boolean {
+  const slash = value.indexOf("/");
+  const provider = slash > 0 ? value.slice(0, slash) : value;
+  return HERMES_RETIRED_QWEN_PROVIDER_IDS.has(normalizeHermesCustomProviderId(provider));
+}
+
+export function usesRetiredHermesQwenProvider(config: Record<string, unknown>): boolean {
+  const model = asOptionalRecord(config.model);
+  return [
+    normalizeOptionalString(config.provider),
+    typeof config.model === "string" ? config.model : undefined,
+    normalizeOptionalString(model?.provider),
+    normalizeOptionalString(model?.default),
+    normalizeOptionalString(model?.model),
+    normalizeOptionalString(config.default_model),
+    normalizeOptionalString(config.model_name),
+  ].some((value) => value !== undefined && isRetiredHermesQwenProviderValue(value));
 }
 
 function readBaseUrl(value: Record<string, unknown> | undefined): string | undefined {
   return value
-    ? (readString(value.base_url) ??
-        readString(value.baseUrl) ??
-        readString(value.url) ??
-        readString(value.api))
+    ? (normalizeOptionalString(value.base_url) ??
+        normalizeOptionalString(value.baseUrl) ??
+        normalizeOptionalString(value.url) ??
+        normalizeOptionalString(value.api))
     : undefined;
 }
 
@@ -159,8 +176,9 @@ function readKimiBaseUrl(
   provider: string,
   env: Record<string, string>,
 ): string | undefined {
-  const model = asRecord(config.model);
-  const selectedProvider = readString(model?.provider) ?? readString(config.provider);
+  const model = asOptionalRecord(config.model);
+  const selectedProvider =
+    normalizeOptionalString(model?.provider) ?? normalizeOptionalString(config.provider);
   if (
     selectedProvider &&
     HERMES_DYNAMIC_KIMI_PROVIDER_IDS.has(normalizeHermesCustomProviderId(selectedProvider))
@@ -170,13 +188,13 @@ function readKimiBaseUrl(
       return modelBaseUrl;
     }
   }
-  const providers = asRecord(config.providers);
+  const providers = asOptionalRecord(config.providers);
   for (const [id, value] of Object.entries(providers ?? {})) {
     if (
       normalizeHermesCustomProviderId(id) === normalizeHermesCustomProviderId(provider) &&
-      asRecord(value)
+      asOptionalRecord(value)
     ) {
-      const providerBaseUrl = readBaseUrl(asRecord(value));
+      const providerBaseUrl = readBaseUrl(asOptionalRecord(value));
       if (providerBaseUrl) {
         return providerBaseUrl;
       }
@@ -218,7 +236,10 @@ function resolveHermesKimiProviderId(
 
 function hasExplicitHermesProvider(config: Record<string, unknown>, provider: string): boolean {
   const normalized = normalizeHermesCustomProviderId(provider);
-  if (HERMES_CANONICAL_PROVIDER_IDS.has(normalized)) {
+  if (
+    HERMES_CANONICAL_PROVIDER_IDS.has(normalized) ||
+    HERMES_RETIRED_QWEN_PROVIDER_IDS.has(normalized)
+  ) {
     return false;
   }
   const providers = config.providers;
@@ -237,7 +258,7 @@ function hasExplicitHermesProvider(config: Record<string, unknown>, provider: st
         return false;
       }
       const record = entry as Record<string, unknown>;
-      const id = readString(record.name) ?? readString(record.id);
+      const id = normalizeOptionalString(record.name) ?? normalizeOptionalString(record.id);
       return id ? normalizeHermesCustomProviderId(id) === normalized : false;
     })
   );
@@ -261,6 +282,10 @@ function joinHermesProviderModel(
   env: Record<string, string>,
 ): string {
   if (!provider) {
+    const slash = model.indexOf("/");
+    if (slash > 0 && isRetiredHermesQwenProviderValue(model)) {
+      return `qwen/${model.slice(slash + 1)}`;
+    }
     return model;
   }
   if (provider.trim().toLowerCase() === "auto") {
@@ -290,37 +315,31 @@ export function resolveHermesModelRef(
   const model = config.model;
   if (typeof model === "string" && model.trim()) {
     const rawModel = model.trim();
-    const provider = readString(config.provider);
+    const provider = normalizeOptionalString(config.provider);
     return joinHermesProviderModel(config, provider, rawModel, env);
   }
   if (model && typeof model === "object" && !Array.isArray(model)) {
     const modelRecord = model as Record<string, unknown>;
-    const rawModel = readString(modelRecord.default) ?? readString(modelRecord.model);
+    const rawModel =
+      normalizeOptionalString(modelRecord.default) ?? normalizeOptionalString(modelRecord.model);
     const hasCustomEndpoint = Boolean(
-      readString(modelRecord.base_url) ?? readString(modelRecord.baseUrl),
+      normalizeOptionalString(modelRecord.base_url) ?? normalizeOptionalString(modelRecord.baseUrl),
     );
-    const provider = readString(modelRecord.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
+    const provider =
+      normalizeOptionalString(modelRecord.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
     return rawModel ? joinHermesProviderModel(config, provider, rawModel, env) : undefined;
   }
-  const rootModel = readString(config.default_model) ?? readString(config.model_name);
-  const rootProvider = readString(config.provider);
+  const rootModel =
+    normalizeOptionalString(config.default_model) ?? normalizeOptionalString(config.model_name);
+  const rootProvider = normalizeOptionalString(config.provider);
   return rootModel ? joinHermesProviderModel(config, rootProvider, rootModel, env) : undefined;
 }
 
-function resolveDefaultAgentModelState(config: MigrationProviderContext["config"]): {
-  agentId: string;
-  effectivePrimary?: string;
-} {
-  const agentId = resolveDefaultAgentId(config);
-  const effectivePrimary = resolveAgentEffectiveModelPrimary(config, agentId);
-  return {
-    agentId,
-    effectivePrimary,
-  };
-}
-
 export function resolveCurrentModelRef(ctx: MigrationProviderContext): string | undefined {
-  return resolveDefaultAgentModelState(ctx.config).effectivePrimary;
+  return resolveAgentEffectiveModelPrimary(
+    ctx.config,
+    ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config),
+  );
 }
 
 class ModelApplyAbortError extends Error {
@@ -342,31 +361,36 @@ export async function applyModelItem(
     return item;
   }
   try {
-    const configApi = ctx.runtime?.config;
+    const configApi = resolveMigrationConfigRuntime(ctx);
     if (!configApi?.current || !configApi.mutateConfigFile) {
       return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }
-    const currentState = resolveDefaultAgentModelState(
+    const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config);
+    const currentModel = resolveAgentEffectiveModelPrimary(
       configApi.current() as MigrationProviderContext["config"],
+      agentId,
     );
-    if (currentState.effectivePrimary === details.model) {
+    if (currentModel === details.model) {
       return hermesItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
     }
-    if (currentState.effectivePrimary && !ctx.overwrite) {
+    if (currentModel && !ctx.overwrite) {
       return hermesItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
     }
     await configApi.mutateConfigFile({
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const mutationState = resolveDefaultAgentModelState(draft);
-        if (mutationState.effectivePrimary === details.model) {
+        const mutationModel = resolveAgentEffectiveModelPrimary(draft, agentId);
+        if (mutationModel === details.model) {
           throw new ModelApplyAbortError("skipped", HERMES_REASON_ALREADY_CONFIGURED);
         }
-        if (mutationState.effectivePrimary && !ctx.overwrite) {
+        if (mutationModel && !ctx.overwrite) {
           throw new ModelApplyAbortError("conflict", HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
         }
-        setAgentEffectiveModelPrimary(draft, mutationState.agentId, details.model);
+        // An explicit migration owner must not rewrite shared defaults when its model is inherited.
+        setAgentEffectiveModelPrimary(draft, agentId, details.model, {
+          forceAgent: Boolean(ctx.targetAgentId),
+        });
       },
     });
     return { ...item, status: "migrated" };

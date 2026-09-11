@@ -21,14 +21,17 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 
 ## Known flags
 
-| Flag             | Enables                                                   |
-| ---------------- | --------------------------------------------------------- |
-| `telegram.http`  | Telegram Bot API HTTP error logging                       |
-| `brave.http`     | Brave Search request/response/cache logging               |
-| `profiler`       | Reply-stage profiler and Codex app-server profiler (both) |
-| `reply.profiler` | Reply-stage profiler only                                 |
-| `codex.profiler` | Codex app-server profiler only                            |
-| `timeline`       | Structured JSONL timeline artifact (see below)            |
+| Flag                  | Enables                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `telegram.http`       | Telegram Bot API HTTP error logging                       |
+| `brave.http`          | Brave Search request/response/cache logging               |
+| `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
+| `reply.profiler`      | Reply-stage profiler only                                 |
+| `codex.profiler`      | Codex app-server profiler only                            |
+| `health`              | Gateway health probe/account/binding debug details        |
+| `ingress.timing`      | Session load, model selection, and model catalog timings  |
+| `plugin.load-profile` | Synchronous plugin module-load timings                    |
+| `timeline`            | Structured JSONL timeline artifact (see below)            |
 
 ## Enable via config
 
@@ -45,7 +48,7 @@ Multiple flags:
 ```json
 {
   "diagnostics": {
-    "flags": ["telegram.http", "brave.http", "gateway.*"]
+    "flags": ["telegram.http", "brave.http", "health"]
   }
 }
 ```
@@ -69,7 +72,11 @@ without editing the file.
 
 ## Profiler flags
 
-Profiler flags gate lightweight timing spans; they add no overhead when off.
+Slow reply preparation and Codex startup are logged at the default log level
+without profiler flags: a stage taking at least 5 seconds or a tracked total
+taking at least 10 seconds emits a warning. Fast paths remain quiet. Profiler
+flags lower the timing thresholds to 500 milliseconds per stage and 1 second
+total, and enable additional detail.
 
 Enable all profiler-gated spans for one gateway run:
 
@@ -129,6 +136,9 @@ Or enable it in config:
 
 The output path always comes from `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, even
 when the flag itself is set in config; there is no config key for the path.
+See [Environment variables](/help/environment) for where OpenClaw reads
+`OPENCLAW_DIAGNOSTICS`, `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, and
+`OPENCLAW_DIAGNOSTICS_EVENT_LOOP` from, and in what precedence order.
 When `timeline` is enabled only from config, the earliest config-loading spans
 are missing because OpenClaw has not read config yet; subsequent startup spans
 are captured normally.
@@ -147,6 +157,12 @@ counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
 
+Timeline writes batch adjacent events with the same destination into a bounded
+64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
+process exit. Event timestamps reflect emission time. Writes remain best-effort;
+a forced kill can lose pending output. External harnesses should read the final
+artifact after the process exits and must not truncate it while the process runs.
+
 ## Where logs go
 
 Flags emit logs into the standard diagnostics log file. By default:
@@ -155,35 +171,40 @@ Flags emit logs into the standard diagnostics log file. By default:
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
+Named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`; for
+example, `--dev` uses `openclaw-dev-YYYY-MM-DD.log`.
+
 If you set `logging.file`, use that path instead. Logs are JSONL (one JSON
-object per line). Redaction still applies based on `logging.redactSensitive`.
+object per line). Redaction still applies; it is always on.
 See [Logging](/logging) for the full log-path resolution, rotation, and
 redaction model.
 
 ## Extract logs
 
-Pick the latest log file:
+Read the active profile's latest log file:
 
 ```bash
-ls -t /tmp/openclaw/openclaw-*.log | head -n 1
+openclaw logs --plain
+# Named profile example:
+openclaw --profile work logs --plain
 ```
 
 Filter for Telegram HTTP diagnostics:
 
 ```bash
-rg "telegram http error" /tmp/openclaw/openclaw-*.log
+openclaw logs --plain --limit 5000 | rg "telegram http error"
 ```
 
 Filter for Brave Search HTTP diagnostics:
 
 ```bash
-rg "brave http" /tmp/openclaw/openclaw-*.log
+openclaw logs --plain --limit 5000 | rg "brave http"
 ```
 
 Or tail while reproducing:
 
 ```bash
-tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
+openclaw logs --follow --plain | rg "telegram http error"
 ```
 
 For remote gateways, use `openclaw logs --follow` instead (see
@@ -191,8 +212,8 @@ For remote gateways, use `openclaw logs --follow` instead (see
 
 ## Notes
 
-- If `logging.level` is set higher than `warn`, flag-gated logs may be
-  suppressed. Default `info` is fine.
+- If `logging.level` is set to `error`, `fatal`, or `silent`, flag-gated logs
+  may be suppressed. Default `info` is fine.
 - `brave.http` logs Brave Search request URLs/query params, response
   status/timing, and cache hit/miss/write events. It does not log the API key
   (sent as a request header) or response bodies, but search queries can be

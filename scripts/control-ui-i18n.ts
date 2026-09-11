@@ -2,49 +2,49 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
+import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { formatErrorMessage } from "../src/infra/errors.ts";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
   syncControlUiCatalogFallbackBaseline,
-  verifyControlUiCatalogs,
+  verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
+import {
+  hashControlUiTranslationText,
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+} from "./lib/control-ui-i18n-catalog-values.ts";
+import {
+  loadControlUiSourceCatalog,
+  readControlUiSourceCatalog,
+} from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   flattenTranslations,
-  resolveLocaleMetaProvenance,
   type GlossaryEntry,
   type LocaleEntry,
   type LocaleMeta,
   type TranslationBatchItem,
-  type TranslationMap,
-  type TranslationMemoryEntry,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
-export { shouldReuseExistingTranslation } from "./lib/control-ui-i18n-sync-plan.ts";
-
-const { formatGeneratedModule } = (await import(
-  new URL("./lib/format-generated-module.mjs", import.meta.url).href
-)) as {
-  formatGeneratedModule: (
-    source: string,
-    options: {
-      errorLabel: string;
-      outputPath: string;
-      repoRoot: string;
-    },
-  ) => string;
-};
+// Translation is standalone tooling: Gateway host hooks open operator state
+// and log model identifiers before this script can redact provider failures.
+const translationRuntime = createLlmRuntime();
+registerBuiltInApiProviders(translationRuntime.registry);
 
 type RunProcessParentSignalState = {
   done: boolean;
@@ -57,9 +57,7 @@ const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
@@ -73,6 +71,7 @@ const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
+const ENV_FALLBACK_MODEL = "OPENCLAW_I18N_FALLBACK_MODEL";
 const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
@@ -124,6 +123,7 @@ function usage(): never {
       "Usage:",
       "  node --import tsx scripts/control-ui-i18n.ts check",
       "  node --import tsx scripts/control-ui-i18n.ts sync [--write] [--locale <code>] [--force]",
+      "  node --import tsx scripts/control-ui-i18n.ts sync --write --locale <code> --refresh-key <key> [--refresh-key <key> ...]",
     ].join("\n"),
   );
   process.exit(2);
@@ -138,6 +138,7 @@ function parseArgs(argv: string[]) {
   let localeFilter: string | null = null;
   let write = false;
   let force = false;
+  const refreshKeys = new Set<string>();
 
   for (let index = 0; index < rest.length; index += 1) {
     const part = rest[index];
@@ -152,6 +153,18 @@ function parseArgs(argv: string[]) {
       case "--force":
         force = true;
         break;
+      case "--refresh-key": {
+        const key = rest[index + 1];
+        if (!key || key.startsWith("--")) {
+          throw new Error("--refresh-key requires a catalog key");
+        }
+        refreshKeys.add(key);
+        if (refreshKeys.size > 64) {
+          throw new Error("--refresh-key accepts at most 64 distinct keys");
+        }
+        index += 1;
+        break;
+      }
       default:
         usage();
     }
@@ -160,11 +173,17 @@ function parseArgs(argv: string[]) {
   if (command === "check" && write) {
     usage();
   }
+  if (refreshKeys.size > 0 && (command !== "sync" || !write || !localeFilter || force)) {
+    throw new Error(
+      "--refresh-key requires sync --write --locale and cannot be combined with --force",
+    );
+  }
 
   return {
     command,
     force,
     localeFilter,
+    refreshKeys,
     write,
   };
 }
@@ -256,33 +275,16 @@ function resolveKnownTranslationProvider(): TranslationProvider {
   throw new Error(`Unsupported translation provider: ${provider}`);
 }
 
-function normalizeText(text: string): string {
-  return text.trim().split(/\s+/).join(" ");
-}
-
 function sha256(input: string | Uint8Array): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-function hashText(text: string): string {
-  return sha256(normalizeText(text));
-}
-
 function cacheNamespace(): string {
-  return [
-    `wf=${CONTROL_UI_I18N_WORKFLOW}`,
-    "engine=openclaw-llm",
-    `provider=${resolveConfiguredProvider()}`,
-    `model=${resolveConfiguredModel()}`,
-  ].join("|");
+  return `wf=${CONTROL_UI_I18N_WORKFLOW}|engine=openclaw-llm`;
 }
 
 function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
   return sha256([cacheNamespace(), SOURCE_LOCALE, targetLocale, segmentId, textHash].join("|"));
-}
-
-function localeFilePath(entry: LocaleEntry): string {
-  return path.join(LOCALES_DIR, entry.fileName);
 }
 
 function glossaryPath(entry: LocaleEntry): string {
@@ -295,20 +297,6 @@ function metaPath(entry: LocaleEntry): string {
 
 function tmPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-}
-
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  const href = `${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`;
-  return (await import(href)) as T;
-}
-
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
 }
 
 type PlaceholderMismatch = {
@@ -343,6 +331,24 @@ export function findPlaceholderMismatches(
     }
   }
   return mismatches;
+}
+
+export function filterPlaceholderCompatibleTranslations(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+): Map<string, string> {
+  return new Map(
+    [...translatedFlat].filter(([key, translated]) => {
+      const source = sourceFlat.get(key);
+      return (
+        source !== undefined &&
+        compareStringArrays(
+          extractTranslationPlaceholders(source),
+          extractTranslationPlaceholders(translated),
+        )
+      );
+    }),
+  );
 }
 
 function assertPlaceholderParity(
@@ -390,27 +396,6 @@ async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   return JSON.parse(raw) as LocaleMeta;
 }
 
-async function loadTranslationMemory(
-  filePath: string,
-): Promise<Map<string, TranslationMemoryEntry>> {
-  const entries = new Map<string, TranslationMemoryEntry>();
-  if (!existsSync(filePath)) {
-    return entries;
-  }
-  const raw = await readFile(filePath, "utf8");
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = JSON.parse(trimmed) as TranslationMemoryEntry;
-    if (parsed.cache_key && parsed.translated.trim()) {
-      entries.set(parsed.cache_key, parsed);
-    }
-  }
-  return entries;
-}
-
 function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
   if (glossary.length === 0) {
     return "";
@@ -436,7 +421,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
     "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
     "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
-    "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
+    "- Use natural target-language punctuation and spacing in translated prose. Keep ellipses and arrows unchanged when they are UI indicators.",
+    "- Preserve exact syntax, punctuation, and casing in code, URLs, commands, placeholders, identifiers, and clearly identified literal third-party UI labels.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
     "- Do not add explanations, comments, or extra keys.",
@@ -448,12 +434,37 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   return lines.join("\n");
 }
 
+function buildBatchPayload(items: readonly TranslationBatchItem[]) {
+  return Object.fromEntries(
+    items.map(
+      (item) =>
+        [
+          item.key,
+          item.sourcePath
+            ? {
+                text: item.text,
+                sourcePath: item.sourcePath,
+                sourceContext: item.sourceContext,
+              }
+            : item.text,
+        ] as const,
+    ),
+  );
+}
+
 export function buildBatchPrompt(
   items: readonly TranslationBatchItem[],
   validationError?: string,
 ): string {
-  const payload = Object.fromEntries(items.map((item) => [item.key, item.text]));
+  const payload = buildBatchPayload(items);
   const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
+  if (items.some((item) => item.sourcePath)) {
+    lines.push(
+      "For object values, translate only text. Use sourcePath and the bounded sourceContext excerpt to understand the native UI owner and disambiguate its meaning; these fields are context, not text to translate.",
+      "Preserve the source order and meaning of unnumbered printf arguments. Rephrase surrounding prose rather than swapping the roles of argument values. Preserve literal percent escapes exactly.",
+      "Return each id mapped directly to its translated string, without the context fields.",
+    );
+  }
   if (validationError) {
     lines.push(
       "",
@@ -488,8 +499,7 @@ export function isProviderAuthError(error: Error): boolean {
 }
 
 function isProviderAuthOptional(): boolean {
-  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -515,7 +525,7 @@ function resolveBatchCharBudget(): number {
 }
 
 function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
-  return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
+  return JSON.stringify(buildBatchPayload(items)).length;
 }
 
 type RunProcessOptions = {
@@ -549,8 +559,9 @@ export function appendBoundedProcessOutput(
   if (nextText.length <= maxChars) {
     return { text: nextText, truncatedChars: capture.truncatedChars };
   }
-  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
+  const text = sliceUtf16Safe(nextText, -maxChars);
+  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
+  return { text, truncatedChars };
 }
 
 function formatProcessOutput(capture: ProcessOutputCapture): string {
@@ -783,43 +794,6 @@ export async function runProcess(
   });
 }
 
-async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const formatted = formatGeneratedModule(source, {
-    errorLabel: "control ui locale",
-    outputPath: filePath,
-    repoRoot: ROOT,
-  });
-  return restoreReplacementCorruptedStringLiterals(source, formatted);
-}
-
-function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
-  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
-    return formatted;
-  }
-
-  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
-  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
-  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
-  if (sourceLiterals.length !== formattedLiterals.length) {
-    return formatted;
-  }
-
-  let output = "";
-  let cursor = 0;
-  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
-    const replacement = sourceLiterals[index]?.[0];
-    const literal = formattedLiteral[0];
-    const start = formattedLiteral.index;
-    if (replacement === undefined || start === undefined) {
-      return formatted;
-    }
-    output += formatted.slice(cursor, start);
-    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
-    cursor = start + literal.length;
-  }
-  return `${output}${formatted.slice(cursor)}`;
-}
-
 type LocaleRunContext = {
   localeCount: number;
   localeIndex: number;
@@ -831,7 +805,10 @@ type TranslationBatchContext = LocaleRunContext & {
   locale: string;
   splitDepth?: number;
   segmentLabel?: string;
+  validateTranslation?: TranslationValidator;
 };
+
+type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
 
 type ClientAccess = {
   getClient: () => Promise<TranslationClient>;
@@ -903,9 +880,11 @@ export function resolveTranslationModel(): Model {
 class TranslationClient {
   private closed = false;
   private sequence: Promise<unknown> = Promise.resolve();
-  private readonly model: Model;
+  private model: Model;
+  private readonly systemPrompt: string;
 
-  private constructor(private readonly systemPrompt: string) {
+  private constructor(systemPrompt: string) {
+    this.systemPrompt = systemPrompt;
     this.model = resolveTranslationModel();
   }
 
@@ -935,28 +914,53 @@ class TranslationClient {
           reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        completeSimple(
-          this.model,
-          {
-            systemPrompt: this.systemPrompt,
-            messages: [{ role: "user", content: message, timestamp: Date.now() }],
-          },
-          {
-            maxTokens: 4096,
-            reasoning: resolveThinkingLevel(),
-            signal: controller.signal,
-            timeoutMs,
-          },
-        )
-          .then((assistantMessage) => {
+        const complete = () =>
+          translationRuntime
+            .completeSimple(
+              this.model,
+              {
+                systemPrompt: this.systemPrompt,
+                messages: [{ role: "user", content: message, timestamp: Date.now() }],
+              },
+              {
+                maxTokens: 4096,
+                reasoning: resolveThinkingLevel(),
+                signal: controller.signal,
+                timeoutMs,
+              },
+            )
+            .then(extractTranslationResult);
+        complete()
+          .catch(async (error: unknown) => {
+            const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
+            if (
+              error instanceof TranslationProviderError &&
+              error.code === "model_not_found" &&
+              !controller.signal.aborted &&
+              !this.closed &&
+              this.model.provider === "openai" &&
+              fallback &&
+              fallback !== this.model.id
+            ) {
+              logProgress(`${label}: primary model unavailable; using configured fallback`);
+              this.model = { ...this.model, id: fallback, name: fallback };
+              return await complete();
+            }
+            throw error;
+          })
+          .then((translation) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            resolve(extractTranslationResult(assistantMessage));
+            resolve(translation);
           })
           .catch((error: unknown) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(
+              error instanceof TranslationProviderError
+                ? error
+                : new TranslationProviderError("provider_error"),
+            );
           });
       });
     });
@@ -973,9 +977,26 @@ class TranslationClient {
   }
 }
 
+class TranslationProviderError extends Error {
+  readonly code: "model_not_found" | "authentication_error" | "provider_error";
+
+  constructor(code: TranslationProviderError["code"]) {
+    super(`translation provider failed (${code}); check the private provider configuration`);
+    this.code = code;
+  }
+}
+
 function extractTranslationResult(message: AssistantMessage): string {
   if (message.errorMessage || message.stopReason === "error") {
-    throw new Error(message.errorMessage?.trim() || "translation provider error");
+    // Provider prose can contain private model names. Only the explicit model
+    // availability code authorizes fallback; all public errors use fixed text.
+    throw new TranslationProviderError(
+      message.errorCode === "model_not_found"
+        ? "model_not_found"
+        : isProviderAuthError(new Error(message.errorMessage))
+          ? "authentication_error"
+          : "provider_error",
+    );
   }
   const text = message.content
     .map((block) => (block.type === "text" ? block.text : ""))
@@ -993,13 +1014,18 @@ function parseTranslationReply(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
   const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
-  return JSON.parse(json);
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error("translation provider returned invalid JSON");
+  }
 }
 
 export function parseTranslationBatchReply(
   raw: string,
   items: readonly TranslationBatchItem[],
   locale: string,
+  validateTranslation?: TranslationValidator,
 ): Map<string, string> {
   const parsed = parseTranslationReply(raw);
   const translated = new Map<string, string>();
@@ -1008,6 +1034,15 @@ export function parseTranslationBatchReply(
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`missing translation for ${item.key}`);
     }
+    const privateModels = [process.env[ENV_MODEL], process.env[ENV_FALLBACK_MODEL]];
+    if (
+      privateModels.some(
+        (model) => model?.trim() && value.toLowerCase().includes(model.trim().toLowerCase()),
+      )
+    ) {
+      throw new TranslationProviderError("provider_error");
+    }
+    validateTranslation?.(item.text, value, item.key, locale);
     translated.set(item.key, value);
   }
   assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
@@ -1034,7 +1069,12 @@ async function translateBatch(
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
       promptCompleted = true;
-      const translated = parseTranslationBatchReply(raw, items, context.locale);
+      const translated = parseTranslationBatchReply(
+        raw,
+        items,
+        context.locale,
+        context.validateTranslation,
+      );
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
@@ -1080,21 +1120,25 @@ type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
+  sourceContext?: string;
 };
 
 export async function translateNativeEntries(
   entries: readonly NativeTranslationEntry[],
   targetLocale: string,
   glossary: readonly GlossaryEntry[] = [],
+  validateTranslation?: TranslationValidator,
 ): Promise<Map<string, string>> {
   if (!hasTranslationProvider()) {
     throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
   }
   const pending = entries.map((entry) => ({
-    cacheKey: cacheKey(entry.id, hashText(entry.source), targetLocale),
+    cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),
     key: entry.id,
     text: entry.source,
-    textHash: hashText(entry.source),
+    textHash: hashControlUiTranslationText(entry.source),
+    sourcePath: entry.sourcePath,
+    sourceContext: entry.sourceContext,
   }));
   const batches = buildTranslationBatches(pending);
   const clientAccess = createTranslationClientAccess(targetLocale, glossary);
@@ -1107,6 +1151,7 @@ export async function translateNativeEntries(
         localeIndex: 1,
         batchCount: batches.length,
         batchIndex: batchIndex + 1,
+        validateTranslation,
       });
       for (const [id, value] of result) {
         translated.set(id, value);
@@ -1125,37 +1170,66 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function assertNoControlUiFallbacks(
+  outcomes: ReadonlyArray<Pick<SyncOutcome, "fallbackCount" | "locale">>,
+) {
+  const fallbackLocales = outcomes.filter((outcome) => outcome.fallbackCount > 0);
+  if (fallbackLocales.length === 0) {
+    return;
+  }
+  throw new Error(
+    [
+      "control-ui-i18n generated locales still contain English fallbacks.",
+      ...fallbackLocales.map(
+        (outcome) => `${outcome.locale}: ${outcome.fallbackCount} fallback keys`,
+      ),
+    ].join("\n"),
+  );
+}
+
 async function syncLocale(
   entry: LocaleEntry,
-  options: { allowTranslate: boolean; checkOnly: boolean; force: boolean; write: boolean },
+  options: {
+    allowTranslate: boolean;
+    checkOnly: boolean;
+    force: boolean;
+    write: boolean;
+    refreshKeys: ReadonlySet<string>;
+  },
   context: LocaleRunContext,
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
+  const sourceRaw = await readControlUiSourceCatalog();
   const sourceHash = sha256(sourceRaw);
-  const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenTranslations(sourceMap);
-  const existingPath = localeFilePath(entry);
-  const existingMap = (await loadLocaleMap(existingPath, entry.exportName)) ?? {};
+  const tm = loadControlUiTranslationMemory(tmPath(entry));
+  const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
   const existingFlat = flattenTranslations(existingMap);
+  // Placeholder changes invalidate the old translation even when the key stays
+  // stable. Treat it as pending so the locale bot can repair source-only PRs.
+  const reusableExistingFlat = filterPlaceholderCompatibleTranslations(sourceFlat, existingFlat);
   const previousMeta = await loadMeta(metaPath(entry));
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
-  const tm = await loadTranslationMemory(tmPath(entry));
   const allowTranslate = options.allowTranslate;
   const plan = createControlUiLocaleSyncPlan({
     allowTranslate,
     cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
     entry,
-    existingFlat,
+    existingFlat: reusableExistingFlat,
     force: options.force,
-    hashText,
+    refreshKeys: options.refreshKeys,
+    hashText: hashControlUiTranslationText,
     previousMeta,
     sourceFlat,
     sourceHash,
     translationMemory: tm,
   });
+  if (options.refreshKeys.size > 0 && !allowTranslate) {
+    throw new Error("--refresh-key requires a configured translation provider");
+  }
 
   // Writing NEW English fallbacks trips the shipped-fallback CI gate
   // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
@@ -1177,7 +1251,7 @@ async function syncLocale(
     const batches = buildTranslationBatches(plan.pending);
     const batchCount = batches.length;
     logProgress(
-      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
     const clientAccess = createTranslationClientAccess(entry.locale, glossary);
     try {
@@ -1189,15 +1263,17 @@ async function syncLocale(
           locale: entry.locale,
         });
         plan.recordTranslations(batch, translated, {
-          model: resolveConfiguredModel(),
-          provider: resolveConfiguredProvider(),
           sourceLocale: SOURCE_LOCALE,
           updatedAt: () => new Date().toISOString(),
         });
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+      if (
+        options.refreshKeys.size === 0 &&
+        isProviderAuthOptional() &&
+        isProviderAuthError(failure)
+      ) {
         logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
         return {
           changed: false,
@@ -1223,28 +1299,18 @@ async function syncLocale(
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  const provenance = resolveLocaleMetaProvenance({
-    didTranslate: allowTranslate && plan.pending.length > 0,
-    model: allowTranslate ? resolveConfiguredModel() : "",
-    previousMeta,
-    provider: allowTranslate ? resolveConfiguredProvider() : "",
-  });
   const artifacts = plan.render({
     defaultGlossary: DEFAULT_GLOSSARY,
     generatedAt: new Date().toISOString(),
     glossary,
-    model: provenance.model,
-    provider: provenance.provider,
     workflow: CONTROL_UI_I18N_WORKFLOW,
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
 
-  const expectedLocale = await formatGeneratedTypeScript(existingPath, artifacts.localeModule);
   const expectedMeta = artifacts.meta;
   const expectedGlossary = artifacts.glossary;
   const expectedTm = artifacts.translationMemory;
 
-  const currentLocale = existsSync(existingPath) ? await readFile(existingPath, "utf8") : "";
   const currentMeta = existsSync(metaPath(entry)) ? await readFile(metaPath(entry), "utf8") : "";
   const currentGlossary = existsSync(glossaryFilePath)
     ? await readFile(glossaryFilePath, "utf8")
@@ -1252,7 +1318,6 @@ async function syncLocale(
   const currentTm = existsSync(tmPath(entry)) ? await readFile(tmPath(entry), "utf8") : "";
 
   const changed =
-    currentLocale !== expectedLocale ||
     currentMeta !== expectedMeta ||
     currentGlossary !== expectedGlossary ||
     currentTm !== expectedTm;
@@ -1276,9 +1341,7 @@ async function syncLocale(
   }
 
   if (!options.checkOnly && options.write) {
-    await mkdir(LOCALES_DIR, { recursive: true });
     await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(existingPath, expectedLocale, "utf8");
     await writeFile(metaPath(entry), expectedMeta, "utf8");
     await writeFile(glossaryFilePath, expectedGlossary, "utf8");
     if (expectedTm) {
@@ -1302,7 +1365,7 @@ async function syncLocale(
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "check") {
-    await verifyControlUiCatalogs({
+    await verifyControlUiGeneratedCatalogs({
       checkOnly: true,
       write: false,
     });
@@ -1326,7 +1389,7 @@ async function main() {
 
   const allowTranslate = args.command === "sync" && hasTranslationProvider();
   logProgress(
-    `command=${args.command} locales=${entries.length} provider=${allowTranslate ? resolveConfiguredProvider() : "disabled"} model=${allowTranslate ? resolveConfiguredModel() : "n/a"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+    `command=${args.command} locales=${entries.length} translation=${allowTranslate ? "enabled" : "disabled"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
   for (const [index, entry] of entries.entries()) {
@@ -1336,6 +1399,7 @@ async function main() {
         allowTranslate,
         checkOnly: args.command === "check",
         force: args.force,
+        refreshKeys: args.refreshKeys,
         write: args.write,
       },
       {
@@ -1357,19 +1421,24 @@ async function main() {
 
   if (args.command === "sync" && args.write) {
     await syncControlUiCatalogFallbackBaseline({
+      // A scoped matrix worker can observe unsynced sibling locales. The final
+      // aggregate sync still rebuilds and validates the complete catalog.
+      allowCatalogDrift: Boolean(args.localeFilter),
       checkOnly: false,
-      resolvedLocale: args.localeFilter ?? undefined,
       write: true,
     });
   }
 
-  if (args.command === "check" && changed.length > 0) {
-    throw new Error(
-      [
-        "control-ui-i18n drift detected.",
-        "Run `node --import tsx scripts/control-ui-i18n.ts sync --write` and commit the results.",
-      ].join("\n"),
-    );
+  if (args.command === "check") {
+    assertNoControlUiFallbacks(outcomes);
+    if (changed.length > 0) {
+      throw new Error(
+        [
+          "control-ui-i18n drift detected.",
+          "Run `node --import tsx scripts/control-ui-i18n.ts sync --write` and commit the results.",
+        ].join("\n"),
+      );
+    }
   }
 
   if (args.command === "sync" && !args.write && changed.length > 0) {
@@ -1386,21 +1455,26 @@ function isCliEntrypoint() {
 
 if (isCliEntrypoint()) {
   await main().catch((error: unknown) => {
-    console.error(formatErrorMessage(error));
+    console.error(
+      formatErrorMessage(error, {
+        // Keep failure reporting independent of Gateway logging configuration.
+        redact: (text) => {
+          let redacted = text;
+          for (const name of [
+            ENV_MODEL,
+            ENV_FALLBACK_MODEL,
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+          ]) {
+            const secret = process.env[name]?.trim();
+            if (secret) {
+              redacted = redacted.replaceAll(new RegExp(escapeRegExp(secret), "gi"), "[redacted]");
+            }
+          }
+          return redacted;
+        },
+      }),
+    );
     process.exit(1);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

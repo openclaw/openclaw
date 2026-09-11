@@ -3,13 +3,20 @@ import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import {
+  formatErrorMessage,
+  PlatformMessageNotDispatchedError,
+} from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
+import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
 const TWILIO_ACCOUNTS_URL = "https://api.twilio.com/2010-04-01/Accounts";
@@ -22,6 +29,10 @@ const TWILIO_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const TRUNCATED_RESPONSE_SUFFIX = "... [truncated]";
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
+export const TWILIO_MESSAGE_BODY_MAX_LENGTH = 1600;
+const TWILIO_MMS_MAX_OUTBOUND_MEDIA_COUNT = 10;
+export const TWILIO_MMS_MAX_BYTES = 5 * 1024 * 1024;
+const SMS_MAX_INBOUND_MEDIA_DOWNLOADS = 10;
 
 type ParsedTwilioApiError = {
   code?: number;
@@ -159,23 +170,26 @@ export function resolveTwilioWebhookSignatureUrl(params: {
   return `${signatureBaseUrl}${search}`;
 }
 
-export class TwilioSmsApiError extends Error {
+class TwilioSmsApiError extends Error {
   readonly httpStatus: number;
   readonly responseText: string;
   readonly twilioCode?: number;
 
   constructor(httpStatus: number, responseText: string, operation = "send") {
-    const parsed = parseTwilioApiError(responseText);
-    const detail = parsed.message ?? (responseText || "unknown");
+    // Remote error bodies can reflect request credentials. Redact once before
+    // exposing the body through either the message or the structured field.
+    const redactedResponseText = redactToolPayloadText(responseText);
+    const parsed = parseTwilioApiError(redactedResponseText);
+    const detail = parsed.message ?? (redactedResponseText || "unknown");
     super(`Twilio SMS ${operation} failed (${httpStatus}): ${detail}`);
     this.name = "TwilioSmsApiError";
     this.httpStatus = httpStatus;
-    this.responseText = responseText;
+    this.responseText = redactedResponseText;
     this.twilioCode = parsed.code;
   }
 }
 
-export function parseTwilioFormBody(body: string): Record<string, string> {
+function parseTwilioFormBody(body: string): Record<string, string> {
   const parsed = querystring.parse(body);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -184,7 +198,7 @@ export function parseTwilioFormBody(body: string): Record<string, string> {
   return out;
 }
 
-export function computeTwilioSignature(params: {
+function computeTwilioSignature(params: {
   url: string;
   authToken: string;
   form: Record<string, string>;
@@ -234,34 +248,78 @@ function parseTwilioInboundFrom(raw: string): string | null {
   return phoneNumber;
 }
 
+export function resolveTwilioInboundSender(form: Record<string, string>): string {
+  return parseTwilioInboundFrom(firstTrimmedString(form.From)) ?? "";
+}
+
 export function buildTwilioInboundMessage(form: Record<string, string>): SmsInboundMessage | null {
   // Signature verification owns the untouched form. Canonicalize only after
   // that boundary so Twilio channel prefixes never change its signed input.
-  const from = parseTwilioInboundFrom(firstTrimmedString(form.From));
+  const from = resolveTwilioInboundSender(form);
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
-  const accountSid = firstTrimmedString(form.AccountSid);
-  const messageSid =
-    firstTrimmedString(form.MessageSid) ||
-    firstTrimmedString(form.SmsSid) ||
-    firstTrimmedString(form.SmsMessageSid);
-  if (!from || !to || !body || !messageSid) {
+  const accountSid = firstString(form.AccountSid);
+  const messagingServiceSid = firstString(form.MessagingServiceSid);
+  const messageSid = resolveTwilioMessageSid(form);
+  const rawMediaCount = firstTrimmedString(form.NumMedia);
+  const mediaCount = rawMediaCount ? Number(rawMediaCount) : 0;
+  if (!Number.isSafeInteger(mediaCount) || mediaCount < 0) {
     return null;
   }
-  return { accountSid, from, to, body, messageSid };
+  let unavailableMediaCount = Math.max(0, mediaCount - SMS_MAX_INBOUND_MEDIA_DOWNLOADS);
+  const media = Array.from(
+    { length: Math.min(mediaCount, SMS_MAX_INBOUND_MEDIA_DOWNLOADS) },
+    (_value, index) => {
+      const url = firstTrimmedString(form[`MediaUrl${index}`]);
+      const contentType = firstTrimmedString(form[`MediaContentType${index}`]);
+      if (!url) {
+        unavailableMediaCount += 1;
+        return null;
+      }
+      return {
+        url,
+        ...(contentType ? { contentType } : {}),
+      };
+    },
+  ).filter((item): item is NonNullable<typeof item> => item !== null);
+  if (!from || !to || (!body && mediaCount === 0) || !messageSid) {
+    return null;
+  }
+  return {
+    accountSid,
+    from,
+    to,
+    body,
+    messageSid,
+    media,
+    ...(messagingServiceSid ? { messagingServiceSid } : {}),
+    ...(unavailableMediaCount > 0 ? { unavailableMediaCount } : {}),
+  };
+}
+
+export function resolveTwilioMessageSid(form: Record<string, string>): string {
+  return (
+    firstTrimmedString(form.MessageSid) ||
+    firstTrimmedString(form.SmsSid) ||
+    firstTrimmedString(form.SmsMessageSid)
+  );
 }
 
 export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Record<string, string>> {
   const body = await readRequestBodyWithLimit(req, {
     maxBytes: WEBHOOK_BODY_LIMIT_BYTES,
     timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the webhook can answer 413 before the connection closes.
+    destroyOnLimit: false,
   });
   return parseTwilioFormBody(body);
 }
 
+export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
+
 export function respondTwiml(res: ServerResponse, statusCode: number, body = ""): void {
   res.statusCode = statusCode;
-  res.setHeader("content-type", "text/xml; charset=utf-8");
+  res.setHeader("content-type", TWIML_CONTENT_TYPE);
   res.end(body || "<Response></Response>");
 }
 
@@ -320,6 +378,17 @@ function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<strin
   return Object.fromEntries(Object.entries(headers));
 }
 
+function assertTwilioRequestCredentialsAvailable(account: ResolvedSmsAccount): void {
+  try {
+    assertSmsCredentialOwnerAvailable(account);
+  } catch (error) {
+    throw new PlatformMessageNotDispatchedError(
+      `SMS request stopped before Twilio dispatch: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 async function requestTwilioApi(params: {
   url: string;
   account: ResolvedSmsAccount;
@@ -336,6 +405,7 @@ async function requestTwilioApi(params: {
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
+    assertTwilioRequestCredentialsAvailable(params.account);
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
@@ -344,9 +414,19 @@ async function requestTwilioApi(params: {
     };
   }
 
+  let requestDispatched = false;
   const guarded = await fetchWithSsrFGuard({
     url: params.url,
     init,
+    beforeRequest: () => {
+      if (requestDispatched) {
+        assertSmsCredentialOwnerAvailable(params.account);
+        return;
+      }
+      assertTwilioRequestCredentialsAvailable(params.account);
+      // A later callback means the preceding request returned a redirect response.
+      requestDispatched = true;
+    },
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,
@@ -515,20 +595,44 @@ export async function listTwilioMessages(params: {
 export async function sendSmsViaTwilio(params: {
   account: ResolvedSmsAccount;
   to: string;
-  text: string;
+  text?: string;
+  mediaUrls?: readonly string[];
   fetchImpl?: typeof fetch;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
+  assertSmsCredentialOwnerAvailable(params.account);
   if (!params.account.fromNumber && !params.account.messagingServiceSid) {
     throw new Error("Twilio SMS send requires fromNumber or messagingServiceSid.");
   }
-  const body = new URLSearchParams({
-    To: params.to,
-    Body: params.text,
-  });
+  if (params.text && params.text.length > TWILIO_MESSAGE_BODY_MAX_LENGTH) {
+    throw new Error(
+      `Twilio SMS/MMS Body supports at most ${TWILIO_MESSAGE_BODY_MAX_LENGTH} characters.`,
+    );
+  }
+  const mediaUrls = (params.mediaUrls ?? []).map((url) => url.trim()).filter(Boolean);
+  if (!params.text && mediaUrls.length === 0) {
+    throw new Error("Twilio SMS/MMS send requires text or media.");
+  }
+  if (mediaUrls.length > TWILIO_MMS_MAX_OUTBOUND_MEDIA_COUNT) {
+    throw new Error(
+      `Twilio MMS send supports at most ${TWILIO_MMS_MAX_OUTBOUND_MEDIA_COUNT} media URLs.`,
+    );
+  }
+  const body = new URLSearchParams({ To: params.to });
+  if (params.text) {
+    body.set("Body", params.text);
+  }
+  for (const mediaUrl of mediaUrls) {
+    body.append("MediaUrl", mediaUrl);
+  }
   if (params.account.fromNumber) {
     body.set("From", params.account.fromNumber);
   } else {
     body.set("MessagingServiceSid", params.account.messagingServiceSid);
+  }
+  const statusCallback = resolveTwilioStatusCallbackUrl(params.account.publicWebhookUrl);
+  if (statusCallback) {
+    body.set("StatusCallback", statusCallback);
   }
   const init = {
     method: "POST",
@@ -537,6 +641,7 @@ export async function sendSmsViaTwilio(params: {
     },
     body,
   } satisfies RequestInit;
+  await params.onPlatformSendDispatch?.();
   const response = await requestTwilioApi({
     account: params.account,
     url: twilioApiUrl(params.account.accountSid, "/Messages.json"),

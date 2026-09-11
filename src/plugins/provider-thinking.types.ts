@@ -29,6 +29,8 @@ type ProviderThinkingModelCompat = {
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
   /** Effective agent runtime selected for this model, when known. */
   agentRuntime?: string | null;
+  /** API adapter id from the selected catalog route, when known. */
+  api?: string | null;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
@@ -70,3 +72,22 @@ export type ProviderThinkingProfile = {
    */
   preserveWhenCatalogReasoningFalse?: boolean;
 };
+
+/** Prepared provider policy ownership, without the broader Gateway registry contract. */
+export type ProviderThinkingRegistry = {
+  providers: ReadonlyArray<{
+    provider: {
+      id: string;
+      aliases?: string[];
+      hookAliases?: string[];
+      resolveThinkingProfile?: (
+        context: ProviderDefaultThinkingPolicyContext,
+      ) => ProviderThinkingProfile | null | undefined;
+    };
+  }>;
+};
+
+export type ProviderThinkingPolicySource =
+  | "active"
+  | "active-or-bundled"
+  | ProviderThinkingRegistry;

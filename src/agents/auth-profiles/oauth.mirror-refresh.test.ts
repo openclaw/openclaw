@@ -9,7 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import {
@@ -22,12 +22,10 @@ import {
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const {
@@ -436,16 +434,9 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.apiKey).toBe("main-side-refreshed-access");
     expect(result?.provider).toBe(provider);
 
-    // Sub-agent's store keeps its local expired credential; inherited OAuth is read-through.
+    // The concurrent winner consumes the shared generation, so the stale peer is retired.
     const subRaw = readAuthProfileStoreForTest(subAgentDir);
-    expectPersistedOpenAICodexProfile(
-      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
-      {
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        accountId: "acct-shared",
-      },
-    );
+    expect(subRaw.profiles[profileId]).toBeUndefined();
   });
 
   it("does not satisfy forced refresh from unchanged main-agent credentials after refresh fails", async () => {

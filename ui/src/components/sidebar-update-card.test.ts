@@ -1,28 +1,46 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateAvailable } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import "./sidebar-update-card.ts";
-
-const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
-  updateRunning: boolean;
+  updateSchedule: UpdateScheduleState | null;
+  compact: boolean;
+  heldUpdateCampaignId: string | null;
+  updateBusy: boolean;
+  updateRun: UpdateRunRecord | null;
+  updateRunAcknowledged: boolean;
+  canUpdate: boolean;
+  canHoldUpdate: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => Promise<boolean>;
+  onHoldUpdate: () => Promise<boolean>;
+  statusBanner: ApplicationStatusBanner | null;
+  onReviewUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
 let originalWebkit: PropertyDescriptor | undefined;
-let originalLocalStorage: PropertyDescriptor | undefined;
 
-async function mount(update: UpdateAvailable | null) {
+async function mount(
+  update: UpdateAvailable | null,
+  schedule: UpdateScheduleState | null = null,
+  canUpdate = true,
+  canHoldUpdate = true,
+) {
   const element = document.createElement(
     "openclaw-sidebar-update-card",
   ) as SidebarUpdateCardElement;
   element.updateAvailable = update;
+  element.updateSchedule = schedule;
+  element.canUpdate = canUpdate;
+  element.canHoldUpdate = canHoldUpdate;
   document.body.append(element);
   await element.updateComplete;
   return element;
@@ -30,20 +48,11 @@ async function mount(update: UpdateAvailable | null) {
 
 beforeEach(() => {
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
-  originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: createStorageMock(),
-  });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
-  if (originalLocalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
   if (originalWebkit) {
     Object.defineProperty(window, "webkit", originalWebkit);
   } else {
@@ -52,155 +61,360 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it("renders an available update and invokes the gateway action", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
+  it("renders the refresh state and invokes its action", async () => {
+    const element = await mount(null);
+    const onRefresh = vi.fn(async () => false);
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
 
-    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
-    expect(element.querySelector(".sidebar-update-card")?.getAttribute("role")).toBe("status");
-    expect(action?.textContent).toContain("Update available");
-    expect(action?.textContent).toContain("v2.0.0");
-    action?.click();
-
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-
-  it.each([null, { currentVersion: "2.0.0", latestVersion: "2.0.0", channel: "stable" }] as const)(
-    "renders nothing when no newer update is available",
-    async (update) => {
-      const element = await mount(update);
-      expect(element.querySelector(".sidebar-update-card")).toBeNull();
-    },
-  );
-
-  it("renders nothing for a dismissed version and channel", async () => {
-    localStorage.setItem(
-      DISMISS_KEY,
-      JSON.stringify({ latestVersion: "2.0.0", channel: "beta", dismissedAtMs: 1 }),
+    const card = element.querySelector(".sidebar-update-card");
+    expect(card?.getAttribute("role")).toBe("status");
+    expect(card?.getAttribute("aria-live")).toBe("polite");
+    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "Server updated",
     );
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "beta",
-    });
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
-  });
-
-  it("routes updates to the native bridge when present", async () => {
-    const postMessage = vi.fn();
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage } } },
-    });
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
+    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
+      "Refresh for full capabilities",
+    );
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
 
-    expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("restores an actionable retry after stale-client recovery cannot reach the Gateway", async () => {
+    const element = await mount(null);
+    let completeRefresh: ((reloading: boolean) => void) | undefined;
+    const firstRefresh = new Promise<boolean>((resolve) => {
+      completeRefresh = resolve;
+    });
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(firstRefresh)
+      .mockResolvedValue(false);
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+
+    expect(action?.disabled).toBe(true);
+    expect(action?.textContent).toContain("Reloading…");
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    completeRefresh?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+    expect(action?.textContent).toContain("Retry now");
+
+    action?.click();
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
+    const element = await mount(null);
+    let completeFirst: ((reloading: boolean) => void) | undefined;
+    let completeSecond: ((reloading: boolean) => void) | undefined;
+    const onRefresh = vi
+      .fn<() => Promise<boolean>>()
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          completeSecond = resolve;
+        }),
+      );
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    await element.updateComplete;
+
+    element.refreshRequired = false;
+    await element.updateComplete;
+    element.refreshRequired = true;
+    await element.updateComplete;
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    action?.click();
+    await element.updateComplete;
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(action?.disabled).toBe(true);
+
+    completeFirst?.(false);
+    await element.updateComplete;
+    expect(action?.disabled).toBe(true);
+    expect(element.textContent).not.toContain(
+      "Actions are unavailable while the Gateway reconnects.",
+    );
+
+    completeSecond?.(false);
+    await vi.waitFor(() => expect(action?.disabled).toBe(false));
+    expect(element.textContent).toContain("Actions are unavailable while the Gateway reconnects.");
+  });
+
+  it("gives the refresh state precedence over an available update", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onRefresh = vi.fn(async () => false);
+    const onUpdate = vi.fn();
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    element.onUpdate = onUpdate;
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Server updated");
+    expect(element.textContent).not.toContain("Update Gateway");
+    expect(element.textContent).not.toContain("v2.0.0");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+
+    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
-  it("returns a declined native click to the gateway while connected", async () => {
+  it("routes a recorded failure to update settings when availability is gone", async () => {
+    const element = await mount(null);
+    const onReviewUpdate = vi.fn();
+    element.statusBanner = { tone: "danger", text: "Update failed" };
+    element.onReviewUpdate = onReviewUpdate;
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Update failed");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
+    expect(onReviewUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows live run progress and stops surfacing an acknowledged or old result", async () => {
+    const element = await mount(null);
+    element.updateRun = createUpdateRunFixture();
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw update in progress: staging");
+    expect(element.textContent).toContain("phases complete");
+    expect(element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.disabled).toBe(
+      false,
+    );
+
+    element.updateRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: Date.now(),
+      after: { version: "2026.9.2" },
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("OpenClaw updated to 2026.9.2");
+    element.updateRunAcknowledged = true;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    element.updateRunAcknowledged = false;
+    element.updateRun = { ...element.updateRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+  });
+
+  it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
+    const element = await mount(
+      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
+      {
+        channel: "dev",
+        autoEnabled: false,
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abc1234def",
+          commitsBehind: 246,
+        },
+      },
+    );
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "246 commits behind",
+    );
+
+    element.updateBusy = true;
+    await element.updateComplete;
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    expect(action?.disabled).toBe(true);
+    expect(action?.textContent).toContain("Updating Gateway…");
+
+    element.updateAvailable = null;
+    element.updateSchedule = null;
+    await element.updateComplete;
+    expect(element.textContent).toContain("Updating Gateway…");
+  });
+
+  it("keeps an available update actionable inside the compact Inbox row", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     });
+    element.compact = true;
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "Update available",
+    );
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "Update Gateway",
+    );
+  });
+
+  it("keeps an unauthorized update discoverable without allowing activation", async () => {
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      null,
+      false,
+    );
     const onUpdate = vi.fn();
     element.onUpdate = onUpdate;
 
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateRunning = true;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateRunning = false;
-    element.updateAvailable = null;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.remove();
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("disables the action while updating", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.updateRunning = true;
-    await element.updateComplete;
-
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
-    expect(action?.disabled).toBe(true);
-    expect(action?.textContent).toContain("Updating…");
+    const tooltip = action?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<boolean> })
+      | null;
+    await tooltip?.updateComplete;
+
+    expect(action?.disabled).toBe(false);
+    expect(action?.getAttribute("aria-disabled")).toBe("true");
+    expect(action?.getAttribute("aria-describedby")).not.toBeNull();
+    expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
+    expect(tooltip?.content).toContain("Administrator access is required");
+    action?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
-  it("persists dismissal and hides the card", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
+  it("renders a quiet live countdown and stops ticking on disconnect", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const clearInterval = vi.spyOn(globalThis, "clearInterval");
+    const element = await mount(
+      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
+      {
+        channel: "stable",
+        autoEnabled: true,
+        target: { kind: "package", version: "2.0.0" },
+        campaign: {
+          id: "campaign-1",
+          state: "countdown",
+          announcedAtMs: 0,
+          applyAtMs: 55_000,
+          forceAtMs: 900_000,
+          updatedAtMs: 0,
+        },
+      },
+    );
+
+    const card = element.querySelector(".sidebar-update-card");
+    const timer = element.querySelector("[role='timer']");
+    expect(card?.hasAttribute("role")).toBe(false);
+    expect(timer?.getAttribute("aria-live")).toBe("off");
+    expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
+    expect(element.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe(
+      "Hold 1 h",
+    );
+
+    element.updateBusy = true;
     await element.updateComplete;
-
-    expect(JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "null")).toMatchObject({
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
-  });
-
-  it("hides the card when dismissal persistence fails", async () => {
-    const storage = createStorageMock();
-    storage.setItem = () => {
-      throw new Error("quota exceeded");
-    };
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-    const update = { currentVersion: "1.0.0", latestVersion: "3.0.0", channel: "stable" };
-    const element = await mount(update);
-
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
+    element.updateBusy = false;
     await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).not.toBeNull();
 
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await element.updateComplete;
+    expect(element.querySelector("[role='timer']")?.textContent).toContain("Updating in 0:53");
+
     element.remove();
-    const replacement = await mount(update);
-    expect(replacement.querySelector(".sidebar-update-card")).not.toBeNull();
+    expect(clearInterval).toHaveBeenCalled();
   });
 
-  it("shows a newer update after dismissing an older version", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
+  it("keeps a consumed hold hidden across shared-state rerenders after expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const element = await mount(
+      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
+      {
+        channel: "stable",
+        autoEnabled: true,
+        target: { kind: "package", version: "2.0.0" },
+        campaign: {
+          id: "campaign-1",
+          state: "waiting-for-idle",
+          announcedAtMs: 0,
+          forceAtMs: 900_000,
+          updatedAtMs: 0,
+        },
+      },
+    );
+    const onHoldUpdate = vi.fn(async () => true);
+    element.onHoldUpdate = onHoldUpdate;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__hold")?.click();
+    await Promise.resolve();
     await element.updateComplete;
 
-    element.updateAvailable = {
-      currentVersion: "1.0.0",
-      latestVersion: "3.0.0",
-      channel: "stable",
+    expect(onHoldUpdate).toHaveBeenCalledOnce();
+    element.heldUpdateCampaignId = "campaign-1";
+    element.updateSchedule = {
+      ...element.updateSchedule!,
+      campaign: { ...element.updateSchedule!.campaign!, holdUntilMs: 61_000 },
     };
     await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
 
-    expect(element.querySelector(".sidebar-update-card")?.textContent).toContain("v3.0.0");
+    element.updateSchedule = {
+      ...element.updateSchedule!,
+      campaign: { ...element.updateSchedule!.campaign!, holdUntilMs: 500 },
+    };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
+  });
+
+  it("renders held timing and gates hold for active or unauthorized campaigns", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const schedule: UpdateScheduleState = {
+      channel: "dev",
+      autoEnabled: true,
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "a".repeat(40),
+        commitsBehind: 2,
+      },
+      campaign: {
+        id: "campaign-1",
+        state: "waiting-for-idle",
+        announcedAtMs: 0,
+        holdUntilMs: 61_000,
+        forceAtMs: 961_000,
+        updatedAtMs: 1_000,
+      },
+    };
+    const held = await mount(null, schedule);
+    expect(held.textContent).toContain("Update held · resumes in 1:00");
+    expect(held.querySelector(".sidebar-update-card__hold")).toBeNull();
+
+    const unheldSchedule: UpdateScheduleState = {
+      ...schedule,
+      campaign: { ...schedule.campaign!, holdUntilMs: undefined },
+    };
+    const unauthorized = await mount(null, unheldSchedule, false);
+    expect(unauthorized.querySelector(".sidebar-update-card__hold")).toBeNull();
+
+    const unsupported = await mount(null, unheldSchedule, true, false);
+    expect(unsupported.querySelector(".sidebar-update-card__hold")).toBeNull();
   });
 });

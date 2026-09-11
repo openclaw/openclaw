@@ -21,9 +21,12 @@ export function getUnitFastTestFilesForIncludePatterns(
   includePatterns: string[],
   options?: { dir?: string },
 ): string[];
-export function getUnitFastTestFiles(): string[];
-export function getUnitFastTimerTestFiles(): string[];
+export function getUnitFastTestFiles(includePatterns?: string[] | null): string[];
+export function getUnitFastIsolatedTestFiles(includePatterns?: string[] | null): string[];
+export function getUnitFastTimerTestFiles(includePatterns?: string[] | null): string[];
 export function isUnitFastTestFile(file: string): boolean;
+export function isUnitFastIsolatedTestFile(file: string): boolean;
 export function isUnitFastTimerTestFile(file: string): boolean;
 export function resolveUnitFastTestIncludePattern(file: string): string | null;
+export function resolveUnitFastIsolatedTestIncludePattern(file: string): string | null;
 export function resolveUnitFastTimerTestIncludePattern(file: string): string | null;

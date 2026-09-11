@@ -1,6 +1,7 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -16,14 +17,53 @@ function buildExecPresentation(request: {
 function buildPluginPresentation(request: {
   title: string;
   description: string;
+  detail?: string;
   pluginId?: string;
   toolName?: string;
   agentId?: string;
+  externalResolution?: {
+    label: string;
+    decisions?: readonly ("allow-once" | "allow-always")[];
+  };
 }) {
   return buildApprovalPresentation({ kind: "plugin", request, allowedDecisions });
 }
 
 describe("buildApprovalPresentation", () => {
+  it.each([
+    { kind: "exec", request: { command: "printf safe" } },
+    {
+      kind: "plugin",
+      request: { title: "Review payment", description: "The plugin needs operator consent." },
+    },
+  ] as const)("sanitizes $kind scope and drops scope that exceeds its wire bound", (params) => {
+    const scope = {
+      kind: "payment",
+      amount: "49.99",
+      currency: "EUR",
+      target: "Stripe\u202E",
+    } as const;
+    const presentation = buildApprovalPresentation({
+      ...params,
+      request: { ...params.request, scope },
+      allowedDecisions,
+    });
+
+    expect(presentation).toMatchObject({
+      kind: params.kind,
+      scope: { ...scope, target: "Stripe\\u{202E}" },
+    });
+
+    const oversizedScopePresentation = buildApprovalPresentation({
+      ...params,
+      request: { ...params.request, scope: { ...scope, target: `${"x".repeat(125)}\u202E` } },
+      allowedDecisions,
+    });
+
+    expect(oversizedScopePresentation).toMatchObject({ kind: params.kind });
+    expect(oversizedScopePresentation).not.toHaveProperty("scope");
+  });
+
   it("sanitizes exec routing metadata and preserves empty values as null", () => {
     const githubToken = `ghp_${"a".repeat(100)}`;
     const presentation = buildExecPresentation({
@@ -53,6 +93,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Deploy\u202Eprod\nnow",
       description: "Line one\r\nLine two\u0000\u202E",
+      detail: "Input one\r\nInput two\u0000\u202E",
       pluginId: "plugin\u202Eid",
       toolName: "tool\nname",
       agentId: "agent\u0000id",
@@ -62,6 +103,7 @@ describe("buildApprovalPresentation", () => {
       kind: "plugin",
       title: "Deploy\\u{202E}prod\\u{A}now",
       description: "Line one\nLine two\\u{0}\\u{202E}",
+      detail: "Input one\nInput two\\u{0}\\u{202E}",
       pluginId: "plugin\\u{202E}id",
       toolName: "tool\\u{A}name",
       agentId: "agent\\u{0}id",
@@ -110,5 +152,154 @@ describe("buildApprovalPresentation", () => {
         description: `${description}${String.fromCodePoint(0x1f6e1)}`,
       }),
     ).toBeNull();
+  });
+
+  it("truncates oversized plugin detail without invalidating the presentation", () => {
+    const presentation = buildPluginPresentation({
+      title: "Review tool input",
+      description: "Bounded channel summary",
+      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+    });
+
+    expect(presentation).toMatchObject({
+      kind: "plugin",
+      detail: expect.stringMatching(/…\[truncated\]$/u),
+    });
+    if (presentation?.kind !== "plugin" || !presentation.detail) {
+      throw new Error("expected plugin detail");
+    }
+    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+  });
+
+  it("projects only bounded reviewer-safe external verification metadata", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "Verify with World\u202E",
+            decisions: ["allow-once", "allow-always"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toMatchObject({
+      kind: "plugin",
+      pluginId: "agentkit",
+      allowedDecisions: ["deny"],
+      externalResolution: {
+        label: "Verify with World\\u{202E}",
+        decisions: ["allow-once", "allow-always"],
+      },
+    });
+  });
+
+  it("rejects an external label that exceeds its limit after spoof-resistant escaping", () => {
+    expect(
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          pluginId: "agentkit",
+          externalResolution: {
+            label: "\u202E".repeat(11),
+            decisions: ["allow-once"],
+          },
+        },
+        allowedDecisions: ["deny"],
+      }),
+    ).toBeNull();
+  });
+
+  it("applies the external label limit by Unicode code point", () => {
+    const label = String.fromCodePoint(0x1f680).repeat(80);
+    const buildWithLabel = (value: string) =>
+      buildApprovalPresentation({
+        kind: "plugin",
+        request: {
+          title: "World verification",
+          description: "Verify personhood before continuing.",
+          externalResolution: { label: value, decisions: ["allow-once"] },
+        },
+        allowedDecisions: ["deny"],
+      });
+
+    expect(buildWithLabel(label)).toMatchObject({
+      kind: "plugin",
+      externalResolution: { label },
+    });
+    expect(buildWithLabel(`${label}${String.fromCodePoint(0x1f680)}`)).toBeNull();
+  });
+
+  it.each([
+    { label: " ", decisions: undefined },
+    { label: "Verify", decisions: [] },
+    { label: "Verify", decisions: ["allow-once", "allow-once"] as const },
+  ])("rejects malformed external verification metadata", (externalResolution) => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution,
+      }),
+    ).toBeNull();
+  });
+
+  it("defaults external verification to allow once", () => {
+    expect(
+      buildPluginPresentation({
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        pluginId: "agentkit",
+        externalResolution: { label: " Verify\nwith World " },
+      }),
+    ).toMatchObject({
+      externalResolution: {
+        label: "Verify\\u{A}with World",
+        decisions: ["allow-once"],
+      },
+    });
+  });
+});
+
+describe("buildApprovalPresentation (system-agent)", () => {
+  function buildSystemAgentPresentation(request: { title: string; description: string }) {
+    return buildApprovalPresentation({
+      kind: "system-agent",
+      request: {
+        ...request,
+        command: "true",
+        proposalHash: "a".repeat(64),
+        allowedDecisions,
+        sessionId: "s1",
+      },
+      allowedDecisions,
+    });
+  }
+
+  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+    const title = `${"a".repeat(79)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
+  });
+
+  it("keeps an emoji that fits within the title limit intact", () => {
+    const title = `${"a".repeat(78)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title });
+  });
+
+  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title: "t", description });
+    expect(presentation).toMatchObject({
+      kind: "system-agent",
+      description: "a".repeat(511),
+    });
   });
 });

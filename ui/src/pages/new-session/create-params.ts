@@ -1,7 +1,39 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * One closed visibility mode instead of independent incognito/draft booleans:
+ * an incognito session is never persisted, so "incognito draft" is unrepresentable.
+ */
+export type NewSessionVisibility = "normal" | "draft" | "incognito";
+export type DraftSessionCreateOverrides = Partial<
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
+> & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
+export type DraftSessionCreateSelection = Partial<
+  Pick<
+    SessionCreateParams,
+    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+  >
+> & {
+  message: string;
+  mentions?: readonly HumanMention[];
+  visibility: NewSessionVisibility;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+};
+
+export function canStartSessionAsDraft(params: {
+  allowedVisibilities?: readonly string[];
+  hasMultipleIdentities?: boolean;
+}): boolean {
+  return (
+    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
+  );
+}
 
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
@@ -10,31 +42,82 @@ export function isWorktreeNameValid(value: string): boolean {
 
 /** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
+  key?: string;
   agentId: string;
   message: string;
+  mentions?: readonly HumanMention[];
+  displayName?: string;
+  deferInitialTurn?: boolean;
   model?: string;
-  attachments?: unknown[];
+  contextWindow?: string;
+  thinkingLevel?: string;
+  fastMode?: SessionCreateParams["fastMode"];
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+  permissionMode?: SessionCreateParams["permissionMode"];
+  visibility?: NewSessionVisibility;
+  attachments?: SessionCreateParams["attachments"];
+  projectId?: string;
+  projectGitUrl?: string;
+  repository?: SessionCreateParams["repository"];
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
-  execNode?: string;
   catalogId?: string;
-}): Record<string, unknown> {
+  category?: string;
+}): SessionCreateParams {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
-  const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
+  const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
-  const customFolder = cwd && cwd !== workspace ? cwd : undefined;
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
+  const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
+  const message = draft.deferInitialTurn ? "" : draft.message;
+  const titleSource =
+    draft.deferInitialTurn && draft.visibility !== "incognito"
+      ? truncateUtf16Safe(draft.message.trim(), 1_000)
+      : undefined;
+  const repository = draft.repository;
+  const projectId = repository ? undefined : normalizeOptionalString(draft.projectId);
+  const projectGitUrl =
+    !repository &&
+    !projectId &&
+    (message.trim() || (!draft.deferInitialTurn && draft.attachments?.length))
+      ? normalizeOptionalString(draft.projectGitUrl)
+      : undefined;
+  const customFolder =
+    !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
   return {
+    ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
-    message: draft.message,
-    ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
+    message,
+    ...(!draft.deferInitialTurn && draft.mentions?.length
+      ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
+      : {}),
+    ...(normalizeOptionalString(draft.displayName)
+      ? { displayName: normalizeOptionalString(draft.displayName) }
+      : {}),
+    ...(titleSource ? { titleSource } : {}),
+    ...(draft.visibility === "incognito" ? { incognito: true } : {}),
+    ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
+    ...(!draft.deferInitialTurn && draft.attachments?.length
+      ? { attachments: draft.attachments }
+      : {}),
     ...(catalogId ? { catalogId } : {}),
+    ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
-    ...(draft.worktree
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
+    ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
+    ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(projectGitUrl ? { projectGitUrl } : {}),
+    ...(repository ? { repository: { ...repository } } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
+    ...(draft.worktree && !repository
       ? {
           worktree: true,
           // Passing the base explicitly also skips the create-time origin fetch.
@@ -44,9 +127,7 @@ export function buildDraftSessionCreateParams(draft: {
           ...(normalizeOptionalString(draft.worktreeName)
             ? { worktreeName: normalizeOptionalString(draft.worktreeName) }
             : {}),
-          ...(customFolder && !execNode ? { cwd: customFolder } : {}),
         }
       : {}),
-    ...(execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

@@ -1,19 +1,23 @@
-// Qa Lab tests cover Crabline local-provider transport integration behavior.
+// Qa Lab tests cover Crabline channel-driver integration with local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function createSelection(channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram") {
   return {
-    capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+    capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
     channel,
     channelDriver: "crabline",
-    smokeArtifactPath: "crabline-fake-provider-smoke.json",
+    providerReadinessArtifactPath: "crabline-provider-readiness.json",
   } as const;
 }
 
@@ -25,6 +29,76 @@ function requireString(value: unknown, label: string): string {
 }
 
 describe("crabline transport", () => {
+  it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                update: { message: { message_id: 42, padding: "x".repeat(1024 * 1024) } },
+              }),
+            ),
+        ),
+      );
+
+      try {
+        await expect(
+          transport.sendInbound({
+            conversation: { id: "-1001234567890", kind: "group" },
+            senderId: "100001",
+            senderName: "Alice",
+            text: "Oversized response marker.",
+          }),
+        ).rejects.toThrow("JSON response exceeds 1048576 bytes");
+      } finally {
+        await transport.cleanupAfterGatewayStop?.();
+      }
+    });
+  });
+
+  it("cancels a failed inbound response before surfacing the provider error", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+      const cancel = vi.fn(() => {
+        throw new Error("cancel failed");
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(new ReadableStream<Uint8Array>({ cancel }), {
+              status: 503,
+            }),
+        ),
+      );
+
+      try {
+        await expect(
+          transport.sendInbound({
+            conversation: { id: "-1001234567890", kind: "group" },
+            senderId: "100001",
+            senderName: "Alice",
+            text: "Telegram failure marker.",
+          }),
+        ).rejects.toThrow("Crabline telegram inbound injection failed with HTTP 503");
+        expect(cancel).toHaveBeenCalledOnce();
+      } finally {
+        await transport.cleanupAfterGatewayStop?.();
+      }
+    });
+  });
+
   it("configures OpenClaw's Telegram plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -35,6 +109,8 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.id).toBe("crabline");
+        expect("cleanup" in transport).toBe(false);
+        expect("cleanupAfterGatewayStop" in transport).toBe(true);
         expect(transport.requiredPluginIds).toEqual(["telegram"]);
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
@@ -57,7 +133,7 @@ describe("crabline transport", () => {
         expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
-          fs.access(path.join(outputDir, "crabline-fake-provider-server.json")),
+          fs.access(path.join(outputDir, "crabline-provider-server.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           transport.sendInbound({
@@ -71,7 +147,7 @@ describe("crabline transport", () => {
           text: "Telegram baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -121,7 +197,7 @@ describe("crabline transport", () => {
         };
         expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -155,6 +231,13 @@ describe("crabline transport", () => {
           senderId: "alice",
           senderName: "Alice",
         });
+        await transport.sendInbound({
+          conversation: { id: "alice", kind: "direct" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "/status",
+          nativeCommand: { name: "status" },
+        });
 
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegram = config.channels?.telegram as
@@ -171,10 +254,16 @@ describe("crabline transport", () => {
                 text: "/stop",
               },
             },
+            {
+              message: {
+                entities: [{ length: 7, offset: 0, type: "bot_command" }],
+                text: "/status",
+              },
+            },
           ],
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -194,6 +283,12 @@ describe("crabline transport", () => {
           | undefined;
         const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
         const botToken = requireString(telegram?.botToken, "Telegram bot token");
+        await transport.sendInbound({
+          conversation: { id: "-1001234567890", kind: "group" },
+          senderId: "100001",
+          text: "forum topic seed",
+          threadId: "42",
+        });
         const postTelegram = async (method: string, body: Record<string, unknown>) => {
           const response = await fetch(`${apiRoot}/bot${botToken}/${method}`, {
             body: JSON.stringify(body),
@@ -232,7 +327,7 @@ describe("crabline transport", () => {
           final: { text: "final marker", threadId: "42" },
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -266,7 +361,7 @@ describe("crabline transport", () => {
           SLACK_SIGNING_SECRET: "crabline-slack-signing-secret",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -340,7 +435,7 @@ describe("crabline transport", () => {
           text: "assistant via fake slack",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -376,7 +471,9 @@ describe("crabline transport", () => {
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         expect(env).toMatchObject({
           CRABLINE_WHATSAPP_ADMIN_TOKEN: expect.any(String),
-          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
+          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(
+            /whatsapp-provider-server\.jsonl$/u,
+          ),
           CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
           OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
             /^ws:\/\/127\.0\.0\.1:\d+\/ws\/chat\?access_token=/u,
@@ -385,7 +482,7 @@ describe("crabline transport", () => {
         expect(env.CRABLINE_WHATSAPP_ACCESS_TOKEN).toBeUndefined();
         expect(env.CRABLINE_WHATSAPP_API_ROOT).toBeUndefined();
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -418,7 +515,7 @@ describe("crabline transport", () => {
           text: "WhatsApp baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -433,17 +530,22 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["signal"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const gatewayConfig = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
+        expect(gatewayConfig).toMatchObject({
           channels: {
             signal: {
               account: "+15550000000",
-              apiMode: "native",
-              autoStart: false,
               enabled: true,
-              httpUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+              transport: {
+                kind: "external-native",
+                url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+              },
             },
           },
         });
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("apiMode");
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("autoStart");
+        expect(gatewayConfig.channels?.signal).not.toHaveProperty("httpUrl");
         expect(transport.createRuntimeEnvPatch?.()).toEqual({});
         const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
         expect(delivery).toMatchObject({
@@ -472,7 +574,7 @@ describe("crabline transport", () => {
           text: "Signal baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -488,8 +590,8 @@ describe("crabline transport", () => {
       try {
         const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const signal = config.channels?.signal as { httpUrl?: string } | undefined;
-        const signalBaseUrl = requireString(signal?.httpUrl, "Signal HTTP URL");
+        const signal = config.channels?.signal as { transport?: { url?: string } } | undefined;
+        const signalBaseUrl = requireString(signal?.transport?.url, "Signal HTTP URL");
         const { response, release } = await fetchWithSsrFGuard({
           url: `${signalBaseUrl}/api/v1/rpc`,
           init: {
@@ -522,7 +624,7 @@ describe("crabline transport", () => {
           text: "assistant via fake signal",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -576,7 +678,7 @@ describe("crabline transport", () => {
           text: "Mattermost baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -596,6 +698,7 @@ describe("crabline transport", () => {
           senderName: "Alice",
           text: "Mattermost baseline marker check.",
         });
+        await transport.state.reset();
         const delivery = transport.buildAgentDelivery({ target: "group:qa-channel" });
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         const mattermostUrl = requireString(env.MATTERMOST_URL, "Mattermost URL");
@@ -630,7 +733,7 @@ describe("crabline transport", () => {
           text: "assistant via fake mattermost",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -715,12 +818,12 @@ describe("crabline transport", () => {
         ).resolves.toMatchObject({
           conversation: { id: roomId, kind: "group" },
           direction: "inbound",
-          id: expect.stringMatching(/^\$[a-f0-9]{16}:matrix\.test$/u),
+          id: expect.stringMatching(/^\$[A-Za-z0-9_-]{43}$/u),
           senderId: "driver",
           text: "Matrix baseline marker check.",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -774,7 +877,7 @@ describe("crabline transport", () => {
           text: "assistant via fake matrix",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -850,7 +953,7 @@ describe("crabline transport", () => {
           text: "assistant via fake zalo",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });
@@ -884,7 +987,9 @@ describe("crabline transport", () => {
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: inbound.conversation.id,
+              chat_id: transport.buildAgentDelivery({
+                target: `channel:${inbound.conversation.id}`,
+              }).to,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },
@@ -945,7 +1050,7 @@ describe("crabline transport", () => {
           text: "assistant after reset",
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });

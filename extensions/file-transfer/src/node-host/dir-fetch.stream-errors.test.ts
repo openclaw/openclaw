@@ -1,5 +1,9 @@
-// File Transfer tests cover canonical process-wrapper failures during dir fetch.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// File Transfer tests cover canonical process-wrapper failures through dir fetch.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import * as tar from "tar";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runCommandBufferedMock } = vi.hoisted(() => ({ runCommandBufferedMock: vi.fn() }));
 
@@ -7,7 +11,9 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandBuffered: runCommandBufferedMock,
 }));
 
-import { testing } from "./dir-fetch.js";
+import { handleDirFetch } from "./dir-fetch.js";
+
+let tmpRoot: string;
 
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
@@ -21,53 +27,173 @@ function commandResult(overrides: Record<string, unknown> = {}) {
   };
 }
 
-afterEach(() => {
+beforeEach(async () => {
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-errors-")));
+  await fs.writeFile(path.join(tmpRoot, "ok.txt"), "ok");
+});
+
+afterEach(async () => {
   runCommandBufferedMock.mockReset();
+  await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
 describe("dir.fetch process wrapper", () => {
   it("falls back to capped tar when the optional du probe fails", async () => {
-    runCommandBufferedMock.mockRejectedValueOnce(new Error("du failed"));
+    const chunks: Buffer[] = [];
+    for await (const chunk of tar.c({ cwd: tmpRoot, gzip: true, portable: true }, ["ok.txt"])) {
+      chunks.push(Buffer.from(chunk));
+    }
+    runCommandBufferedMock
+      .mockRejectedValueOnce(new Error("du failed"))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.concat(chunks) }));
 
-    await expect(testing.preflightDu("/tmp/project", 1024)).resolves.toBe(true);
-    expect(runCommandBufferedMock).toHaveBeenCalledWith(
-      ["du", "-sk", "/tmp/project"],
+    await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+    });
+    expect(runCommandBufferedMock).toHaveBeenNthCalledWith(
+      1,
+      ["du", "-sk", tmpRoot],
       expect.objectContaining({ discardOutput: { stderr: true } }),
     );
   });
 
-  it("fails tar entry listing closed on wrapper errors", async () => {
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({ code: null, termination: "error", error: new Error("listing failed") }),
-    );
+  it("uses capped tar output for preflight-only requests without returning the archive", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
 
-    await expect(testing.listTarEntries(Buffer.from("archive"))).resolves.toBeNull();
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+      fileCount: 1,
+      preflightOnly: true,
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
     expect(runCommandBufferedMock).toHaveBeenCalledWith(
-      ["tar", "-tzf", "-"],
-      expect.objectContaining({ discardOutput: { stderr: true } }),
-    );
-  });
-
-  it("classifies archive output caps, timeouts, and launch errors", async () => {
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({
-        code: null,
-        termination: "output-limit",
-        outputLimitStream: "stdout",
+      [
+        process.execPath,
+        "-e",
+        expect.any(String),
+        tmpRoot,
+        tmpRoot,
+        expect.any(String),
+        expect.any(String),
+        process.platform !== "win32" ? "/usr/bin/tar" : "tar",
+      ],
+      expect.objectContaining({
+        discardOutput: { stderr: true },
+        maxOutputBytes: { stdout: 1024, stderr: 64 * 1024 },
       }),
     );
-    await expect(testing.createTarArchive("/tmp/project", 1024)).resolves.toBe("TOO_LARGE");
-    expect(runCommandBufferedMock).toHaveBeenLastCalledWith(
-      expect.any(Array),
-      expect.objectContaining({ discardOutput: { stderr: true } }),
+  });
+
+  it("rejects preflight-only requests once filesystem listing crosses the entry cap", async () => {
+    await Promise.all(
+      Array.from({ length: 5001 }, (_, index) =>
+        fs.writeFile(path.join(tmpRoot, `file-${index}.txt`), ""),
+      ),
     );
 
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({ code: null, termination: "timeout" }),
-    );
-    await expect(testing.createTarArchive("/tmp/project", 1024)).resolves.toBe("TIMEOUT");
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "directory tree exceeds 5000 entries during preflight",
+    });
+    expect(runCommandBufferedMock).not.toHaveBeenCalled();
+  });
 
-    runCommandBufferedMock.mockRejectedValueOnce(new Error("spawn failed"));
-    await expect(testing.createTarArchive("/tmp/project", 1024)).resolves.toBe("ERROR");
+  it.each([true, false])(
+    "reclassifies a removed directory only for preflight=%s",
+    async (preflightOnly) => {
+      if (!preflightOnly) {
+        runCommandBufferedMock.mockResolvedValueOnce(
+          commandResult({ stdout: Buffer.from("1\tproject\n") }),
+        );
+      }
+      runCommandBufferedMock.mockImplementationOnce(async () => {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+        return commandResult({ code: 1 });
+      });
+
+      await expect(
+        handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly }),
+      ).resolves.toMatchObject({
+        ok: false,
+        code: preflightOnly ? "NOT_FOUND" : "READ_ERROR",
+        message: preflightOnly ? expect.stringContaining("stat failed:") : "tar command failed",
+        canonicalPath: tmpRoot,
+      });
+      expect(runCommandBufferedMock).toHaveBeenCalledTimes(preflightOnly ? 1 : 2);
+    },
+  );
+
+  it("rejects invalid producer archive bytes before returning a transfer", async () => {
+    runCommandBufferedMock
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
+
+    await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
+      ok: false,
+      code: "READ_ERROR",
+      message: expect.stringContaining("archive inspection failed:"),
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {
+    it.each([
+      {
+        label: "output cap",
+        result: commandResult({
+          code: null,
+          termination: "output-limit",
+          outputLimitStream: "stdout",
+        }),
+        code: "TREE_TOO_LARGE",
+        message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
+      },
+      {
+        label: "timeout",
+        result: commandResult({ code: null, termination: "timeout" }),
+        code: "READ_ERROR",
+        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+      },
+      {
+        label: "changed canonical path",
+        result: commandResult({ code: 78 }),
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+      },
+      {
+        label: "launch error",
+        result: new Error("spawn failed"),
+        code: "READ_ERROR",
+        message: "tar command failed",
+      },
+    ])("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
+      if (!preflightOnly) {
+        runCommandBufferedMock.mockResolvedValueOnce(
+          commandResult({ stdout: Buffer.from("1\tproject\n") }),
+        );
+      }
+      if (result instanceof Error) {
+        runCommandBufferedMock.mockRejectedValueOnce(result);
+      } else {
+        runCommandBufferedMock.mockResolvedValueOnce(result);
+      }
+
+      await expect(
+        handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly }),
+      ).resolves.toEqual({
+        ok: false,
+        code,
+        message,
+        canonicalPath: tmpRoot,
+      });
+      expect(runCommandBufferedMock).toHaveBeenCalledTimes(preflightOnly ? 1 : 2);
+    });
   });
 });

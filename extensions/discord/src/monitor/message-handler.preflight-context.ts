@@ -10,6 +10,7 @@ type SharedPreflightFields =
   | "accountId"
   | "token"
   | "runtime"
+  | "buildContext"
   | "botUserId"
   | "abortSignal"
   | "guildHistories"
@@ -19,6 +20,7 @@ type SharedPreflightFields =
   | "replyToMode"
   | "ackReactionScope"
   | "groupPolicy"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -39,6 +41,7 @@ export function buildDiscordMessagePreflightContext({
     accountId: preflightParams.accountId,
     token: preflightParams.token,
     runtime: preflightParams.runtime,
+    buildContext: preflightParams.buildContext,
     botUserId: preflightParams.botUserId,
     abortSignal: preflightParams.abortSignal,
     guildHistories: preflightParams.guildHistories,
@@ -48,6 +51,7 @@ export function buildDiscordMessagePreflightContext({
     replyToMode: preflightParams.replyToMode,
     ackReactionScope: preflightParams.ackReactionScope,
     groupPolicy: preflightParams.groupPolicy,
+    turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
     ...fields,
     threadBindings: preflightParams.threadBindings,
     discordRestFetch: preflightParams.discordRestFetch,

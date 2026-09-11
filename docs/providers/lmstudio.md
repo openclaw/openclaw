@@ -45,6 +45,14 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
+    default or configured LM Studio host. An existing LLM is offered automatically
+    only when LM Studio reports tool training and at least 16K of effective
+    context. For loaded models, the loaded instance context takes precedence over
+    the larger advertised maximum. The same CLI/macOS setup ladder verifies the
+    route with a real completion before saving it. The automatic check never
+    downloads a model and ignores embedding-only catalog entries.
+
   </Step>
 </Steps>
 
@@ -65,7 +73,7 @@ curl http://localhost:1234/api/v1/models
 ## Non-interactive onboarding
 
 ```bash
-openclaw onboard --non-interactive --accept-risk --auth-choice lmstudio
+openclaw onboard --non-interactive --accept-risk --skip-health --auth-choice lmstudio
 ```
 
 Or specify base URL, model, and API key explicitly:
@@ -74,6 +82,7 @@ Or specify base URL, model, and API key explicitly:
 openclaw onboard \
   --non-interactive \
   --accept-risk \
+  --skip-health \
   --auth-choice lmstudio \
   --custom-base-url http://localhost:1234/v1 \
   --lmstudio-api-key "$LM_API_TOKEN" \
@@ -137,6 +146,18 @@ still has `off`/`on` reasoning maps.
 }
 ```
 
+### Model instances and context
+
+With preload enabled, OpenClaw routes chat requests to a loaded instance with
+enough context for the selected model budget. A newly loaded instance is addressed by the
+identifier returned by LM Studio. Your configured model reference and conversation model identity
+keep the canonical model key.
+
+With preload enabled, embedding requests also check that their model is loaded and route to the
+instance prepared for the configured context length. This avoids truncating input through a smaller
+loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
+loading is disabled. Embedding model and cache identity keep the canonical model key.
+
 ### Disabling preload
 
 LM Studio supports just-in-time (JIT) model loading, loading models on first request. OpenClaw
@@ -180,12 +201,21 @@ loopback on that machine:
 ```
 
 `lmstudio` automatically trusts its configured endpoint for model requests, including loopback,
-LAN, and tailnet hosts (except metadata/link-local origins). Any custom/local OpenAI-compatible
+LAN, and tailnet hosts (except metadata, link-local, and local-use NAT64
+`64:ff9b:1::/48` origins). Any custom/local OpenAI-compatible
 provider entry gets the same exact-origin trust. Requests to a different private host or port still
 require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `false` to opt out of
 the default trust.
 
 ## Troubleshooting
+
+### Model discovery failures
+
+When a configured server cannot list models, OpenClaw reports an unavailable catalog or a
+catalog authentication rejection. A refresh can keep the last successful inventory when the
+connection and credentials still match. A successful empty response clears discovered models;
+explicitly configured models remain available without discovery. Restore the server connection
+or correct its credentials, then refresh the model list.
 
 ### LM Studio not detected
 

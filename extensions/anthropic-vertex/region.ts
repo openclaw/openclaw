@@ -2,28 +2,24 @@
  * Anthropic Vertex region, project, and ADC auth detection helpers. They keep
  * credential probing local to the provider plugin.
  */
-import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { GoogleAuthOptions } from "google-auth-library";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const ANTHROPIC_VERTEX_DEFAULT_REGION = "global";
 const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
+const ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES = 1024 * 1024;
 
-type AdcProjectFile = {
+type AnthropicVertexAdcCredentials = NonNullable<GoogleAuthOptions["credentials"]> & {
   project_id?: unknown;
   quota_project_id?: unknown;
 };
-
-function normalizeOptionalSecretInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 /** Resolve the configured Vertex region, defaulting to global. */
 export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.env): string {
@@ -45,23 +41,6 @@ export function resolveAnthropicVertexProjectId(
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_PROJECT) ||
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_PROJECT_ID) ||
     resolveAnthropicVertexProjectIdFromAdc(env)
-  );
-}
-
-/** Extract a Vertex region from a provider base URL when possible. */
-export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
-  const endpoint = resolveProviderEndpoint(baseUrl);
-  return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
-}
-
-/** Resolve the client region from model base URL first, then env fallback. */
-export function resolveAnthropicVertexClientRegion(params?: {
-  baseUrl?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return (
-    resolveAnthropicVertexRegionFromBaseUrl(params?.baseUrl) ||
-    resolveAnthropicVertexRegion(params?.env)
   );
 }
 
@@ -107,14 +86,27 @@ function resolveAnthropicVertexAdcCredentialsPathCandidate(
   return resolveAnthropicVertexDefaultAdcPath(env);
 }
 
-function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
+export function resolveAnthropicVertexAdcCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+): AnthropicVertexAdcCredentials | undefined {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
-  if (!credentialsPath) {
-    return false;
+  const text = tryReadSecretFileSync(credentialsPath, "Anthropic Vertex ADC credentials", {
+    maxBytes: ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES,
+    rejectHardlinks: false,
+  });
+  if (!text) {
+    return undefined;
   }
+  const parsed = JSON.parse(text) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Anthropic Vertex ADC credentials must be a JSON object: ${credentialsPath}`);
+  }
+  return parsed as AnthropicVertexAdcCredentials;
+}
+
+function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   try {
-    readFileSync(credentialsPath, "utf8");
-    return true;
+    return resolveAnthropicVertexAdcCredentials(env) !== undefined;
   } catch {
     return false;
   }
@@ -123,12 +115,11 @@ function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolea
 function resolveAnthropicVertexProjectIdFromAdc(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
-  if (!credentialsPath) {
-    return undefined;
-  }
   try {
-    const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
+    const parsed = resolveAnthropicVertexAdcCredentials(env);
+    if (!parsed) {
+      return undefined;
+    }
     return (
       normalizeOptionalSecretInput(parsed.project_id) ||
       normalizeOptionalSecretInput(parsed.quota_project_id)

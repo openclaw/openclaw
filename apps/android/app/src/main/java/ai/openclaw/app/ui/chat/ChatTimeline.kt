@@ -1,17 +1,35 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatSubagentActivity
+import ai.openclaw.app.chat.ChatToolActivity
+import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 internal sealed class ChatTimelineItem {
   data class Message(
     val message: ChatMessage,
+    val turnBoundary: Boolean = message.turnBoundary,
   ) : ChatTimelineItem()
 
   /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
   data class OutboxCommand(
     val item: ChatOutboxItem,
+  ) : ChatTimelineItem()
+
+  /** Gateway-level recovery row that cannot be placed in the visible owner/session. */
+  data class RecoveryOutboxCommand(
+    val item: ChatOutboxItem,
+  ) : ChatTimelineItem()
+
+  data class OutboxRecoveryHeader(
+    val count: Int,
   ) : ChatTimelineItem()
 
   data class StreamingAssistant(
@@ -22,7 +40,51 @@ internal sealed class ChatTimelineItem {
     val toolCalls: List<ChatPendingToolCall>,
   ) : ChatTimelineItem()
 
+  data class CompletedTools(
+    val key: String,
+    val tools: List<ChatToolActivity>,
+    val turnBoundary: Boolean = false,
+  ) : ChatTimelineItem()
+
+  data class SubagentActivity(
+    val activities: List<ChatSubagentActivity>,
+    val moreWorkingCount: Int = 0,
+  ) : ChatTimelineItem()
+
+  data class QuestionPrompt(
+    val prompt: ChatQuestionPrompt,
+  ) : ChatTimelineItem()
+
+  data class WorkedSummary(
+    val key: String,
+    val durationMs: Long?,
+    val expanded: Boolean,
+  ) : ChatTimelineItem()
+
+  data class TurnRecapSummary(
+    val recap: TurnRecap,
+  ) : ChatTimelineItem()
+
+  data class SystemNotice(
+    val key: String,
+    val label: String,
+    val body: String,
+  ) : ChatTimelineItem()
+
+  data class SystemDivider(
+    val key: String,
+    val kind: SystemDividerKind,
+    val label: String,
+    val metric: String? = null,
+    val secondary: String? = null,
+  ) : ChatTimelineItem()
+
   object Thinking : ChatTimelineItem()
+}
+
+internal enum class SystemDividerKind {
+  Compaction,
+  Reset,
 }
 
 internal data class ChatTimeline(
@@ -39,17 +101,32 @@ internal fun buildChatTimeline(
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
+  subagentActivities: Map<String, ChatSubagentActivity> = emptyMap(),
   outboxItems: List<ChatOutboxItem> = emptyList(),
+  recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
+  questions: List<ChatQuestionPrompt> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
+  val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
+      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
+      recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
+      if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
       if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
+      if (visibleSubagents.activities.isNotEmpty()) {
+        add(
+          ChatTimelineItem.SubagentActivity(
+            activities = visibleSubagents.activities,
+            moreWorkingCount = visibleSubagents.moreWorkingCount,
+          ),
+        )
+      }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      messages.asReversed().forEach { message -> add(ChatTimelineItem.Message(message)) }
+      addAll(buildTranscriptTimeline(messages).asReversed())
     }
   if (items.isEmpty()) {
     return ChatTimeline(
@@ -83,20 +160,91 @@ internal fun buildChatTimeline(
     latestContentIndex = latestContentIndex,
     latestUserMessageId = latestUserMessage?.id,
     latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
-    latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream, outboxItems),
+    latestContentVersion =
+      latestContentVersion(
+        messages,
+        pendingRunCount,
+        pendingToolCalls,
+        visibleSubagents.activities,
+        visibleSubagents.moreWorkingCount,
+        stream,
+        outboxItems + recoveryOutboxItems,
+        questions,
+      ),
   )
 }
 
+// Gateway projects sessions_send user inputs as assistant rows; they still start a new turn.
+internal fun ChatMessage.isForwardedBoundary(): Boolean =
+  role.trim().equals("assistant", ignoreCase = true) &&
+    provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
+
+/** Build transcript rows in source order so hidden turn boundaries fence tool groups. */
+private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimelineItem> {
+  val toolsByMessage = projectTranscriptToolActivity(messages)
+  return buildList {
+    val completedTools = mutableListOf<ChatToolActivity>()
+    var completedToolsKey: String? = null
+    var completedToolsTurnBoundary = false
+    var pendingTurnBoundary = false
+
+    fun flushCompletedTools() {
+      if (completedTools.isEmpty()) return
+      add(ChatTimelineItem.CompletedTools(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary))
+      completedTools.clear()
+      completedToolsKey = null
+      completedToolsTurnBoundary = false
+    }
+
+    messages.forEachIndexed { index, message ->
+      if (message.turnBoundary || message.isForwardedBoundary()) {
+        flushCompletedTools()
+        pendingTurnBoundary = true
+      }
+      val tools = toolsByMessage[index]
+      val hasVisibleContent = message.content.any { it.toolActivity == null }
+      // Empty or consumed result envelopes must not erase a pending turn boundary.
+      if (tools.isEmpty() && !hasVisibleContent && message.transcriptMarker == null) return@forEachIndexed
+      val key = message.entryId ?: message.idempotencyKey ?: message.id
+      if (tools.isNotEmpty() && !hasVisibleContent && message.transcriptMarker == null) {
+        if (completedTools.isEmpty()) {
+          completedToolsKey = key
+          completedToolsTurnBoundary = pendingTurnBoundary
+          pendingTurnBoundary = false
+        }
+        completedTools.addAll(tools)
+      } else {
+        flushCompletedTools()
+        val classified = classifyTranscriptMessage(message, index)
+        if (classified is ChatTimelineItem.Message) {
+          add(classified.copy(turnBoundary = pendingTurnBoundary || classified.turnBoundary))
+          pendingTurnBoundary = false
+        } else {
+          classified?.let(::add)
+        }
+        if (tools.isNotEmpty()) {
+          add(ChatTimelineItem.CompletedTools(key, coalesceToolActivity(tools), pendingTurnBoundary))
+          pendingTurnBoundary = false
+        }
+      }
+    }
+    flushCompletedTools()
+  }
+}
+
 /**
- * Outbox rows for the visible session. Rows enqueued under the "main" alias still belong to the
+ * Outbox rows for the visible session owner. Rows enqueued under the "main" alias still belong to the
  * canonical main session once the gateway hello rewrites the current key. Rows whose user turn
  * is already visible as a message (optimistic while a live run owns it, or the canonical history
- * copy right before the row retires) are hidden so one send never renders as two bubbles.
+ * copy right before the row retires) are hidden so one send never renders as two bubbles. Migrated
+ * ownerless and unreachable legacy-main rows are excluded here and rendered only in the
+ * gateway-level recovery section.
  */
 internal fun outboxItemsForSession(
   items: List<ChatOutboxItem>,
   sessionKey: String,
   mainSessionKey: String,
+  ownerAgentId: String,
   messages: List<ChatMessage> = emptyList(),
 ): List<ChatOutboxItem> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
@@ -107,8 +255,26 @@ internal fun outboxItemsForSession(
       .toSet()
   return items.filter { item ->
     val itemKey = item.sessionKey.let { if (it == "main") mainKey else it }
-    itemKey == current && "${item.id}:user" !in visibleUserKeys
+    val ownerMatches = item.ownerAgentId == ownerAgentId
+    ownerMatches &&
+      itemKey == current &&
+      "${item.id}:user" !in visibleUserKeys &&
+      !isRecoveryOutboxItem(item)
   }
+}
+
+/** Rows with missing or internally contradictory ownership still need neutral controls. */
+internal fun outboxItemsForRecovery(items: List<ChatOutboxItem>): List<ChatOutboxItem> = items.filter(::isRecoveryOutboxItem)
+
+private fun isRecoveryOutboxItem(item: ChatOutboxItem): Boolean {
+  val keyOwner = resolveAgentIdFromMainSessionKey(item.sessionKey)
+  val parkedMainAlias =
+    item.sessionKey.trim() == "main" &&
+      item.status == ChatOutboxStatus.Failed &&
+      item.lastError == OUTBOX_OWNER_CHANGED_ERROR
+  return item.ownerAgentId == null ||
+    (keyOwner != null && keyOwner != item.ownerAgentId) ||
+    parkedMainAlias
 }
 
 private fun stableMessageVersion(message: ChatMessage): String {
@@ -120,21 +286,33 @@ private fun stableMessageVersion(message: ChatMessage): String {
     append(role)
     append(':')
     append(message.timestampMs ?: "")
-    message.content.forEach { content ->
-      append(':')
-      append(content.type)
-      append('=')
-      append(content.text?.hashCode() ?: 0)
-      append(',')
-      append(content.mimeType.orEmpty())
-      append(',')
-      append(content.fileName.orEmpty())
-      append(',')
-      append(content.base64?.length ?: 0)
-      append(',')
-      append(content.durationMs ?: "")
-    }
+    message.content.forEach { appendContentVersion(it) }
   }
+}
+
+private fun StringBuilder.appendContentVersion(content: ChatMessageContent) {
+  append(':')
+  append(content.type)
+  append('=')
+  append(content.text?.hashCode() ?: 0)
+  append(',')
+  append(content.mimeType.orEmpty())
+  append(',')
+  append(content.fileName.orEmpty())
+  append(',')
+  append(content.base64?.length ?: 0)
+  append(',')
+  append(content.durationMs ?: "")
+  append(',')
+  append(content.toolActivity?.toolCallId.orEmpty())
+  append(',')
+  append(content.toolActivity?.detail?.hashCode() ?: 0)
+  append(',')
+  append(content.toolActivity?.result?.hashCode() ?: 0)
+  append(',')
+  append(content.toolActivity?.isError ?: false)
+  append(',')
+  append(content.toolActivity?.arguments?.hashCode() ?: 0)
 }
 
 internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
@@ -143,14 +321,29 @@ internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
     message.role.trim().equals("user", ignoreCase = true) && stableMessageVersion(message) == version
   }
 
+internal fun ChatTimeline.withTurnRecap(recap: TurnRecap?): ChatTimeline {
+  if (recap == null) return this
+  // reverseLayout makes index 0 the newest visual edge. The recap replaces the terminal
+  // thinking slot there, while shifting the saved user-message anchor to the same row.
+  return copy(
+    items = listOf(ChatTimelineItem.TurnRecapSummary(recap)) + items,
+    readAnchorIndex = readAnchorIndex?.plus(1),
+    latestContentIndex = 0,
+    latestContentVersion = "$latestContentVersion:recap=${recap.runtimeMs}:${recap.outputTokens ?: ""}",
+  )
+}
+
 // Reader restoration only needs to detect changes at the live edge. Avoid hashing
 // the full transcript whenever a streamed response updates.
 private fun latestContentVersion(
   messages: List<ChatMessage>,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
+  subagentActivities: Collection<ChatSubagentActivity>,
+  moreWorkingCount: Int,
   stream: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
+  questions: List<ChatQuestionPrompt> = emptyList(),
 ): String {
   val latest = messages.lastOrNull()
   return buildString {
@@ -161,20 +354,9 @@ private fun latestContentVersion(
     append(latest?.role.orEmpty())
     append(':')
     append(latest?.timestampMs ?: "")
-    latest?.content?.forEach { content ->
-      append(':')
-      append(content.type)
-      append('=')
-      append(content.text?.hashCode() ?: 0)
-      append(',')
-      append(content.mimeType.orEmpty())
-      append(',')
-      append(content.fileName.orEmpty())
-      append(',')
-      append(content.base64?.length ?: 0)
-      append(',')
-      append(content.durationMs ?: "")
-    }
+    latest?.content?.forEach { appendContentVersion(it) }
+    append(":turnBoundary=")
+    append(latest?.turnBoundary ?: false)
     append(":runs=")
     append(pendingRunCount)
     append(":tools=")
@@ -184,8 +366,27 @@ private fun latestContentVersion(
       append(call.name)
       append(',')
       append(call.isError)
+      append(',')
+      append(call.liveDiff)
       append(';')
     }
+    append(":subagents=")
+    subagentActivities.sortedBy { it.id }.forEach { activity ->
+      append(activity.id)
+      append(',')
+      append(activity.status)
+      append(',')
+      append(activity.snippet?.hashCode() ?: 0)
+      append(',')
+      append(activity.terminalSummary?.hashCode() ?: 0)
+      append(',')
+      append(activity.error?.hashCode() ?: 0)
+      append(',')
+      append(activity.diffStat)
+      append(';')
+    }
+    append("more=")
+    append(moreWorkingCount)
     append(":stream=")
     append(stream?.hashCode() ?: 0)
     append(":outbox=")
@@ -195,6 +396,21 @@ private fun latestContentVersion(
       append(item.status)
       append(';')
     }
+    append(":questions=")
+    questions.forEach { prompt ->
+      append(prompt.record.id)
+      append(',')
+      append(prompt.status())
+      append(',')
+      append(prompt.submitting)
+      append(',')
+      append(prompt.skipping)
+      append(',')
+      append(prompt.errorText?.hashCode() ?: 0)
+      append(',')
+      append(prompt.record.answers.hashCode())
+      append(';')
+    }
   }
 }
 
@@ -202,7 +418,179 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
   when (item) {
     is ChatTimelineItem.Message -> "message:${item.message.id}"
     is ChatTimelineItem.OutboxCommand -> "outbox:${item.item.id}"
+    is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
+    is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
+    is ChatTimelineItem.CompletedTools -> "completed-tools:${item.key}"
+    is ChatTimelineItem.SubagentActivity -> "subagent-activity"
+    is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
+    is ChatTimelineItem.WorkedSummary -> "worked:${item.key}"
+    is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
+    is ChatTimelineItem.SystemNotice -> item.key
+    is ChatTimelineItem.SystemDivider -> item.key
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }
+
+private fun classifyTranscriptMessage(
+  message: ChatMessage,
+  index: Int,
+): ChatTimelineItem? {
+  message.transcriptMarker?.let { marker ->
+    val keySuffix = marker.id ?: "${message.timestampMs ?: "missing"}:$index"
+    return when (marker.kind) {
+      "compaction" -> {
+        val before = marker.tokensBefore
+        val after = marker.tokensAfter
+        val saved =
+          if (before != null && before.isFinite() && after != null && after.isFinite() && before > after) {
+            (before - after).toLong()
+          } else {
+            null
+          }
+        ChatTimelineItem.SystemDivider(
+          key = "divider:compaction:$keySuffix",
+          kind = SystemDividerKind.Compaction,
+          label = nativeString("Compacted history"),
+          metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
+        )
+      }
+
+      "reset" -> {
+        ChatTimelineItem.SystemDivider(
+          key = "divider:reset:$keySuffix",
+          kind = SystemDividerKind.Reset,
+          label = nativeString("Session reset"),
+          secondary = nativeString("The earlier conversation was cleared."),
+        )
+      }
+
+      else -> {
+        null
+      }
+    }
+  }
+
+  val provenance = message.provenance
+  if (message.role == "user" && provenance?.kind == "internal_system") {
+    val rawBody = chatMessagePlainText(message.content).removePrefix("[System] ")
+    val label: String
+    val body: String
+    when (provenance.sourceTool) {
+      "main_session_restart_recovery" -> {
+        label = nativeString("System · restart recovery")
+        body = nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
+      }
+
+      "restart-sentinel" -> {
+        label = nativeString("System · gateway restarted")
+        body = rawBody
+      }
+
+      else -> {
+        label = nativeString("System")
+        body = rawBody
+      }
+    }
+    if (body.isBlank()) return null
+    val keySuffix = message.entryId ?: message.idempotencyKey ?: "${message.timestampMs ?: "missing"}:$index"
+    return ChatTimelineItem.SystemNotice(
+      key = "system-notice:$keySuffix",
+      label = label,
+      body = body,
+    )
+  }
+
+  return message.takeIf { it.content.isNotEmpty() }?.let(ChatTimelineItem::Message)
+}
+
+// Results belong to their invocation even when commentary separates the two.
+// Keep their display at the original call instead of manufacturing a second Tool row.
+private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<List<ChatToolActivity>> {
+  val projected = messages.map { mutableListOf<ChatToolActivity>() }
+  val calls = mutableMapOf<String, Pair<Int, Int>>()
+  var turnRunId: String? = null
+  messages.forEachIndexed { messageIndex, message ->
+    if (message.turnBoundary || message.isForwardedBoundary()) {
+      calls.clear()
+      turnRunId = null
+    }
+    // A later turn may reuse a harness-local call ID.
+    if (message.transcriptMarker != null) {
+      calls.clear()
+      turnRunId = null
+    } else if (message.role.equals("user", ignoreCase = true)) {
+      val continuesRun = turnRunId != null && message.steerTargetRunId == turnRunId
+      if (!continuesRun) {
+        calls.clear()
+        turnRunId = message.runId
+      }
+    }
+    message.content.forEach { content ->
+      val tool = content.toolActivity ?: return@forEach
+      val result = content.type.equals("toolResult", ignoreCase = true)
+      val owner = if (result) tool.toolCallId?.let(calls::get) else null
+      if (owner != null) {
+        val original = projected[owner.first][owner.second]
+        projected[owner.first][owner.second] = mergeToolActivity(original, tool)
+      } else {
+        // ID-only result envelopes have no standalone UI. Keep meaningful unnamed
+        // output and failures, and keep empty named calls (they may still be running).
+        val emptyOrphan =
+          result && tool.name == "tool" && tool.detail.isNullOrBlank() &&
+            tool.result.isNullOrBlank() && !tool.isError && tool.arguments.isNullOrEmpty()
+        if (!emptyOrphan) {
+          if (!result) tool.toolCallId?.let { calls[it] = messageIndex to projected[messageIndex].size }
+          projected[messageIndex].add(tool)
+        }
+      }
+    }
+  }
+  return projected
+}
+
+private fun mergeToolActivity(
+  previous: ChatToolActivity,
+  next: ChatToolActivity,
+): ChatToolActivity =
+  previous.copy(
+    name = previous.name.takeUnless { it == "tool" } ?: next.name,
+    detail = previous.detail ?: next.detail,
+    result = next.result ?: previous.result,
+    isError = previous.isError || next.isError,
+    arguments = previous.arguments ?: next.arguments,
+  )
+
+private fun coalesceToolActivity(parts: List<ChatToolActivity>): List<ChatToolActivity> {
+  val merged = linkedMapOf<String, ChatToolActivity>()
+  parts.forEachIndexed { index, part ->
+    val key = part.toolCallId ?: "${part.name}:$index"
+    val previous = merged[key]
+    merged[key] =
+      if (previous == null) {
+        part
+      } else {
+        mergeToolActivity(previous, part)
+      }
+  }
+  return merged.values.toList()
+}
+
+internal data class VisibleSubagentActivities(
+  val activities: List<ChatSubagentActivity>,
+  val moreWorkingCount: Int,
+)
+
+internal fun visibleSubagentActivities(activities: Collection<ChatSubagentActivity>): VisibleSubagentActivities {
+  val working = activities.filter(ChatSubagentActivity::isWorking).sortedWith(compareBy<ChatSubagentActivity> { it.startedAtMs }.thenBy { it.id })
+  val finished =
+    activities
+      .filterNot(ChatSubagentActivity::isWorking)
+      .sortedWith(compareByDescending<ChatSubagentActivity> { it.endedAtMs ?: Long.MIN_VALUE }.thenBy { it.id })
+  val visible = (working + finished).take(5)
+  return VisibleSubagentActivities(
+    activities = visible,
+    moreWorkingCount =
+      working.count { it.status == "running" && it !in visible },
+  )
+}

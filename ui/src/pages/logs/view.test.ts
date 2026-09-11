@@ -24,7 +24,8 @@ function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
-    error: null,
+    refreshDisabled: false,
+    status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
     entries: [
       {
@@ -61,7 +62,7 @@ function buttonByText(container: Element, text: string): HTMLButtonElement {
 
 async function useTestPortugueseLogsLabels() {
   i18n.registerTranslation("pt-BR", {
-    logsView: {
+    gatewayLogs: {
       title: "Registros",
       subtitle: "Registros do Gateway em JSONL.",
       exportButton: "Exportar {label}",
@@ -86,6 +87,48 @@ afterEach(async () => {
 });
 
 describe("renderLogs", () => {
+  it("does not claim the log is empty before the initial load completes", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: true, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it("does not show loading when no initial request is pending", () => {
+    const container = document.createElement("div");
+
+    render(renderLogs(createProps({ loading: false, entries: [] })), container);
+
+    expect(container.textContent).not.toContain("No log entries.");
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("disables refresh actions while the gateway cannot accept them", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderLogs(
+        createProps({
+          refreshDisabled: true,
+          status: {
+            error: "logs unavailable",
+            hasLoaded: false,
+            stale: false,
+            awaitingGateway: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector(".logs-refresh-status button")).toBeNull();
+  });
+
   it("renders the subtitle under the section header", () => {
     const container = document.createElement("div");
 
@@ -115,4 +158,28 @@ describe("renderLogs", () => {
       );
     },
   );
+
+  it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderLogs(
+        createProps({
+          status: {
+            error: "logs unavailable",
+            hasLoaded: true,
+            stale: true,
+            awaitingGateway: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const status = container.querySelector(".logs-refresh-status");
+    expect(status?.textContent).toContain("logs unavailable");
+    expect(status?.textContent).toContain("Showing stale data");
+    expect(container.textContent).toContain("matched line");
+    expect(status?.querySelector("button")).toBeNull();
+  });
 });

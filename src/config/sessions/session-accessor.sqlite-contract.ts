@@ -1,10 +1,8 @@
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type { OpenClawConfig } from "../types.openclaw.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleMutation,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
@@ -12,55 +10,79 @@ import type {
   SessionLifecycleArchivedTranscript,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
-  SessionLifecycleStoreTarget,
-} from "./store.js";
-import type { SessionEntry } from "./types.js";
-
-export type SessionAccessScope = {
-  agentId?: string;
-  clone?: boolean;
-  env?: NodeJS.ProcessEnv;
-  hydrateSkillPromptRefs?: boolean;
-  readConsistency?: "latest";
-  sessionKey: string;
-  storePath?: string;
-};
-
-export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
-  sessionFile?: string;
-  sessionId: string;
-  sessionKey?: string;
-  threadId?: string | number;
-};
-
-type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  sessionFile?: string;
-  sessionId: string;
-  threadId?: string | number;
-};
-
-export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
-  sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
-};
-
-export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
-  sessionId?: string;
-};
-
-export type ExactSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-export type SessionEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
+} from "./session-accessor.lifecycle-types.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+/** Worker operation facts; no Worker object or plan payload is retained. */
+export type SqliteSessionReclamationDiagnostics = {
+  kind?: "entry" | "lifecycle-artifacts" | "history-eviction" | "historical-generation";
+  workerThreadId?: number;
+};
+
+/** One validated request owns this record until its observed release event. */
+export type SqliteSessionReclamationAdmissionDiagnostics = {
+  admissionId: number;
+  releaseCause?: "worker-release" | "worker-exit";
+};
+
+export type SqliteSessionDatabaseAdmissionDiagnostics = {
+  admissionMode?: "cached" | "async";
+  admissionMs?: number;
+};
+
+/** One cleanup attempt owns these numeric observations; no row or transcript is retained. */
+export type SqliteSessionArtifactPreparationDiagnostics =
+  SqliteSessionDatabaseAdmissionDiagnostics & {
+    nodeInventoryMs?: number;
+    referencePlanningMs?: number;
+    orphanPlanningMs?: number;
+    markerScanMs?: number;
+    nodeRows?: number;
+    windowRows?: number;
+    referenceIds?: number;
+    selectedEntries?: number;
+    markerWindows?: number;
+    markerRows?: number;
+    deletePlans?: number;
+    completed?: boolean;
+  };
+
+/** One pruning attempt retains only aggregate stage observations. */
+export type SqliteSessionArchivePruningDiagnostics = {
+  trigger: "initial" | "after-eviction" | "final";
+  admissionMs?: number;
+  cachedAdmissions?: number;
+  asyncAdmissions?: number;
+  checkpointCalls?: number;
+  checkpointIncomplete?: number;
+  checkpointMs?: number;
+  checkpointMaxMs?: number;
+  vacuumMs?: number;
+  vacuumPasses?: number;
+  vacuumPagesRequested?: number;
+  queryMs?: number;
+  rowDeletionMs?: number;
+  fileRemovalMs?: number;
+  removedFiles?: number;
+  missingFiles?: number;
+  failedRemovals?: number;
+  measurementMs?: number;
+  measurements?: number;
+  legacyInventoryMs?: number;
+  completed?: boolean;
+};
+
+export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
+  artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
+  archivePruning?: SqliteSessionArchivePruningDiagnostics;
+  reclamationAdmission?: SqliteSessionReclamationAdmissionDiagnostics;
+};
+
 export type SessionTranscriptInstance = SessionEntrySummary & {
+  agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */
   sessionId: string;
   /** True when this transcript instance was owned by an ACP runtime. */
@@ -69,202 +91,81 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
   provenanceKnown: boolean;
   /** Activity timestamp for this transcript instance, not the current logical session row. */
   updatedAtMs: number;
+  /** Recorded source facts; coarse historical trust classes cannot identify an exact hook source. */
+  sourceMetadata: {
+    createdAt: number;
+    channel: string | null;
+    accountId: string | null;
+    chatType: NonNullable<SessionEntry["chatType"]> | null;
+    hookExternalContentSource: NonNullable<SessionEntry["hookExternalContentSource"]> | null;
+  };
 };
 
-export type TranscriptEvent = unknown;
-
-export type SessionTranscriptStats = {
-  eventCount: number;
-  lastMutationAtMs?: number;
-  lastObservedMutationAtMs?: number;
-  maxSeq: number;
-  sizeBytes: number;
+export type SessionTranscriptInstanceListOptions = {
+  /** Include empty and internal windows when inspecting recorded source metadata. */
+  includeAllWindows?: boolean;
+  sessionId?: string;
 };
 
-export type TranscriptMessageAppendOptions<TMessage> = {
-  config?: OpenClawConfig;
-  cwd?: string;
-  idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
-  message: TMessage;
-  now?: number;
-  eventId?: string;
-  parentId?: string | null;
-  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  useRawWhenLinear?: boolean;
+export type TranscriptEventAppendOptions = {
+  appendIntent?: "active-branch";
+  /** Synchronous authority check run inside the append transaction. */
+  beforeCommitInTransaction?: () => void;
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
+  /** Captures the parent selected by an active-branch event append. */
+  captureEffectiveParentIdInTransaction?: (parentId: string | null) => void;
 };
 
-export type TranscriptMessageAppendResult<TMessage> = {
-  appended: boolean;
-  message: TMessage;
-  messageId: string;
-};
+export type TranscriptAppendRefusal =
+  | {
+      actualSessionIdHash: string;
+      agentIdHash: string;
+      code: "session-rebound";
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
+    }
+  | {
+      agentIdHash: string;
+      code: "session-entry-missing";
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
+    };
 
-export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate>;
-
-export type LatestTranscriptAssistantText = {
-  id?: string;
-  text: string;
-  timestamp?: number;
-};
+export type {
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+  ForkSessionFromParentTranscriptResult,
+  SessionParentForkDecision,
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+  TranscriptEvent,
+} from "./session-accessor.types.js";
 
 export type LatestTranscriptAssistantMessage = {
   id?: string;
   message: unknown;
 };
 
-export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
-  shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
-};
-
-export type SessionTranscriptTurnWriteContext = {
-  agentId?: string;
-  sessionFile: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-};
-
-export type SessionEntryPatchOptions = {
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  preserveActivity?: boolean;
-  requireWriteSuccess?: boolean;
-  replaceEntry?: boolean;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-};
-
-export type SessionEntryPatchContext = {
-  existingEntry?: SessionEntry;
-};
-
-export type SessionEntryTargetPatchScope = {
-  agentId?: string;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
-export type SessionEntryReplacementSnapshot = {
+type SessionEntryBatchProjectionMutation = {
   entry: SessionEntry;
+  previousSessionKeys?: readonly string[];
   sessionKey: string;
 };
 
-type SessionEntryReplacement = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-export type SessionEntryReplacementUpdate<T> = {
-  replacements?: Iterable<SessionEntryReplacement>;
+export type SessionEntryBatchProjectionUpdate<T> = {
+  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
-};
-
-export type SessionParentForkDecision =
-  | {
-      status: "fork";
-      maxTokens: number;
-      parentTokens?: number;
-    }
-  | {
-      status: "skip";
-      reason: "parent-too-large";
-      maxTokens: number;
-      parentTokens: number;
-      message: string;
-    };
-
-type ParentForkedSessionTranscript = {
-  sessionFile: string;
-  sessionId: string;
-};
-
-export type ForkSessionFromParentTranscriptResult =
-  | {
-      status: "created";
-      transcript: ParentForkedSessionTranscript;
-    }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionFromParentTranscriptParams = {
-  agentId?: string;
-  parentEntry: SessionEntry;
-  parentSessionKey: string;
-  sessionKey: string;
-  storePath: string;
-
-  /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
-  targetSessionId?: string;
-
-  /** Cross-agent forks land the child transcript in the target agent's store. */
-  targetStorePath?: string;
-};
-
-export type ForkSessionEntryFromParentTargetResult =
-  | {
-      status: "forked";
-      fork: ParentForkedSessionTranscript;
-      parentEntry: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-    }
-  | {
-      status: "skipped";
-      reason: "existing-entry" | "decision-skip";
-      parentEntry?: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision?: SessionParentForkDecision;
-    }
-  | { status: "missing-entry" }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionEntryFromParentTargetParams = {
-  agentId?: string;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
-  fallbackEntry?: SessionEntry;
-  parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
-  sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
-  storePath: string;
-};
-
-export type ResetSessionEntryLifecycleParams = {
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
-  agentId?: string;
-  buildNextEntry: (context: {
-    currentEntry?: SessionEntry;
-    primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-};
-
-export type DeleteSessionEntryLifecycleParams = {
-  agentId?: string;
-  archiveTranscript: boolean;
-  expectedEntry?: SessionEntry;
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
-  expectedUpdatedAt?: number;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
 };
 
 export type {
   DeletedAgentSessionEntryPurgeParams,
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
@@ -273,3 +174,25 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 };
+
+export type {
+  ExactSessionEntry,
+  LatestTranscriptAssistantText,
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+  SessionEntryReplacementSnapshot,
+  SessionEntryReplacementUpdate,
+  SessionEntrySummary,
+  SessionEntryTargetPatchScope,
+  SessionTranscriptAccessScope,
+  SessionTranscriptEventRow,
+  SessionTranscriptReadScope,
+  SessionTranscriptStats,
+  SessionTranscriptTurnMessageAppend,
+  SessionTranscriptTurnWriteContext,
+  SessionTranscriptWriteScope,
+  TranscriptMessageAppendOptions,
+  TranscriptMessageAppendResult,
+  TranscriptUpdatePayload,
+} from "./session-accessor.types.js";

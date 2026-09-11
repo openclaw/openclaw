@@ -1,17 +1,32 @@
 // Vitest unit fast config wires the unit fast test shard.
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
-import { getUnitFastTestFiles, getUnitFastTimerTestFiles } from "./vitest.unit-fast-paths.mjs";
+import {
+  getUnitFastIsolatedTestFiles,
+  getUnitFastTestFiles,
+  getUnitFastTimerTestFiles,
+} from "./vitest.unit-fast-paths.mjs";
+import { unitTestIncludePatterns } from "./vitest.unit-paths.mjs";
 
 export function createUnitFastVitestConfig(
   env: Record<string, string | undefined> = process.env,
-  options: { argv?: string[] } = {},
+  options: { argv?: string[]; runner?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
-  const unitFastTestFiles = getUnitFastTestFiles().filter((file) => !timerTestFiles.has(file));
+  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const discoveryPatterns =
+    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
+  const timerTestFiles = new Set(getUnitFastTimerTestFiles(discoveryPatterns));
+  const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles(discoveryPatterns));
+  const unitFastTestFiles = getUnitFastTestFiles(discoveryPatterns).filter(
+    (file) => !timerTestFiles.has(file) && !isolatedTestFiles.has(file),
+  );
+  const includeFromEnv = intersectIncludePatterns(unitFastTestFiles, selectedPatterns);
   const cliInclude = narrowIncludePatternsForCli(unitFastTestFiles, options.argv);
 
   return defineConfig({
@@ -20,7 +35,7 @@ export function createUnitFastVitestConfig(
       ...sharedTest,
       name: "unit-fast",
       isolate: false,
-      runner: undefined,
+      runner: options.runner,
       // Env isolation only (no shared-setup mocks): membership is auto-curated,
       // so tests must never read the developer's real config/state.
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],

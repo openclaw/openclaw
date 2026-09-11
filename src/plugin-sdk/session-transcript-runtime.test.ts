@@ -1,21 +1,33 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
-  upsertSessionEntry,
+  replaceTranscriptEvents,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionYieldContext,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
   readLatestAssistantTextByIdentity,
+  readSessionTranscriptRawDelta,
   readSessionTranscriptEvents,
   readVisibleSessionTranscriptMessageEntries,
   resolveSessionTranscriptIdentity,
@@ -27,15 +39,18 @@ import {
 describe("session transcript runtime SDK", () => {
   let tempDir: string;
   let storePath: string;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-transcript-"));
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ prefix: "openclaw-sdk-transcript-", applyEnv: false });
+    tempDir = state.root;
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    fs.rmSync(tempDir, { force: true, recursive: true });
+    closeOpenClawAgentDatabasesForTest();
+    await state.cleanup();
   });
 
   it("resolves transcript identity and reads events without returning sessionFile", async () => {
@@ -47,7 +62,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-1", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     const identity = await resolveSessionTranscriptIdentity(scope);
@@ -70,13 +85,188 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(resolveSessionTranscriptIdentity(scope)).resolves.toMatchObject({
       memoryKey: "transcript:main:read-only-session",
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("pages raw events across appends and resets after replacement", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "raw-delta-session",
+      sessionKey: "agent:main:raw-delta",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    for (const id of ["event-1", "event-2", "event-3"]) {
+      await appendTranscriptEvent(scope, { id, type: "custom" });
+    }
+
+    const first = await readSessionTranscriptRawDelta({
+      ...scope,
+      maxBytes: 10_000,
+      maxEvents: 2,
+    });
+    expect(first).toMatchObject({
+      kind: "page",
+      events: [
+        { event: { id: "event-1", type: "custom" }, seq: 0 },
+        { event: { id: "event-2", type: "custom" }, seq: 1 },
+      ],
+      hasMore: true,
+    });
+    if (first.kind !== "page") {
+      throw new Error("expected the first raw transcript page");
+    }
+
+    await appendTranscriptEvent(scope, { id: "event-4", type: "custom" });
+    const second = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: first.cursor,
+      maxBytes: 10_000,
+      maxEvents: 2,
+    });
+    expect(second).toMatchObject({
+      kind: "page",
+      events: [
+        { event: { id: "event-3", type: "custom" }, seq: 2 },
+        { event: { id: "event-4", type: "custom" }, seq: 3 },
+      ],
+      hasMore: false,
+    });
+
+    await replaceTranscriptEvents(scope, [{ id: "replacement", type: "custom" }]);
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: first.cursor,
+        maxBytes: 10_000,
+        maxEvents: 2,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+  });
+
+  it("bounds raw pages before parsing an oversized event", async () => {
+    const missingScope = {
+      agentId: "main",
+      sessionId: "missing-raw-delta",
+      sessionKey: "agent:main:missing-raw-delta",
+      storePath,
+    };
+    await upsertSessionEntryCore(missingScope, {
+      sessionId: missingScope.sessionId,
+      updatedAt: 10,
+    });
+    await expect(
+      readSessionTranscriptRawDelta({ ...missingScope, maxBytes: 10, maxEvents: 1 }),
+    ).resolves.toEqual({ kind: "missing" });
+
+    const scope = {
+      ...missingScope,
+      sessionId: "oversized-raw-delta",
+      sessionKey: "agent:main:oversized-raw-delta",
+    };
+    await appendTranscriptEvent(scope, { id: "large", text: "x".repeat(200), type: "custom" });
+    const blocked = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: "not-a-cursor",
+      maxBytes: 10,
+      maxEvents: 1,
+    });
+    expect(blocked).toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: "",
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    if (blocked.kind !== "reset") {
+      throw new Error("expected invalid cursor reset");
+    }
+    const beyondFrontierCursor = Buffer.from(
+      JSON.stringify({
+        ...(JSON.parse(Buffer.from(blocked.cursor, "base64url").toString("utf8")) as object),
+        lastSeq: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: beyondFrontierCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+    const unsafeCursor = Buffer.from(
+      JSON.stringify({
+        agentId: scope.agentId,
+        generation: "untrusted",
+        lastSeq: 1e100,
+        sessionId: scope.sessionId,
+        version: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: unsafeCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+
+    const bounded = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: blocked.cursor,
+      maxBytes: 10,
+      maxEvents: 1,
+    });
+    expect(bounded).toMatchObject({
+      kind: "page",
+      events: [],
+      hasMore: true,
+      requiredBytes: expect.any(Number),
+      serializedBytes: 0,
+    });
+    if (bounded.kind !== "page" || bounded.requiredBytes === undefined) {
+      throw new Error("expected oversized event metadata");
+    }
+
+    const retried = await readSessionTranscriptRawDelta({
+      ...scope,
+      cursor: bounded.cursor,
+      maxBytes: bounded.requiredBytes,
+      maxEvents: 1,
+    });
+    expect(retried).toMatchObject({
+      kind: "page",
+      events: [{ event: { id: "large", text: "x".repeat(200), type: "custom" }, seq: 0 }],
+      hasMore: false,
+      serializedBytes: bounded.requiredBytes,
+    });
+
+    const otherScope = {
+      ...scope,
+      sessionId: "other-raw-delta",
+      sessionKey: "agent:main:other-raw-delta",
+    };
+    await appendTranscriptEvent(otherScope, { id: "other", type: "custom" });
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...otherScope,
+        cursor: retried.kind === "page" ? retried.cursor : "",
+        maxBytes: 1_000,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "scope_mismatch" });
   });
 
   it("projects only visible transcript message entries with read-order metadata", async () => {
@@ -87,7 +277,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const root = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -171,7 +361,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -201,7 +391,7 @@ describe("session transcript runtime SDK", () => {
       sessionId: "unkeyed-mirror-session",
       sessionKey: "agent:main:unkeyed",
     };
-    await upsertSessionEntry(unkeyedScope, {
+    await upsertSessionEntryCore(unkeyedScope, {
       sessionId: unkeyedScope.sessionId,
       updatedAt: 20,
     });
@@ -223,7 +413,7 @@ describe("session transcript runtime SDK", () => {
     );
     expect(unkeyedAssistantMessages).toHaveLength(1);
 
-    await upsertSessionEntry(scope, { sessionId: "new-session", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { sessionId: "new-session", updatedAt: 20 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -231,6 +421,114 @@ describe("session transcript runtime SDK", () => {
         text: "stale assistant reply",
       }),
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
+  it("does not append an assistant mirror after cancellation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cancelled-mirror-session",
+      sessionKey: "agent:main:cancelled",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const cancellation = new Error("cancelled by user");
+    const signal = AbortSignal.abort(cancellation);
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        signal,
+        text: "must not be persisted",
+      }),
+    ).rejects.toBe(cancellation);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+  });
+
+  it.each(["assistant mirror", "yield context"])(
+    "rejects %s after its admitted writer is superseded",
+    async (operation) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "superseded-mirror-session",
+        sessionKey: "agent:main:superseded-mirror",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, {
+        activeWriterRunId: "replacement-run",
+        lifecycleRevision: "revision-a",
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      });
+
+      await expect(
+        withOwnedSessionTranscriptWrites(
+          {
+            sessionKey: scope.sessionKey,
+            sessionTarget: {
+              ...scope,
+              expectedLifecycleRevision: "revision-a",
+              expectedWriterRunId: "superseded-run",
+            },
+            withTranscriptWrite: async (run) => await run(),
+          },
+          async () => {
+            if (operation === "yield context") {
+              await appendSessionYieldContext({
+                ...scope,
+                message: "must not be persisted",
+                assertCurrent: () => {},
+              });
+              return;
+            }
+            await appendAssistantMirrorMessageByIdentity({
+              ...scope,
+              idempotencyKey: "superseded:fallback",
+              text: "must not be persisted",
+            });
+          },
+        ),
+      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+      await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+    },
+  );
+
+  it("rechecks yield settlement authority after waiting for the transcript writer", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "yield-settlement-session",
+      sessionKey: "agent:main:yield-settlement",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    let active = true;
+    const stopped = new Error("yield settlement stopped");
+    const writerEntered = createDeferredCore();
+    const releaseWriter = createDeferredCore();
+    const heldWriter = withSessionTranscriptWriteLock(scope, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    });
+    await writerEntered.promise;
+    try {
+      const write = appendSessionYieldContext({
+        ...scope,
+        message: "private continuation",
+        assertCurrent: () => {
+          if (!active) {
+            throw stopped;
+          }
+        },
+      });
+      const rejected = expect(write).rejects.toBe(stopped);
+      active = false;
+      releaseWriter.resolve();
+      await heldWriter;
+      await rejected;
+    } finally {
+      releaseWriter.resolve();
+      await heldWriter;
+    }
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
@@ -241,7 +539,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const active = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -288,7 +586,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const firstAssistant = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -328,7 +626,7 @@ describe("session transcript runtime SDK", () => {
       internalUpdates.push(update);
     });
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     try {
       await expect(
@@ -374,7 +672,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-locator", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
@@ -391,7 +689,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-active", type: "metadata" };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "store-default.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -480,6 +778,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     expect(internalUpdates).toEqual([
@@ -492,6 +791,7 @@ describe("session transcript runtime SDK", () => {
           agentId: "main",
           sessionId: "publish-session",
           sessionKey: "agent:main:main",
+          storePath: path.join(tempDir, "openclaw-agent.sqlite"),
         },
       },
     ]);
@@ -508,6 +808,8 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("appendMessageWithMessageSequence");
+      expect(locked).not.toHaveProperty("readMessageFacts");
       await locked.appendMessage({
         message: {
           role: "assistant",
@@ -616,6 +918,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "queued-publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
@@ -679,7 +982,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:telegram:direct:123",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "legacy-file-name.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -688,7 +991,7 @@ describe("session transcript runtime SDK", () => {
     const keys = resolveSessionTranscriptMemoryHitKeyToSessionKeys({
       key: formatSessionTranscriptMemoryHitKey(scope),
       store: Object.fromEntries(
-        listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
       ),
     });
 

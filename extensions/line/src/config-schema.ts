@@ -1,13 +1,16 @@
 // Line helper module supports config schema behavior.
 import {
+  ChannelDeliveryStreamingConfigSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
 
-const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const ThreadBindingsSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -15,13 +18,20 @@ const ThreadBindingsSchema = z
     maxAgeHours: z.number().optional(),
     spawnSessions: z.boolean().optional(),
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-    spawnSubagentSessions: z.boolean().optional(),
-    spawnAcpSessions: z.boolean().optional(),
   })
   .strict();
 
+// "batched" separates a reply to a coalesced turn from a reply to an immediate one,
+// and nothing on the LINE path marks a turn as coalesced: no caller here reaches
+// resolveBatchedReplyThreadingPolicy. Reject it rather than accept a mode whose
+// defining behavior can never occur.
+const LineReplyToModeSchema = z.enum(["off", "first", "all"]);
+
 const LineCommonConfigSchemaBase = z.object({
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
+  joinIntro: z.boolean().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
   tokenFile: z.string().optional(),
@@ -32,26 +42,27 @@ const LineCommonConfigSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   responsePrefix: z.string().optional(),
+  replyToMode: LineReplyToModeSchema.optional(),
+  // LINE cannot edit a sent message, so it has no preview streaming mode and takes
+  // the delivery-only shape this shared schema is written for.
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),
 });
 
-const LineGroupConfigSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    requireMention: z.boolean().optional(),
-    systemPrompt: z.string().optional(),
-    skills: z.array(z.string()).optional(),
-  })
-  .strict();
+const LineGroupConfigSchema = buildGroupEntrySchema().omit({
+  tools: true,
+  toolsBySender: true,
+});
 
 const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
+}).strict();
+
+export const LineConfigSchema = buildMultiAccountChannelSchema(LineAccountConfigSchema, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
     requireChannelOpenAllowFrom({
       channel: "line",
       policy: value.dmPolicy,
@@ -59,24 +70,16 @@ const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
       ctx,
       requireOpenAllowFrom,
     });
-  });
+  },
+});
 
-export const LineConfigSchema = LineCommonConfigSchemaBase.extend({
-  accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
-    requireChannelOpenAllowFrom({
-      channel: "line",
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      requireOpenAllowFrom,
-    });
-  });
-
-export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
+export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema, {
+  uiHints: {
+    joinIntro: {
+      label: "LINE Group Join Introduction",
+      help: "Post one brief introduction when the bot joins an allowed LINE group or multi-person room (default: true). Account settings override the channel-wide setting.",
+    },
+  },
+});
 
 export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;

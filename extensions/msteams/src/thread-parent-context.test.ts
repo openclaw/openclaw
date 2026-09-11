@@ -1,14 +1,26 @@
 // Msteams tests cover thread parent context plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
-import {
-  resetThreadParentContextCachesForTest,
-  fetchParentMessageCached,
-  formatParentContextEvent,
-  markParentContextInjected,
-  shouldInjectParentContext,
-  summarizeParentMessage,
-} from "./thread-parent-context.js";
+
+let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
+let formatParentContextEvent: typeof import("./thread-parent-context.js").formatParentContextEvent;
+let markParentContextInjected: typeof import("./thread-parent-context.js").markParentContextInjected;
+let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
+let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
+
+async function loadParentContextModule() {
+  vi.resetModules();
+  ({
+    fetchParentMessageCached,
+    formatParentContextEvent,
+    markParentContextInjected,
+    shouldInjectParentContext,
+    summarizeParentMessage,
+  } = await import("./thread-parent-context.js"));
+}
+
+// Formatting is stateless; only the cache and dedupe suites need per-case imports.
+beforeAll(loadParentContextModule);
 
 // Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
 // on the ES2024 String.prototype.isWellFormed() runtime API.
@@ -111,36 +123,25 @@ describe("formatParentContextEvent", () => {
 });
 
 describe("fetchParentMessageCached", () => {
-  beforeEach(() => {
-    resetThreadParentContextCachesForTest();
-  });
+  beforeEach(loadParentContextModule);
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("invokes the fetcher on first call", async () => {
+  it("fetches a parent once and returns the cached value on repeat calls", async () => {
     const mockMsg: GraphThreadMessage = {
       id: "p1",
       body: { content: "hi", contentType: "text" },
     };
     const fetcher = vi.fn(async () => mockMsg);
 
-    const result = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
 
-    expect(result).toEqual(mockMsg);
+    expect(first).toEqual(mockMsg);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith("tok", "g1", "c1", "p1");
-  });
 
-  it("returns cached value on repeat fetch without invoking fetcher", async () => {
-    const mockMsg: GraphThreadMessage = {
-      id: "p1",
-      body: { content: "hi", contentType: "text" },
-    };
-    const fetcher = vi.fn(async () => mockMsg);
-
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
     await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
     const third = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
 
@@ -233,26 +234,15 @@ describe("fetchParentMessageCached", () => {
 });
 
 describe("shouldInjectParentContext / markParentContextInjected", () => {
-  beforeEach(() => {
-    resetThreadParentContextCachesForTest();
-  });
+  beforeEach(loadParentContextModule);
 
-  it("returns true for first observation", () => {
+  it("deduplicates a marked parent while keeping other parents and sessions independent", () => {
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(true);
-  });
 
-  it("returns false after marking the same parent", () => {
     markParentContextInjected("session-1", "parent-1");
+
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(false);
-  });
-
-  it("returns true again when a different parent appears in the session", () => {
-    markParentContextInjected("session-1", "parent-1");
     expect(shouldInjectParentContext("session-1", "parent-2")).toBe(true);
-  });
-
-  it("dedupe is scoped per session key", () => {
-    markParentContextInjected("session-1", "parent-1");
     expect(shouldInjectParentContext("session-2", "parent-1")).toBe(true);
   });
 });

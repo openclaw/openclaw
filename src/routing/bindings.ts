@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Routing binding helpers resolve configured channel and agent route bindings.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,7 +23,9 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
   }
   const ids = new Set<string>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved || resolved.channelId !== normalizedChannel) {
       continue;
     }
@@ -40,7 +42,11 @@ export function resolveDefaultAgentBoundAccountId(
   if (!normalizedChannel) {
     return null;
   }
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (!soleAgentId) {
+    return null;
+  }
+  const defaultAgentId = normalizeAgentId(soleAgentId);
   for (const binding of listBindings(cfg)) {
     const resolved = resolveNormalizedRouteBindingMatch(binding);
     if (
@@ -58,7 +64,9 @@ export function resolveDefaultAgentBoundAccountId(
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved) {
       continue;
     }

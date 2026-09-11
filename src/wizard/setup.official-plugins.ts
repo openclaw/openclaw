@@ -37,15 +37,15 @@ function isGenericOfficialPluginEntry(entry: { source?: string; kind?: string })
     Boolean(manifest?.plugin?.id) &&
     !manifest?.channel &&
     (manifest?.providers?.length ?? 0) === 0 &&
-    (manifest?.webSearchProviders?.length ?? 0) === 0
+    (manifest?.webSearchProviders?.length ?? 0) === 0 &&
+    // Migration owners have their own setup flow; listing them here duplicates install prompts.
+    (manifest?.contracts?.migrationProviders?.length ?? 0) === 0
   );
 }
 
 function formatInstallHint(install: PluginPackageInstall): string {
   if (install.clawhubSpec && install.npmSpec) {
-    return install.defaultChoice === "clawhub"
-      ? "ClawHub, with npm fallback"
-      : "npm, with ClawHub fallback";
+    return "npm, with ClawHub fallback";
   }
   if (install.clawhubSpec) {
     return "ClawHub";

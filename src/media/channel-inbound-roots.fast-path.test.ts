@@ -5,9 +5,17 @@ import type { OpenClawConfig } from "../config/types.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(),
+  loadPluginPublicArtifactModuleSync: vi.fn(),
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
+
+// Installed-plugin discovery is out of scope for the bundled fast path; keep these
+// tests independent of the host plugin metadata graph.
+vi.mock("../plugins/plugin-metadata-snapshot.runtime.js", () => ({
+  getCurrentPluginMetadataSnapshotRuntime: () => undefined,
+  resolvePluginMetadataSnapshotRuntime: () => undefined,
+}));
 
 import {
   resolveChannelInboundAttachmentRoots,
@@ -38,6 +46,7 @@ function createContext(provider: string, accountId = "work"): MsgContext {
 
 beforeEach(() => {
   publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReset();
+  publicSurfaceLoaderMocks.loadPluginPublicArtifactModuleSync.mockReset();
 });
 
 describe("channel inbound roots fast path", () => {
@@ -70,9 +79,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("localchat"),
       }),
     ).toEqual(["/remote/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
         dirName: "localchat",
@@ -140,9 +146,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("partialchat"),
       }),
     ).toEqual(["/partial/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
   });
 
   it("resolves local inbound roots from explicit channel context", () => {

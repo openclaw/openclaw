@@ -1,22 +1,27 @@
 // Gateway Talk realtime agent-consult bridge.
 // Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
-  type ConnectParams,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  getCommandSenderAuthority,
+  withCommandSenderAuthority,
+} from "../auto-reply/command-sender-authority.js";
 import { normalizeTalkSection } from "../config/talk.js";
-import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
-import { chatHandlers } from "./server-methods/chat.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-} from "./server-methods/shared-types.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  buildRealtimeVoiceAgentConsultChatMessage,
+} from "../talk/agent-consult-tool.js";
+import { abortChatRunById } from "./chat-abort.js";
+import { handleTrustedInternalChatSend } from "./server-methods/chat-send-handler.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types.js";
+import { prepareTalkAgentConsultTranscript } from "./talk-agent-consult-transcript.js";
+import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 import { formatForLog } from "./ws-log.js";
 
 type TalkChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -56,19 +61,17 @@ function terminalTalkChatSendAckError(status: TalkChatSendAckStatus): ErrorShape
 /**
  * Starts the agent-consult chat run that backs realtime Talk tool calls.
  */
-export async function startTalkRealtimeAgentConsult(params: {
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-  isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
-  requestId: string;
-  sessionKey: string;
-  callId: string;
-  args: unknown;
-  relaySessionId?: string;
-  connId?: string;
-}): Promise<
-  { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
-> {
+export async function startTalkRealtimeAgentConsult(
+  request: GatewayRequestHandlerOptions,
+  params: {
+    sessionTarget: PreparedTalkSessionTarget;
+    callId: string;
+    args: unknown;
+    relaySessionId?: string;
+    connId?: string;
+    onRunStarted?: (runId: string) => void;
+  },
+): Promise<{ ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }> {
   let message: string;
   try {
     message = buildRealtimeVoiceAgentConsultChatMessage(params.args);
@@ -76,27 +79,46 @@ export async function startTalkRealtimeAgentConsult(params: {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
-  const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
+  const normalizedTalk = normalizeTalkSection(request.context.getRuntimeConfig().talk);
+  const authority = resolveTalkAgentConsultAuthority(
+    request.client?.connect?.scopes,
+    request.client,
+  );
+  let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
   >((resolve) => {
     let acknowledged = false;
-    const chatSendResult = expectDefined(
-      chatHandlers["chat.send"],
-      "chat.send handler",
-    )({
+    const chatSendOptions = {
+      ...request,
+      client:
+        request.client && authority.replyCaller
+          ? withCommandSenderAuthority(
+              {
+                ...request.client,
+                connect: {
+                  ...request.client.connect,
+                  caps: authority.replyCaller.GatewayClientCaps,
+                },
+              },
+              getCommandSenderAuthority(authority.replyCaller),
+            )
+          : request.client,
       req: {
         type: "req",
-        id: `${params.requestId}:talk-tool-call`,
+        id: `${request.req.id}:talk-tool-call`,
         method: "chat.send",
       },
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      context: params.context,
       params: {
-        sessionKey: params.sessionKey,
+        sessionKey: params.sessionTarget.canonicalKey,
+        agentId: params.sessionTarget.agentId,
         message,
         idempotencyKey,
+        suppressCommandInterpretation: true,
+        systemInputProvenance: {
+          kind: "internal_system",
+          sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        },
         ...(normalizedTalk?.consultThinkingLevel
           ? { thinking: normalizedTalk.consultThinkingLevel }
           : {}),
@@ -106,6 +128,37 @@ export async function startTalkRealtimeAgentConsult(params: {
       },
       respond: (ok: boolean, result?: unknown, error?: ErrorShape) => {
         acknowledged = true;
+        if (ok && !terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result))) {
+          const candidateRunId =
+            result && typeof result === "object" && !Array.isArray(result)
+              ? (result as Record<string, unknown>).runId
+              : undefined;
+          const runId = typeof candidateRunId === "string" ? candidateRunId : idempotencyKey;
+          try {
+            if (params.relaySessionId && params.connId) {
+              registerTalkRealtimeRelayAgentRun({
+                relaySessionId: params.relaySessionId,
+                connId: params.connId,
+                sessionKey: params.sessionTarget.canonicalKey,
+                runId,
+                callId: params.callId,
+              });
+            }
+            params.onRunStarted?.(runId);
+            acknowledgedRunId = runId;
+          } catch (registrationError) {
+            abortChatRunById(request.context, {
+              runId,
+              sessionKey: params.sessionTarget.canonicalKey,
+              stopReason: "voice session binding failed",
+            });
+            resolve({
+              ok: false,
+              error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(registrationError)),
+            });
+            return;
+          }
+        }
         resolve(
           ok
             ? { ok: true, result }
@@ -116,7 +169,13 @@ export async function startTalkRealtimeAgentConsult(params: {
               },
         );
       },
-    } as Parameters<GatewayRequestHandlers[string]>[0]);
+    } satisfies GatewayRequestHandlerOptions;
+    // Speech owns reusable history; keep consult scaffolding only in the lossless archive.
+    const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
+      toolsAllow: authority.toolsAllow,
+      transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+    });
     void Promise.resolve(chatSendResult).then(
       () => {
         if (!acknowledged) {
@@ -125,7 +184,7 @@ export async function startTalkRealtimeAgentConsult(params: {
       },
       (error: unknown) => {
         if (acknowledged) {
-          params.context.logGateway.warn(
+          request.context.logGateway.warn(
             `realtime Talk agent consult failed after acknowledgement: ${formatForLog(error)}`,
           );
           return;
@@ -152,20 +211,11 @@ export async function startTalkRealtimeAgentConsult(params: {
   if (terminalAckError) {
     return { ok: false, error: terminalAckError };
   }
-  const runId =
-    result && typeof result === "object" && !Array.isArray(result)
-      ? typeof (result as Record<string, unknown>).runId === "string"
-        ? (result as Record<string, string>).runId
-        : idempotencyKey
-      : idempotencyKey;
-  if (params.relaySessionId && params.connId) {
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: params.relaySessionId,
-      connId: params.connId,
-      sessionKey: params.sessionKey,
-      runId: expectDefined(runId, "talk agent run id"),
-      callId: params.callId,
-    });
+  if (!acknowledgedRunId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "chat.send did not acknowledge an active run"),
+    };
   }
-  return { ok: true, runId: expectDefined(runId, "talk agent run id"), idempotencyKey };
+  return { ok: true, runId: acknowledgedRunId, idempotencyKey };
 }

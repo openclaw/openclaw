@@ -1,13 +1,71 @@
 {
   "id": "workboard",
+  "categories": [
+    "productivity"
+  ],
+  "cliCommands": [
+    {
+      "name": "workboard",
+      "description": "Manage Workboard cards and worker dispatch",
+      "hasSubcommands": true
+    }
+  ],
+  "doctorContract": {
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
+  },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": ["workboard"]
+    "onCommands": [
+      "workboard"
+    ]
+  },
+  "dashboard": {
+    "dataBindings": [
+      {
+        "id": "cards.list",
+        "method": "workboard.cards.list",
+        "description": "List Workboard cards and statuses."
+      },
+      {
+        "id": "stats",
+        "method": "workboard.cards.stats",
+        "description": "Read Workboard card statistics."
+      },
+      {
+        "id": "boards.list",
+        "method": "workboard.boards.list",
+        "description": "List Workboard boards."
+      }
+    ],
+    "actionVerbs": [
+      {
+        "id": "dispatch",
+        "method": "workboard.cards.dispatch",
+        "description": "Dispatch ready Workboard cards.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    ]
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
-  "catalog": { "featured": true, "order": 10 },
+  "catalog": {
+    "featured": true,
+    "order": 10
+  },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -49,9 +107,7 @@
   },
   "commandAliases": [
     {
-      "name": "workboard",
-      "kind": "runtime-slash",
-      "cliCommand": "workboard"
+      "name": "workboard"
     }
   ],
   "toolMetadata": {
@@ -165,5 +221,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/97b95a0030f4b0cf166009d1ee126d45a86f2a11930eee5d4f6dcbe9400474ab/index.js",
+    "styles": [
+      "dist/control-ui/97b95a0030f4b0cf166009d1ee126d45a86f2a11930eee5d4f6dcbe9400474ab/index.css"
+    ]
   }
 }

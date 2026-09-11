@@ -1,10 +1,13 @@
-// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import {
-  createMantleAnthropicStreamFn,
-  resolveMantleAnthropicBaseUrl,
-} from "./mantle-anthropic.runtime.js";
+  notifyProviderStreamOpened,
+  withProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
+import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
 function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -32,12 +35,7 @@ function createTestDeps() {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[index];
@@ -61,19 +59,77 @@ function firstStreamOptions(deps: ReturnType<typeof createTestDeps>): Record<str
 }
 
 describe("createMantleAnthropicStreamFn", () => {
-  it("uses authToken bearer auth for Mantle Anthropic requests", () => {
+  it.each(["short", "long", "none"] as const)(
+    "keeps the stable system prefix independently cacheable across suffix changes (%s)",
+    async (cacheRetention) => {
+      const systems: unknown[] = [];
+      for (const suffix of ["Today: Monday", "Today: Tuesday"]) {
+        let payload: unknown;
+        const events = await createMantleAnthropicStreamFn()(
+          createTestModel(),
+          {
+            systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          },
+          {
+            apiKey: "synthetic-test-key",
+            cacheRetention,
+            onPayload: (request) => {
+              payload = request;
+              throw new Error("payload captured before network");
+            },
+          },
+        );
+        await events.result();
+        const request = requireRecord(payload, "Mantle payload");
+        systems.push(request.system);
+        expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+        if (cacheRetention === "none") {
+          expect(request.system).toEqual([{ type: "text", text: `Stable workspace\n${suffix}` }]);
+          expect(JSON.stringify(request)).not.toContain("cache_control");
+        } else {
+          expect(request.system).toEqual([
+            {
+              type: "text",
+              text: "Stable workspace",
+              cache_control: {
+                type: "ephemeral",
+                ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
+              },
+            },
+            { type: "text", text: suffix },
+          ]);
+          expect(JSON.stringify(request).match(/"cache_control"/g)?.length).toBeLessThanOrEqual(4);
+        }
+      }
+      if (cacheRetention !== "none") {
+        expect(Array.isArray(systems[0]) && systems[0][0]).toEqual(
+          Array.isArray(systems[1]) && systems[1][0],
+        );
+      }
+    },
+  );
+
+  it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
     const stream = { kind: "anthropic-stream" };
     const model = createTestModel();
     const context = { messages: [] };
     const deps = createTestDeps();
     deps.stream.mockReturnValue(stream as never);
-
-    const result = createMantleAnthropicStreamFn(deps)(model, context, {
-      apiKey: "bedrock-bearer-token",
-      headers: {
-        "X-Caller": "caller-header",
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: "bedrock-bearer-token",
+        onResponse,
+        headers: {
+          "X-Caller": "caller-header",
+        },
       },
-    });
+      acceptanceObserver,
+    );
+
+    const result = createMantleAnthropicStreamFn(deps)(model, context, options);
 
     expect(result).toBe(stream);
     const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
@@ -94,6 +150,9 @@ describe("createMantleAnthropicStreamFn", () => {
       "bedrock-bearer-token",
     );
     expect(streamOptions.thinkingEnabled).toBe(false);
+    expect(streamOptions.onResponse).toBe(onResponse);
+    await notifyProviderStreamOpened({ options: streamOptions, cancelStream: vi.fn() });
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {
@@ -134,6 +193,47 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.thinkingEnabled).toBe(true);
     expect(streamOptions.effort).toBe("high");
   });
+
+  it.each([
+    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
+    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
+    { reasoning: "max" as const, thinkingEnabled: true, effort: "max" },
+  ])(
+    "uses the Opus 5 contract for reasoning=$reasoning",
+    ({ reasoning, thinkingEnabled, effort }) => {
+      const model = createTestModel({
+        id: "anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-opus-5" },
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        maxTokens: 128_000,
+      });
+      const deps = createTestDeps();
+      deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+      void createMantleAnthropicStreamFn(deps)(
+        model,
+        { messages: [] },
+        {
+          apiKey: "bedrock-bearer-token",
+          reasoning,
+          temperature: 0.2,
+        },
+      );
+
+      expect(firstStreamOptions(deps)).toMatchObject({
+        thinkingEnabled,
+        maxTokens: 128_000,
+      });
+      if (effort) {
+        expect(firstStreamOptions(deps).effort).toBe(effort);
+      } else {
+        expect(firstStreamOptions(deps)).not.toHaveProperty("effort");
+      }
+      expect(firstStreamOptions(deps)).not.toHaveProperty("temperature");
+    },
+  );
 
   it.each([
     { reasoning: undefined, effort: "high" },
@@ -266,14 +366,5 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.maxTokens).toBe(1_000);
     expect(streamOptions).not.toHaveProperty("thinkingBudgetTokens");
     expect(streamOptions.temperature).toBeUndefined();
-  });
-
-  it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {
-    expect(resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/v1")).toBe(
-      "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-    );
-    expect(
-      resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/anthropic/"),
-    ).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
   });
 });

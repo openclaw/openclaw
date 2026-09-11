@@ -8,8 +8,9 @@ import {
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -204,20 +205,45 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("does not load a provider runtime to normalize an empty tool set", () => {
+    const onPreNormalizationSchemaDiagnostics = vi.fn();
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools: [],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics,
+      }),
+    ).toEqual([]);
+    expect(onPreNormalizationSchemaDiagnostics).toHaveBeenCalledWith([], []);
+    expect(mocks.normalizeProviderToolSchemas).not.toHaveBeenCalled();
+  });
+
   it("preserves plugin metadata when provider schema normalization clones tools", () => {
     // Provider normalization may clone tool objects; plugin metadata has to move
     // with the clone so later dispatch still knows the owning plugin/MCP server.
     const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
-    setPluginToolMeta(tool, {
+    const metadata: Parameters<typeof setPluginToolMeta>[1] = {
       pluginId: "bundle-mcp",
-      optional: false,
+      kind: "memory",
+      optional: true,
+      replaySafe: true,
+      sideEffecting: true,
+      trustedLocalMedia: false,
       mcp: {
         serverName: "fixture",
         safeServerName: "fixture",
         toolName: "lookup_note",
         operation: "tool",
+        deniedBySession: true,
+        codexApproval: {
+          mode: "prompt",
+          annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+        },
+        node: { id: "fixture-node", displayName: "Fixture node" },
       },
-    });
+    };
+    setPluginToolMeta(tool, metadata);
     const normalized = {
       ...tool,
       parameters: normalizedParameterFreeSchema(),
@@ -230,14 +256,39 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result[0]).toBe(normalized);
-    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
-      pluginId: "bundle-mcp",
-      mcp: {
-        serverName: "fixture",
-        toolName: "lookup_note",
-      },
-    });
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(metadata);
   });
+
+  it.each([true, false, undefined])(
+    "preserves output schemas and channel-progress visibility (%s) across runtime clones",
+    (hideFromChannelProgress) => {
+      const outputSchema = Type.Object(
+        { id: Type.String(), ready: Type.Boolean() },
+        { additionalProperties: false },
+      );
+      const tool = {
+        ...createParameterFreeTool("fixture_status"),
+        outputSchema,
+      } as unknown as AgentTool;
+      Object.defineProperty(tool, "hideFromChannelProgress", { value: hideFromChannelProgress });
+      const normalized = {
+        ...createParameterFreeTool("fixture_status"),
+        parameters: normalizedParameterFreeSchema(),
+      } as unknown as AgentTool;
+      mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+      const result = normalizeAgentRuntimeTools({
+        tools: [tool],
+        provider: "openai",
+      });
+
+      expect(result[0]).toBe(normalized);
+      expect(result[0]?.outputSchema).toBe(outputSchema);
+      expect(result[0]?.hideFromChannelProgress).toBe(
+        hideFromChannelProgress === true ? true : undefined,
+      );
+    },
+  );
 
   it("preserves private execution metadata when provider normalization clones tools", () => {
     const formatter = vi.fn(() => ({ text: "Terminal summary" }));

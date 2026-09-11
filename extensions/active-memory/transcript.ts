@@ -1,13 +1,6 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import * as readline from "node:readline";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  readSessionTranscriptEvents,
-  type SessionTranscriptTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -58,108 +51,26 @@ function resolveTranscriptReadLimits(
   };
 }
 
-async function streamBoundedTranscriptJsonl(params: {
-  sessionFile: string;
+async function streamActiveMemoryTranscriptRecords(params: {
+  source: ActiveMemoryTranscriptSource;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
+  let page: Awaited<ReturnType<typeof readSessionTranscriptRawDelta>>;
   try {
-    const stats = await fs.stat(params.sessionFile);
-    if (!stats.isFile() || stats.size > limits.maxBytes) {
-      return;
-    }
+    page = await readSessionTranscriptRawDelta({
+      ...params.source,
+      maxBytes: limits.maxBytes,
+      maxEvents: limits.maxLines,
+    });
   } catch {
     return;
   }
-  const stream = fsSync.createReadStream(params.sessionFile, {
-    encoding: "utf8",
-  });
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-  let seenLines = 0;
-  try {
-    for await (const line of rl) {
-      seenLines += 1;
-      if (seenLines > limits.maxLines) {
-        break;
-      }
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        if (params.onRecord(JSON.parse(trimmed) as unknown)) {
-          break;
-        }
-      } catch {}
-    }
-  } catch {
-    // Treat transcript recovery as best-effort on timeout/abort paths.
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-
-function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource {
-  return { kind: "file", sessionFile };
-}
-
-function transcriptSourceFromReturnedSessionFile(params: {
-  sessionFile: string;
-  sessionKey: string;
-}): ActiveMemoryTranscriptSource {
-  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
-  if (!marker) {
-    return fileTranscriptSource(params.sessionFile);
-  }
-  return {
-    kind: "runtime",
-    target: {
-      agentId: marker.agentId,
-      sessionId: marker.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: marker.storePath,
-    },
-  };
-}
-
-function estimateTranscriptEventsBytes(events: readonly unknown[]): number {
-  let total = 0;
-  for (const event of events) {
-    try {
-      total += Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
-    } catch {
-      total += 1;
-    }
-  }
-  return total;
-}
-
-async function streamRuntimeTranscriptEvents(params: {
-  target: SessionTranscriptTargetParams;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  const limits = resolveTranscriptReadLimits(params.limits);
-  let events: readonly unknown[];
-  try {
-    events = await readSessionTranscriptEvents(params.target);
-  } catch {
+  if (page.kind !== "page") {
     return;
   }
-  if (estimateTranscriptEventsBytes(events) > limits.maxBytes) {
-    return;
-  }
-  let seenLines = 0;
-  for (const event of events) {
-    seenLines += 1;
-    if (seenLines > limits.maxLines) {
-      break;
-    }
+  for (const { event } of page.events) {
     try {
       if (params.onRecord(event)) {
         break;
@@ -168,49 +79,26 @@ async function streamRuntimeTranscriptEvents(params: {
   }
 }
 
-async function streamActiveMemoryTranscriptRecords(params: {
-  source: ActiveMemoryTranscriptSource;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  if (params.source.kind === "runtime") {
-    await streamRuntimeTranscriptEvents({
-      target: params.source.target,
-      limits: params.limits,
-      onRecord: params.onRecord,
-    });
-    return;
-  }
-  await streamBoundedTranscriptJsonl({
-    sessionFile: params.source.sessionFile,
-    limits: params.limits,
-    onRecord: params.onRecord,
-  });
+function resolveToolResultMessage(value: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(value);
+  const message =
+    asOptionalRecord(record?.message) ?? (record?.role === "toolResult" ? record : undefined);
+  return message && normalizeOptionalString(message.role) === "toolResult" ? message : undefined;
 }
 
 function extractActiveMemorySearchDebugFromSessionRecord(
   value: unknown,
 ): ActiveMemorySearchDebug | undefined {
-  const record = asRecord(value);
-  const nestedMessage = asRecord(record?.message);
-  const recordToolName = normalizeLowercaseStringOrEmpty(record?.toolName);
-  const topLevelMessage =
-    record?.role === "toolResult" ||
-    recordToolName === "memory_search" ||
-    recordToolName === "memory_recall"
-      ? record
-      : undefined;
-  const message = nestedMessage ?? topLevelMessage;
+  const message = resolveToolResultMessage(value);
   if (!message) {
     return undefined;
   }
-  const role = normalizeOptionalString(message.role);
   const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
+  if (toolName !== "memory_search" && toolName !== "memory_recall") {
     return undefined;
   }
-  const details = asRecord(message.details);
-  const debug = asRecord(details?.debug);
+  const details = asOptionalRecord(message.details);
+  const debug = asOptionalRecord(details?.debug);
   const warning = normalizeOptionalString(details?.warning);
   const action = normalizeOptionalString(details?.action);
   const error = normalizeOptionalString(details?.error);
@@ -234,16 +122,12 @@ function extractActiveMemorySearchDebugFromSessionRecord(
 }
 
 function extractToolResultNameFromSessionRecord(value: unknown): string | undefined {
-  const record = asRecord(value);
-  const nestedMessage = asRecord(record?.message);
-  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
-  const message = nestedMessage ?? topLevelMessage;
+  const message = resolveToolResultMessage(value);
   if (!message) {
     return undefined;
   }
-  const role = normalizeOptionalString(message.role);
   const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  return role === "toolResult" && toolName ? toolName : undefined;
+  return toolName || undefined;
 }
 
 function hasUnavailableMemoryResultInSessionRecord(
@@ -253,18 +137,15 @@ function hasUnavailableMemoryResultInSessionRecord(
     ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   ],
 ): boolean {
-  const record = asRecord(value);
-  const nestedMessage = asRecord(record?.message);
-  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
-  const message = nestedMessage ?? topLevelMessage;
-  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+  const message = resolveToolResultMessage(value);
+  if (!message) {
     return false;
   }
   const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   const unavailable = message.isError === true || readStructuredMemoryFailure(details) === true;
   if (unavailable) {
     return true;
@@ -276,18 +157,15 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
   value: unknown,
   toolsAllow: readonly string[],
 ): boolean {
-  const record = asRecord(value);
-  const nestedMessage = asRecord(record?.message);
-  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
-  const message = nestedMessage ?? topLevelMessage;
-  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+  const message = resolveToolResultMessage(value);
+  if (!message) {
     return false;
   }
   const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   if (details?.disabled === true || details?.unavailable === true) {
     return true;
   }
@@ -307,12 +185,14 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
 type ActiveMemoryHookDeadline = {
   arm: (timeoutMs: number, onTimeout: () => void) => void;
   promise: Promise<symbol>;
+  remainingMs: () => number;
   stop: () => void;
 };
 
 function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let deadlineAt = 0;
   let resolveTimeout: (value: symbol) => void = () => {};
   const promise = new Promise<symbol>((resolve) => {
     resolveTimeout = resolve;
@@ -325,13 +205,18 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   };
   const arm = (timeoutMs: number, onTimeout: () => void) => {
     stop();
+    deadlineAt = performance.now() + timeoutMs;
     timeoutId = setTimeout(() => {
       onTimeout();
       resolveTimeout(timeoutSentinel);
     }, timeoutMs);
     timeoutId.unref?.();
   };
-  return { arm, promise, stop };
+  // Remaining budget of the armed phase, so optional sub-steps can bound
+  // themselves inside the same deadline instead of racing a fresh timer.
+  const remainingMs = () =>
+    timeoutId ? Math.max(0, Math.floor(deadlineAt - performance.now())) : 0;
+  return { arm, promise, remainingMs, stop };
 }
 
 function hasUsableMemoryResultInSessionRecord(
@@ -341,17 +226,8 @@ function hasUsableMemoryResultInSessionRecord(
     ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   ],
 ): boolean {
-  const record = asRecord(value);
-  const nestedMessage = asRecord(record?.message);
-  const recordToolName = normalizeLowercaseStringOrEmpty(record?.toolName);
-  const topLevelMessage =
-    record?.role === "toolResult" ||
-    recordToolName === "memory_search" ||
-    recordToolName === "memory_recall"
-      ? record
-      : undefined;
-  const message = nestedMessage ?? topLevelMessage;
-  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+  const message = resolveToolResultMessage(value);
+  if (!message) {
     return false;
   }
   const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
@@ -361,7 +237,7 @@ function hasUsableMemoryResultInSessionRecord(
   if (hasUnavailableMemoryResultInSessionRecord(value, toolsAllow)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   const content = extractTextContent(message.content);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
@@ -408,7 +284,7 @@ function hasUsableMemoryResultInSessionRecord(
       return true;
     }
     try {
-      const parsed = asRecord(JSON.parse(content));
+      const parsed = asOptionalRecord(JSON.parse(content));
       return (
         typeof parsed?.expandedSummaryCount === "number" &&
         Number.isFinite(parsed.expandedSummaryCount) &&
@@ -434,12 +310,10 @@ export {
   createActiveMemoryHookDeadline,
   extractActiveMemorySearchDebugFromSessionRecord,
   extractToolResultNameFromSessionRecord,
-  fileTranscriptSource,
   hasTerminalUnavailableMemoryResultInSessionRecord,
   hasUnavailableMemoryResultInSessionRecord,
   hasUsableMemoryResultInSessionRecord,
   isUnavailableMemorySearchDebug,
   resolveTranscriptReadLimits,
   streamActiveMemoryTranscriptRecords,
-  transcriptSourceFromReturnedSessionFile,
 };

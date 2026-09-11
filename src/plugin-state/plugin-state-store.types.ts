@@ -1,3 +1,5 @@
+import type { Result } from "@openclaw/normalization-core/result";
+
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
 export type PluginStateEntry<T> = {
@@ -16,7 +18,13 @@ export type PluginStateKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => Promise<boolean>;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
+  /** Positional outcomes for at most 10,000 keys; missing/expired values are undefined. */
+  lookupMany?: (
+    keys: readonly string[],
+  ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
@@ -32,7 +40,11 @@ export type PluginStateSyncKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => boolean;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
   lookup(key: string): T | undefined;
+  /** Positional outcomes for at most 10,000 keys; missing/expired values are undefined. */
+  lookupMany?: (keys: readonly string[]) => Array<Result<T | undefined, PluginStateStoreError>>;
   consume(key: string): T | undefined;
   delete(key: string): boolean;
   entries(): PluginStateEntry<T>[];

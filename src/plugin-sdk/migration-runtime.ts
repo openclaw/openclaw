@@ -6,18 +6,8 @@ import path from "node:path";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  ensureAbsoluteDirectory,
-  pathExists,
-  readRegularFile,
-  root as openFsSafeRoot,
-} from "../infra/fs-safe.js";
+import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
-import type {
-  MigrationApplyResult,
-  MigrationItem,
-  MigrationProviderContext,
-} from "../plugins/types.js";
 import {
   assertMemoryMigrationSourceRevision,
   MAX_MEMORY_MIGRATION_FILE_BYTES,
@@ -29,8 +19,13 @@ import {
   markMigrationItemError,
   redactMigrationPlan,
 } from "./migration.js";
+import type {
+  MigrationApplyResult,
+  MigrationItem,
+  MigrationProviderContext,
+} from "./plugin-entry.js";
 
-export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+export type { MigrationApplyResult, MigrationItem } from "./plugin-entry.js";
 
 /** Directories a migration provider writes imported agent data into. */
 export type PlannedMigrationTargets = {
@@ -110,9 +105,11 @@ export function withCachedMigrationConfigRuntime(
   };
 }
 
-async function backupExistingMigrationTarget(
+/** Back up an existing migration target within the report's item backup directory. */
+export async function backupMigrationItemTarget(
   target: string,
   reportDir: string,
+  opts: { dereference?: boolean } = {},
 ): Promise<string | undefined> {
   if (!(await pathExists(target))) {
     return undefined;
@@ -126,7 +123,11 @@ async function backupExistingMigrationTarget(
     .slice(0, 12);
   const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
   const backupPath = path.join(backupDir, path.basename(target));
-  await fs.cp(target, backupPath, { recursive: true, force: true });
+  await fs.cp(target, backupPath, {
+    recursive: true,
+    force: true,
+    ...(opts.dereference === undefined ? {} : { dereference: opts.dereference }),
+  });
   return backupPath;
 }
 
@@ -294,30 +295,32 @@ export async function copyMigrationFileItem(
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
+  let result = item;
   try {
     const targetExists = await pathExists(item.target);
     if (targetExists && !opts.overwrite) {
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
     const backupPath = opts.overwrite
-      ? await backupExistingMigrationTarget(item.target, reportDir)
+      ? await backupMigrationItemTarget(item.target, reportDir)
       : undefined;
+    // Keep the recovery path when a subsequent copy fails.
+    result = {
+      ...item,
+      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
+    };
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await fs.cp(item.source, item.target, {
       recursive: true,
       force: Boolean(opts.overwrite),
       errorOnExist: !opts.overwrite,
     });
-    return {
-      ...item,
-      status: "migrated",
-      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
-    };
+    return { ...result, status: "migrated" };
   } catch (err) {
     if (isFileAlreadyExistsError(err)) {
-      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+      return markMigrationItemConflict(result, MIGRATION_REASON_TARGET_EXISTS);
     }
-    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+    return markMigrationItemError(result, err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -343,9 +346,16 @@ export async function copyMemoryMigrationFileItem(
     const workspaceDir = path.resolve(opts.workspaceDir);
     relativeTarget = path.relative(workspaceDir, path.resolve(item.target));
     safeRoot = await openMemoryMigrationRoot(workspaceDir);
-    const { buffer: sourceBuffer } = await readRegularFile({
-      filePath: item.source,
+    // A hardlink inside a source tree can alias sensitive bytes outside that tree.
+    const sourceRoot = await openFsSafeRoot(path.dirname(item.source), {
+      hardlinks: "reject",
       maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+      symlinks: "reject",
+    });
+    const { buffer: sourceBuffer } = await sourceRoot.read(path.basename(item.source), {
+      hardlinks: "reject",
+      maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+      symlinks: "reject",
     });
     assertMemoryMigrationSourceRevision(item, sourceBuffer);
     const replaceExisting = opts.overwrite === true && (await safeRoot.exists(relativeTarget));

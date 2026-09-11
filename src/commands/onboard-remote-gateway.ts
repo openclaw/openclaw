@@ -1,28 +1,39 @@
 // Remote-Gateway onboarding adapters keep inference detection and activation on the Gateway host.
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
-  CrestodianChatResult,
-  CrestodianSetupActivateResult,
-  CrestodianSetupDetectResult,
-  CrestodianSetupVerifyResult,
+  SystemAgentChatResult,
+  SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyResult,
+  WizardNextResult,
+  WizardStartResult,
+  WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+  resolveDeviceIdentityForGatewayCall,
+  type CallGatewayCliOptions,
+} from "../gateway/call.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type {
   ActivateSetupInferenceParams,
   ActivateSetupInferenceResult,
   SetupInferenceDetection,
-  SetupInferenceFailureStatus,
-} from "../crestodian/setup-inference.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { WizardCancelledError } from "../wizard/prompts.js";
+} from "../system-agent/setup-inference.js";
+import { t } from "../wizard/i18n/index.js";
+import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
-const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 20_000;
+const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 const GATEWAY_SETUP_VERIFY_TIMEOUT_MS = 30_000;
-const GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS = 190_000;
+const GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
+const GATEWAY_RESTART_WAIT_TIMEOUT_MS = 45_000;
+const GATEWAY_RESTART_IDENTITY_ERROR =
+  "Inference settings were saved, but the Gateway did not provide a boot identity. Update and restart the remote Gateway, then run onboarding again.";
 
 type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 
@@ -41,13 +52,16 @@ type RemoteGatewayInferenceOnboardingDeps = {
   runGuidedOnboarding?: typeof import("./onboard-guided.js").runGuidedOnboarding;
 };
 
-function toSetupInferenceDetection(result: CrestodianSetupDetectResult): SetupInferenceDetection {
+function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
     candidates: result.candidates.map((candidate) => ({
       kind: candidate.kind,
+      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
+      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
+      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
@@ -55,61 +69,97 @@ function toSetupInferenceDetection(result: CrestodianSetupDetectResult): SetupIn
     })),
     manualProviders: result.manualProviders.map((provider) => ({
       id: provider.id,
+      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
+      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
+      ...(provider.website !== undefined ? { website: provider.website } : {}),
     })),
     authOptions: (result.authOptions ?? []).map((option) =>
       Object.assign(
         {
           id: option.id,
+          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
           label: option.label,
           kind: option.kind,
           featured: option.featured,
         },
         option.hint !== undefined ? { hint: option.hint } : {},
         option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
+        option.icon !== undefined ? { icon: option.icon } : {},
+        option.website !== undefined ? { website: option.website } : {},
       ),
     ),
+    ...(result.prepareOptions !== undefined
+      ? {
+          prepareOptions: result.prepareOptions.map((option) =>
+            Object.assign(
+              {
+                id: option.id,
+                label: option.label,
+              },
+              option.brandId !== undefined ? { brandId: option.brandId } : {},
+              option.hint !== undefined ? { hint: option.hint } : {},
+              option.icon !== undefined ? { icon: option.icon } : {},
+              option.website !== undefined ? { website: option.website } : {},
+            ),
+          ),
+        }
+      : {}),
+    recommendedInstalls: result.recommendedInstalls ?? [],
+    unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
+      id: candidate.id,
+      label: candidate.label,
+      detail: candidate.detail,
+      reason: candidate.reason,
+    })),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
     setupComplete: result.setupComplete,
   };
 }
 
-function isSetupInferenceFailureStatus(value: unknown): value is SetupInferenceFailureStatus {
-  return (
-    value === "auth" ||
-    value === "rate_limit" ||
-    value === "billing" ||
-    value === "timeout" ||
-    value === "format" ||
-    value === "unavailable" ||
-    value === "unknown"
-  );
-}
-
-function toSetupInferenceActivationResult(
-  result: CrestodianSetupActivateResult,
-): ActivateSetupInferenceResult {
-  if (result.ok) {
-    if (
-      !result.modelRef?.trim() ||
-      typeof result.latencyMs !== "number" ||
-      !Array.isArray(result.lines)
-    ) {
-      throw new Error("Gateway returned an invalid successful inference activation result.");
-    }
-    return {
-      ok: true,
-      modelRef: result.modelRef,
-      latencyMs: result.latencyMs,
-      lines: result.lines,
-    };
+async function answerSetupStep(step: WizardStep, prompter: WizardPrompter): Promise<unknown> {
+  const message = step.message ?? step.title ?? "Continue";
+  if (step.externalUrl) {
+    await prompter.note(step.externalUrl, "Open this URL to continue");
   }
-  if (!isSetupInferenceFailureStatus(result.status) || !result.error?.trim()) {
-    throw new Error("Gateway returned an invalid failed inference activation result.");
+  switch (step.type) {
+    case "note":
+      await prompter.note(message, step.title);
+      return undefined;
+    case "text":
+      return await prompter.text({
+        message,
+        sensitive: step.sensitive,
+        placeholder: step.placeholder,
+        initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
+      });
+    case "select":
+      return await prompter.select({
+        message,
+        options: step.options ?? [],
+        initialValue: step.initialValue,
+      });
+    case "multiselect":
+      return await prompter.multiselect({
+        message,
+        options: step.options ?? [],
+        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
+      });
+    case "confirm":
+    case "action":
+      if (step.executor === "gateway") {
+        return undefined;
+      }
+      return await prompter.confirm({
+        message,
+        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
+      });
+    case "progress":
+      break;
   }
-  return { ok: false, status: result.status, error: result.error };
+  return undefined;
 }
 
 function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number {
@@ -132,11 +182,11 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
   };
 }
 
-function assertVerifiedActivation(params: {
-  activation: Extract<ActivateSetupInferenceResult, { ok: true }>;
+function toVerifiedActivationResult(params: {
+  activation: NonNullable<WizardNextResult["modelActivation"]>;
   requestedModelRef?: string;
-  verification: CrestodianSetupVerifyResult;
-}): void {
+  verification: SystemAgentSetupVerifyResult;
+}): ActivateSetupInferenceResult {
   if (
     params.requestedModelRef &&
     params.activation.modelRef.trim() !== params.requestedModelRef.trim()
@@ -153,11 +203,12 @@ function assertVerifiedActivation(params: {
       `Gateway verified ${params.verification.modelRef}, not the activated ${params.activation.modelRef}.`,
     );
   }
+  return { ok: true, ...params.activation, latencyMs: params.verification.latencyMs, lines: [] };
 }
 
 /**
  * Configure missing inference on the selected remote Gateway, then let that
- * Gateway's Crestodian finish setup before handing off to its normal TUI.
+ * Gateway's OpenClaw finish setup before handing off to its normal TUI.
  * The local config is routing input only; every setup mutation runs through
  * Gateway RPC.
  */
@@ -173,12 +224,14 @@ export async function runRemoteGatewayInferenceOnboarding(
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
 
-  const request = async <T>(params: {
-    method: string;
-    payload: unknown;
-    timeoutMs: number;
-  }): Promise<T> =>
+  const request = async <T>(
+    params: Pick<
+      CallGatewayCliOptions,
+      "method" | "params" | "onHelloOk" | "signal" | "deviceIdentity"
+    > & { timeoutMs: number },
+  ): Promise<T> =>
     await callGateway<T>({
+      ...params,
       config: boundConfig,
       // Authenticated calls can pin the URL directly. Auth-free loopback
       // Gateways use the equivalently pinned config target because URL
@@ -188,15 +241,12 @@ export async function runRemoteGatewayInferenceOnboarding(
       ...(target.password ? { password: target.password } : {}),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
       ignoreEnvUrlOverride: true,
-      method: params.method,
-      params: params.payload,
-      timeoutMs: params.timeoutMs,
     });
 
   const detect = async (): Promise<SetupInferenceDetection> => {
-    const result = await request<CrestodianSetupDetectResult>({
-      method: "crestodian.setup.detect",
-      payload: {},
+    const result = await request<SystemAgentSetupDetectResult>({
+      method: "openclaw.setup.detect",
+      params: {},
       timeoutMs: GATEWAY_SETUP_DETECT_TIMEOUT_MS,
     });
     const detection = toSetupInferenceDetection(result);
@@ -207,76 +257,200 @@ export async function runRemoteGatewayInferenceOnboarding(
   const activate = async (
     params: ActivateSetupInferenceParams,
   ): Promise<ActivateSetupInferenceResult> => {
-    const result = await request<CrestodianSetupActivateResult>({
-      method: "crestodian.setup.activate",
-      payload: {
-        kind: params.kind,
-        ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
-        ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
-        ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
-        ...(gatewayWorkspace ? { workspace: gatewayWorkspace } : {}),
-      },
-      timeoutMs: activationTimeoutMs(params.kind),
-    });
-    const activation = toSetupInferenceActivationResult(result);
-    if (!activation.ok) {
-      return activation;
+    let activationBootId: string | undefined;
+    const sessionId = randomUUID();
+    let started = false;
+    let terminal = false;
+    const prompter: WizardPrompter =
+      params.prompter ??
+      (await (deps.createPrompter?.() ??
+        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
+          createClackPrompter(),
+        )));
+    let result: WizardNextResult;
+    try {
+      result = await request<WizardStartResult>({
+        method: "openclaw.setup.activate.start",
+        params: {
+          sessionId,
+          kind: params.kind,
+          ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
+          ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
+          ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
+          ...(gatewayWorkspace ? { workspace: gatewayWorkspace } : {}),
+        },
+        timeoutMs: activationTimeoutMs(params.kind),
+        onHelloOk: (hello) => {
+          activationBootId = hello.server.bootId?.trim();
+        },
+      });
+      started = true;
+      terminal = result.done;
+      while (!result.done) {
+        params.signal?.throwIfAborted();
+        const step = result.step;
+        let answer: { stepId: string; value: unknown } | undefined;
+        if (step) {
+          if (result.error) {
+            await prompter.note(result.error);
+          }
+          const value = await answerSetupStep(step, prompter);
+          if (step.type !== "progress" && step.executor !== "gateway") {
+            answer = { stepId: step.id, value };
+          }
+        }
+        result = await request<WizardNextResult>({
+          method: "wizard.next",
+          params: { sessionId, ...(answer ? { answer } : {}) },
+          signal: params.signal,
+          timeoutMs: activationTimeoutMs(params.kind),
+        });
+        terminal = result.done;
+      }
+    } catch (error) {
+      if (!terminal && (started || !isGatewayClientRequestError(error))) {
+        try {
+          await request({
+            method: "wizard.cancel",
+            params: { sessionId, closeInput: true },
+            timeoutMs: activationTimeoutMs(params.kind),
+          });
+        } catch (cancelError) {
+          throw new AggregateError(
+            [error, cancelError],
+            "Remote activation failed and its setup session could not be closed.",
+            { cause: cancelError },
+          );
+        }
+      }
+      throw error;
     }
-    const verification = await request<CrestodianSetupVerifyResult>({
-      method: "crestodian.setup.verify",
-      payload: {},
-      timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
-    });
-    assertVerifiedActivation({
-      activation,
-      verification,
-      ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
-    });
-    return activation;
+    if (result.status === "cancelled") {
+      throw new WizardCancelledError(result.error);
+    }
+    if (result.activationRejection && result.error) {
+      return { ok: false, status: result.activationRejection.status, error: result.error };
+    }
+    const activation = result.modelActivation;
+    if (!activation) {
+      throw new Error(result.error ?? "Gateway setup ended without a verified activation.");
+    }
+    const restartBootId = activation.gatewayRestartRequired ? activationBootId : undefined;
+    if (activation.gatewayRestartRequired && !restartBootId) {
+      throw new Error(GATEWAY_RESTART_IDENTITY_ERROR);
+    }
+    const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
+    let retryDelayMs = 250;
+    for (;;) {
+      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      if (restartBootId && remainingBeforeAttemptMs <= 0) {
+        throw new Error(
+          "Inference settings were saved, but the Gateway did not finish restarting and verifying inference. Check the remote Gateway, then run onboarding again.",
+        );
+      }
+      const restartWait = new AbortController();
+      let requestedDelay = retryDelayMs;
+      try {
+        const verification = await request<SystemAgentSetupVerifyResult>({
+          method: "openclaw.setup.verify",
+          params: {},
+          timeoutMs: restartBootId
+            ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
+            : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
+          signal: restartWait.signal,
+          onHelloOk: (hello) => {
+            if (!restartBootId) {
+              return;
+            }
+            const bootId = hello.server.bootId?.trim();
+            // Verification runs inference. Cancel at hello so an old healthy
+            // listener cannot bill another completion or satisfy the restart.
+            if (!bootId || bootId === restartBootId) {
+              restartWait.abort(bootId ? "unchanged-boot" : "missing-boot");
+            }
+          },
+        });
+        if (!restartBootId || verification.ok || verification.status !== "unavailable") {
+          return toVerifiedActivationResult({
+            activation,
+            verification,
+            ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
+          });
+        }
+      } catch (error) {
+        if (restartWait.signal.reason === "missing-boot") {
+          throw new Error(GATEWAY_RESTART_IDENTITY_ERROR, { cause: error });
+        }
+        const retryable =
+          restartBootId &&
+          (restartWait.signal.reason === "unchanged-boot" ||
+            isGatewayTransportError(error) ||
+            (isGatewayClientRequestError(error) && error.retryable));
+        if (!retryable) {
+          throw error;
+        }
+        if (isGatewayClientRequestError(error)) {
+          requestedDelay = error.retryAfterMs ?? retryDelayMs;
+        }
+      }
+      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - Date.now())));
+      retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
+    }
   };
 
   await runGuidedOnboarding({}, runtime, {
     detect,
     activate,
+    // Setup applies on the remote gateway through its chat; the local
+    // custodian flow (question zero, local setup apply, local hatch) is wrong here.
+    handoffMode: "chat",
+    runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
-    runCrestodianChat: async () => {
+    runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??
         import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
           createClackPrompter(),
         ));
-      await prompter.intro("Crestodian");
+      await prompter.intro("OpenClaw");
+      // One-shot RPCs have different connections. Preserve a signed device
+      // owner across chat replies even when loopback shared auth needs no device.
+      const deviceIdentity = resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
-      let reply = await request<CrestodianChatResult>({
-        method: "crestodian.chat",
-        payload: { sessionId, welcomeVariant: "onboarding" },
-        timeoutMs: GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS,
+      let reply = await request<SystemAgentChatResult>({
+        method: "openclaw.chat",
+        deviceIdentity,
+        params: { sessionId, welcomeVariant: "onboarding" },
+        timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
 
+      let agentDraft: SystemAgentChatResult["agentDraft"];
       try {
         for (;;) {
-          await prompter.note(reply.reply, "Crestodian");
+          await prompter.note(reply.reply, "OpenClaw");
           if (reply.action === "exit") {
-            await prompter.outro("Crestodian setup finished.");
+            await prompter.outro("OpenClaw setup finished.");
             return;
           }
           if (reply.action === "open-agent") {
+            agentDraft = reply.agentDraft;
             await prompter.outro("Opening your agent…");
             break;
           }
           const message = await prompter.text({
-            message: "Reply to Crestodian",
+            message: "Reply to OpenClaw",
             ...(reply.sensitive ? { sensitive: true } : {}),
             validate: (value) => (value.trim() ? undefined : "Required"),
           });
-          reply = await request<CrestodianChatResult>({
-            method: "crestodian.chat",
-            payload: { sessionId, message },
-            timeoutMs: GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS,
+          reply = await request<SystemAgentChatResult>({
+            method: "openclaw.chat",
+            deviceIdentity,
+            params: { sessionId, message },
+            timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
           });
         }
       } catch (error) {
         if (error instanceof WizardCancelledError) {
-          await prompter.outro("Crestodian setup paused.");
+          await prompter.outro("OpenClaw setup paused.");
           return;
         }
         throw error;
@@ -288,6 +462,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       await runTui({
         config: boundConfig,
         deliver: false,
+        ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
           ...(target.token ? { token: target.token } : {}),

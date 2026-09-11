@@ -7,7 +7,7 @@ import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
 } from "../agents/tool-fs-policy.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveDeliveryQueueMediaDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
@@ -29,7 +29,7 @@ function resolveCachedPreferredTmpDir(): string {
 }
 
 /** Builds the baseline local media root allowlist from state/config directories. */
-export function buildMediaLocalRoots(
+function buildMediaLocalRoots(
   stateDir: string,
   configDir: string,
   options: BuildMediaLocalRootsOptions = {},
@@ -42,6 +42,10 @@ export function buildMediaLocalRoots(
       preferredTmpDir,
       path.join(resolvedConfigDir, "media"),
       path.join(resolvedStateDir, "media"),
+      // Queue-owned copies of undelivered attachments. Recovery replays in a
+      // process that never saw the original source, so it must be able to read
+      // this root; only the spool dir is granted, never the state dir at large.
+      resolveDeliveryQueueMediaDir(resolvedStateDir),
       path.join(resolvedStateDir, "canvas"),
       path.join(resolvedStateDir, "workspace"),
       path.join(resolvedStateDir, "sandboxes"),
@@ -54,21 +58,38 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
-/** Adds the active agent workspace to the default media roots without exposing all agent state. */
+/**
+ * Adds exact agent/session workspaces without exposing shared agent or sandbox roots.
+ *
+ * Callers that need to send media from a sandbox must pass the authoritative active
+ * session workspace, not a path derived from the requested media source. Omitting that
+ * context intentionally denies sandbox files under workspace-only filesystem policy.
+ */
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
+  sessionWorkspaceDir?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
+  const stateDir = resolveStateDir();
+  const resolvedStateDir = path.resolve(stateDir);
+  const roots = buildMediaLocalRoots(stateDir, resolveConfigDir()).filter((root) => {
+    const resolvedRoot = path.resolve(root);
+    if (resolvedRoot === path.join(resolvedStateDir, "sandboxes")) {
+      return false;
+    }
+    return !sessionWorkspaceDir || resolvedRoot !== path.join(resolvedStateDir, "workspace");
+  });
   const normalizedAgentId = normalizeOptionalString(agentId);
-  if (!normalizedAgentId) {
-    return roots;
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
+  const workspaceDir =
+    normalizeOptionalString(sessionWorkspaceDir) ??
+    (normalizedAgentId ? resolveAgentWorkspaceDir(cfg, normalizedAgentId) : undefined);
   if (!workspaceDir) {
     return roots;
   }
   const normalizedWorkspaceDir = path.resolve(workspaceDir);
+  if (normalizedWorkspaceDir === path.join(resolvedStateDir, "sandboxes")) {
+    return roots;
+  }
   if (!roots.includes(normalizedWorkspaceDir)) {
     roots.push(normalizedWorkspaceDir);
   }
@@ -98,13 +119,21 @@ export function appendLocalMediaParentRoots(
   return appended;
 }
 
-/** Resolves outbound media roots, expanding for local sources only when filesystem policy allows it. */
+/**
+ * Resolves outbound media roots, expanding for local sources only when filesystem policy allows it.
+ * Pass `sessionWorkspaceDir` from trusted session context to retain access to that exact sandbox.
+ */
 export function getAgentScopedMediaLocalRootsForSources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   mediaSources?: readonly string[];
+  sessionWorkspaceDir?: string;
 }): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const roots = getAgentScopedMediaLocalRoots(
+    params.cfg,
+    params.agentId,
+    params.sessionWorkspaceDir,
+  );
   if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
     return roots;
   }

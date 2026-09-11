@@ -1,6 +1,6 @@
 package ai.openclaw.app.voice
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -51,6 +51,32 @@ class TalkSpeakClientTest {
   }
 
   @Test
+  fun serializesParsedDirectiveWithStableBytesAndOmitsOnce() =
+    runTest {
+      var request: Triple<String, String, Long>? = null
+      val client =
+        TalkSpeakClient(
+          requestDetailed = { method, paramsJson, timeoutMs ->
+            request = Triple(method, paramsJson, timeoutMs)
+            GatewaySession.RpcResult(ok = false, payloadJson = null, error = null)
+          },
+        )
+      val parsed =
+        TalkDirectiveParser.parse(
+          """
+          {"voice":"v","model":"m","output_format":"pcm","speed":1.25,"rate":0,"stability":0.0,"similarity":0.4,"style":0.0,"speaker_boost":false,"seed":42,"normalize":"auto","lang":"en","latency":0,"once":true}
+          Say "hello".
+          """.trimIndent(),
+        )
+
+      client.synthesize(text = parsed.stripped, directive = parsed.directive)
+
+      val expectedJson =
+        """{"text":"Say \"hello\".","voiceId":"v","modelId":"m","outputFormat":"pcm","speed":1.25,"rateWpm":0,"stability":0.0,"similarity":0.4,"style":0.0,"speakerBoost":false,"seed":42,"normalize":"auto","language":"en","latencyTier":0}"""
+      assertEquals(Triple("talk.speak", expectedJson, 45_000L), request)
+    }
+
+  @Test
   fun fallsBackOnlyForUnavailableReasons() =
     runTest {
       val client =
@@ -64,7 +90,7 @@ class TalkSpeakClientTest {
                   code = "UNAVAILABLE",
                   message = "talk unavailable",
                   details =
-                    GatewayConnectErrorDetails(
+                    GatewayErrorDetails(
                       code = null,
                       canRetryWithDeviceToken = false,
                       recommendedNextStep = null,
@@ -93,7 +119,7 @@ class TalkSpeakClientTest {
                   code = "UNAVAILABLE",
                   message = "provider failed",
                   details =
-                    GatewayConnectErrorDetails(
+                    GatewayErrorDetails(
                       code = null,
                       canRetryWithDeviceToken = false,
                       recommendedNextStep = null,

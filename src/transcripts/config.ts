@@ -1,4 +1,3 @@
-// Resolves transcript source configuration from OpenClaw config.
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
 /**
@@ -10,6 +9,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
 /** Raw auto-start transcript source entry from config. */
 type TranscriptsAutoStartConfig = {
   providerId: string;
+  whenOccupied?: boolean;
   sessionId?: string;
   title?: string;
   accountId?: string;
@@ -21,6 +21,7 @@ type TranscriptsAutoStartConfig = {
 /** Normalized auto-start source entry consumed by transcript runtime code. */
 export type ResolvedTranscriptsAutoStartConfig = {
   providerId: string;
+  whenOccupied: boolean;
   sessionId?: string;
   title?: string;
   accountId?: string;
@@ -32,7 +33,6 @@ export type ResolvedTranscriptsAutoStartConfig = {
 /** Raw transcripts config block. */
 export type TranscriptsConfig = {
   enabled?: boolean;
-  maxUtterances?: number;
   autoStart?: TranscriptsAutoStartConfig[];
 };
 
@@ -42,6 +42,8 @@ type ResolvedTranscriptsConfig = {
   maxUtterances: number;
   autoStart: ResolvedTranscriptsAutoStartConfig[];
 };
+
+const DEFAULT_TRANSCRIPTS_MAX_UTTERANCES = 2_000;
 
 function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
   if (!Array.isArray(raw)) {
@@ -56,7 +58,8 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
       }
       return {
         providerId,
-        sessionId: readString(config.sessionId),
+        whenOccupied: config.whenOccupied === true,
+        sessionId: config.whenOccupied === true ? undefined : readString(config.sessionId),
         title: readString(config.title),
         accountId: readString(config.accountId),
         guildId: readString(config.guildId),
@@ -70,13 +73,9 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
 /** Normalize raw transcripts config into runtime settings. */
 export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
   const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const maxUtterances =
-    typeof config.maxUtterances === "number" && Number.isFinite(config.maxUtterances)
-      ? Math.max(1, Math.min(10_000, Math.floor(config.maxUtterances)))
-      : 2_000;
   return {
-    enabled: config.enabled === true,
-    maxUtterances,
+    enabled: config.enabled !== false,
+    maxUtterances: DEFAULT_TRANSCRIPTS_MAX_UTTERANCES,
     autoStart: resolveAutoStart(config.autoStart),
   };
 }

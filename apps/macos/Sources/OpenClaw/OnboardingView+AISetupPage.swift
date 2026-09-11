@@ -1,14 +1,26 @@
 import SwiftUI
 
+struct GatewayAuthenticationReturnDecision: Equatable {
+    let connectionPage: Int
+    let authIssue: RemoteGatewayAuthIssue
+    let probeState: RemoteOnboardingProbeState
+    let showRemoteChoices: Bool
+    let showAdvancedConnection: Bool
+}
+
 extension OnboardingView {
-    /// Structured AI setup: detect what's already on this machine, test the
-    /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. Crestodian becomes available only after inference
-    /// has completed a live round-trip.
+    /// Detect available AI access, then wait for the user to select a connection.
+    /// OpenClaw becomes available after that choice completes a live round-trip.
     func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
-            Text("Connect your AI")
-                .font(.largeTitle.weight(.semibold))
+            Group {
+                if self.aiSetup.configuredGatewayAuthIssue != nil {
+                    Text("Authenticate with your Gateway")
+                } else {
+                    Text("Connect your AI")
+                }
+            }
+            .font(.largeTitle.weight(.semibold))
             Text(self.aiSetupSubtitle)
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -16,16 +28,10 @@ extension OnboardingView {
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                OnboardingAISetupView(
-                    model: self.aiSetup,
-                    crestodianChat: self.crestodianState.chat,
-                    showCrestodianChat: self.$crestodianState.isPresented,
-                    retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
-                    .padding(.vertical, 4)
-                    .padding(.trailing, 12)
-            }
-            .scrollIndicators(.automatic)
+            OnboardingAISetupView(
+                model: self.aiSetup,
+                returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
+                retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe(intent: $0) })
         }
         .padding(.horizontal, 28)
         .padding(.top, 48)
@@ -33,8 +39,11 @@ extension OnboardingView {
     }
 
     private var aiSetupSubtitle: String {
-        if aiSetup.connected {
-            return "All good — your assistant has a working AI connection."
+        if self.aiSetup.configuredGatewayAuthIssue != nil {
+            return "Finish the remote Gateway connection before continuing."
+        }
+        if state.connectionMode == .remote {
+            return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }
         return "OpenClaw needs an AI account to think. " +
             "It reuses what you already have — nothing new to sign up for if " +
@@ -43,36 +52,39 @@ extension OnboardingView {
 
     func maybeStartAISetup(for pageIndex: Int) {
         guard pageIndex == aiPageIndex else { return }
-        // Local mode reaches this page only after the CLI/gateway install page,
-        // so the gateway is up before the first RPC.
-        guard state.connectionMode != .local || cliInstalled else { return }
-        self.prepareCrestodianHandoff()
+        // Only app-managed local installs need CLI activation; external attachments
+        // proceed through the existing route-bound Gateway probe.
+        guard !requiresLocalCLI || cliInstalled else { return }
+        self.prepareSystemAgentHandoff()
         // A selected/reconnected Gateway may already have a configured default
         // agent. Check that route before setup tries to author inference.
-        probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+        probeConfiguredGatewayForDashboard(intent: .startSetup)
     }
 
-    func prepareCrestodianHandoff() {
-        crestodianState.chat.onAgentHandoff = { [self] in self.finish() }
+    func prepareSystemAgentHandoff() {
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
-                self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+                guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
+                self.probeConfiguredGatewayForDashboard(intent: .resumePending)
             }
         }
         if aiSetup.onConnected == nil {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.crestodianState.presentAndStart()
+                self.finish()
             }
         }
     }
 
     @discardableResult
-    func resumePendingCrestodian(modelRef: String) -> Task<Void, Never> {
-        self.prepareCrestodianHandoff()
+    func resumePendingSystemAgent(
+        modelRef: String,
+        intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
+    {
+        self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         aiSetup.resumeConfiguredInference(modelRef: modelRef)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
@@ -80,6 +92,10 @@ extension OnboardingView {
         }
         return Task {
             let outcome = await self.aiSetup.verifyPendingConfiguredInference()
+            if case let .freshSetupAllowed(context) = outcome {
+                if intent != .inspectOnly { self.aiSetup.resumeSetup(ifCurrent: context, intent: intent) }
+                return
+            }
             // The outcome belongs to the exact attempt and route captured by
             // verification. Never infer success from newer mutable UI state.
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
@@ -89,14 +105,12 @@ extension OnboardingView {
                   !Task.isCancelled
             else { return }
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
-            // `onConnected` already owns presentation. Await that exact start
-            // task without starting a replacement route's chat after suspension.
-            await self.crestodianState.waitForStartIfNeeded()
+            self.finish()
         }
     }
 
     func waitForPendingInferenceSetup() {
-        self.prepareCrestodianHandoff()
+        self.prepareSystemAgentHandoff()
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
@@ -104,22 +118,57 @@ extension OnboardingView {
     }
 
     @discardableResult
-    func retryConfiguredGatewayProbe() -> Task<Void, Never>? {
+    func retryConfiguredGatewayProbe(intent: OnboardingAISetupModel.SetupIntent = .startSetup) -> Task<Void, Never>? {
+        // The action carries intent; expiry or a changed view state must never
+        // turn Check again into a new activation. Timer/reconnect callers own auto-resume.
         aiSetup.beginConfiguredGatewayProbeRetry()
         // The retry button itself proves the onboarding view is visible even
         // before SwiftUI commits an @State visibility write.
         return probeConfiguredGatewayForDashboard(
-            startAISetupWhenMissing: true,
+            intent: intent,
             knownVisible: true,
             knownAISetupPage: true)
     }
 
+    func returnToGatewayAuthentication() {
+        guard let decision = Self.gatewayAuthenticationReturnDecision(
+            connectionMode: state.connectionMode,
+            authIssue: aiSetup.configuredGatewayAuthIssue,
+            pageOrder: pageOrder,
+            connectionPageIndex: connectionPageIndex,
+            probeInput: remoteGatewayProbeInput)
+        else { return }
+        remoteAuthIssue = decision.authIssue
+        remoteProbeState = decision.probeState
+        showRemoteChoices = decision.showRemoteChoices
+        showAdvancedConnection = decision.showAdvancedConnection
+        withAnimation { currentPage = decision.connectionPage }
+    }
+
+    static func gatewayAuthenticationReturnDecision(
+        connectionMode: AppState.ConnectionMode,
+        authIssue: RemoteGatewayAuthIssue?,
+        pageOrder: [Int],
+        connectionPageIndex: Int,
+        probeInput: RemoteGatewayProbeInput) -> GatewayAuthenticationReturnDecision?
+    {
+        guard connectionMode == .remote,
+              let authIssue,
+              let connectionPage = pageOrder.firstIndex(of: connectionPageIndex)
+        else { return nil }
+        return GatewayAuthenticationReturnDecision(
+            connectionPage: connectionPage,
+            authIssue: authIssue,
+            probeState: .failed(probeInput, authIssue.statusMessage),
+            showRemoteChoices: true,
+            showAdvancedConnection: true)
+    }
+
     func resumePendingInferenceSetup() {
-        self.prepareCrestodianHandoff()
+        self.prepareSystemAgentHandoff()
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
-        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        aiSetup.startIfNeeded()
+        aiSetup.resumeSetup()
     }
 }

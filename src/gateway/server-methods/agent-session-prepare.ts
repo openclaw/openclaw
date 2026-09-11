@@ -1,38 +1,30 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
-  evaluateSessionFreshness,
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveSessionWorkStartError,
-  resolveTerminalMainSessionTranscriptRegistryCheck,
   type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
-import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+} from "../agent-turn/agent-handler-helpers.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
+import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedAgentSession = {
@@ -64,6 +56,7 @@ type PreparedAgentSession = {
 };
 
 export function prepareAgentSession(params: {
+  cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
   expectedExistingSessionId?: string;
@@ -76,9 +69,19 @@ export function prepareAgentSession(params: {
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
 }): PreparedAgentSession | undefined {
+  const requestedSessionAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    params.agentId,
+  );
+  if (!requestedSessionAgent.ok) {
+    params.respond(false, undefined, requestedSessionAgent.error);
+    return undefined;
+  }
+  const requestedAgentId = requestedSessionAgent.agentId;
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
     params.requestedSessionKey,
-    { ...(params.agentId ? { agentId: params.agentId } : {}), clone: false },
+    { agentId: requestedAgentId, clone: false },
   );
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
     params.respond(
@@ -196,41 +199,16 @@ export function prepareAgentSession(params: {
     return undefined;
   }
 
-  const canonicalSessionAgentId =
-    canonicalKey === "global"
-      ? (params.agentId ?? resolveDefaultAgentId(cfg))
-      : resolveAgentIdFromSessionKey(canonicalKey);
+  const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
   const now = Date.now();
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg: cfg.session,
     resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
     resetOverride: resolveChannelResetConfig({
       sessionCfg: cfg.session,
-      channel: entry?.lastChannel ?? entry?.channel ?? params.recipientChannel,
+      channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const lifecycleTimestamps = entry
-    ? resolveSessionLifecycleTimestamps({
-        entry,
-        storePath,
-        agentId: canonicalSessionAgentId,
-      })
-    : undefined;
-  const skipImplicitExpiry =
-    params.expectedExistingSessionId !== undefined ||
-    restoredCronContinuationIdentity !== undefined ||
-    entry?.modelSelectionLocked === true ||
-    (resetPolicy.configured !== true && hasProviderOwnedSession(entry));
-  const freshness = entry
-    ? skipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: entry.updatedAt,
-          ...lifecycleTimestamps,
-          now,
-          policy: resetPolicy,
-        })
-    : undefined;
   const visibleRequest =
     effectiveBootstrapContextRunKind !== "cron" &&
     effectiveBootstrapContextRunKind !== "heartbeat" &&
@@ -239,31 +217,16 @@ export function prepareAgentSession(params: {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
     }
-    const sqliteMarker = parseSqliteSessionFileMarker(candidateEntry.sessionFile);
-    if (sqliteMarker) {
-      if (sqliteMarker.sessionId !== candidateEntry.sessionId) {
-        return true;
-      }
-      try {
-        return (
-          readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            sessionKey: canonicalKey,
-            storePath: sqliteMarker.storePath,
-            sessionEntry: candidateEntry,
-          }).eventCount === 0
-        );
-      } catch {
-        return true;
-      }
-    }
     try {
-      const options = resolveSessionFilePathOptions({
-        storePath,
-        agentId: canonicalSessionAgentId,
-      });
-      return !existsSync(resolveSessionFilePath(candidateEntry.sessionId, candidateEntry, options));
+      return (
+        readTranscriptStatsSync({
+          agentId: canonicalSessionAgentId,
+          sessionId: candidateEntry.sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+          sessionEntry: candidateEntry,
+        }).eventCount === 0
+      );
     } catch {
       return true;
     }
@@ -271,49 +234,22 @@ export function prepareAgentSession(params: {
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   const isSystemGatewayRun =
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
-  const requestedSessionMatchesEntry = Boolean(
-    params.requestedSessionId && entry?.sessionId?.trim() === params.requestedSessionId,
-  );
-  const terminalMainTranscriptCheck =
-    isSystemGatewayRun || requestedSessionMatchesEntry
-      ? undefined
-      : resolveTerminalMainSessionTranscriptRegistryCheck({
-          entry,
-          sessionScope: cfg.session?.scope,
-          sessionKey: canonicalKey,
-          agentId: canonicalSessionAgentId,
-          mainKey: cfg.session?.mainKey,
-          storePath,
-        });
-  const terminalMainTranscriptNewerThanRegistry = terminalMainTranscriptCheck
-    ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
-        entry,
-        sessionScope: cfg.session?.scope,
-        sessionKey: canonicalKey,
-        agentId: canonicalSessionAgentId,
-        mainKey: cfg.session?.mainKey,
-        storePath,
-      })
-    : false;
-  const recoverableTerminalSession =
-    Boolean(entry?.sessionId) &&
-    visibleRequest &&
-    isRecoverableTerminalSessionStatus(entry?.status);
-  const canReuseSession =
-    Boolean(entry?.sessionId) &&
-    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
-    !failedSessionTranscriptMissing(entry) &&
-    !terminalMainTranscriptNewerThanRegistry;
-  const usableRequestedSessionId =
-    params.requestedSessionId && (!entry?.sessionId || canReuseSession)
-      ? params.requestedSessionId
-      : undefined;
-  const sessionId =
-    usableRequestedSessionId ?? (canReuseSession ? entry?.sessionId : undefined) ?? randomUUID();
-  const isNewSession =
-    !entry ||
-    (!canReuseSession && !usableRequestedSessionId) ||
-    Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
+  const reuse = evaluateAgentSessionReuse({
+    freshEntry: entry,
+    cfg,
+    sessionAgentId: canonicalSessionAgentId,
+    canonicalSessionKey: canonicalKey,
+    storePath,
+    expectedExistingSessionId: params.expectedExistingSessionId,
+    hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
+    resetPolicy,
+    now,
+    requestedSessionId: params.requestedSessionId,
+    isSystemGatewayRun,
+    visibleRequest,
+    failedSessionTranscriptMissing,
+  });
+  const sessionId = reuse.sessionId ?? randomUUID();
   return {
     cfg,
     storePath,
@@ -324,13 +260,13 @@ export function prepareAgentSession(params: {
     canonicalSessionAgentId,
     resetPolicy,
     now,
-    freshness,
+    freshness: reuse.freshness,
     visibleRequest,
     mainSessionKey,
     isSystemGatewayRun,
-    usableRequestedSessionId,
+    usableRequestedSessionId: reuse.usableRequestedSessionId,
     sessionId,
-    isNewSession,
+    isNewSession: reuse.isNewSession,
     rotatedSessionId: Boolean(entry?.sessionId && entry.sessionId !== sessionId),
     touchInteraction: visibleRequest,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,

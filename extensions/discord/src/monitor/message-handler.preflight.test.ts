@@ -1,5 +1,8 @@
 // Discord tests cover message handler.preflight plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as discordMessagesApi from "../internal/api.messages.js";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
@@ -12,9 +15,20 @@ const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
 vi.mock("../pluralkit.js", () => ({
   fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
 }));
-vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 vi.mock("./dm-command-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dm-command-auth.js")>()),
   resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
@@ -22,19 +36,15 @@ vi.mock("./dm-command-auth.js", async (importOriginal) => ({
 vi.mock("./dm-command-decision.js", () => ({
   handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return {
-    ...actual,
-    saveRemoteMedia: (...args: unknown[]) => saveRemoteMediaMock(...args),
-  };
-});
+import {
+  isRecentOutboundMessageIdentity,
+  recordOutboundMessageIdentity,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
@@ -45,11 +55,13 @@ import {
   type DiscordConfig,
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
 let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
+let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
 beforeAll(async () => {
   ({
@@ -57,8 +69,8 @@ beforeAll(async () => {
     resolvePreflightMentionRequirement,
     shouldIgnoreBoundThreadWebhookMessage,
   } = await import("./message-handler.preflight.js"));
-  ({ testing: threadBindingTesting, createThreadBindingManager } =
-    await import("./thread-bindings.js"));
+  ({ createThreadBindingManager } = await import("./thread-bindings.js"));
+  ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
 });
 
 beforeEach(() => {
@@ -72,6 +84,7 @@ beforeEach(() => {
       contentType: options.fallbackContentType,
     }),
   );
+  vi.mocked(saveRemoteMedia).mockImplementation((...args) => saveRemoteMediaMock(...args));
 });
 
 function createThreadBinding(
@@ -223,6 +236,7 @@ async function runGuildPreflight(params: {
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
   abortSignal?: AbortSignal;
+  botUserId?: string;
 }) {
   return preflightDiscordMessage({
     ...createPreflightArgs({
@@ -239,6 +253,7 @@ async function runGuildPreflight(params: {
     }),
     guildEntries: params.guildEntries,
     abortSignal: params.abortSignal,
+    botUserId: params.botUserId ?? "openclaw-bot",
   });
 }
 
@@ -282,14 +297,18 @@ async function runUnresolvedDmPreflight(params: {
 }
 
 async function runMentionOnlyBotPreflight(params: {
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   channelId: string;
   guildId: string;
   message: import("../internal/discord.js").Message;
+  botUserId?: string;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,
     guildId: params.guildId,
     message: params.message,
+    cfg: params.cfg,
+    botUserId: params.botUserId,
     discordConfig: {
       allowBots: "mentions",
     } as DiscordConfig,
@@ -363,6 +382,62 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("carries the host channel context builder into the preflight context", async () => {
+    const buildContext = vi.fn();
+    const channelId = "dm-channel-host-builder";
+    const message = createDiscordMessage({
+      id: "m-host-builder",
+      channelId,
+      content: "hello",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { dmPolicy: "open" } as DiscordConfig,
+        data: {
+          channel_id: channelId,
+          author: message.author,
+          message,
+        } as DiscordMessageEvent,
+        client: createDmClient(channelId),
+      }),
+      buildContext,
+    });
+
+    expect(expectPreflightResult(result).buildContext).toBe(buildContext);
+  });
+
+  it("admits embed-only messages when their text appears after a textless first embed", async () => {
+    const channelId = "dm-channel-multiple-embeds";
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-multiple-embeds",
+        channelId,
+        content: "",
+        author: { id: "user-1", bot: false, username: "alice" },
+      }),
+      {
+        embeds: [
+          { image: { url: "https://cdn.discordapp.com/image.png" } },
+          { title: "Alert", description: "Details" },
+          { description: "Follow-up" },
+        ],
+      },
+    );
+
+    const result = await runDmPreflight({
+      channelId,
+      message,
+      discordConfig: { dmPolicy: "open" } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("Alert\nDetails\nFollow-up");
+    expect(preflight.messageText).toBe("Alert\nDetails\nFollow-up");
+  });
+
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -374,7 +449,7 @@ describe("preflightDiscordMessage", () => {
       id: "m-system-1",
       channelId: threadId,
       content:
-        "⚙️ codex-acp session active (auto-unfocus in 24h). Messages here go directly to this session.",
+        "⚙️ codex-acp session active (idle expiry in 24h). Messages here go directly to this session.",
       author: {
         id: "relay-bot-1",
         bot: true,
@@ -560,12 +635,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const dmAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(dmAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(dmAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(dmAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.isDirectMessage).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
@@ -606,7 +683,7 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
-        placeholder: "<media:image>",
+        fileName: "photo.png",
       },
     ]);
   });
@@ -890,6 +967,44 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
   });
 
+  it("looks up thread bindings once for an accepted ordinary guild message", async () => {
+    const channelId = "channel-binding-lookup-once";
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    onTestFinished(() => manager.stop());
+    const getByThreadId = vi.spyOn(manager, "getByThreadId");
+    const message = createDiscordMessage({
+      id: "m-binding-lookup-once",
+      channelId,
+      content: "ordinary human message <@openclaw-bot>",
+      author: { id: "user-1", bot: false, username: "alice" },
+      mentionedUsers: [{ id: "openclaw-bot" }],
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      threadBindings: manager,
+    });
+
+    expect(expectPreflightResult(result).message.id).toBe(message.id);
+    expect(getByThreadId).toHaveBeenCalledTimes(1);
+    expect(getByThreadId).toHaveBeenCalledWith(channelId);
+  });
+
   it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -1026,6 +1141,56 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.canonicalMessageId).toBe("orig-123");
   });
 
+  it("skips PluralKit lookup for ordinary non-webhook messages", async () => {
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "ordinary-human-1",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        author: {
+          id: "human-1",
+          bot: false,
+          username: "Human",
+        },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expectPreflightResult(result);
+    expect(fetchPluralKitMessageInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("skips PluralKit lookup for allowed non-webhook bot messages", async () => {
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "ordinary-bot-1",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        author: {
+          id: "bot-1",
+          bot: true,
+          username: "Bot",
+        },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        allowBots: true,
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.sender.isPluralKit).toBe(false);
+    expect(fetchPluralKitMessageInfoMock).not.toHaveBeenCalled();
+  });
+
   it("uses the resolved PluralKit member id when creating DM pairing requests", async () => {
     fetchPluralKitMessageInfoMock.mockResolvedValue({
       id: "proxy-dm-1",
@@ -1071,6 +1236,8 @@ describe("preflightDiscordMessage", () => {
           id: "pk-member-1",
           name: "Echo",
           tag: "Echo",
+          isPluralKit: true,
+          authorKind: "bot",
         },
       }),
     );
@@ -1164,43 +1331,455 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.groupRequireMention).toBe(true);
   });
 
-  it("drops bot messages without mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-mentions-off";
-    const guildId = "guild-bot-mentions-off";
-    const message = createDiscordMessage({
-      id: "m-bot-mentions-off",
-      channelId,
+  it.each<{
+    name: string;
+    channelId: string;
+    guildId: string;
+    messageId: string;
+    content: string;
+    mentioned?: boolean;
+    accepted: boolean;
+  }>([
+    {
+      name: "drops bot messages without mention when allowBots=mentions",
+      channelId: "channel-bot-mentions-off",
+      guildId: "guild-bot-mentions-off",
+      messageId: "m-bot-mentions-off",
       content: "relay chatter",
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
+      accepted: false,
+    },
+    {
+      name: "allows bot messages with explicit mention when allowBots=mentions",
+      channelId: "channel-bot-mentions-on",
+      guildId: "guild-bot-mentions-on",
+      messageId: "m-bot-mentions-on",
+      content: "hi <@openclaw-bot>",
+      mentioned: true,
+      accepted: true,
+    },
+    {
+      name: "still drops bot control commands without a real mention when allowBots=mentions",
+      channelId: "channel-bot-command-no-mention",
+      guildId: "guild-bot-command-no-mention",
+      messageId: "m-bot-command-no-mention",
+      content: "/new incident room",
+      accepted: false,
+    },
+    {
+      name: "still allows bot control commands with an explicit mention when allowBots=mentions",
+      channelId: "channel-bot-command-with-mention",
+      guildId: "guild-bot-command-with-mention",
+      messageId: "m-bot-command-with-mention",
+      content: "<@openclaw-bot> /new incident room",
+      mentioned: true,
+      accepted: true,
+    },
+  ])("$name", async ({ channelId, guildId, messageId, content, mentioned, accepted }) => {
+    const message = createDiscordMessage({
+      id: messageId,
+      channelId,
+      content,
+      ...(mentioned ? { mentionedUsers: [{ id: "openclaw-bot" }] } : {}),
+      author: { id: "relay-bot-1", bot: true, username: "Relay" },
+    });
+    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
+
+    if (!accepted) {
+      expect(result).toBeNull();
+      return;
+    }
+    expect(expectPreflightResult(result).message.id).toBe(messageId);
+  });
+
+  it.each([
+    { name: "available", includeParent: true },
+    { name: "deleted", includeParent: false },
+  ])("drops a bot reply whose only mention is the $name reply ping", async ({ includeParent }) => {
+    const channelId = "channel-bot-reply-ping";
+    const guildId = "guild-bot-reply-ping";
+    const message = createDiscordMessage({
+      id: `m-bot-reply-ping-${includeParent ? "available" : "deleted"}`,
+      channelId,
+      content: "reply without an inline mention",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      type: MessageType.Reply,
+      author: { id: "relay-bot-1", bot: true, username: "Relay" },
+      ...(includeParent
+        ? {
+            referencedMessage: createDiscordMessage({
+              id: "m-openclaw-parent",
+              channelId,
+              content: "parent message",
+              author: { id: "openclaw-bot", bot: true, username: "OpenClaw" },
+            }),
+          }
+        : {}),
     });
 
+    expect(await runMentionOnlyBotPreflight({ channelId, guildId, message })).toBeNull();
+  });
+
+  it.each([
+    { name: "message content", content: "hi <@openclaw-bot>", components: undefined },
+    {
+      name: "component text",
+      content: "",
+      components: [{ type: ComponentType.TextDisplay, content: "hi <@openclaw-bot>" }],
+    },
+  ])("allows an active native mention in reply $name", async ({ content, components }) => {
+    const channelId = "channel-bot-reply-native-mention";
+    const guildId = "guild-bot-reply-native-mention";
+    const message = Object.assign(
+      createDiscordMessage({
+        id: `m-bot-reply-native-${components ? "component" : "content"}`,
+        channelId,
+        content,
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        type: MessageType.Reply,
+        author: { id: "relay-bot-1", bot: true, username: "Relay" },
+      }),
+      components ? { components } : {},
+    );
+
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).message.id).toBe(message.id);
+  });
+
+  it.each([
+    { name: "inline code", content: "`openclaw`" },
+    { name: "fenced code", content: "```text\nopenclaw\n```" },
+    { name: "tilde-fenced code", content: "~~~\nopenclaw\n~~~" },
+    { name: "indented code", content: "    openclaw" },
+    { name: "escaped native token", content: "\\<@123456789012345678>" },
+    { name: "code-formatted native token", content: "`<@123456789012345678>`" },
+  ])("does not re-admit reply-ping metadata through $name", async ({ content }) => {
+    const channelId = "channel-bot-reply-inactive-pattern";
+    const guildId = "guild-bot-reply-inactive-pattern";
+    const botUserId = "123456789012345678";
+    const mentionedBotUser = { id: botUserId, username: "OpenClaw" };
+    const message = createDiscordMessage({
+      id: `m-bot-reply-inactive-${content.length}`,
+      channelId,
+      content,
+      mentionedUsers: [mentionedBotUser],
+      type: MessageType.Reply,
+      author: { id: "relay-bot-1", bot: true, username: "Relay" },
+    });
+
+    const result = await runMentionOnlyBotPreflight({
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: { groupChat: { mentionPatterns: ["openclaw"] } },
+      },
+      channelId,
+      guildId,
+      message,
+      botUserId,
+    });
 
     expect(result).toBeNull();
   });
 
-  it("allows bot messages with explicit mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-mentions-on";
-    const guildId = "guild-bot-mentions-on";
-    const message = createDiscordMessage({
-      id: "m-bot-mentions-on",
-      channelId,
-      content: "hi <@openclaw-bot>",
-      mentionedUsers: [{ id: "openclaw-bot" }],
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
+  it.each([
+    { content: "openclaw, take over", pattern: "openclaw", accepted: true },
+    { content: "`example`\nopenclaw", pattern: "^openclaw$", accepted: false },
+    { content: "openclaw\n`example`", pattern: "^openclaw$", accepted: false },
+    { content: "`example` openclaw", pattern: "(?<=`example` )openclaw", accepted: true },
+    { content: "openclaw `example`", pattern: "openclaw\\s", accepted: true },
+    { content: "`openclaw` openclaw", pattern: "openclaw", accepted: true },
+    { content: "hello `openclaw`", pattern: "hello.*openclaw", accepted: false },
+    { content: "\u200b`openclaw`", pattern: "openclaw", accepted: false },
+    { content: "İ `openclaw`", pattern: "openclaw", accepted: false },
+  ])(
+    "matches reply pattern $pattern against the whole document $content",
+    async ({ content, pattern, accepted }) => {
+      const channelId = "channel-bot-reply-active-pattern";
+      const guildId = "guild-bot-reply-active-pattern";
+      const message = createDiscordMessage({
+        id: "m-bot-reply-active-pattern",
+        channelId,
+        content,
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        type: MessageType.Reply,
+        author: { id: "relay-bot-1", bot: true, username: "Relay" },
+      });
+
+      const result = await runMentionOnlyBotPreflight({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: { groupChat: { mentionPatterns: [pattern] } },
+        },
+        channelId,
+        guildId,
+        message,
+      });
+
+      if (accepted) {
+        expect(expectPreflightResult(result).message.id).toBe(message.id);
+      } else {
+        expect(result).toBeNull();
+      }
+    },
+  );
+
+  it.each<{
+    contents: [string, string];
+    mentions: [boolean, boolean];
+    patterns: string[];
+    accepted: boolean;
+    botId?: string;
+    hydrate?: { content: string; native: boolean };
+    expectedText?: string;
+  }>([
+    {
+      contents: ["    openclaw", "    openclaw"],
+      mentions: [true, true],
+      patterns: ["openclaw"],
+      accepted: false,
+    },
+    {
+      contents: ["<@openclaw-bot> take over", "continuation"],
+      mentions: [true, false],
+      patterns: [],
+      accepted: true,
+    },
+    {
+      contents: ["<@openclaw-bot> without native mention metadata", "reply ping"],
+      mentions: [false, true],
+      patterns: [],
+      accepted: false,
+    },
+    {
+      contents: ["~~~\nexample", "openclaw"],
+      mentions: [true, true],
+      patterns: ["^openclaw$"],
+      accepted: true,
+    },
+    {
+      contents: ["prior context", "<@123456789012345678> missing metadata"],
+      mentions: [false, false],
+      patterns: [],
+      accepted: true,
+      botId: "123456789012345678",
+      hydrate: { content: "<@123456789012345678> take over", native: true },
+      expectedText: "prior context\n@OpenClaw take over",
+    },
+    {
+      contents: ["prior context", "<@123456789012345678> missing content"],
+      mentions: [false, false],
+      patterns: ["^openclaw take over$"],
+      accepted: true,
+      botId: "123456789012345678",
+      hydrate: { content: "openclaw take over", native: false },
+      expectedText: "prior context\nopenclaw take over",
+    },
+  ])(
+    "preserves mention documents through a reply batch: $contents",
+    async ({
+      contents,
+      mentions,
+      patterns,
+      accepted,
+      botId = "openclaw-bot",
+      hydrate,
+      expectedText,
+    }) => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const channelId = "channel-bot-reply-batch";
+      const guildId = "guild-bot-reply-batch";
+      const client = createGuildTextClient(channelId);
+      client.fetchGuild = async () => {
+        throw new Error("Guild icon unavailable");
+      };
+      if (hydrate) {
+        const fetchMessage = vi.spyOn(discordMessagesApi, "getChannelMessage").mockResolvedValue({
+          id: "m-batch-1",
+          channel_id: channelId,
+          content: hydrate.content,
+          author: {
+            id: "relay-bot",
+            username: "Relay",
+            discriminator: "0",
+            global_name: null,
+            avatar: null,
+            bot: true,
+          },
+          mentions: hydrate.native
+            ? [
+                {
+                  id: botId,
+                  username: "OpenClaw",
+                  discriminator: "0",
+                  global_name: null,
+                  avatar: null,
+                  bot: true,
+                },
+              ]
+            : [],
+          mention_roles: [],
+          mention_everyone: false,
+          attachments: [],
+          embeds: [],
+          timestamp: new Date().toISOString(),
+          edited_timestamp: null,
+          tts: false,
+          pinned: false,
+          type: MessageType.Reply,
+        });
+        onTestFinished(() => fetchMessage.mockRestore());
+      }
+      const parent = createDiscordMessage({
+        id: "m-batch-parent",
+        channelId,
+        content: "handoff",
+        author: { id: botId, bot: true },
+      });
+      const events = contents.map((content, index) => {
+        const message = createDiscordMessage({
+          id: `m-batch-${index}`,
+          channelId,
+          content,
+          mentionedUsers: mentions[index] ? [{ id: botId }] : [],
+          type: MessageType.Reply,
+          referencedMessage: parent,
+          author: { id: "relay-bot", bot: true },
+        });
+        return createGuildEvent({ channelId, guildId, author: message.author, message });
+      });
+      const evaluated = createDeferred<DiscordPreflightResult | null>();
+      const dispatcher = createDiscordMessageDispatcher({
+        ...createPreflightArgs({
+          cfg: {
+            ...DEFAULT_PREFLIGHT_CFG,
+            messages: { inbound: { debounceMs: 20 }, groupChat: { mentionPatterns: patterns } },
+          },
+          discordConfig: { allowBots: "mentions", groupPolicy: "open" },
+          data: events[0]!,
+          client,
+        }),
+        botUserId: botId,
+        runtime: {
+          log: vi.fn(),
+          error: (...args) => evaluated.reject(new Error(args.join(" "))),
+          exit: vi.fn(),
+        },
+        testing: {
+          preflightDiscordMessage: async (params) => {
+            const result = await preflightDiscordMessage(params);
+            evaluated.resolve(result);
+            return result;
+          },
+          processDiscordMessage: async () => {},
+        },
+      });
+      onTestFinished(() => dispatcher.deactivate());
+      for (const event of events) {
+        await dispatcher(event, client);
+      }
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await evaluated.promise;
+      if (accepted) {
+        expect(expectPreflightResult(result).message.id).toBe("m-batch-1");
+        if (expectedText) {
+          expect(expectPreflightResult(result).messageText).toBe(expectedText);
+        }
+      } else {
+        expect(result).toBeNull();
+      }
+    },
+  );
+
+  it.each([
+    { requireMention: true, transcript: "hey openclaw", accepted: true },
+    { requireMention: false, transcript: "hey openclaw", accepted: true },
+    { requireMention: false, transcript: "hello everyone", accepted: false },
+  ])(
+    "gates bot audio replies by transcript: $requireMention, $transcript",
+    async ({ requireMention, transcript, accepted }) => {
+      transcribeFirstAudioMock.mockResolvedValue(transcript);
+      const channelId = "channel-bot-audio-mention";
+      const guildId = "guild-bot-audio-mention";
+      const message = createDiscordMessage({
+        id: "m-bot-audio-mention",
+        channelId,
+        content: "",
+        type: MessageType.Reply,
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        referencedMessage: createDiscordMessage({
+          id: "m-audio-parent",
+          channelId,
+          content: "audio handoff",
+          author: { id: "openclaw-bot", bot: true },
+        }),
+        attachments: [
+          {
+            id: "att-bot-audio-mention",
+            url: "https://cdn.discordapp.com/attachments/bot-voice.ogg",
+            content_type: "audio/ogg",
+            filename: "bot-voice.ogg",
+          },
+        ],
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
+        },
+      });
+
+      const result = await runGuildPreflight({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+        channelId,
+        guildId,
+        message,
+        discordConfig: { allowBots: "mentions" },
+        guildEntries: { [guildId]: { requireMention } },
+      });
+
+      if (accepted) {
+        const preflight = expectPreflightResult(result);
+        expect(preflight.wasMentioned).toBe(true);
+        expect(preflight.preflightAudioTranscript).toBe(transcript);
+      } else {
+        expect(result).toBeNull();
+      }
+      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("parses component mention tokens as independent Markdown documents", async () => {
+    const channelId = "channel-bot-reply-component-documents";
+    const guildId = "guild-bot-reply-component-documents";
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-bot-reply-component-documents",
+        channelId,
+        content: "",
+        mentionedUsers: [{ id: "openclaw-bot" }],
+        type: MessageType.Reply,
+        author: { id: "relay-bot-1", bot: true, username: "Relay" },
+      }),
+      {
+        components: [
+          { type: ComponentType.TextDisplay, content: "~~~\nexample" },
+          { type: ComponentType.TextDisplay, content: "hi <@openclaw-bot>" },
+        ],
       },
-    });
+    );
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
+    expect(expectPreflightResult(result).message.id).toBe(message.id);
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
@@ -1249,43 +1828,147 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-hydrated");
   });
 
-  it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-command-no-mention";
-    const guildId = "guild-bot-command-no-mention";
+  it.each(["<@123456789012345678>", "<@!123456789012345678>"])(
+    "accepts raw bot mention %s when REST hydration fails",
+    async (rawMention) => {
+      const channelId = "channel-bot-mentions-raw";
+      const guildId = "guild-bot-mentions-raw";
+      const botId = "123456789012345678";
+      const message = createDiscordMessage({
+        id: "m-bot-mentions-raw",
+        channelId,
+        content: `hi ${rawMention}`,
+        author: {
+          id: "relay-bot-1",
+          bot: true,
+          username: "Relay",
+        },
+        mentionedUsers: [],
+      });
+      const client = createGuildTextClient(channelId);
+      client.rest = {
+        get: vi.fn(async () => {
+          throw new Error("Discord REST unavailable");
+        }),
+      } as unknown as DiscordClient["rest"];
+
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {
+            allowBots: "mentions",
+          } as DiscordConfig,
+          data: createGuildEvent({
+            channelId,
+            guildId,
+            author: message.author,
+            message,
+          }),
+          client,
+        }),
+        botUserId: botId,
+      });
+
+      expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-raw");
+    },
+  );
+
+  it("does not trust raw mention syntax when REST hydration succeeds without a mention", async () => {
+    const channelId = "channel-bot-mentions-authoritative";
+    const guildId = "guild-bot-mentions-authoritative";
+    const botId = "123456789012345678";
     const message = createDiscordMessage({
-      id: "m-bot-command-no-mention",
+      id: "m-bot-mentions-authoritative",
       channelId,
-      content: "/new incident room",
+      content: `hi <@${botId}>`,
       author: {
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
       },
+      mentionedUsers: [],
     });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => ({
+        id: message.id,
+        content: message.content,
+        mentions: [],
+        mention_roles: [],
+        mention_everyone: false,
+      })),
+    } as unknown as DiscordClient["rest"];
 
-    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
 
     expect(result).toBeNull();
   });
 
-  it("still allows bot control commands with an explicit mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-command-with-mention";
-    const guildId = "guild-bot-command-with-mention";
+  it.each([
+    { name: "inline code", content: (botId: string) => `example: \`<@${botId}>\`` },
+    {
+      name: "fenced code",
+      content: (botId: string) => `example:\n\`\`\`text\n<@${botId}>\n\`\`\``,
+    },
+    { name: "escaped syntax", content: (botId: string) => `example: \\<@${botId}>` },
+    { name: "another user", content: () => "hi <@987654321098765432>" },
+    { name: "role mention", content: (botId: string) => `hi <@&${botId}>` },
+    { name: "longer user id", content: (botId: string) => `hi <@${botId}9>` },
+  ])("does not trust $name when REST hydration fails", async ({ content }) => {
+    const channelId = "channel-bot-mentions-untrusted";
+    const guildId = "guild-bot-mentions-untrusted";
+    const botId = "123456789012345678";
     const message = createDiscordMessage({
-      id: "m-bot-command-with-mention",
+      id: "m-bot-mentions-untrusted",
       channelId,
-      content: "<@openclaw-bot> /new incident room",
-      mentionedUsers: [{ id: "openclaw-bot" }],
+      content: content(botId),
       author: {
         id: "relay-bot-1",
         bot: true,
         username: "Relay",
       },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => {
+        throw new Error("Discord REST unavailable");
+      }),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
     });
 
-    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
-
-    expect(expectPreflightResult(result).message.id).toBe("m-bot-command-with-mention");
+    expect(result).toBeNull();
   });
 
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
@@ -1676,6 +2359,162 @@ describe("preflightDiscordMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("drops guild replies to another bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-other-bot-reply";
+    const guildId = "guild-other-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    expect(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message })).toBeNull();
+  });
+
+  it("keeps forwarded messages from another bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-other-bot-forward";
+    const guildId = "guild-other-bot-forward";
+    const message = createDiscordMessage({
+      id: "m-other-bot-forward",
+      channelId,
+      content: "forwarding this",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      messageReference: { type: MessageReferenceType.Forward, channel_id: channelId },
+      referencedMessage: createDiscordMessage({
+        id: "m-forwarded-other-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-other-bot-forward");
+  });
+
+  it("keeps replies to the current bot when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-current-bot-reply";
+    const guildId = "guild-current-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-current-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-current-bot",
+        channelId,
+        content: "earlier answer",
+        author: { id: "openclaw-bot", bot: true, username: "OpenClaw" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-current-bot-reply");
+  });
+
+  it("lets an explicit current-bot mention override a reply to another bot", async () => {
+    const channelId = "channel-other-bot-reply-override";
+    const guildId = "guild-other-bot-reply-override";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply-override",
+      channelId,
+      content: "<@openclaw-bot> please weigh in",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot-override-target",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(expectPreflightResult(result).wasMentioned).toBe(true);
+  });
+
+  it("keeps replies to humans when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-human-reply";
+    const guildId = "guild-human-reply";
+    const message = createDiscordMessage({
+      id: "m-human-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-human-target",
+        channelId,
+        content: "earlier question",
+        author: { id: "user-2", bot: false, username: "Bob" },
+      }),
+    });
+
+    expect(
+      expectPreflightResult(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message }))
+        .message.id,
+    ).toBe("m-human-reply");
+  });
+
+  it("keeps replies to webhook bots when ignoreOtherMentions=true", async () => {
+    const channelId = "channel-webhook-bot-reply";
+    const guildId = "guild-webhook-bot-reply";
+    const message = createDiscordMessage({
+      id: "m-webhook-bot-reply",
+      channelId,
+      content: "following up",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-webhook-bot-target",
+        channelId,
+        content: "relayed human message",
+        webhookId: "webhook-1",
+        author: { id: "webhook-bot", bot: true, username: "Webhook" },
+      }),
+    });
+
+    expect(
+      expectPreflightResult(await runIgnoreOtherMentionsPreflight({ channelId, guildId, message }))
+        .message.id,
+    ).toBe("m-webhook-bot-reply");
+  });
+
+  it("keeps replies to another bot when ignoreOtherMentions=false", async () => {
+    const channelId = "channel-other-bot-reply-open";
+    const guildId = "guild-other-bot-reply-open";
+    const message = createDiscordMessage({
+      id: "m-other-bot-reply-open",
+      channelId,
+      content: "room is open",
+      author: { id: "user-1", bot: false, username: "Alice" },
+      referencedMessage: createDiscordMessage({
+        id: "m-other-bot-open-target",
+        channelId,
+        content: "earlier answer",
+        author: { id: "other-bot", bot: true, username: "OtherBot" },
+      }),
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: { [guildId]: { requireMention: false, ignoreOtherMentions: false } },
+    });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-other-bot-reply-open");
+  });
+
   it("records local image media for skipped mention-gated guild history", async () => {
     const channelId = "channel-history-image";
     const guildId = "guild-history-image";
@@ -1745,8 +2584,12 @@ describe("preflightDiscordMessage", () => {
     expect(entries).toHaveLength(1);
     expect(entries?.[0]).toMatchObject({
       sender: "Alice",
-      body: "<media:image> (1 image)",
+      body: "<media:image>",
       messageId: "m-history-image",
+      senderProvenance: {
+        id: "user-1",
+        memberRoleIds: [],
+      },
       media: [
         {
           contentType: "image/png",
@@ -1815,7 +2658,7 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:document> (1 file)",
+        body: "<media:document>",
         messageId: "m-history-doc",
       }),
     ]);
@@ -1884,13 +2727,13 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:sticker> (1 sticker)",
+        body: "<media:sticker>",
         messageId: "m-history-sticker",
         media: [
           {
             path: "/tmp/openclaw-discord-test/sticker.png",
             contentType: "image/png",
-            kind: "image",
+            kind: "sticker",
             messageId: "m-history-sticker",
           },
         ],
@@ -2122,12 +2965,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(guildAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(guildAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(guildAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.wasMentioned).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
@@ -2284,7 +3129,10 @@ describe("preflightDiscordMessage", () => {
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    threadBindingTesting.resetThreadBindingsForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns true when inbound webhook id matches the bound thread webhook", () => {
@@ -2329,13 +3177,16 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(false);
   });
 
-  it("returns true for recently unbound thread webhook echoes", async () => {
+  it("leaves a sent webhook identity suppressible after the Discord thread is unbound", async () => {
+    let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const manager = createThreadBindingManager({
       cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
       persist: false,
       enableSweeper: false,
     });
+    onTestFinished(() => manager.stop());
     const binding = await manager.bindTarget({
       threadId: "thread-1",
       channelId: "parent-1",
@@ -2345,74 +3196,73 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    if (!binding) {
-      throw new Error("Expected Discord thread binding");
-    }
-    expect(binding.accountId).toBe("default");
-    expect(binding.channelId).toBe("parent-1");
-    expect(binding.threadId).toBe("thread-1");
-    expect(binding.targetKind).toBe("subagent");
-    expect(binding.targetSessionKey).toBe("agent:main:subagent:child-1");
-    expect(binding.agentId).toBe("main");
-    expect(binding.webhookId).toBe("wh-1");
-    expect(binding.webhookToken).toBe("tok-1");
-    expect(binding.boundBy).toBe("system");
-    expect(binding.idleTimeoutMs).toBe(24 * 60 * 60 * 1000);
-    expect(binding.maxAgeMs).toBe(0);
-    expect(typeof binding.boundAt).toBe("number");
-    expect(binding.boundAt).toBeGreaterThan(0);
-    expect(binding.lastActivityAt).toBe(binding.boundAt);
-    expect(binding.label).toBeUndefined();
-    expect(binding.metadata).toBeUndefined();
-
-    manager.unbindThread({
-      threadId: "thread-1",
-      sendFarewell: false,
+    expect(binding).not.toBeNull();
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      sourceId: "wh-1",
     });
 
+    nowMs += 30_000;
+    manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
+
+    expect(
+      isRecentOutboundMessageIdentity({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-1",
+        sourceId: "wh-1",
+      }),
+    ).toBe(true);
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
-        accountId: "default",
         threadId: "thread-1",
         webhookId: "wh-1",
       }),
-    ).toBe(true);
-  });
-
-  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
-    const manager = createThreadBindingManager({
-      cfg: DEFAULT_PREFLIGHT_CFG,
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-    const binding = await manager.bindTarget({
-      threadId: "thread-overflow",
-      channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child-1",
-      agentId: "main",
-      webhookId: "wh-overflow",
-      webhookToken: "tok-1",
-    });
-    expect(binding).not.toBeNull();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    try {
-      manager.unbindThread({
-        threadId: "thread-overflow",
-        sendFarewell: false,
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    expect(
-      shouldIgnoreBoundThreadWebhookMessage({
-        accountId: "default",
-        threadId: "thread-overflow",
-        webhookId: "wh-overflow",
-      }),
     ).toBe(false);
+
+    const guildHistories = new Map();
+    const message = createDiscordMessage({
+      id: "m-unbound-webhook-echo-1",
+      channelId: "thread-1",
+      content: "outbound webhook echo without a mention",
+      webhookId: "wh-1",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "OpenClaw",
+      },
+    });
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { allowBots: true } as DiscordConfig,
+        data: createGuildEvent({
+          channelId: "thread-1",
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId: "thread-1", parentId: "parent-1" }),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      threadBindings: manager,
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            "parent-1": {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get("thread-1")).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

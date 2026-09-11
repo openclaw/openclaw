@@ -3,8 +3,8 @@
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -13,7 +13,7 @@ import {
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
-import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
+import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -95,14 +95,12 @@ function buildFileContext(params: {
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
-      MediaUrl: remoteRef,
-      MediaType: mediaType,
+      media: [{ url: remoteRef, contentType: mediaType }],
       ...scopeFields,
     };
   }
   return {
-    MediaPath: params.filePath,
-    MediaType: mediaType,
+    media: [{ path: params.filePath, contentType: mediaType }],
     ...scopeFields,
   };
 }
@@ -148,9 +146,9 @@ export async function runMediaUnderstandingFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const cfg =
+  const cfg: OpenClawConfig =
     requestPrompt || requestTimeoutSeconds !== undefined
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -170,7 +168,7 @@ export async function runMediaUnderstandingFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const ctx = buildFileContext({
     ...params,
@@ -178,10 +176,22 @@ export async function runMediaUnderstandingFile(
     scopeContext: params.scopeContext,
   });
   const attachments = normalizeMediaAttachments(ctx);
+  const decisionBase = {
+    capability: params.capability,
+    attachments: [],
+    attachmentProcessing: Object.fromEntries(
+      attachments.map(({ index }) => [index, "omitted" as const]),
+    ),
+    ...(params.capability === "image" ? { nativeVisionActive: false } : {}),
+  };
   if (attachments.length === 0) {
     return {
       text: undefined,
-      decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
+      decision: {
+        ...decisionBase,
+        outcome: "no-attachment",
+        attachmentDispositions: {},
+      },
     };
   }
   const config = cfg.tools?.media?.[params.capability];
@@ -191,11 +201,21 @@ export async function runMediaUnderstandingFile(
       provider: undefined,
       model: undefined,
       output: undefined,
-      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
+      decision: {
+        ...decisionBase,
+        outcome: "disabled",
+        attachmentDispositions: Object.fromEntries(
+          attachments.map((attachment) => [
+            attachment.index,
+            { kind: "capability-disabled" as const },
+          ]),
+        ),
+      },
     };
   }
-
   const providerRegistry = buildProviderRegistry(undefined, cfg);
+  const agentDir =
+    params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
@@ -208,7 +228,8 @@ export async function runMediaUnderstandingFile(
       ctx,
       attachments: cache,
       media: attachments,
-      agentDir: params.agentDir,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(agentDir ? { agentDir } : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
@@ -275,6 +296,11 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const describeImage = provider?.describeImage ?? describeImageWithModel;
+  const agentDir =
+    params.agentDir ??
+    (params.agentId
+      ? resolveAgentDir(params.cfg, params.agentId)
+      : resolveDefaultAgentDir(params.cfg));
   return await describeImage({
     buffer: params.image.buffer,
     fileName: params.image.fileName,
@@ -285,7 +311,8 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     maxTokens: params.maxTokens,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
@@ -306,20 +333,11 @@ async function readImageDescriptionInput(params: {
   cfg: OpenClawConfig;
   timeoutMs: number;
 }): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
-  const remoteRef =
-    params.mediaUrl ??
-    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
-  if (!remoteRef) {
-    return {
-      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
-      fileName: basenameFromMediaReference(params.filePath),
-      mime: params.mime,
-    };
-  }
   const attachments = normalizeMediaAttachments(
     buildFileContext({ ...params, capability: "image" }),
   );
   const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
   });
   try {
@@ -330,8 +348,10 @@ async function readImageDescriptionInput(params: {
     });
     return {
       buffer: media.buffer,
-      fileName: media.fileName || basenameFromMediaReference(remoteRef),
-      mime: concreteMime(params.mime) ?? media.mime,
+      fileName: media.fileName || basenameFromMediaReference(params.mediaUrl ?? params.filePath),
+      // The attachment cache has already resolved MIME from bytes, filename, and headers.
+      // Keep the caller hint only as a fallback for cache implementations with no MIME result.
+      mime: media.mime ?? concreteMime(params.mime),
     };
   } finally {
     await cache.cleanup();
@@ -375,13 +395,39 @@ export async function describeVideoFile(
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
 }
 
+/** Prepares the largest input that any configured transcription fallback can accept. */
+export async function resolveAudioInputBudget(params: {
+  cfg: OpenClawConfig;
+}): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
+  const { cfg } = params;
+  const config = cfg.tools?.media?.audio;
+  if (config?.enabled === false) {
+    return { enabled: false };
+  }
+  const capability = "audio";
+  const entries = resolveModelEntries({
+    cfg,
+    capability,
+    config,
+    providerRegistry: buildProviderRegistry(undefined, cfg),
+  }).map(({ entry }) => entry);
+  // Auto-detected provider and CLI entries inherit the capability limit.
+  const candidates = entries.length > 0 ? entries : [{}];
+  return {
+    enabled: true,
+    maxBytes: Math.max(
+      ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
+    ),
+  };
+}
+
 /** Transcribes one audio file or URL through the configured audio-understanding pipeline. */
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
+  const cfg: OpenClawConfig =
     params.language || params.prompt
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -396,7 +442,7 @@ export async function transcribeAudioFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;

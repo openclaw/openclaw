@@ -1,30 +1,36 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatType } from "../channels/chat-type.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-  type ResolvedTimeFormat,
-} from "./date-time.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
+import { resolveAgentIdentity } from "./identity.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+
+const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
+const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
 type RuntimeInfoInput = {
   agentId?: string;
+  agentName?: string;
   sessionKey?: string;
   sessionId?: string;
+  sessionUrl?: string;
+  gitCoauthorPrompt?: string;
   host: string;
   os: string;
   arch: string;
@@ -35,49 +41,78 @@ type RuntimeInfoInput = {
   channel?: string;
   chatType?: ChatType;
   capabilities?: string[];
-  /** Supported message actions for the current channel (e.g., react, edit, unsend) */
-  channelActions?: string[];
   repoRoot?: string;
-  activeProcessSessions?: ActiveProcessSessionReference[];
   activeNode?: string;
 };
 
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate: string;
 };
 
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl" | "gitCoauthorPrompt">;
   workspaceDir?: string;
   cwd?: string;
+  preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
 }): SystemPromptRuntimeParams {
-  const repoRoot = resolveRepoRoot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-  });
+  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
+    ? (params.preparedRepoRoot ?? undefined)
+    : resolveSystemPromptRepoRoot(params);
+  const gitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
+    ? (params.preparedGitCoauthorPrompt ?? undefined)
+    : resolveSessionGitCoauthorPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  const userDate = formatDateStamp(Date.now(), userTimezone);
+  const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
+  // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
+  // defeating byte-identical prompt-prefix reuse across runs of the same job.
+  const sessionUrl =
+    runId === undefined
+      ? resolveControlUiSessionUrl(params.config, {
+          sessionKey: params.runtime.sessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        })
+      : undefined;
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      agentName:
+        params.config && params.agentId
+          ? resolveRuntimeAgentName(params.config, params.agentId)
+          : undefined,
       ...params.runtime,
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()) ?? params.runtime.activeNode,
+      gitCoauthorPrompt,
+      // Published links must be externally usable and bounded before entering model context.
+      sessionUrl:
+        sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
+          ? sessionUrl
+          : undefined,
+      activeNode:
+        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
       repoRoot,
     },
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
   };
 }
 
-function resolveRepoRoot(params: {
+export function resolveRuntimeAgentName(config: OpenClawConfig, agentId: string) {
+  const name = sanitizeForPromptLiteral(resolveAgentIdentity(config, agentId)?.name ?? "").trim();
+  const bounded = truncateUtf16Safe(name, MAX_RUNTIME_AGENT_NAME_CHARS).trimEnd();
+  return bounded && bounded !== agentId ? bounded : undefined;
+}
+
+export function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;

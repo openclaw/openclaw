@@ -7,11 +7,11 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { listenBrowserHttpServer } from "./http-listen.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
@@ -89,7 +89,6 @@ export async function startBrowserBridgeServer(params: {
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
-  skipRouteRegistrationForTest?: boolean;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -138,26 +137,17 @@ export async function startBrowserBridgeServer(params: {
     profiles: new Map(),
   };
 
-  if (params.skipRouteRegistrationForTest) {
-    app.get("/", (_req, res) => {
-      res.status(200).send("OK");
-    });
-  } else {
-    const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
-      import("./server-context.js"),
-      import("./routes/index.js"),
-    ]);
-    const ctx = createBrowserRouteContext({
-      getState: () => state,
-      onEnsureAttachTarget: params.onEnsureAttachTarget,
-    });
-    registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
-  }
-
-  const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, host, () => resolve(s));
-    s.once("error", reject);
+  const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
+    import("./server-context.js"),
+    import("./routes/index.js"),
+  ]);
+  const ctx = createBrowserRouteContext({
+    getState: () => state,
+    onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
+  registerBrowserRoutes(app, ctx);
+
+  const server = await listenBrowserHttpServer(app, port, host);
 
   const address = server.address() as AddressInfo | null;
   const resolvedPort = address?.port ?? port;

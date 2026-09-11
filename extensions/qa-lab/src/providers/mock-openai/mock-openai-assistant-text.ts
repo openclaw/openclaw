@@ -13,7 +13,6 @@ import {
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
-  type MockScenarioState,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -26,16 +25,20 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractToolErrorForNamedCall,
-  isHeartbeatPrompt,
+  resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
 import {
   extractLastUserText,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   extractToolOutput,
   extractLatestToolOutput,
+  buildSlackMpimHistoryReply,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
-  extractLatestImageUserTurn,
+  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
@@ -44,13 +47,111 @@ import {
   extractActiveMemorySummary,
   extractToolSearchTarget,
   extractSnackPreference,
+  isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
-export function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
-) {
+
+function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
+  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = prompt.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
+export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
+
+function isCompactionRetryWritePatch(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const lines = value.split(/\r?\n/);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (
+      lines[index] !== "--- compaction-retry-summary.txt" ||
+      lines[index + 1] !== "+++ compaction-retry-summary.txt"
+    ) {
+      continue;
+    }
+    let sectionEnd = lines.length;
+    for (let candidate = index + 2; candidate < lines.length - 1; candidate += 1) {
+      if (lines[candidate]?.startsWith("--- ") && lines[candidate + 1]?.startsWith("+++ ")) {
+        sectionEnd = candidate;
+        break;
+      }
+    }
+    if (lines.slice(index + 2, sectionEnd).includes("+Replay safety: unsafe after write.")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
+  if (
+    /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(toolOutput.trim())
+  ) {
+    return true;
+  }
+  const parsed = parseToolOutputJson(toolOutput);
+  if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
+    return false;
+  }
+  const value = parsed.value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Record<string, unknown>;
+  return (
+    result.changed === true &&
+    result.created === true &&
+    result.firstChangedLine === 1 &&
+    isCompactionRetryWritePatch(result.patch)
+  );
+}
+
+export function readForkedContextCompletion(input: ResponsesInputItem[]) {
+  const { current } = splitMockConversationContext(extractAllUserTexts(input).at(-1) ?? "");
+  // The yielded requester gets a numbered all-settled finding; active requesters
+  // can receive the individual protected event. Both carry owner-recorded status.
+  const settled =
+    /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
+      current,
+    );
+  if (settled && current.includes("sourceTool=subagent_settle")) {
+    const result = settled[2];
+    return settled[1] === "ok" &&
+      result &&
+      /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/.test(result)
+      ? result
+      : "FORKED-CONTEXT-MISSING-RESULT";
+  }
+  const eventStart = current.lastIndexOf("[Internal task completion event]");
+  const event = eventStart < 0 ? "" : current.slice(eventStart);
+  if (!/^task:\s*qa-fork-context\s*$/m.test(event)) {
+    return undefined;
+  }
+  const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(event);
+  return /^source:\s*subagent\s*$/m.test(event) &&
+    /^status:\s*completed; ready for parent review\s*$/m.test(event) &&
+    result
+    ? result[0]
+    : "FORKED-CONTEXT-MISSING-RESULT";
+}
+
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
+  const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||
@@ -60,7 +161,17 @@ export function buildAssistantText(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const userTexts = extractAllUserTexts(input);
+  const structuredToolText = Array.isArray(toolJson?.content)
+    ? toolJson.content
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as { text?: unknown }).text
+            : undefined,
+        )
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+    : "";
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
@@ -79,9 +190,13 @@ export function buildAssistantText(
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = userTexts.join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const exactMarkerDirective =
-    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const currentImageRequest = extractCurrentImageRequest(input, body);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -93,7 +208,6 @@ export function buildAssistantText(
     : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -102,6 +216,10 @@ export function buildAssistantText(
     toolJson,
   });
 
+  const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
+  if (slackMpimHistoryReply !== undefined) {
+    return slackMpimHistoryReply;
+  }
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
   }
@@ -117,18 +235,19 @@ export function buildAssistantText(
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return "HEARTBEAT_OK";
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return heartbeatReply;
   }
   if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
   if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /image understanding check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
@@ -150,11 +269,11 @@ export function buildAssistantText(
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return exactMarkerDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return userExactMarkerDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return userExactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -168,10 +287,10 @@ export function buildAssistantText(
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
-  if (/silent snack recall check/i.test(prompt) && snackPreference) {
+  if (isSnackRecallPrompt(prompt) && snackPreference) {
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
-  if (/silent snack recall check/i.test(prompt)) {
+  if (isSnackRecallPrompt(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
@@ -267,26 +386,25 @@ export function buildAssistantText(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
   }
-  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
-    return "FORKED-CONTEXT-ALPHA";
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    const parent = forkTask.inheritedUserTexts.findLast((text) =>
+      /forked subagent context qa check/i.test(text),
+    );
+    const inheritedCode =
+      /The visible code in this current conversation is (FORKED-CONTEXT-[A-Z0-9-]+)\./.exec(
+        parent ?? "",
+      )?.[1];
+    return inheritedCode && !forkTask.task.includes(inheritedCode)
+      ? `FORKED-CONTEXT-CHILD: ${inheritedCode}`
+      : "FORKED-CONTEXT-MISSING-HISTORY";
   }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
+  const forkCompletion = readForkedContextCompletion(input);
+  if (forkCompletion) {
+    return forkCompletion;
   }
-  if (
-    /forked subagent context qa check/i.test(prompt) &&
-    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
-  ) {
-    return [
-      "Worked",
-      "- FORKED-CONTEXT-ALPHA",
-      "Evidence",
-      "- The forked child recovered the visible code from requester transcript context.",
-      "Blocked",
-      "- None.",
-    ].join("\n");
+  if (/forked subagent context qa check/i.test(splitMockConversationContext(prompt).current)) {
+    return "Waiting for the forked child to recover the visible code.";
   }
   if (
     toolOutput &&
@@ -310,15 +428,44 @@ export function buildAssistantText(
     (/compaction retry mutating tool check/i.test(allInputText) ||
       /compaction-retry-summary\.txt/i.test(toolOutput))
   ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";
+  }
+  const askUserResult = structuredToolText || toolOutput;
+  const askUserDeploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  const askUserChecks = /^Checks:\s*(.+)$/m
+    .exec(askUserResult)?.[1]
+    ?.split(",")
+    .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
+    .filter(Boolean)
+    .join(",");
+  const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=single\b/i.test(allInputText) &&
+    askUserDeploy
+  ) {
+    return `ASK-USER-SINGLE-OK | deploy=${askUserDeploy}`;
+  }
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=multi\b/i.test(allInputText) &&
+    askUserChecks
+  ) {
+    return `ASK-USER-MULTI-OK | checks=${askUserChecks}`;
+  }
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    askUserDeploy &&
+    askUserChecks &&
+    askUserNote
+  ) {
+    return `ASK-USER-ROUNDTRIP-OK | deploy=${askUserDeploy} | checks=${askUserChecks} | note=${askUserNote}`;
   }
   if (
     toolOutput &&

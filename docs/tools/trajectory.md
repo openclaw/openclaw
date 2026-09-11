@@ -52,7 +52,8 @@ results, runtime events, and local paths, so the chat command always runs
 through exec approval. Approve the export once when you intend to create the
 bundle; do not use allow-all. In group chats, OpenClaw sends the approval
 prompt and export result to the owner privately instead of posting trajectory
-details back to the shared room.
+details back to the shared room. The room receives only a status notice that
+distinguishes confirmed, pending, and suppressed private delivery.
 
 For local inspection or support workflows, run the underlying CLI command
 directly:
@@ -80,6 +81,8 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `tool.call`, with the tool identity and sanitized arguments
+- `tool.result`, with the sanitized result and execution outcome
 - `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether the chain advanced, succeeded, or was exhausted
 - `model.completed`
 - `trace.artifacts`
@@ -195,3 +198,4 @@ reproduction.
 - [Diffs](/tools/diffs)
 - [Session management](/concepts/session)
 - [Exec tool](/tools/exec)
+- [Codex harness runtime](/plugins/codex-harness-runtime)

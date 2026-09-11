@@ -1,9 +1,16 @@
 // Manual facade. Keep loader boundary explicit.
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type {
+  DreamingArtifactsAuditSummary,
+  RepairDreamingArtifactsResult,
+  RepairShortTermPromotionArtifactsResult,
+  ShortTermAuditSummary,
+  ShortTermDreamingStats,
+} from "../memory-host-sdk/dreaming.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderCreateOptions,
@@ -20,14 +27,17 @@ type EmbeddingProviderResult = {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
+export type { DreamingArtifactsAuditSummary, ShortTermAuditSummary };
+
 type RuntimeFacadeModule = {
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
   createEmbeddingProvider: (
-    options: MemoryEmbeddingProviderCreateOptions & {
+    options: Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
       provider: string;
       fallback: string;
+      outputDimensionality?: number;
     },
   ) => Promise<EmbeddingProviderResult>;
   removeGroundedShortTermCandidates: (params: {
@@ -38,11 +48,20 @@ type RuntimeFacadeModule = {
     nowMs: number;
     timezone?: string;
   }) => Promise<ShortTermDreamingStats>;
+  auditDreamingArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<DreamingArtifactsAuditSummary>;
+  auditShortTermPromotionArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<ShortTermAuditSummary>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
     archiveDiary?: boolean;
     now?: Date;
   }) => Promise<RepairDreamingArtifactsResult>;
+  repairShortTermPromotionArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<RepairShortTermPromotionArtifactsResult>;
 };
 
 type GroundedRemPreviewItem = {
@@ -69,101 +88,8 @@ type GroundedRemPreviewResult = {
   files: GroundedRemFilePreview[];
 };
 
-type RemDreamingPreview = {
-  sourceEntryCount: number;
-  reflections: string[];
-  candidateTruths: Array<{
-    snippet: string;
-    confidence: number;
-    evidence: string;
-  }>;
-  candidateKeys: string[];
-  bodyLines: string[];
-};
-
-type PromotionCandidate = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  uniqueQueries: number;
-  avgScore: number;
-  maxScore: number;
-  ageDays: number;
-  firstRecalledAt: string;
-  lastRecalledAt: string;
-  promotedAt?: string;
-};
-
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-export type ShortTermDreamingStats = {
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath: string;
-  phaseSignalPath: string;
-  phaseSignalError?: string;
-  lastPromotedAt?: string;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-};
-
-type RemHarnessPreviewResult = {
-  workspaceDir: string;
-  nowMs: number;
-  remConfig: {
-    enabled: boolean;
-    lookbackDays: number;
-    limit: number;
-    minPatternStrength: number;
-  };
-  deepConfig: {
-    minScore: number;
-    minRecallCount: number;
-    minUniqueQueries: number;
-    recencyHalfLifeDays: number;
-    maxAgeDays?: number;
-  };
-  recallEntryCount: number;
-  remSkipped: boolean;
-  rem: RemDreamingPreview;
-  groundedInputPaths: string[];
-  grounded: GroundedRemPreviewResult | null;
-  deep: {
-    candidateLimit?: number;
-    candidateCount: number;
-    truncated: boolean;
-    candidates: PromotionCandidate[];
-  };
-};
-
 type ApiFacadeModule = {
+  MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE: string;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -186,37 +112,10 @@ type ApiFacadeModule = {
   removeBackfillDiaryEntries: (params: {
     workspaceDir: string;
   }) => Promise<{ dreamsPath: string; removed: number }>;
-  filterRecallEntriesWithinLookback: (params: {
-    entries: readonly unknown[];
-    nowMs: number;
-    lookbackDays: number;
-  }) => unknown[];
-  previewRemHarness: (params: {
-    workspaceDir: string;
-    cfg?: unknown;
-    pluginConfig?: Record<string, unknown>;
-    grounded?: boolean;
-    groundedInputPaths?: string[];
-    groundedFileLimit?: number;
-    includePromoted?: boolean;
-    candidateLimit?: number;
-    remPreviewLimit?: number;
-    nowMs?: number;
-  }) => Promise<RemHarnessPreviewResult>;
-};
-
-type RepairDreamingArtifactsResult = {
-  changed: boolean;
-  archiveDir?: string;
-  archivedDreamsDiary: boolean;
-  archivedSessionCorpus: boolean;
-  archivedSessionIngestion: boolean;
-  archivedPaths: string[];
-  warnings: string[];
 };
 
 function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "api.js",
   });
@@ -227,7 +126,7 @@ function loadApiFacadeModule(): ApiFacadeModule {
 }
 
 function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSync<RuntimeFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });
@@ -235,6 +134,11 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
     createPluginStateKeyedStore<T>("memory-core", options),
   );
   return module;
+}
+
+/** Returns the memory-core-owned recovery message for an absent local provider plugin. */
+export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
+  return loadApiFacadeModule().MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE;
 }
 
 const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
@@ -262,11 +166,28 @@ export const loadShortTermPromotionDreamingStats: RuntimeFacadeModule["loadShort
     loadRuntimeFacadeModule().loadShortTermPromotionDreamingStats(
       ...args,
     )) as RuntimeFacadeModule["loadShortTermPromotionDreamingStats"];
+/** Audit dreaming diary and session-corpus artifacts through the bundled runtime facade. */
+export const auditDreamingArtifacts: RuntimeFacadeModule["auditDreamingArtifacts"] = ((...args) =>
+  loadRuntimeFacadeModule().auditDreamingArtifacts(
+    ...args,
+  )) as RuntimeFacadeModule["auditDreamingArtifacts"];
+/** Audit short-term promotion artifacts through the bundled runtime facade. */
+export const auditShortTermPromotionArtifacts: RuntimeFacadeModule["auditShortTermPromotionArtifacts"] =
+  ((...args) =>
+    loadRuntimeFacadeModule().auditShortTermPromotionArtifacts(
+      ...args,
+    )) as RuntimeFacadeModule["auditShortTermPromotionArtifacts"];
 /** Repair or archive problematic dreaming artifacts through the bundled runtime facade. */
 export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
   loadRuntimeFacadeModule().repairDreamingArtifacts(
     ...args,
   )) as RuntimeFacadeModule["repairDreamingArtifacts"];
+/** Repair short-term promotion artifacts through the bundled runtime facade. */
+export const repairShortTermPromotionArtifacts: RuntimeFacadeModule["repairShortTermPromotionArtifacts"] =
+  ((...args) =>
+    loadRuntimeFacadeModule().repairShortTermPromotionArtifacts(
+      ...args,
+    )) as RuntimeFacadeModule["repairShortTermPromotionArtifacts"];
 
 /** Preview grounded REM markdown facts and candidates for selected input files. */
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
@@ -295,14 +216,3 @@ export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEnt
   loadApiFacadeModule().removeBackfillDiaryEntries(
     ...args,
   )) as ApiFacadeModule["removeBackfillDiaryEntries"];
-
-/** Filter recall entries to the configured REM lookback window. */
-export const filterRecallEntriesWithinLookback: ApiFacadeModule["filterRecallEntriesWithinLookback"] =
-  ((...args) =>
-    loadApiFacadeModule().filterRecallEntriesWithinLookback(
-      ...args,
-    )) as ApiFacadeModule["filterRecallEntriesWithinLookback"];
-
-/** Preview REM harness output across dreaming, grounded, and deep promotion candidates. */
-export const previewRemHarness: ApiFacadeModule["previewRemHarness"] = ((...args) =>
-  loadApiFacadeModule().previewRemHarness(...args)) as ApiFacadeModule["previewRemHarness"];

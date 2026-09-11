@@ -6,7 +6,6 @@ import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import * as backupShared from "./backup-shared.js";
-import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 
 const backupTestMocks = vi.hoisted(() => ({
   backupVerifyCommandMock: vi.fn(),
@@ -56,16 +55,14 @@ export async function resetBackupTempHome(tempHome: { home: string }) {
 }
 
 export async function mockStateOnlyBackupPlan(stateDir: string) {
-  await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-  vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-    await resolveBackupPlanFromPaths({
-      stateDir,
-      configPath: path.join(stateDir, "openclaw.json"),
-      oauthDir: path.join(stateDir, "credentials"),
-      includeWorkspace: false,
-      configInsideState: true,
-      oauthInsideState: true,
-      nowMs: 123,
-    }),
+  await fs.writeFile(
+    path.join(stateDir, "openclaw.json"),
+    JSON.stringify({ agents: { ownership: "explicit", entries: {} } }),
+    "utf8",
   );
+  const plan = await backupShared.resolveBackupPlanFromDisk({
+    includeWorkspace: false,
+    nowMs: 123,
+  });
+  vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(plan);
 }

@@ -1,6 +1,9 @@
 // Control UI view renders debug screen content.
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
+import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -10,14 +13,25 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+import type {
+  CommandLaneDynamicSummary,
+  CommandLaneSnapshot,
+} from "../../lib/gateway-diagnostics.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
+import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
+import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
+  connected: boolean;
+  offlineStable: boolean;
   loading: boolean;
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
+  diagnosticsError: string | null;
   eventLog: readonly EventLogEntry[];
   methods: string[];
   callMethod: string;
@@ -27,6 +41,7 @@ type DebugProps = {
   onCallMethodChange: (next: string) => void;
   onCallParamsChange: (next: string) => void;
   onRefresh: () => void;
+  onOpenOverlay: () => void;
   onCall: () => void;
 };
 
@@ -34,7 +49,8 @@ function renderJsonRow(title: unknown, value: unknown) {
   return renderSettingsRow({
     title,
     stacked: true,
-    control: html`<pre class="code-block">${JSON.stringify(value ?? {}, null, 2)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2)))}</pre>`,
   });
 }
 
@@ -69,30 +85,102 @@ function renderSecurityRow(props: DebugProps) {
   });
 }
 
+function renderDiagnosticsError(error: string | null) {
+  if (!error) {
+    return nothing;
+  }
+  return html`
+    <div class="settings-row" role="alert">
+      <div class="settings-row__text">
+        <span class="settings-row__title">
+          ${renderSettingsStatus({ kind: "danger", label: t("common.failed") })}
+        </span>
+        <span class="settings-row__desc">${error}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderSnapshotActivity(props: DebugProps) {
+  const active = props.connected ? props.loading : props.offlineStable;
+  if (!active) {
+    return nothing;
+  }
+  const refreshing = props.connected;
+  return renderSettingsRow({
+    title: renderSettingsStatus({
+      kind: refreshing ? "accent" : "muted",
+      label: t(refreshing ? "common.refreshing" : "common.offline"),
+    }),
+    description: t(refreshing ? "debug.refreshingSnapshots" : "debug.offlineSnapshots"),
+  });
+}
+
 function renderEventRow(evt: EventLogEntry) {
   return renderSettingsRow({
     title: evt.event,
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
-    control: html`<pre class="code-block">${formatEventPayload(evt.payload)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
   });
 }
 
 export function renderDebug(props: DebugProps) {
+  const refreshPending = props.connected && props.loading;
   const snapshotsSection = renderSettingsSection(
     {
       title: t("debug.snapshotsTitle"),
       description: t("debug.snapshotsSubtitle"),
       actions: html`
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? t("common.refreshing") : t("common.refresh")}
+        <button
+          class="btn"
+          ?disabled=${!props.connected || props.loading}
+          @click=${props.onRefresh}
+        >
+          ${refreshPending ? t("common.refreshing") : t("common.refresh")}
         </button>
       `,
     },
     html`
+      ${renderSnapshotActivity(props)} ${renderDiagnosticsError(props.diagnosticsError)}
       ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
+    `,
+  );
+
+  const lanesSection = renderSettingsSection(
+    {
+      title: t("debug.lanes.title"),
+      description: t("debug.lanes.subtitle"),
+      actions: html`
+        <button class="btn" @click=${props.onOpenOverlay}>
+          ${
+            isNativeEmbedHost()
+              ? t("debug.overlay.open")
+              : t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })
+          }
+        </button>
+      `,
+    },
+    html`
+      <div class="data-table-container command-lanes-table-wrap">
+        <table class="data-table command-lanes-table settings-table--stacked" role="table">
+          <thead>
+            <tr>
+              <th scope="col">${t("debug.lanes.lane")}</th>
+              <th scope="col">${t("debug.lanes.active")}</th>
+              <th scope="col">${t("debug.lanes.queued")}</th>
+              <th scope="col">${t("debug.lanes.group")}</th>
+              <th scope="col">${t("debug.lanes.blocked")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderCommandLaneRows({ lanes: props.lanes, dynamic: props.dynamic })}
+          </tbody>
+        </table>
+      </div>
     `,
   );
 
@@ -108,9 +196,11 @@ export function renderDebug(props: DebugProps) {
             .value=${props.callMethod}
             @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
           >
-            ${!props.callMethod
-              ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
-              : nothing}
+            ${
+              !props.callMethod
+                ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
+                : nothing
+            }
             ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
           </select>
         `,
@@ -135,22 +225,26 @@ export function renderDebug(props: DebugProps) {
           <button class="btn primary" @click=${props.onCall}>${t("common.call")}</button>
         `,
       })}
-      ${props.callError
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
-              <pre class="code-block">${props.callError}</pre>
-            </div>
-          `
-        : nothing}
-      ${props.callResult
-        ? html`
-            <div class="settings-row settings-row--stacked">
-              ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-              <pre class="code-block">${props.callResult}</pre>
-            </div>
-          `
-        : nothing}
+      ${
+        props.callError
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "danger", label: t("debug.callFailed") })}
+                <pre class="code-block">${props.callError}</pre>
+              </div>
+            `
+          : nothing
+      }
+      ${
+        props.callResult
+          ? html`
+              <div class="settings-row settings-row--stacked">
+                ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
+                <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
+              </div>
+            `
+          : nothing
+      }
     `,
   );
 
@@ -158,7 +252,8 @@ export function renderDebug(props: DebugProps) {
     { title: t("debug.modelsTitle"), description: t("debug.modelsSubtitle") },
     html`
       <div class="settings-row settings-row--stacked">
-        <pre class="code-block">${JSON.stringify(props.models ?? [], null, 2)}</pre>
+        <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</pre>
       </div>
     `,
   );
@@ -171,7 +266,7 @@ export function renderDebug(props: DebugProps) {
   );
 
   return renderSettingsPage(
-    html`${snapshotsSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
+    html`${snapshotsSection} ${lanesSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
     { wide: true },
   );
 }

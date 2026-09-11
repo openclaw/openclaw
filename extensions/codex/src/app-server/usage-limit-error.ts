@@ -5,17 +5,13 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
   readCodexRateLimitsRevision,
   readRecentCodexRateLimits,
@@ -40,6 +36,51 @@ type CodexUsageLimitErrorResult = {
   message: string;
   rateLimitsForProfile?: JsonValue;
 };
+
+// HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
+export class CodexUsageLimitPromptError extends Error {
+  readonly status = 429;
+}
+
+export function resolveCodexPromptError(
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+): string | Error | undefined {
+  const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
+  if (usageLimitMessage) {
+    return new CodexUsageLimitPromptError(usageLimitMessage);
+  }
+  // Native retry exhaustion is not a permanent model/configuration failure.
+  // Preserve the provider facts before terminal projection drops the native envelope.
+  const info = source.codexErrorInfo;
+  let status =
+    info === "rateLimitExceeded"
+      ? 429
+      : info === "serverOverloaded"
+        ? 503
+        : info === "internalServerError"
+          ? 500
+          : undefined;
+  if (isJsonObject(info)) {
+    for (const variant of [
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ]) {
+      const detail = info[variant];
+      if (isJsonObject(detail) && typeof detail.httpStatusCode === "number") {
+        status = detail.httpStatusCode;
+        break;
+      }
+    }
+  }
+  return status === undefined
+    ? (source.message ?? undefined)
+    : Object.assign(new Error(source.message ?? "codex app-server error"), {
+        status,
+        ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
+      });
+}
 
 /** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
@@ -101,22 +142,20 @@ export async function refreshCodexUsageLimitPromptError(params: {
   message: string | undefined;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(params.message)) {
     return undefined;
   }
-  return (
-    await refreshCodexUsageLimitError({
-      client: params.client,
-      source: {
-        message: params.message,
-        codexErrorInfo: "usageLimitExceeded",
-        rateLimits: readRecentCodexRateLimits(params.client),
-      },
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    })
-  )?.message;
+  return refreshCodexUsageLimitError({
+    client: params.client,
+    source: {
+      message: params.message,
+      codexErrorInfo: "usageLimitExceeded",
+      rateLimits: readRecentCodexRateLimits(params.client),
+    },
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
 }
 
 async function refreshCodexUsageLimitError(params: {
@@ -155,6 +194,7 @@ async function refreshCodexUsageLimitError(params: {
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
+    rateLimitsAuthoritative: true,
   });
   const message = refreshedMessage ?? initialMessage;
   return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
@@ -249,9 +289,4 @@ function readCodexErrorPayload(error: unknown): {
     codexErrorInfo: nestedError.codexErrorInfo,
     rateLimits,
   };
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

@@ -9,6 +9,7 @@
  */
 
 import { lookup } from "node:dns/promises";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -219,12 +220,15 @@ export async function uploadToConsentUrl(params: {
         "Content-Type": params.contentType ?? "application/octet-stream",
         "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
       },
-      body: new Uint8Array(params.buffer),
+      body: new Blob([bufferToBlobPart(params.buffer)]),
     },
     params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
     fetchFn,
   );
 
+  // Consent uploads never consume the response payload. Cancel it on every
+  // status so the fetch implementation can release the underlying connection.
+  await res.body?.cancel().catch(() => undefined);
   if (!res.ok) {
     throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
   }

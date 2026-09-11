@@ -1,22 +1,29 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
-  asOptionalRecord as asRecord,
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+  DEFAULT_ACTIVE_MEMORY_MODE,
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+  DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
   DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
-  DEFAULT_QMD_SEARCH_MODE,
   DEFAULT_QUERY_MODE,
   DEFAULT_RECENT_ASSISTANT_CHARS,
   DEFAULT_RECENT_ASSISTANT_TURNS,
@@ -30,8 +37,8 @@ import {
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   type ActiveMemoryChatType,
+  type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
-  type ActiveMemoryQmdSearchMode,
   type ActiveMemoryThinkingLevel,
   type ActiveRecallPluginConfig,
   type ResolvedActiveRecallPluginConfig,
@@ -51,10 +58,7 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value as number)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 function normalizeTranscriptDir(value: unknown): string {
@@ -69,26 +73,7 @@ function normalizeTranscriptDir(value: unknown): string {
 }
 
 function normalizeChatIdList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim().toLowerCase();
-    if (!trimmed) {
-      continue;
-    }
-    if (seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
+  return uniqueStrings(normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase()));
 }
 
 function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
@@ -131,20 +116,8 @@ function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawCo
   );
 }
 
-function normalizePromptConfigText(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? text : undefined;
-}
-
-function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
-  if (value === "inherit" || value === "search" || value === "vsearch" || value === "query") {
-    return value;
-  }
-  return DEFAULT_QMD_SEARCH_MODE;
-}
-
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
-  const raw = asRecord(pluginConfig);
+  const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
@@ -175,13 +148,6 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
     "agents",
     toSafeTranscriptAgentDirName(agentId),
   );
-}
-
-function requireTransientWorkspaceDir(tempDir: string | undefined): string {
-  if (!tempDir) {
-    throw new Error("Active memory transient workspace was not initialized.");
-  }
-  return tempDir;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -218,7 +184,6 @@ function normalizePluginConfig(
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
-  const qmd = asRecord(raw.qmd);
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
@@ -227,28 +192,29 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
+    mode:
+      raw.mode === "always" || raw.mode === "off" || raw.mode === "escalate"
+        ? raw.mode
+        : DEFAULT_ACTIVE_MEMORY_MODE,
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
-    model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
-    modelFallback:
-      typeof raw.modelFallback === "string" && raw.modelFallback.trim()
-        ? raw.modelFallback.trim()
-        : undefined,
-    modelFallbackPolicy:
-      raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
+    model: normalizeOptionalString(raw.model),
+    modelFallback: normalizeOptionalString(raw.modelFallback),
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
     allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
+    fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
-    promptOverride: normalizePromptConfigText(raw.promptOverride),
-    promptAppend: normalizePromptConfigText(raw.promptAppend),
+    promptOverride: normalizeOptionalString(raw.promptOverride),
+    promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
       minimumTimeoutMs,
       MAX_TIMEOUT_MS,
     ),
+    timeoutMsIsDefault: raw.timeoutMs === undefined || raw.timeoutMs === null,
     setupGraceTimeoutMs: clampInt(
       raw.setupGraceTimeoutMs,
       setupGraceTimeoutMs,
@@ -285,47 +251,14 @@ function normalizePluginConfig(
     ),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
-    qmd: {
-      searchMode: resolveQmdSearchMode(qmd?.searchMode),
-    },
   };
 }
 
-function applyActiveMemoryRuntimeConfigSnapshot(
-  cfg: OpenClawConfig,
-  pluginConfig: ResolvedActiveRecallPluginConfig,
-): OpenClawConfig {
-  const existingEntry = asRecord(cfg.plugins?.entries?.["active-memory"]);
-  const existingPluginConfig = asRecord(existingEntry?.config);
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        "active-memory": {
-          ...existingEntry,
-          config: {
-            ...existingPluginConfig,
-            qmd: {
-              ...asRecord(existingPluginConfig?.qmd),
-              searchMode: pluginConfig.qmd.searchMode,
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
-function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   try {
-    return (
-      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-      (api.config as OpenClawConfig | undefined)
-    );
+    return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
   } catch {
-    return api.config as OpenClawConfig | undefined;
+    return api.config;
   }
 }
 
@@ -343,6 +276,10 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
     return thinking;
   }
   return "off";
+}
+
+function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
+  return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
 }
 
 function resolvePromptStyle(
@@ -381,15 +318,34 @@ function setSetupGraceTimeoutMsForTests(value: number): void {
   setupGraceTimeoutMs = Math.max(0, Math.floor(value));
 }
 
+/**
+ * Recalls eligible for CLI-backend dispatch run a fresh CLI process, which
+ * measured runs place at 9-20s — over the plain 15s default. Eligibility is
+ * the runner's own dispatch decision (route, registered backend, stored
+ * credential mode), so API-key setups that keep the direct passthrough also
+ * keep the plain default. Explicit operator timeoutMs config always wins.
+ */
+function applyCliRuntimeRecallTimeoutDefault(
+  config: ResolvedActiveRecallPluginConfig,
+  cliDispatchEligible: boolean,
+): ResolvedActiveRecallPluginConfig {
+  if (!config.timeoutMsIsDefault || config.timeoutMs >= DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS) {
+    return config;
+  }
+  return cliDispatchEligible
+    ? { ...config, timeoutMs: DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS }
+    : config;
+}
+
 export {
-  applyActiveMemoryRuntimeConfigSnapshot,
+  applyCliRuntimeRecallTimeoutDefault,
   clampInt,
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,
+  normalizeActiveMemoryFastMode,
   normalizePluginConfig,
-  requireTransientWorkspaceDir,
   resetActiveMemoryConfigForTests,
-  resolveActiveMemoryCleanupConfig,
+  readActiveMemoryConfig,
   resolvePersistentTranscriptBaseDir,
   resolveSafeTranscriptDir,
   setMinimumTimeoutMsForTests,

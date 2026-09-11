@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -121,6 +122,7 @@ function runRegQuery(
     args.push("/reg:64");
   }
   return execFileSync(regExe, args, {
+    env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: REG_QUERY_TIMEOUT_MS,
@@ -232,6 +234,11 @@ export function getWindowsCmdExePath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return getWindowsSystem32ExePath("cmd.exe", env);
+}
+
+/** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
+export function queryWindowsRegistryValue(key: string, valueName: string): string | null {
+  return queryRegistryValueFn(key, valueName);
 }
 
 export function getWindowsSystem32ExePath(

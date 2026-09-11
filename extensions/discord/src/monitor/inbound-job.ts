@@ -9,13 +9,12 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type DiscordInboundJobRuntimeField =
   | "runtime"
+  | "buildContext"
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
-  // Function-backed feedback stays runtime-only; payload must remain
-  // materializable data so queued jobs cannot accidentally serialize it.
-  | "replyTypingFeedback"
   | "discordRestFetch";
 
 type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
@@ -23,37 +22,27 @@ type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInbo
 type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
 export type DiscordInboundJob = {
-  queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
+  };
 };
-
-export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
-  // This key is both the run-queue serialization key and the typing prestart
-  // dedupe key, so keep it aligned with the eventual session route.
-  const sessionKey = ctx.route.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const baseSessionKey = ctx.baseSessionKey?.trim();
-  if (baseSessionKey) {
-    return baseSessionKey;
-  }
-  return ctx.messageChannelId;
-}
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
+    buildContext,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
-    replyTypingFeedback,
     discordRestFetch,
     message,
     data,
@@ -63,7 +52,6 @@ export function buildDiscordInboundJob(
 
   const sanitizedMessage = sanitizeDiscordInboundMessage(message);
   return {
-    queueKey: resolveDiscordInboundJobQueueKey(ctx),
     payload: {
       ...payload,
       message: sanitizedMessage,
@@ -75,14 +63,15 @@ export function buildDiscordInboundJob(
     },
     runtime: {
       runtime,
+      buildContext,
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
-      replyTypingFeedback,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { chunkTextForTwitch } from "./markdown.js";
+import { stripMarkdownForTwitch } from "./markdown.js";
 
-describe("chunkTextForTwitch", () => {
-  it("strips markdown and keeps surrogate pairs intact at hard boundaries", () => {
-    const prefix = "a".repeat(499);
+describe("stripMarkdownForTwitch", () => {
+  it("keeps labeled link destinations", () => {
+    expect(stripMarkdownForTwitch("Read **the [docs](https://example.com/docs)**")).toBe(
+      "Read the docs (https://example.com/docs)",
+    );
+  });
 
-    expect(chunkTextForTwitch(`**${prefix}😀b**`, 500)).toEqual([prefix, "😀b"]);
+  it("strips standalone underscore emphasis across lines", () => {
+    expect(stripMarkdownForTwitch("_line one\nline two_")).toBe("line one line two");
+  });
+
+  it("still strips standalone underscore emphasis", () => {
+    expect(stripMarkdownForTwitch("use foo_bar_baz with _italic_ and __bold__ text")).toBe(
+      "use foo_bar_baz with italic and bold text",
+    );
   });
 });

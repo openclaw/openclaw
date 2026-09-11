@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 import PackageDescription
 
 let package = Package(
@@ -13,8 +13,7 @@ let package = Package(
         .executable(name: "swabble", targets: ["SwabbleCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.2"),
-        .package(url: "https://github.com/apple/swift-testing", from: "6.3.1"),
+        .package(url: "https://github.com/steipete/Commander.git", exact: "0.2.4"),
     ],
     targets: [
         .target(
@@ -39,7 +38,6 @@ let package = Package(
             name: "SwabbleKitTests",
             dependencies: [
                 "SwabbleKit",
-                .product(name: "Testing", package: "swift-testing"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
@@ -48,7 +46,8 @@ let package = Package(
             name: "swabbleTests",
             dependencies: [
                 "Swabble",
-                .product(name: "Testing", package: "swift-testing"),
+                "SwabbleCLI",
+                .product(name: "Commander", package: "Commander"),
             ]),
     ],
     swiftLanguageModes: [.v6])

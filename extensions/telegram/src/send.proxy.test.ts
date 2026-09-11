@@ -1,4 +1,5 @@
 // Telegram tests cover send.proxy plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
@@ -7,6 +8,7 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
     type RichMessageParams = {
       chat_id?: string | number;
       rich_message?: {
+        blocks?: unknown[];
         markdown?: string;
         html?: string;
       };
@@ -23,7 +25,9 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
         sendRichMessage: vi.fn(async (params: RichMessageParams) =>
           sendMessage(
             params.chat_id,
-            params.rich_message?.markdown ?? params.rich_message?.html ?? "",
+            params.rich_message?.blocks
+              ? JSON.stringify(params.rich_message.blocks)
+              : (params.rich_message?.markdown ?? params.rich_message?.html ?? ""),
             Object.fromEntries(
               Object.entries(params).filter(([key]) => key !== "chat_id" && key !== "rich_message"),
             ),
@@ -173,8 +177,6 @@ describe("telegram proxy client", () => {
 
   it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
     const { proxyFetch, fetchImpl: _fetchImpl } = prepareProxyFetch();
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
 
     await sendMessageTelegram("123", "first", {
       cfg: TELEGRAM_PROXY_CFG,
@@ -197,8 +199,6 @@ describe("telegram proxy client", () => {
   });
 
   it("closes the evicted Telegram transport when the client options cache exceeds its limit", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -285,8 +285,6 @@ describe("telegram proxy client", () => {
       },
     },
   ])("defers closing an evicted Telegram transport until $name", async ({ setupFirstSend }) => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -343,8 +341,6 @@ describe("telegram proxy client", () => {
   });
 
   it("defers closing an evicted Telegram transport while media loads before the first API request", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -415,8 +411,6 @@ describe("telegram proxy client", () => {
   });
 
   it("defers closing an evicted Telegram transport while reactions persist a resolved target before the first action request", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -477,9 +471,6 @@ describe("telegram proxy client", () => {
   });
 
   it("does not allocate cached client transport when a Telegram API override is provided", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
-
     await reactMessageTelegram("123", "456", "✅", {
       cfg: TELEGRAM_PROXY_CFG,
       token: "tok",
@@ -561,17 +552,3 @@ describe("telegram proxy client", () => {
     vi.useRealTimers();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

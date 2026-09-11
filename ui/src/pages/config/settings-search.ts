@@ -1,259 +1,93 @@
 import type { ConfigUiHints } from "../../api/types.ts";
-import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import {
+  isSettingsNavigationRouteVisible,
+  settingsSearchTextMatches,
+  type SettingsSearchBlock,
+} from "../../app-navigation.ts";
+import { pathForMemoryTab } from "../../app-route-paths.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "../../app/native-device-settings.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  AI_AGENTS_SECTION_KEYS,
-  APPEARANCE_SECTION_KEYS,
-  AUTOMATION_SECTION_KEYS,
-  COMMUNICATION_SECTION_KEYS,
-  INFRASTRUCTURE_SECTION_KEYS,
-} from "./config-sections.ts";
-import {
-  APPEARANCE_SETTINGS_TARGET_IDS,
-  COMMUNICATION_SETTINGS_TARGET_IDS,
-  GENERAL_SETTINGS_TARGET_IDS,
-} from "./settings-targets.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
+import { configPageForSection } from "./config-sections.ts";
+import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
+import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
+import { setupVisibleSchema } from "./setup-schema.ts";
 
-type StaticSettingsBlockDescriptor = Omit<SettingsSearchBlock, "label"> & {
-  labelKey: string;
-  searchKeys: readonly string[];
-  aliases?: string;
-};
+registerSettingsEnglish();
 
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;
 };
 
-const GENERAL_SETTINGS_BLOCKS = {
-  model: {
-    routeId: "config",
-    labelKey: "quickSettings.model.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.model}`,
-    searchKeys: [
-      "quickSettings.model.model",
-      "quickSettings.model.thinking",
-      "quickSettings.model.fastMode",
-      "quickSettings.model.thinkingLevels.off",
-      "quickSettings.model.thinkingLevels.low",
-      "quickSettings.model.thinkingLevels.medium",
-      "quickSettings.model.thinkingLevels.high",
-      "quickSettings.model.fastModes.auto",
-      "quickSettings.model.fastModes.fast",
-      "quickSettings.model.fastModes.standard",
-    ],
-  },
-  channels: {
-    routeId: "config",
-    labelKey: "quickSettings.channels.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.channels}`,
-    searchKeys: [
-      "quickSettings.channels.connectedCount",
-      "quickSettings.channels.empty",
-      "quickSettings.channels.connect",
-    ],
-    aliases: "telegram discord slack whatsapp signal imessage",
-  },
-  security: {
-    routeId: "config",
-    labelKey: "quickSettings.security.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.security}`,
-    searchKeys: [
-      "quickSettings.security.gatewayAuth",
-      "quickSettings.security.execPolicy",
-      "quickSettings.security.deviceAuth",
-      "quickSettings.security.browserEnabled",
-      "quickSettings.security.toolProfile",
-    ],
-  },
-  system: {
-    routeId: "config",
-    labelKey: "quickSettings.system.gatewayHost",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
-    searchKeys: [
-      "quickSettings.system.cpu",
-      "quickSettings.system.memory",
-      "quickSettings.system.disk",
-      "quickSettings.system.loadAverage",
-      "quickSettings.system.runtime",
-    ],
-    aliases: "system uptime node address pid",
-  },
-  appearance: {
-    routeId: "config",
-    labelKey: "quickSettings.appearance.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.appearance}`,
-    searchKeys: [
-      "quickSettings.appearance.theme",
-      "quickSettings.appearance.textSize",
-      "quickSettings.appearance.importedTheme",
-      "quickSettings.appearance.lobsterVisits",
-      "quickSettings.appearance.lobsterSounds",
-      "quickSettings.appearance.lobsterdex",
-    ],
-    aliases: "mode",
-  },
-  personal: {
-    routeId: "config",
-    labelKey: "quickSettings.personal.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.personal}`,
-    searchKeys: [
-      "quickSettings.personal.user",
-      "quickSettings.personal.assistant",
-      "quickSettings.personal.localIdentity",
-      "quickSettings.personal.assistantIdentity",
-      "quickSettings.personal.avatarText",
-      "quickSettings.personal.chooseImage",
-      "quickSettings.personal.browserOnly",
-    ],
-    aliases: "avatar image",
-  },
-  automations: {
-    routeId: "config",
-    labelKey: "quickSettings.automation.title",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.automations}`,
-    searchKeys: [
-      "quickSettings.automation.scheduledTask",
-      "quickSettings.automation.scheduledTasks",
-      "quickSettings.automation.installedSkill",
-      "quickSettings.automation.installedSkills",
-      "quickSettings.automation.mcpServer",
-      "quickSettings.automation.mcpServers",
-      "quickSettings.automation.manage",
-      "quickSettings.automation.browse",
-      "quickSettings.automation.configure",
-    ],
-    aliases: "cron",
-  },
-} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
+const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
+  Object.values(SETTINGS_SEARCH_TARGETS);
 
-const APPEARANCE_SETTINGS_BLOCKS = {
-  theme: {
-    routeId: "appearance",
-    labelKey: "configView.appearance.theme",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
-    searchKeys: [
-      "configView.appearance.chooseTheme",
-      "configView.appearance.importedTheme",
-      "configView.appearance.import",
-      "configView.appearance.importFromTweakcn",
-      "configView.appearance.browseTweakcn",
-    ],
-    aliases: "tweakcn light dark system",
-  },
-  textSize: {
-    routeId: "appearance",
-    labelKey: "configView.appearance.textSize",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
-    searchKeys: [
-      "configView.textSizes.small",
-      "configView.textSizes.default",
-      "configView.textSizes.large",
-      "configView.textSizes.xl",
-      "configView.textSizes.xxl",
-    ],
-    aliases: "scale",
-  },
-  chat: {
-    routeId: "appearance",
-    labelKey: "configView.chatPrefs.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
-    searchKeys: [
-      "chat.sendShortcut",
-      "chat.sendShortcutEnter",
-      "chat.sendShortcutModifierEnter",
-      "chat.catalogOpenTarget",
-      "chat.catalogOpenTargetViewer",
-      "chat.catalogOpenTargetTerminal",
-      "chat.composer.microphoneInput",
-      "chat.composer.systemDefaultMicrophone",
-    ],
-    aliases: "keyboard enter microphone voice audio input codex claude terminal viewer",
-  },
-  connection: {
-    routeId: "appearance",
-    labelKey: "configView.connection.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
-    searchKeys: [
-      "configView.connection.gateway",
-      "configView.connection.status",
-      "configView.connection.assistant",
-    ],
-    aliases: "version",
-  },
-} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
-
-const COMMUNICATION_SETTINGS_BLOCKS = {
-  notifications: {
-    routeId: "communications",
-    labelKey: "configView.notifications.title",
-    search: "?section=__notifications__",
-    hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}`,
-    searchKeys: [
-      "configView.notifications.hint",
-      "configView.notifications.browserSupport",
-      "configView.notifications.permission",
-      "configView.notifications.status",
-      "configView.notifications.subscribed",
-      "configView.notifications.notSubscribed",
-      "configView.notifications.enable",
-    ],
-    aliases: "vapid gateway",
-  },
-} as const satisfies Record<string, StaticSettingsBlockDescriptor>;
-
-const STATIC_SETTINGS_BLOCKS: readonly StaticSettingsBlockDescriptor[] = [
-  ...Object.values(GENERAL_SETTINGS_BLOCKS),
-  ...Object.values(APPEARANCE_SETTINGS_BLOCKS),
-  ...Object.values(COMMUNICATION_SETTINGS_BLOCKS),
-];
-
-const COMMUNICATION_SECTIONS = new Set<string>(COMMUNICATION_SECTION_KEYS);
-const APPEARANCE_SECTIONS = new Set<string>(APPEARANCE_SECTION_KEYS);
-const AUTOMATION_SECTIONS = new Set<string>(AUTOMATION_SECTION_KEYS);
-const INFRASTRUCTURE_SECTIONS = new Set<string>(INFRASTRUCTURE_SECTION_KEYS);
-const AI_AGENTS_SECTIONS = new Set<string>(AI_AGENTS_SECTION_KEYS);
-
-function resolveStaticSettingsBlock(block: StaticSettingsBlockDescriptor): StaticSettingsBlock {
-  const { labelKey, searchKeys, aliases, ...destination } = block;
-  const label = t(labelKey);
+function resolveStaticSettingsBlock(
+  block: SettingsSearchTarget,
+  snapshot: NativeDeviceSettingsSnapshot | null,
+): StaticSettingsBlock {
+  const label = t(block.labelKey);
+  const nativeKeys = snapshot
+    ? Object.entries(block.nativeSearchKeys ?? {})
+        .filter(([, available]) => available(snapshot))
+        .map(([key]) => key)
+    : [];
   return {
-    ...destination,
+    routeId: block.routeId,
+    ...(block.search === undefined ? {} : { search: block.search }),
+    hash: block.hash,
     label,
-    searchText: [label, ...searchKeys.map((key) => t(key)), aliases ?? ""].join(" "),
+    searchText: [
+      label,
+      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      block.aliases ?? "",
+    ].join(" "),
   };
 }
 
-function routeForConfigSection(key: string): RouteId {
-  if (key === "mcp") {
-    return "mcp";
+// Curated pages render only a subset of their section's schema; search must
+// promise exactly what the destination page can edit, or the result is a
+// dead-end.
+const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
+  memory: memoryVisibleSchemaKeys,
+  "plugin-settings": () => ["enabled", "allow", "deny", "load", "slots"],
+  updates: () => ["channel", "checkOnStart", "auto"],
+};
+
+const preparedSectionsBySchema = new WeakMap<
+  JsonSchema,
+  {
+    hints: ConfigUiHints;
+    sections: Map<
+      string,
+      { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
+    >;
   }
-  if (COMMUNICATION_SECTIONS.has(key)) {
-    return "communications";
+>();
+
+function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
+  const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
+  const properties = sectionSchema.properties;
+  if (!visibleKeys || !properties) {
+    return sectionSchema;
   }
-  if (APPEARANCE_SECTIONS.has(key)) {
-    return "appearance";
-  }
-  if (AUTOMATION_SECTIONS.has(key)) {
-    return "automation";
-  }
-  if (INFRASTRUCTURE_SECTIONS.has(key)) {
-    return "infrastructure";
-  }
-  if (AI_AGENTS_SECTIONS.has(key)) {
-    return "ai-agents";
-  }
-  return "config";
+  const visible = new Set(visibleKeys());
+  return {
+    ...sectionSchema,
+    properties: Object.fromEntries(
+      Object.entries(properties).filter(([child]) => visible.has(child)),
+    ),
+  };
 }
 
 export function findSettingsSearchBlocks(params: {
@@ -261,6 +95,10 @@ export function findSettingsSearchBlocks(params: {
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
+  identityAvailable?: boolean;
+  basePath?: string;
+  canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -268,9 +106,20 @@ export function findSettingsSearchBlocks(params: {
   const criteria = parseConfigSearchQuery(params.query);
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
-      ? STATIC_SETTINGS_BLOCKS.map(resolveStaticSettingsBlock).filter((block) =>
-          settingsSearchTextMatches(block.searchText, criteria.text),
+      ? STATIC_SETTINGS_BLOCKS.filter(
+          (block) =>
+            (params.identityAvailable || !block.requiresIdentity) &&
+            (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
+            isSettingsNavigationRouteVisible(
+              block.routeId,
+              params.canAdmin !== false,
+              params.nativeDeviceSettings,
+            ),
         )
+          .map((block) =>
+            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
+          )
+          .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema =
     params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
@@ -279,29 +128,87 @@ export function findSettingsSearchBlocks(params: {
   if (!schema || schemaType(schema) !== "object" || !schema.properties) {
     return matches;
   }
+  let prepared = preparedSectionsBySchema.get(schema);
+  // Schema responses replace both objects. Keep only the current hint revision;
+  // draft values, query text, locale, and route visibility are evaluated below.
+  if (!prepared || prepared.hints !== params.uiHints) {
+    prepared = { hints: params.uiHints, sections: new Map() };
+    preparedSectionsBySchema.set(schema, prepared);
+  }
   const value = params.value ?? {};
-  for (const [key, sectionSchema] of Object.entries(schema.properties)) {
+  for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
+    const routeId = configPageForSection(key);
+    if (
+      !isSettingsNavigationRouteVisible(
+        routeId,
+        params.canAdmin !== false,
+        params.nativeDeviceSettings,
+      )
+    ) {
+      continue;
+    }
+    let section = prepared.sections.get(key);
+    if (!section) {
+      const sectionSchema =
+        key === "wizard"
+          ? setupVisibleSchema(rawSectionSchema)
+          : visibleSectionSchema(routeId, rawSectionSchema);
+      section = {
+        schema: sectionSchema,
+        tiers: splitConfigSchemaByTier({
+          schema: sectionSchema,
+          path: [key],
+          hints: params.uiHints,
+        }),
+      };
+      prepared.sections.set(key, section);
+    }
+    const { schema: sectionSchema, tiers: tierSplit } = section;
     const meta = SECTION_META[key];
-    const matchesSection = matchesConfigSectionSearch({
-      key,
-      schema: sectionSchema,
-      value: value[key],
-      hints: params.uiHints,
-      query: params.query,
-      label: meta?.label,
-      description: meta?.description,
-      textMatcher: settingsSearchTextMatches,
-    });
-    if (!matchesSection) {
+    const matchesTier = (tierSchema: JsonSchema | null) =>
+      Boolean(
+        tierSchema &&
+        matchesConfigSectionSearch({
+          key,
+          schema: tierSchema,
+          value: value[key],
+          hints: params.uiHints,
+          query: params.query,
+          label: meta?.label,
+          description: meta?.description,
+          textMatcher: settingsSearchTextMatches,
+        }),
+      );
+    const matchesCommon = matchesTier(tierSplit.common);
+    const matchesAdvanced = matchesTier(tierSplit.advanced);
+    if (!matchesCommon && !matchesAdvanced) {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
-    matches.push({
-      routeId: routeForConfigSection(key),
-      label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}`,
-      hash: `#config-section-${encodedKey}`,
-    });
+    const editorHash = `#config-section-${encodedKey}`;
+    const destination = { search: "", hash: editorHash };
+    matches.push(
+      routeId === "memory"
+        ? {
+            routeId,
+            label: meta?.label ?? sectionSchema.title ?? key,
+            pathname: pathForMemoryTab("settings", params.basePath),
+            hash: destination.hash,
+          }
+        : routeId === "plugin-settings"
+          ? {
+              routeId,
+              label: meta?.label ?? sectionSchema.title ?? key,
+              search: "?tab=advanced",
+              hash: "#plugin-settings-advanced",
+            }
+          : {
+              routeId,
+              label: meta?.label ?? sectionSchema.title ?? key,
+              search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
+              hash: destination.hash,
+            },
+    );
   }
   return matches;
 }

@@ -31,7 +31,7 @@ openclaw gateway restart
 
 ## Getting started
 
-Both paths set the default model to `chutes/zai-org/GLM-4.7-TEE` and register
+Both paths set the default model to `chutes/zai-org/GLM-5.2-TEE` and register
 the Chutes catalog.
 
 <Tabs>
@@ -51,7 +51,7 @@ the Chutes catalog.
     <Steps>
       <Step title="Get an API key">
         Create a key at
-        [chutes.ai/settings/api-keys](https://chutes.ai/settings/api-keys).
+        [chutes.ai/app/settings/api-keys](https://chutes.ai/app/settings/api-keys).
       </Step>
       <Step title="Run the API key onboarding flow">
         ```bash
@@ -66,38 +66,55 @@ the Chutes catalog.
 
 When Chutes auth is available, OpenClaw queries `GET /v1/models` with that
 credential and uses the discovered models, cached for 5 minutes per
-credential. On an expired/unauthorized key (HTTP 401), OpenClaw retries once
-without credentials. If discovery still returns no rows, fails, or returns any
-other non-2xx status, it falls back to the bundled static catalog (both API-key
-and OAuth discovery use this same path). If discovery fails at startup, the
-static catalog is used automatically.
+credential. A rejected credential produces a catalog authentication failure;
+OpenClaw does not retry anonymously. Other request failures produce an
+unavailable catalog outcome, not a successful static list. A successful empty
+response stays empty. API-key and OAuth discovery use this same path.
+
+Token prices come from the native [Chutes model catalog](https://llm.chutes.ai/v1/models).
+Its numeric prompt, completion, and cached-input rates are already in USD per
+million tokens; they are not per-token OpenRouter rates. Unavailable or invalid
+price metadata does not establish that a model is free.
+
+In the default `models.mode: "merge"`, fresh onboarding records the provider and
+aliases without copying generated model rows or prices into your config. Live
+prices can then refresh without overwriting explicitly authored model costs.
+`models.mode: "replace"` disables discovery, so onboarding retains the bundled
+catalog as an explicit offline seed in that mode. Existing configured model rows
+and their prices are preserved when applying provider setup again.
 
 ## Default aliases
 
-OpenClaw registers three convenience aliases for the Chutes catalog:
+OpenClaw registers two convenience aliases for the Chutes catalog:
 
-| Alias           | Target model                                          |
-| --------------- | ----------------------------------------------------- |
-| `chutes-fast`   | `chutes/zai-org/GLM-4.7-FP8`                          |
-| `chutes-pro`    | `chutes/deepseek-ai/DeepSeek-V3.2-TEE`                |
-| `chutes-vision` | `chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506` |
+| Alias           | Target model                           |
+| --------------- | -------------------------------------- |
+| `chutes-pro`    | `chutes/deepseek-ai/DeepSeek-V3.2-TEE` |
+| `chutes-vision` | `chutes/moonshotai/Kimi-K2.6-TEE`      |
 
 ## Built-in starter catalog
 
-The bundled fallback catalog has 47 models. A representative sample of current refs:
+The bundled fallback catalog contains these current starter models plus two
+compatible prior-generation refs that remain selectable but are hidden from
+pickers:
 
-| Model ref                                             |
-| ----------------------------------------------------- |
-| `chutes/zai-org/GLM-4.7-TEE`                          |
-| `chutes/zai-org/GLM-5-TEE`                            |
-| `chutes/deepseek-ai/DeepSeek-V3.2-TEE`                |
-| `chutes/deepseek-ai/DeepSeek-R1-0528-TEE`             |
-| `chutes/moonshotai/Kimi-K2.5-TEE`                     |
-| `chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506` |
-| `chutes/Qwen/Qwen3-Coder-Next-TEE`                    |
-| `chutes/openai/gpt-oss-120b-TEE`                      |
+| Model ref                              | Picker status |
+| -------------------------------------- | ------------- |
+| `chutes/zai-org/GLM-5.2-TEE`           | Visible       |
+| `chutes/deepseek-ai/DeepSeek-V3.2-TEE` | Visible       |
+| `chutes/moonshotai/Kimi-K2.6-TEE`      | Visible       |
+| `chutes/MiniMaxAI/MiniMax-M2.5-TEE`    | Visible       |
+| `chutes/Qwen/Qwen3.6-27B-TEE`          | Visible       |
+| `chutes/moonshotai/Kimi-K2.5-TEE`      | Hidden        |
+| `chutes/Qwen/Qwen3.5-397B-A17B-TEE`    | Hidden        |
 
 Run `openclaw models list --all --provider chutes` for the full list.
+
+Fallback prices for starter models still listed by the native endpoint were
+refreshed from its August 31, 2026 response. An absent model keeps its previous
+seed snapshot: feed absence alone does not retire a shipped reference or change
+its picker status. Listing metadata is not proof that your account can invoke a
+model.
 
 ## Config example
 
@@ -105,9 +122,9 @@ Run `openclaw models list --all --provider chutes` for the full list.
 {
   agents: {
     defaults: {
-      model: { primary: "chutes/zai-org/GLM-4.7-TEE" },
+      model: { primary: "chutes/zai-org/GLM-5.2-TEE" },
       models: {
-        "chutes/zai-org/GLM-4.7-TEE": { alias: "Chutes GLM 4.7" },
+        "chutes/zai-org/GLM-5.2-TEE": { alias: "Chutes GLM 5.2" },
         "chutes/deepseek-ai/DeepSeek-V3.2-TEE": { alias: "Chutes DeepSeek V3.2" },
       },
     },
@@ -150,7 +167,7 @@ Run `openclaw models list --all --provider chutes` for the full list.
   <Card title="Chutes" href="https://chutes.ai" icon="arrow-up-right-from-square">
     Chutes dashboard and API docs.
   </Card>
-  <Card title="Chutes API keys" href="https://chutes.ai/settings/api-keys" icon="key">
+  <Card title="Chutes API keys" href="https://chutes.ai/app/settings/api-keys" icon="key">
     Create and manage Chutes API keys.
   </Card>
 </CardGroup>

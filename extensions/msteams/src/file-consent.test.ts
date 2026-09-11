@@ -51,6 +51,12 @@ const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
   return call;
 };
 
+const responseWithCancel = (status: number, statusText?: string) => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ cancel });
+  return { response: new Response(body, { status, statusText }), cancel };
+};
+
 // ─── isPrivateOrReservedIP ───────────────────────────────────────────────────
 
 describe("isPrivateOrReservedIP", () => {
@@ -319,7 +325,7 @@ describe("uploadToConsentUrl", () => {
       "Content-Type": "application/octet-stream",
       "User-Agent": buildUserAgent(),
     });
-    expect(opts?.body).toEqual(new Uint8Array(Buffer.from("hello")));
+    expect(Buffer.from(await new Response(opts?.body).arrayBuffer())).toEqual(Buffer.from("hello"));
   });
 
   it("aborts consent uploads that do not finish before the request timeout", async () => {
@@ -477,16 +483,36 @@ describe("uploadToConsentUrl", () => {
   });
 
   it("allows upload to a valid SharePoint URL and performs PUT", async () => {
-    const mockFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
-    const buffer = Buffer.from("file content");
+    const { response, cancel } = responseWithCancel(200);
+    const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
+    const buffer = backing.subarray(2, 5);
+    const expectedBytes = Buffer.from([0, 0x80, 0xff]);
+    let finishResolution: () => void = () => {};
+    const resolutionReady = new Promise<void>((resolve) => {
+      finishResolution = resolve;
+    });
+    const resolveFn = vi.fn(async () => {
+      await resolutionReady;
+      return { address: "13.107.136.10" };
+    });
+    const mockFetch = vi.fn<typeof fetch>(async (_url, init) => {
+      backing.fill(0);
+      expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
+      return response;
+    });
 
-    await uploadToConsentUrl({
+    const upload = uploadToConsentUrl({
       url: "https://contoso.sharepoint.com/sites/uploads/file.pdf",
       buffer,
       contentType: "application/pdf",
       fetchFn: mockFetch,
-      validationOpts: { resolveFn: publicResolve },
+      validationOpts: { resolveFn },
     });
+    await vi.waitFor(() => expect(resolveFn).toHaveBeenCalledOnce());
+    expect(mockFetch).not.toHaveBeenCalled();
+    expectedBytes.copy(buffer);
+    finishResolution();
+    await expect(upload).resolves.toBeUndefined();
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, opts] = firstFetchCall(mockFetch);
@@ -495,19 +521,16 @@ describe("uploadToConsentUrl", () => {
     expect(opts?.headers).toEqual({
       "User-Agent": buildUserAgent(),
       "Content-Type": "application/pdf",
-      "Content-Range": "bytes 0-11/12",
+      "Content-Range": "bytes 0-2/3",
     });
-    expect(opts?.body).toEqual(new Uint8Array(buffer));
     expect(opts?.signal).toBeInstanceOf(AbortSignal);
     expect(opts?.signal?.aborted).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("throws on non-OK response after passing validation", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-      statusText: "Forbidden",
-    });
+    const { response, cancel } = responseWithCancel(403, "Forbidden");
+    const mockFetch = vi.fn<typeof fetch>(async () => response);
 
     await expect(
       uploadToConsentUrl({
@@ -517,6 +540,7 @@ describe("uploadToConsentUrl", () => {
         validationOpts: { resolveFn: publicResolve },
       }),
     ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("blocks HTTP (non-HTTPS) upload before fetch is called", async () => {

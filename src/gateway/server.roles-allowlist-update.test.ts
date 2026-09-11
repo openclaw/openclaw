@@ -1,18 +1,27 @@
 // Role allowlist update tests cover operator-driven gateway updates, node lists,
 // device/node pairing state, restart sentinels, and runtime plugin visibility.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HealthSummary } from "../commands/health.types.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  isOpenClawStateDatabaseOpen,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -20,6 +29,74 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import type { HealthSummary } from "./health/types.js";
+import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+
+const readonlyPreparation = vi.hoisted(() => ({
+  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
+  turns: [] as Promise<void>[],
+}));
+
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
+  const observe = (pathname: string) => {
+    let progressed = false;
+    readonlyPreparation.turns.push(
+      new Promise<void>((resolve) => {
+        setImmediate(() => {
+          progressed = true;
+          resolve();
+        });
+      }),
+    );
+    return (prepared?: { location: string }) =>
+      readonlyPreparation.prepared.push({
+        pathname,
+        location: prepared?.location,
+        progressed,
+      });
+  };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync(pathname: string) {
+      const finish = observe(pathname);
+      let prepared: ReturnType<typeof actual.prepareSqliteReadOnlyLocationSync> | undefined;
+      try {
+        prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+    async prepareSqliteReadOnlyLocation(
+      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
+    ) {
+      const finish = observe(args[0]);
+      let prepared: Awaited<ReturnType<typeof actual.prepareSqliteReadOnlyLocation>> | undefined;
+      try {
+        prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+  };
+});
+
+const reloadFixture = vi.hoisted<{
+  reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
+}>(() => ({}));
+
+vi.mock("./server-reload-managed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-managed.js")>();
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {
+      reloadFixture.reconcileRuntimePolicy = params.reconcileRuntimePolicy;
+      return actual.startManagedGatewayConfigReloader(params);
+    },
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({
@@ -339,9 +416,12 @@ async function respondToInvoke(
 }
 
 function createDeviceIdentityForTest(prefix: string) {
-  return loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
-  );
+  return loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
+    ),
+  });
 }
 
 describe("gateway role enforcement", () => {
@@ -361,11 +441,24 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-role-enforcement",
         displayName: "node-role-enforcement",
+      });
+
+      const unsupportedEvent = await nodeClient.request<{
+        ok: boolean;
+        event?: string;
+        handled?: boolean;
+        reason?: string;
+      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
+      expect(unsupportedEvent).toEqual({
+        ok: true,
+        event: "test.unsupported",
+        handled: false,
+        reason: "unsupported_event",
       });
 
       const binsPayload = await nodeClient.request("skills.bins", {});
@@ -379,6 +472,88 @@ describe("gateway role enforcement", () => {
       nodeClient?.stop();
     }
   });
+});
+
+describe("gateway update history", () => {
+  test.each(["fresh", "expired", "retained"] as const)(
+    "keeps authenticated update history responsive (%s)",
+    async (shape) => {
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientVersion: "1.0.0",
+        scopes: ["operator.admin"],
+      });
+      try {
+        const clock = vi
+          .spyOn(Date, "now")
+          .mockReturnValue(Date.now() - (shape === "fresh" ? 0 : 25 * 60 * 60_000));
+        const run = createUpdateRun({ trigger: "api" });
+        if (shape === "retained") {
+          const from = {
+            root: process.env.OPENCLAW_STATE_DIR ?? "/fixture",
+            nodePath: process.execPath,
+            version: "2026.9.2",
+            buildId: null,
+          };
+          createRetainedUpdateRecovery({
+            runId: run.runId,
+            from,
+            to: { ...from, version: "2026.9.3" },
+          });
+        }
+        clock.mockRestore();
+        const databasePath = openOpenClawStateDatabase().path;
+        const methods =
+          shape === "fresh" ? ["update.runs.get", "update.runs.list"] : ["update.runs.get"];
+        for (const method of methods) {
+          // Exercise expiry cold first, before a warm read could reconcile the row.
+          for (const cache of ["closed", "warm"] as const) {
+            openOpenClawStateDatabase();
+            if (cache === "closed") {
+              expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+            }
+            expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
+            const before = readonlyPreparation.prepared.length;
+            const result = await client.request(
+              method,
+              method === "update.runs.get" ? { runId: run.runId } : { limit: 1 },
+            );
+            await Promise.all(readonlyPreparation.turns);
+            const expected =
+              shape === "expired"
+                ? expect.objectContaining({
+                    runId: run.runId,
+                    status: "failed",
+                    reason: "legacy-driver-expired",
+                  })
+                : run;
+            expect(result).toEqual(
+              method === "update.runs.get" ? { run: expected } : { runs: [expected] },
+            );
+            const prepared = readonlyPreparation.prepared
+              .slice(before)
+              .filter((entry) => entry.pathname === databasePath);
+            expect(
+              prepared.every((entry) => entry.progressed),
+              "the Gateway isolate must progress during every cold-history snapshot",
+            ).toBe(true);
+            if (cache === "warm") {
+              expect(prepared).toEqual([]);
+            } else {
+              expect(prepared).toHaveLength(1);
+              expect(prepared[0]?.location).toBeDefined();
+              expect(existsSync(prepared[0]!.location!)).toBe(false);
+            }
+          }
+        }
+      } finally {
+        await client.stopAndWait();
+      }
+    },
+  );
 });
 
 describe("gateway update.run", () => {
@@ -486,17 +661,20 @@ describe("gateway node command allowlist", () => {
     const invokeCapture = createInvokeCapture();
 
     try {
-      const systemDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
-      );
-      const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
-      );
-      const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
-      );
+      const systemDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          os.tmpdir(),
+          `openclaw-node-system-run-${Date.now()}-${Math.random()}.sqlite`,
+        ),
+      });
+      const emptyDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.sqlite`),
+      });
+      const allowedDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
+      });
 
-      systemClient = await connectNodeClientWithPairing({
+      systemClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -515,7 +693,7 @@ describe("gateway node command allowlist", () => {
       await systemClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClientWithPairing({
+      emptyClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -553,6 +731,22 @@ describe("gateway node command allowlist", () => {
       const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
+      for (const [progress, message] of [
+        [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
+        [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
+      ] as const) {
+        await expect(
+          allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
+        ).rejects.toThrow(message);
+      }
+      await expect(
+        allowedClient.request("node.invoke.progress", {
+          invokeId: requestId,
+          nodeId: nodeIdFromReq,
+          seq: 0,
+          chunk: "",
+        }),
+      ).resolves.toEqual({ ok: true, ignored: true });
       await allowedClient.request("node.invoke.result", {
         id: requestId,
         nodeId: nodeIdFromReq,
@@ -562,23 +756,37 @@ describe("gateway node command allowlist", () => {
       const invokeRes = await invokeResP;
       expect(invokeRes.ok).toBe(true);
 
-      const invokeNullResP = rpcReq(ws, "node.invoke", {
-        nodeId: allowedNodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-null-payloadjson",
-      });
-      const payloadNull = await invokeCapture.waitForInvoke();
-      const requestIdNull = payloadNull?.id ?? "";
-      const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
-      await allowedClient.request("node.invoke.result", {
-        id: requestIdNull,
-        nodeId: nodeIdNull,
-        ok: true,
-        payloadJSON: null,
-      });
-      const invokeNullRes = await invokeNullResP;
-      expect(invokeNullRes.ok).toBe(true);
+      for (const [id, result, expectedPayload] of [
+        ["null", { payloadJSON: null, error: null }, undefined],
+        ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
+        [
+          "explicit",
+          { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
+          { source: "payload" },
+        ],
+      ] as const) {
+        const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
+          ws,
+          "node.invoke",
+          {
+            nodeId: allowedNodeId,
+            command: "canvas.snapshot",
+            params: { format: "png" },
+            idempotencyKey: `allowlist-${id}-payloadjson`,
+          },
+        );
+        const captured = await invokeCapture.waitForInvoke();
+        await allowedClient.request("node.invoke.result", {
+          id: captured.id,
+          nodeId: captured.nodeId,
+          ok: true,
+          ...result,
+        });
+        const response = await invokeResult;
+        expect(response.ok).toBe(true);
+        expect(response.payload?.payloadJSON).toBeNull();
+        expect(response.payload?.payload).toEqual(expectedPayload);
+      }
     } finally {
       await systemClient?.stopAndWait();
       await emptyClient?.stopAndWait();
@@ -605,7 +813,9 @@ describe("gateway node command allowlist", () => {
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-      await expectCanvasSnapshotDenied(nodeId, "pending-node-canvas");
+      const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
+      expect(denied.ok).toBe(false);
+      expect(denied.error?.details).toMatchObject({ code: "PAIRING_CHANGED" });
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -650,7 +860,11 @@ describe("gateway node command allowlist", () => {
   test("rechecks current allowlist before exposing approved live commands", async () => {
     const displayName = "node-approve-live-commands-current-allowlist";
     let nodeClient: GatewayClient | undefined;
-    let configPath: string | undefined;
+    let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
+    if (!reconcileRuntimePolicy) {
+      throw new Error("gateway runtime policy reconciliation is required");
+    }
 
     try {
       const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
@@ -668,12 +882,17 @@ describe("gateway node command allowlist", () => {
 
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
-      configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
+        originalConfig.path,
+        JSON.stringify(
+          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
+          null,
+          2,
+        ),
       );
+      // The shared minimal Gateway skips file watching; drive its real commit hook.
+      await reconcileRuntimePolicy((await readConfigFileSnapshot()).config, "committed");
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
@@ -681,10 +900,11 @@ describe("gateway node command allowlist", () => {
 
       await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
-      if (configPath) {
-        await fs.writeFile(configPath, "{}\n");
-      }
       await nodeClient?.stopAndWait();
+      if (originalConfig) {
+        await fs.writeFile(originalConfig.path, originalConfig.raw ?? "{}\n");
+        await reconcileRuntimePolicy(originalConfig.config, "committed");
+      }
     }
   });
 

@@ -6,17 +6,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
-  resetCliAuthEpochTestDeps,
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
   resolveCliRuntimeOwnerFingerprint,
-  setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.js";
+import {
+  resetCliAuthEpochTestDeps,
+  setCliAuthEpochTestDeps,
+} from "./cli-auth-epoch.test-support.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 describe("resolveCliAuthEpoch", () => {
   afterEach(() => {
     resetCliAuthEpochTestDeps();
+    cliBackendsTesting.resetDepsForTest();
   });
 
   function expectCliAuthEpoch(
@@ -31,7 +35,6 @@ describe("resolveCliAuthEpoch", () => {
 
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => null,
       readCodexCliCredentialsCached: () => null,
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => ({
@@ -188,60 +191,6 @@ describe("resolveCliAuthEpoch", () => {
     expect(renamed).not.toBe(primary);
   });
 
-  it("keeps identity-less claude cli oauth epochs stable across token changes", async () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
-    let expires = 1;
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "anthropic",
-        access,
-        refresh,
-        expires,
-      }),
-    });
-
-    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
-    access = "access-b";
-    refresh = "refresh-b";
-    expires = 2;
-    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    expectCliAuthEpoch(first);
-    expect(second).toBe(first);
-  });
-
-  it("uses stricter binding semantics for identity-less CLI OAuth", async () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "anthropic",
-        access,
-        refresh,
-        expires: 1,
-      }),
-    });
-
-    const reusableEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
-    const firstBinding = resolveCliAuthBindingFingerprint({
-      provider: "claude-cli",
-      config: {},
-    });
-    access = "access-b";
-    refresh = "refresh-b";
-    const reusableEpochAfterRefresh = await resolveCliAuthEpoch({ provider: "claude-cli" });
-    const secondBinding = resolveCliAuthBindingFingerprint({
-      provider: "claude-cli",
-      config: {},
-    });
-
-    expect(reusableEpochAfterRefresh).toBe(reusableEpoch);
-    expect(secondBinding).not.toBe(firstBinding);
-  });
-
   it("keeps strict CLI bindings stable for a known OAuth principal", () => {
     let access = "access-a";
     let refresh = "refresh-a";
@@ -357,83 +306,6 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     expect(second).toBe(first);
-  });
-
-  it("keeps claude cli token epochs stable across token rotation", async () => {
-    let token = "token-a";
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "token",
-        provider: "anthropic",
-        token,
-        expires: 1,
-      }),
-    });
-
-    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
-    token = "token-b";
-    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    expectCliAuthEpoch(first);
-    // Static-token rotation is an authorized credential refresh, not an
-    // identity change. After #74312 the hash is identity-only for both
-    // OAuth and token branches, so rotation does not invalidate the epoch.
-    expect(second).toBe(first);
-  });
-
-  it("matches claude cli token and oauth epochs so partial keychain reads do not flip", async () => {
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: 1,
-      }),
-    });
-    const oauthEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "token",
-        provider: "anthropic",
-        token: "access",
-        expires: 1,
-      }),
-    });
-    const tokenEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    expectCliAuthEpoch(oauthEpoch);
-    expectCliAuthEpoch(tokenEpoch);
-    // The macOS Claude keychain rewrite is not atomic. A transient read with
-    // `refreshToken` missing falls into the parser's token branch; the OAuth
-    // and token encodings must produce the same hash so the auth-epoch does
-    // not flip during a token rotation. Regression for #74312.
-    expect(tokenEpoch).toBe(oauthEpoch);
-  });
-
-  it("drops the claude cli epoch when the credential read is absent", async () => {
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: 1,
-      }),
-    });
-    const successfulRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    // A null read can mean the credential was removed or logout left no
-    // readable auth state. Keep that absence visible so reusable sessions do
-    // not survive a true auth-state loss.
-    setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => null,
-    });
-    const nullRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
-
-    expectCliAuthEpoch(successfulRead);
-    expect(nullRead).toBeUndefined();
   });
 
   it("keeps gemini cli oauth epochs stable through token rotation and flips on account change", async () => {
@@ -961,15 +833,23 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   function cliConfig(command: string): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command },
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          config: { command },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/claude-cli",
+            entrypoint: "command",
+            nativeExecutableNames: ["claude", "claude.exe"],
           },
         },
-      },
-    };
+      ],
+    });
+    return {};
   }
 
   function copyNativeExecutable(filePath: string, source = process.execPath): void {
@@ -989,7 +869,6 @@ describe("resolveCliAuthEpoch", () => {
 
   it("attests an opaque CLI backend owner without reading credential material", async () => {
     setCliAuthEpochTestDeps({
-      readClaudeCliCredentialsCached: () => null,
       ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
     });
 
@@ -1001,7 +880,7 @@ describe("resolveCliAuthEpoch", () => {
       const fingerprint = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
 
       expectCliAuthEpoch(fingerprint);
@@ -1009,7 +888,7 @@ describe("resolveCliAuthEpoch", () => {
         resolveCliRuntimeOwnerFingerprint({
           provider: "claude-cli",
           config,
-          agentId: "crestodian",
+          agentId: "openclaw",
           runtimeOwnerId: "replacement-backend",
         }),
       ).resolves.toBeUndefined();
@@ -1029,13 +908,13 @@ describe("resolveCliAuthEpoch", () => {
       const first = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
         env: { PATH: firstBin },
       });
       const second = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
         env: { PATH: secondBin },
       });
 
@@ -1056,7 +935,7 @@ describe("resolveCliAuthEpoch", () => {
       const first = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
       copyNativeExecutable(executable, nativeUtility("false"));
       if (nativeUtility("true") === nativeUtility("false")) {
@@ -1065,7 +944,7 @@ describe("resolveCliAuthEpoch", () => {
       const second = await resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config,
-        agentId: "crestodian",
+        agentId: "openclaw",
       });
 
       expectCliAuthEpoch(first);
@@ -1110,7 +989,7 @@ describe("resolveCliAuthEpoch", () => {
         resolveCliRuntimeOwnerFingerprint({
           provider: "claude-cli",
           config: cliConfig("./claude"),
-          agentId: "crestodian",
+          agentId: "openclaw",
           cwd: dir,
         }),
       ).resolves.toBeUndefined();
@@ -1128,10 +1007,9 @@ describe("resolveCliAuthEpoch", () => {
       resolveCliRuntimeOwnerFingerprint({
         provider: "claude-cli",
         config: cliConfig(process.execPath),
-        agentId: "crestodian",
+        agentId: "openclaw",
         authProfileId: "anthropic:missing",
       }),
     ).resolves.toBeUndefined();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

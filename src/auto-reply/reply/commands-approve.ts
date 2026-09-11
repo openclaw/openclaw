@@ -8,6 +8,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveChannelAccountId } from "./channel-context.js";
@@ -58,24 +59,34 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const first = normalizeLowercaseStringOrEmpty(tokens[0]);
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
-  if (DECISION_ALIASES[first]) {
+  // Decision tokens are chat-supplied, so inherited keys such as "constructor"
+  // or "__proto__" must not read through to Object.prototype.
+  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
+    ? DECISION_ALIASES[first]
+    : undefined;
+  if (firstDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[first],
+      decision: firstDecision,
       id: tokens.slice(1).join(" ").trim(),
     };
   }
-  if (DECISION_ALIASES[second]) {
+  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
+    ? DECISION_ALIASES[second]
+    : undefined;
+  if (secondDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[second],
+      decision: secondDecision,
       id: expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
-function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
+type ApproveCommandParams = Pick<Parameters<CommandHandler>[0], "cfg" | "command" | "ctx">;
+
+function buildResolvedByLabel(params: ApproveCommandParams): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
@@ -85,7 +96,6 @@ function formatApprovalSubmitError(error: unknown): string {
   return formatErrorMessage(error);
 }
 
-type ApprovalKind = "exec" | "plugin";
 type ApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
@@ -94,7 +104,7 @@ type ApproveCommandBehavior =
 function resolveAuthorizedApprovalKinds(params: {
   execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
   pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-}): ApprovalKind[] {
+}): ChannelApprovalKind[] {
   return [
     ...(params.execAuthorization.authorized ? (["exec"] as const) : []),
     ...(params.pluginAuthorization.authorized ? (["plugin"] as const) : []),
@@ -112,7 +122,10 @@ function resolveApprovalAuthorizationError(params: {
   );
 }
 
-export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
+export async function handleApproveCommandFromContext(
+  params: ApproveCommandParams,
+  allowTextCommands: boolean,
+) {
   if (!allowTextCommands) {
     return null;
   }
@@ -166,7 +179,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );
-  const commandBehaviors = new Map<ApprovalKind, ApproveCommandBehavior | undefined>();
+  const commandBehaviors = new Map<ChannelApprovalKind, ApproveCommandBehavior | undefined>();
   for (const approvalKind of ["exec", "plugin"] as const) {
     commandBehaviors.set(
       approvalKind,
@@ -192,12 +205,18 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   };
 
   const resolvedBy = buildResolvedByLabel(params);
-  const callApprovalMethod = async (resolveMethod: ApprovalKind): Promise<void> => {
+  const callApprovalMethod = async (resolveMethod: ChannelApprovalKind): Promise<void> => {
     await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
-      senderId: params.command.senderId,
+      ...(approvalCapability?.authorizeActorAction
+        ? {
+            channel: params.command.channel,
+            accountId: effectiveAccountId,
+            senderId: params.command.senderId,
+          }
+        : {}),
       resolveMethod,
       clientDisplayName: `Chat approval (${resolvedBy})`,
     });
@@ -255,4 +274,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     shouldContinue: false,
     reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
   };
-};
+}
+
+export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) =>
+  await handleApproveCommandFromContext(params, allowTextCommands);

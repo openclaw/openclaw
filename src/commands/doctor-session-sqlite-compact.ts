@@ -3,18 +3,24 @@ import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
+  clearOpenClawAgentDatabaseOpenFailure,
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
+  migrateOpenClawAgentDatabaseForMaintenance,
+  resolveOpenClawAgentSqlitePath,
+  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 
 /** Reclaim free pages from one agent session SQLite database. */
-export function compactDoctorSessionSqliteTarget(
+export async function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-): DoctorSessionSqliteCompactReport {
-  const sqlitePath = resolveTargetSqlitePath(target);
+  options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
+): Promise<DoctorSessionSqliteCompactReport> {
+  const databaseOptions = resolveTargetSqliteOptions(target, options.env);
+  const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
   const stat = readSessionDatabaseStat(sqlitePath);
   if (!stat) {
@@ -38,31 +44,51 @@ export function compactDoctorSessionSqliteTarget(
       `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
     );
   }
-
-  const compact = compactDoctorSqliteFile({
-    afterMutation: () =>
-      ensureOpenClawAgentDatabasePermissions(sqlitePath, {
-        agentId: target.agentId,
-        path: sqlitePath,
-      }),
-    sqlitePath,
-    validateBeforeMutation: (database) =>
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: target.agentId,
-        pathname: sqlitePath,
-      }),
-  });
-  return {
-    dbSizeAfterBytes: compact.after.dbSizeBytes,
-    dbSizeBeforeBytes: compact.before.dbSizeBytes,
-    freelistAfterPages: compact.after.freelistPages,
-    freelistBeforePages: compact.before.freelistPages,
-    pageSizeBytes: compact.before.pageSizeBytes || compact.after.pageSizeBytes,
-    reclaimedBytes: compact.reclaimedBytes,
-    skipped: false,
-    walSizeAfterBytes: compact.after.walSizeBytes,
-    walSizeBeforeBytes: compact.before.walSizeBytes,
+  const requireQuarantineCleared = () => {
+    if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: options.env })) {
+      throw new Error(
+        `OpenClaw agent database ${sqlitePath} was repaired, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+      );
+    }
   };
+  const compactTarget = () => {
+    const compact = compactDoctorSqliteFile({
+      operation: options.operation,
+      afterSuccess: () => {
+        requireQuarantineCleared();
+        ensureOpenClawAgentDatabasePermissions(sqlitePath, databaseOptions);
+      },
+      sqlitePath,
+      validateBeforeMutation: (database) =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: databaseOptions.agentId,
+          pathname: sqlitePath,
+        }),
+    });
+    return {
+      dbSizeAfterBytes: compact.after.dbSizeBytes,
+      dbSizeBeforeBytes: compact.before.dbSizeBytes,
+      freelistAfterPages: compact.after.freelistPages,
+      freelistBeforePages: compact.before.freelistPages,
+      pageSizeBytes: compact.before.pageSizeBytes || compact.after.pageSizeBytes,
+      reclaimedBytes: compact.reclaimedBytes,
+      skipped: false,
+      walSizeAfterBytes: compact.after.walSizeBytes,
+      walSizeBeforeBytes: compact.before.walSizeBytes,
+    };
+  };
+  // The maintenance lease lives in shared state; never forward the agent database path.
+  return options.operation === "import-finalize"
+    ? withAgentDatabaseMaintenanceLease({ env: databaseOptions.env }, async (maintenance) => {
+        await migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: databaseOptions.agentId, pathname: sqlitePath },
+          maintenance,
+        );
+        maintenance.assertOwned();
+        requireQuarantineCleared();
+        return compactTarget();
+      })
+    : compactTarget();
 }
 
 function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {

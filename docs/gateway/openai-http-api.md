@@ -15,7 +15,8 @@ Once enabled, it serves all of these on the same port as the Gateway (WS + HTTP 
 | GET    | `/v1/models`           |
 | GET    | `/v1/models/{id}`      |
 | POST   | `/v1/embeddings`       |
-| POST   | `/v1/responses`        |
+
+`POST /v1/responses` is enabled separately with `gateway.http.endpoints.responses.enabled`. See [OpenResponses API](/gateway/openresponses-http-api).
 
 Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
 
@@ -104,9 +105,27 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
-## Request limits (config)
+### Explicit incognito session continuation
 
-Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
+Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
+
+```json
+{
+  "error": {
+    "message": "Incognito session \"<sessionKey>\" was not found.",
+    "type": "forbidden"
+  }
+}
+```
+
+Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
+
+## Request limits
+
+The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
+parts from the latest user message, and 20 MB of cumulative decoded image
+data. Image source policy remains configurable under
+`gateway.http.endpoints.chatCompletions.images`:
 
 ```json5
 {
@@ -115,9 +134,6 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
       endpoints: {
         chatCompletions: {
           enabled: true,
-          maxBodyBytes: 20000000,
-          maxImageParts: 8,
-          maxTotalImageBytes: 20000000,
           images: {
             allowUrl: false,
             urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
@@ -140,17 +156,14 @@ Defaults can be tuned under `gateway.http.endpoints.chatCompletions`:
 }
 ```
 
-Defaults when omitted:
+Image settings default to:
 
-| Key                   | Default                                                                     |
-| --------------------- | --------------------------------------------------------------------------- |
-| `maxBodyBytes`        | 20MB                                                                        |
-| `maxImageParts`       | 8 (max `image_url` parts read from the latest user message)                 |
-| `maxTotalImageBytes`  | 20MB (cumulative decoded bytes across all `image_url` parts in one request) |
-| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled)         |
-| `images.maxBytes`     | 10MB per image                                                              |
-| `images.maxRedirects` | 3                                                                           |
-| `images.timeoutMs`    | 10s                                                                         |
+| Key                   | Default                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `images.allowUrl`     | `false` (URL-sourced `image_url` parts are rejected unless enabled) |
+| `images.maxBytes`     | 10MB per image                                                      |
+| `images.maxRedirects` | 3                                                                   |
+| `images.timeoutMs`    | 10s                                                                 |
 
 HEIC/HEIF `image_url` sources are accepted and normalized to JPEG before provider delivery through the shared OpenClaw image processor (Rastermill), which falls back to a system converter (`sips`, ImageMagick, GraphicsMagick, or ffmpeg) for formats needing external codec support.
 
@@ -162,20 +175,20 @@ Security note: allowlisting a hostname does not bypass private/internal IP block
 
 ### Supported request fields
 
-| Field                      | Notes                                                                                                                                         |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools`                    | Array of `{ "type": "function", "function": { ... } }`                                                                                        |
-| `tool_choice`              | `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`                                                  |
-| `messages[*].role: "tool"` | Follow-up turns                                                                                                                               |
-| `messages[*].tool_call_id` | Binds a tool result back to a prior tool call                                                                                                 |
-| `max_completion_tokens`    | Number; per-call cap on total completion tokens (reasoning tokens included). Current field name; used when both it and `max_tokens` are sent. |
-| `max_tokens`               | Number; legacy alias, ignored when `max_completion_tokens` is also present.                                                                   |
-| `temperature`              | Number 0-2; best-effort, forwarded to the upstream provider. `400 invalid_request_error` if out of range.                                     |
-| `top_p`                    | Number 0-1; best-effort. `400 invalid_request_error` if out of range.                                                                         |
-| `frequency_penalty`        | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                 |
-| `presence_penalty`         | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                 |
-| `seed`                     | Integer; best-effort. `400 invalid_request_error` for non-integer values.                                                                     |
-| `stop`                     | String or array of up to 4 strings; best-effort. `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.           |
+| Field                      | Notes                                                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tools`                    | Array of `{ "type": "function", "function": { ... } }`                                                                                                                               |
+| `tool_choice`              | `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`                                                                                         |
+| `messages[*].role: "tool"` | Follow-up turns                                                                                                                                                                      |
+| `messages[*].tool_call_id` | Binds a tool result back to a prior tool call                                                                                                                                        |
+| `max_completion_tokens`    | Positive safe integer; per-call cap on total completion tokens (reasoning tokens included). Current field name; used when both fields are non-null. Null or omitted leaves it unset. |
+| `max_tokens`               | Positive safe integer; legacy alias. It is still validated when `max_completion_tokens` is non-null, then ignored for precedence. Null or omitted leaves it unset.                   |
+| `temperature`              | Number 0-2; best-effort, forwarded to the upstream provider. `400 invalid_request_error` if out of range.                                                                            |
+| `top_p`                    | Number 0-1; best-effort. `400 invalid_request_error` if out of range.                                                                                                                |
+| `frequency_penalty`        | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                                                        |
+| `presence_penalty`         | Number -2.0 to 2.0; best-effort. `400 invalid_request_error` if out of range.                                                                                                        |
+| `seed`                     | Integer; best-effort. `400 invalid_request_error` for non-integer values.                                                                                                            |
+| `stop`                     | String or array of up to 4 strings; best-effort. `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.                                                  |
 
 All sampling and token-cap fields ride the same agent stream-param channel and are forwarded best-effort:
 
@@ -205,19 +218,29 @@ When the agent calls tools, the response uses:
 
 When `stream: true`, tool calls arrive as incremental SSE chunks: an initial assistant role delta, optional assistant commentary deltas, one or more `delta.tool_calls` chunks carrying tool identity and argument fragments, then a final chunk with `finish_reason: "tool_calls"` and `data: [DONE]`.
 
+For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
+
 If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
 
 ### Tool follow-up loop
 
 After receiving `tool_calls`, execute the requested function(s) and send a follow-up request that includes the prior assistant tool-call message plus one or more `role: "tool"` messages with matching `tool_call_id`. This continues the same agent reasoning loop to produce the final answer.
 
+If a tool produces no text, still include its result with `content: ""` or an empty text-part array. An empty result completes the call; omitting the result does not. Legacy `role: "function"` results may use `content: null` with their function `name`.
+
 ## Streaming (SSE)
+
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream reports an error rather than completing with inconsistent content.
 
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
+
+Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Open WebUI quick setup
 
@@ -308,6 +331,8 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 ```
 
 `/v1/embeddings` supports `input` as a string or array of strings.
+
+For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
 
 ## Related
 

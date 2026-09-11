@@ -1,5 +1,8 @@
 // Imessage type declarations define plugin contracts.
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
@@ -40,14 +43,12 @@ export type IMessagePayload = {
   poll?: IMessagePoll | null;
   chat_id?: number | null;
   sender?: string | null;
+  sender_name?: string | null;
   destination_caller_id?: string | null;
-  balloon_bundle_id?: string | null;
   is_from_me?: boolean | null;
   text?: string | null;
-  reply_to_id?: number | string | null;
-  // imsg emits the replied-to message's GUID here (its inbound events carry
-  // `reply_to_guid`, not a numeric `reply_to_id`); the poll-comment fold matches
-  // a caption's `reply_to_guid` against the poll balloon's guid.
+  // Thread origin owns quote identity; direct reply GUID also links poll captions.
+  thread_originator_guid?: string | null;
   reply_to_guid?: string | null;
   reply_to_text?: string | null;
   reply_to_sender?: string | null;
@@ -85,4 +86,5 @@ export type MonitorIMessageOpts = {
    * runtime). Threaded through from the gateway via ChannelGatewayAccountContext.
    */
   channelRuntime?: ChannelRuntimeSurface;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };

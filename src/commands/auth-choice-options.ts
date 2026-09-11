@@ -1,8 +1,11 @@
 // Builds provider-aware auth-choice options and grouped onboarding menus.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
+import {
+  compareProviderAuthChoiceGroups,
+  isFeaturedProviderAuthChoiceGroup,
+} from "../plugins/provider-auth-choice-order.js";
 import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
@@ -15,17 +18,9 @@ function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
 }
 
-const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
-  ["openai", 0],
-  ["anthropic", 1],
-  ["xai", 2],
-  ["google", 3],
-  ["openrouter", 4],
-]);
-
 /** Keep the first-tier provider list stable; every other group belongs under More. */
 export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
-  return FEATURED_AUTH_GROUP_ORDER.has(group.value);
+  return isFeaturedProviderAuthChoiceGroup(group.value);
 }
 
 function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
@@ -34,18 +29,11 @@ function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): numb
   return priorityA - priorityB || compareOptionLabels(a, b);
 }
 
-function compareLabelsCaseInsensitive(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { sensitivity: "base" });
-}
-
 /** Sort auth-choice groups with featured providers first, then stable labels. */
 export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
-  const priorityA = FEATURED_AUTH_GROUP_ORDER.get(a.value) ?? Number.POSITIVE_INFINITY;
-  const priorityB = FEATURED_AUTH_GROUP_ORDER.get(b.value) ?? Number.POSITIVE_INFINITY;
-  return (
-    priorityA - priorityB ||
-    compareLabelsCaseInsensitive(a.label, b.label) ||
-    compareLabelsCaseInsensitive(a.value, b.value)
+  return compareProviderAuthChoiceGroups(
+    { id: a.value, label: a.label },
+    { id: b.value, label: b.label },
   );
 }
 
@@ -83,20 +71,25 @@ function resolveProviderChoiceOptions(params?: {
   );
 }
 
-/** Format all currently available auth-choice values for CLI help/validation. */
+/**
+ * Format every accepted `--auth-choice` value for CLI help and validation.
+ *
+ * This is the single owner of that set: help text, onboard preflight, and the
+ * non-interactive dispatcher all render it, so an advertised value is always an
+ * accepted one. Deprecated aliases stay out; `auth-choice-legacy.ts` normalizes
+ * them before any surface sees them.
+ */
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
-  includeLegacyAliases?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveProviderSetupFlowContributions({
-      ...params,
-      scope: "text-inference",
-    }).map((contribution) => contribution.option.value),
+    ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
+      (contribution) => contribution.option.value,
+    ),
   ];
 
   return uniqueStrings(values).join("|");
@@ -104,14 +97,12 @@ export function formatAuthChoiceChoicesForCli(params?: {
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  void params.store;
   const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
@@ -139,7 +130,6 @@ function buildAuthChoiceOptions(params: {
 
 /** Build grouped auth choices, filtering manual-only methods by default. */
 export function buildAuthChoiceGroups(params: {
-  store: AuthProfileStore;
   includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;

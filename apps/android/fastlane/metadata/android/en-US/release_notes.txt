@@ -1,7 +1,7 @@
-Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
+View your connected machine's desktop from your phone, and follow live subagent progress in chat.
 
-Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
+Organize conversations with session groups, nested threads, and colors. Switch agents more easily and receive reply notifications.
 
-Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
+Keeps queued messages and offline history intact across reconnects, recovers truncated replies, and preserves shared attachments.
 
-Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.
+Improves Talk playback, photo orientation, notification consent, and connections through Gateway proxy paths.

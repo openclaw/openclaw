@@ -26,6 +26,7 @@ function requireFirstFetchCall() {
     init?: { headers?: unknown; signal?: unknown };
     auditContext?: string;
     policy?: unknown;
+    timeoutMs?: number;
   };
 }
 
@@ -61,7 +62,8 @@ describe("probeMattermost", () => {
     const fetchCall = requireFirstFetchCall();
     expect(fetchCall?.url).toBe("https://mm.example.com/api/v4/users/me");
     expect(fetchCall?.init?.headers).toStrictEqual({ Authorization: "Bearer bot-token" });
-    expect(fetchCall?.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchCall?.timeoutMs).toBe(2500);
+    expect(fetchCall?.init?.signal).toBeUndefined();
     expect(fetchCall?.auditContext).toBe("mattermost-probe");
     expect(fetchCall?.policy).toBeUndefined();
     const { elapsedMs, ...stableResult } = result;
@@ -120,7 +122,7 @@ describe("probeMattermost", () => {
     expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
   });
 
-  it("clamps oversized probe timeouts before scheduling", async () => {
+  it("clamps oversized probe timeouts before the guard-owned deadline", async () => {
     mockFetchGuard.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ id: "bot-1" }), {
         status: 200,
@@ -128,14 +130,10 @@ describe("probeMattermost", () => {
       }),
       release: mockRelease,
     });
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await probeMattermost("https://mm.example.com", "bot-token", Number.MAX_SAFE_INTEGER);
 
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    await probeMattermost("https://mm.example.com", "bot-token", Number.MAX_SAFE_INTEGER);
+
+    expect(requireFirstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("returns API error details from JSON response", async () => {
@@ -156,6 +154,29 @@ describe("probeMattermost", () => {
       error: "invalid auth token",
     });
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a string diagnostic without a reflected active credential in an object message", async () => {
+    mockFetchGuard.mockImplementationOnce(async ({ init }: { init: RequestInit }) => {
+      const authorization = new Headers(init.headers).get("Authorization");
+      expect(authorization).toBe("Bearer abcdefghijklmnopqrstuvwxyz");
+      return {
+        response: new Response(
+          JSON.stringify({ message: { context: "retry later", echoed: authorization?.slice(7) } }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+        release: mockRelease,
+      };
+    });
+
+    const result = await probeMattermost("https://mm.example.com", "abcdefghijklmnopqrstuvwxyz");
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 503,
+      error: '{"message":{"context":"retry later","echoed":"***"}}',
+    });
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 

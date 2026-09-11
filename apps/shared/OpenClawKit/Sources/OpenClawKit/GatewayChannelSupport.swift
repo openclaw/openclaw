@@ -44,7 +44,7 @@ final class GatewayRequestCancellationGate: @unchecked Sendable {
 
 extension GatewayChannelActor {
     enum ConnectChallengeError: Error {
-        case timeout
+        case invalid
     }
 
     public static let defaultOperatorConnectScopes: [String] = [
@@ -52,6 +52,7 @@ extension GatewayChannelActor {
         "operator.read",
         "operator.write",
         "operator.approvals",
+        "operator.questions",
         "operator.pairing",
     ]
 

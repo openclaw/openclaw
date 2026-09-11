@@ -1,7 +1,19 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
+
+function resolveSimpleCompletionSelectionForAgent(
+  params: Parameters<typeof resolveSimpleCompletionSelectionForAgentBase>[0],
+) {
+  return resolveSimpleCompletionSelectionForAgentBase({
+    ...params,
+    cfg: migratePersistedImplicitMainRoster(params.cfg).config as OpenClawConfig,
+  });
+}
 
 function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSelectionForAgent>) {
   // Narrows absent selections so each case can assert parsed provider/model fields.
@@ -12,6 +24,48 @@ function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSe
 }
 
 describe("resolveSimpleCompletionSelectionForAgent", () => {
+  it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: { primary: "fixture/entry" } },
+      },
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            models: ["middle", "final"].map((id): ModelDefinitionConfig => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 256,
+            })),
+          },
+        },
+      },
+    };
+    const selection = requireSelection(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        ...(explicit ? { modelRef: "fixture/entry" } : {}),
+        manifestPlugins: [
+          createPluginManifestRecordFixture({
+            id: "fixture",
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { entry: "middle", middle: "final" } } },
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(selection).toMatchObject({ provider: "fixture", modelId: "middle" });
+  });
+
   it("preserves multi-segment model ids (openrouter provider models)", () => {
     const cfg = {
       agents: {
@@ -175,7 +229,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     );
     expect(selection.provider).toBe("openai");
     expect(selection.modelId).toBe("gpt-5.4-mini");
-    expect(selection.runtimeProvider).toBe("openai");
   });
 
   it("falls back to runtime default model when no explicit model is configured", () => {
@@ -188,7 +241,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.modelId).toBe("gpt-5.6-sol");
   });
 
-  it("uses configured provider fallback when default provider is unavailable", () => {
+  it("uses the configured provider model when the runtime default is unavailable", () => {
     const cfg = {
       models: {
         providers: {
@@ -219,6 +272,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.6-sol");
+    expect(selection.modelId).toBe("gpt-5");
   });
 });

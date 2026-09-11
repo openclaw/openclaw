@@ -1,31 +1,28 @@
 // Nvidia setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
-  type OpenClawConfig,
+  createDefaultModelsConnectionPresetAppliers,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { buildSelectableNvidiaProvider, NVIDIA_DEFAULT_MODEL_ID } from "./provider-catalog.js";
 
 export const NVIDIA_DEFAULT_MODEL_REF = NVIDIA_DEFAULT_MODEL_ID;
 
-const nvidiaPresetAppliers = createDefaultModelsPresetAppliers({
+const nvidiaPreset = {
   primaryModelRef: NVIDIA_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => {
+  resolveParams: () => {
     const defaultProvider = buildSelectableNvidiaProvider();
     return {
       providerId: "nvidia",
       api: defaultProvider.api ?? "openai-completions",
       baseUrl: defaultProvider.baseUrl,
-      defaultModels: defaultProvider.models ?? [],
+      defaultModels: () => defaultProvider.models ?? [],
       defaultModelId: NVIDIA_DEFAULT_MODEL_ID,
       aliases: [{ modelRef: NVIDIA_DEFAULT_MODEL_REF, alias: "NVIDIA" }],
     };
   },
-});
+} satisfies Parameters<typeof createDefaultModelsConnectionPresetAppliers<[]>>[0];
 
-export function applyNvidiaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return nvidiaPresetAppliers.applyProviderConfig(cfg);
-}
-
-export function applyNvidiaConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return nvidiaPresetAppliers.applyConfig(cfg);
-}
+export const { applyConfig: applyNvidiaConfig, applyProviderConfig: applyNvidiaProviderConfig } =
+  createDefaultModelsPresetAppliers(nvidiaPreset);
+export const { applyConfig: applyNvidiaConnectionConfig } =
+  createDefaultModelsConnectionPresetAppliers(nvidiaPreset);

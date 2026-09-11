@@ -1,11 +1,9 @@
 /**
  * Shared run helpers for retry limits, model reporting, and final text.
  */
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -15,7 +13,7 @@ import {
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
-import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
 type UsageSnapshot = {
   input?: number;
@@ -40,62 +38,44 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
-const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
-const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
+export const MAX_TRANSIENT_RETRIES = 8;
+const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
 
-// Same-model in-place rate_limit retry: provider RPM caps reset on a
-// minute scale, so wait out the current provider/model window before spending
-// a profile rotation or model failover.
-export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
-// Linear step: retriesSoFar=0 -> 10s, 1 -> 20s, 2 -> 30s. Total wait across the
-// 3-retry budget is 60s, roughly one RPM window.
-const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;
-const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
-
-export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
-}
-
-export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
-}
-
-export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return (
-    cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
+/** Resolves jittered exponential backoff without exceeding the turn retry ceiling. */
+export function resolveTransientRetryDelayMs(params: {
+  retryNumber: number;
+  retryAfterMs?: number;
+  elapsedMs?: number;
+}): number | undefined {
+  const remainingMs =
+    params.elapsedMs === undefined
+      ? Infinity
+      : MAX_TRANSIENT_RETRY_TIME_MS - Math.max(0, params.elapsedMs);
+  // The header parser uses Infinity for a floor too large to represent safely.
+  if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
+    return undefined;
+  }
+  const exponentialMs = Math.min(
+    TRANSIENT_RETRY_MAX_DELAY_MS,
+    TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, params.retryNumber - 1),
   );
-}
-
-/**
- * Backoff before the next same-model rate_limit retry, given how many such
- * retries already happened. Linear and deterministic (no jitter) so RPM
- * windows clear predictably and tests can assert exact values.
- */
-export function resolveSameModelRateLimitRetryDelayMs(params: {
-  retriesSoFar: number;
-  retryAfterSeconds?: number;
-}): number {
-  const backoffDelayMs =
-    SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, params.retriesSoFar) + 1);
-  const backoffMs = Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, backoffDelayMs);
-  const retryAfterMs = Number.isFinite(params.retryAfterSeconds)
-    ? Math.ceil(Math.max(0, params.retryAfterSeconds ?? 0) * 1000)
+  const jitteredMs = Math.min(
+    TRANSIENT_RETRY_MAX_DELAY_MS,
+    Math.round(exponentialMs * (0.5 + Math.random())),
+  );
+  const retryAfterMs = Number.isFinite(params.retryAfterMs)
+    ? Math.max(0, Math.ceil(params.retryAfterMs ?? 0))
     : 0;
-  return Math.max(backoffMs, Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, retryAfterMs));
-}
-
-export function resolveNextSameModelRateLimitRetryCount(params: {
-  retriesSoFar: number;
-  retriedSameModelRateLimit: boolean;
-}): number {
-  return params.retriedSameModelRateLimit ? Math.max(0, params.retriesSoFar) + 1 : 0;
+  const delayMs = Math.max(jitteredMs, retryAfterMs);
+  return delayMs <= remainingMs ? delayMs : undefined;
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
-const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
 
-// Avoid Anthropic's refusal test token poisoning session transcripts.
+// Keep the replacement neutral: naming the refusal trigger can itself prompt a refusal.
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
@@ -106,19 +86,18 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
-/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+/** Anthropic's transport interprets this marker even for native-owned attempts. */
 export function resolveEmbeddedAttemptBasePrompt(params: {
-  nativeModelOwned: boolean;
   provider: string;
   prompt: string;
 }): string {
-  if (params.nativeModelOwned || params.provider !== "anthropic") {
+  if (params.provider !== "anthropic") {
     return params.prompt;
   }
   return scrubAnthropicRefusalMagic(params.prompt);
 }
 
-export function createCompactionDiagId(): string {
+export function createRunRecoveryDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
@@ -128,22 +107,11 @@ const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
 // Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(
-  profileCandidateCount: number,
-  cfg?: OpenClawConfig,
-  agentId?: string,
-): number {
-  const configRetries =
-    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.runRetries : undefined) ??
-    cfg?.agents?.defaults?.runRetries;
-
-  const base = Math.max(1, configRetries?.base ?? BASE_RUN_RETRY_ITERATIONS);
-  const perProfile = Math.max(0, configRetries?.perProfile ?? RUN_RETRY_ITERATIONS_PER_PROFILE);
-  const minLimit = Math.max(1, configRetries?.min ?? MIN_RUN_RETRY_ITERATIONS);
-  const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
-
-  const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
-  return Math.min(maxLimit, Math.max(minLimit, scaled));
+export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 export function resolveActiveErrorContext(params: {
@@ -155,20 +123,6 @@ export function resolveActiveErrorContext(params: {
   model: string;
 } {
   return resolveReportedModelRef(params);
-}
-
-export function isAssistantForModelRef(
-  assistant: { provider?: string; model?: string } | undefined,
-  ref: { provider: string; model: string },
-): boolean {
-  if (!assistant) {
-    return false;
-  }
-  const resolved = resolveReportedModelRef({
-    ...ref,
-    assistant,
-  });
-  return resolved.provider === ref.provider && resolved.model === ref.model;
 }
 
 function isEmbeddedHarnessProvider(provider: string): boolean {
@@ -205,41 +159,58 @@ export function resolveReportedModelRef(params: {
 
 export function resolveLatestCallUsage(params: {
   currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
-  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedUsage: NormalizedUsage | undefined;
+  transcriptFallback: NormalizedUsage | undefined;
 }): {
   currentAttempt: NormalizedUsage | undefined;
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
+  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
+    ? params.transcriptFallback
+    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
   };
+}
+
+export function normalizeAssistantUsageForContext(
+  assistant: { api?: string; usage?: unknown } | null | undefined,
+): NormalizedUsage | undefined {
+  if (
+    assistant?.api === "cli" &&
+    assistant.usage &&
+    typeof assistant.usage === "object" &&
+    !Array.isArray(assistant.usage) &&
+    (assistant.usage as { contextUsage?: unknown }).contextUsage === undefined
+  ) {
+    return { contextUsage: { state: "unavailable" } };
+  }
+  return normalizeUsage(assistant?.usage as UsageSnapshot | undefined);
 }
 
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
-  lastAssistantUsage?: UsageSnapshot | null;
+  latestUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastTurnTotal?: number;
-}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
+}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
-    usage.total = params.lastTurnTotal;
-  }
-  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
-  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
-    ? lastAssistantUsage
+  const latestUsage = normalizeUsage(params.latestUsage as never);
+  const lastCallUsage = hasNonzeroUsage(latestUsage)
+    ? latestUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
-      : toLastCallUsage(params.usageAccumulator);
+      : undefined;
   const promptTokens = deriveContextPromptTokens({
-    lastCallUsage: params.lastRunPromptUsage,
+    lastCallUsage,
   });
   return {
     usage,
     lastCallUsage,
     promptTokens,
+    ...(usage?.cost ? { costUsd: usage.cost.total } : {}),
   };
 }
 
@@ -254,27 +225,29 @@ export function buildErrorAgentMeta(params: {
   sessionFile?: string;
   provider: string;
   model: string;
+  credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastAssistant?: { usage?: unknown } | null;
-  lastTurnTotal?: number;
+  currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
-    lastAssistantUsage: params.lastAssistant?.usage as UsageSnapshot | undefined,
+    latestUsage: normalizeAssistantUsageForContext(params.currentAttemptAssistant),
     lastRunPromptUsage: params.lastRunPromptUsage,
-    lastTurnTotal: params.lastTurnTotal,
   });
   return {
     sessionId: params.sessionId,
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     provider: params.provider,
     model: params.model,
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
+    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
+    ...(usageMeta.costUsd !== undefined ? { costUsd: usageMeta.costUsd } : {}),
   };
 }
 

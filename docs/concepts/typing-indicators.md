@@ -14,6 +14,7 @@ When `agents.defaults.typingMode` is **unset**:
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.
 - **Group chats without a mention**: typing starts when the admitted run has user-visible activity, such as harness execution activity or message text.
+- **Message-tool-only replies**: typing starts immediately, even in a group chat without a mention, so members can see the agent working when no automatic final reply is posted. This takes precedence over the group rules above; an explicit `typingMode` still wins over it.
 - **Heartbeat runs**: typing starts when the heartbeat run begins, if the resolved heartbeat target is a typing-capable chat and typing is not disabled.
 
 ## Modes
@@ -42,13 +43,16 @@ Set the agent-level default:
 }
 ```
 
-Override mode or cadence per session:
+Override the policy for one agent:
 
 ```json5
 {
-  session: {
-    typingMode: "message",
-    typingIntervalSeconds: 4,
+  agents: {
+    entries: {
+      support: {
+        typingMode: "message",
+      },
+    },
   },
 }
 ```
@@ -59,7 +63,7 @@ Override mode or cadence per session:
 - `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`), and can also start from active execution before reasoning deltas arrive.
 - Heartbeat typing is a liveness signal for the resolved delivery target. It starts at heartbeat run start instead of following `message` or `thinking` stream timing. Set `typingMode: "never"` to disable it.
 - Heartbeats do not show typing when the heartbeat target is `"none"`, when the target cannot be resolved, when chat delivery is disabled for the heartbeat, or when the channel does not support typing.
-- `typingIntervalSeconds` controls the **refresh cadence**, not the start time. Default: 6 seconds.
+- `agents.defaults.typingIntervalSeconds` controls the **refresh cadence** for every agent, not the start time. Default: 6 seconds.
 
 ## Related
 
@@ -69,5 +73,11 @@ Override mode or cadence per session:
   </Card>
   <Card title="Streaming and chunking" href="/concepts/streaming" icon="bars-staggered">
     Outbound streaming behavior, chunk boundaries, and channel-specific delivery.
+  </Card>
+  <Card title="Heartbeat" href="/gateway/heartbeat" icon="heart-pulse">
+    The system-owned automation that runs periodic agent turns, and the notification rules for its target chat.
+  </Card>
+  <Card title="Groups" href="/channels/groups" icon="users">
+    Group chat behavior and mention gating across group-capable channels.
   </Card>
 </CardGroup>

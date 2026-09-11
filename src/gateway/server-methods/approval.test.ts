@@ -5,9 +5,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type ApprovalHistoryResult,
   validateApprovalGetResult,
+  validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -18,21 +22,40 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
 
 function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
   const result = getOperatorApprovalDetailed(params);
   return result.outcome === "found" ? result.record : null;
 }
+import {
+  cancelAgentRuntimeBoundApprovals,
+  cancelUnboundRunApprovals,
+  cancelWorkerTurnClaimBoundApprovals,
+} from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../approval-channel-custody.js", () => ({
+  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
+}));
 
 const tempDirs: string[] = [];
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
@@ -42,28 +65,37 @@ const managersForCleanup: Array<{
 }> = [];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-"));
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
+  );
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
 function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
   const persistence = { runtimeEpoch: "approval-handler-test", databaseOptions };
+  const execOptions: ExecApprovalManagerOptions<ExecApprovalRequestPayload> = {
+    approvalKind: "exec",
+    persistence,
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+  };
   const managers = {
-    exec: new ExecApprovalManager<ExecApprovalRequestPayload>({
-      approvalKind: "exec",
-      persistence,
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
-    }),
+    exec: new ExecApprovalManager(execOptions),
     plugin: new ExecApprovalManager<PluginApprovalRequestPayload>({
       approvalKind: "plugin",
       persistence,
       resolveAllowedDecisions: resolvePluginApprovalRequestAllowedDecisions,
       resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
+    systemAgent: new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      persistence,
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+    }),
   };
-  managersForCleanup.push(managers.exec, managers.plugin);
+  managersForCleanup.push(managers.exec, managers.plugin, managers.systemAgent);
   return managers;
 }
 
@@ -164,6 +196,28 @@ function registerPlugin(
   return { record, decision };
 }
 
+function registerSystemAgent(
+  manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>,
+  id: string,
+) {
+  const record = manager.create(
+    {
+      title: "OpenClaw change",
+      description: "Set gateway.port to 19001",
+      command: "Set gateway.port to 19001",
+      proposalHash: "a".repeat(64),
+      allowedDecisions: ["allow-once", "deny"],
+      agentId: "main",
+      sessionKey: "agent:main:child",
+      sessionId: "delegation-1",
+    },
+    600_000,
+    id,
+  );
+  const decision = manager.register(record, 600_000);
+  return { record, decision };
+}
+
 function createClient(params: {
   scopes?: string[];
   deviceId?: string;
@@ -181,19 +235,27 @@ function createClient(params: {
   } as unknown as GatewayRequestHandlerOptions["client"];
 }
 
-function createContext(controlUiBasePath?: string) {
+function createContext(
+  controlUiBasePath?: string,
+  approvalWebPushDelivery?: GatewayRequestHandlerOptions["context"]["approvalWebPushDelivery"],
+) {
   return {
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
+    approvalEvents: {
+      publishRequested: vi.fn(() => 0),
+      publishResolved: vi.fn(),
+    },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
+    approvalWebPushDelivery,
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
 async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.resolve";
+  method: "approval.get" | "approval.history" | "approval.resolve";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];
@@ -233,16 +295,328 @@ describe("unified approval handlers", () => {
         manager.expire(record.id, "test-cleanup");
       }
     }
-    closeOpenClawStateDatabaseForTest();
+    closeOpenClawAgentDatabasesForTest();
     for (const dir of tempDirs.splice(0)) {
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
+      closeOpenClawStateDatabaseByPath(path.join(dir, "state.sqlite"));
       fs.rmSync(dir, { force: true, recursive: true });
     }
+  });
+
+  it("resolves a system-agent proposal only through unified operator approval", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:proposal-1");
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+    const context = createContext();
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "system-agent", decision: "allow-once" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: {
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "system-agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
+    expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+  });
+
+  it("resolves a system-agent proposal through its channel reviewer custody", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:channel-reviewer");
+    prepareApprovalChannelCustodyMock.mockImplementation(
+      ({ approvalKind }: { approvalKind: string }) =>
+        approvalKind === "system-agent"
+          ? {
+              resolverId: "telegram:ops",
+              authorizes: (record: { request: SystemAgentApprovalRequestPayload }) =>
+                record.request.sessionId === "delegation-1",
+            }
+          : null,
+    );
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "system-agent",
+        decision: "allow-once",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "allowed", decision: "allow-once" },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
+  });
+
+  it("checks live channel custody before the canonical resolution CAS", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: "channel-custody-cas",
+      request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
+      reviewerDeviceIds: [],
+    });
+    prepareApprovalChannelCustodyMock.mockReturnValue({
+      resolverId: "telegram:ops",
+      authorizes: (request: { request: ExecApprovalRequestPayload }) =>
+        request.request.turnSourceAccountId === "ops",
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+      kind: "channel",
+      id: "telegram:ops",
+    });
+  });
+
+  it("returns mapped terminal history with attribution and a next cursor", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const first = registerExec(managers.exec, { id: "history:first" });
+    const second = registerPlugin(managers.plugin, { id: "history:second" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    for (const [id, kind] of [
+      [first.record.id, "exec"],
+      [second.record.id, "plugin"],
+    ] as const) {
+      const response = await invoke({
+        handlers,
+        method: "approval.resolve",
+        body: { id, kind, decision: "deny" },
+        client: createClient({ deviceId: "reviewer" }),
+      });
+      expect(response.ok).toBe(true);
+    }
+
+    const firstPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+      context: createContext("/operator/"),
+    });
+    expect(firstPage.ok).toBe(true);
+    expect(validateApprovalHistoryResult(firstPage.result)).toBe(true);
+    const firstResult = firstPage.result as ApprovalHistoryResult;
+    expect(firstResult.items).toHaveLength(1);
+    expect(firstResult.items[0]).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      source: { agentId: "main", sessionKey: "agent:main:child" },
+      resolver: { kind: "device", id: "reviewer" },
+    });
+    expect(firstResult.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { cursor: firstResult.nextCursor, limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(secondPage.ok).toBe(true);
+    expect((secondPage.result as ApprovalHistoryResult).items).toHaveLength(1);
+    expect((secondPage.result as ApprovalHistoryResult).nextCursor).toBeUndefined();
+  });
+
+  it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const stateDir = databaseOptions.env?.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("expected isolated approval state directory");
+    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
+      setUserProfileRole(profile.id, "guest", databaseOptions);
+      const ownerKey = "agent:main:approval-owned";
+      const foreignKey = "agent:main:approval-foreign";
+      for (const [sessionKey, creatorId] of [
+        [ownerKey, profile.id],
+        [foreignKey, "foreign-owner"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-${sessionKey}`,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: creatorId },
+          },
+        );
+      }
+      const managers = createManagers(databaseOptions);
+      const own = registerExec(managers.exec, {
+        id: "approval:owned",
+        request: { sessionKey: ownerKey },
+      });
+      const foreign = registerExec(managers.exec, {
+        id: "approval:foreign",
+        request: { sessionKey: foreignKey },
+      });
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.approvals"],
+              },
+            },
+          },
+        },
+      };
+      const context = {
+        ...createContext(),
+        getRuntimeConfig: () => cfg,
+      } as GatewayRequestHandlerOptions["context"];
+      const roleClient = {
+        ...createClient({ deviceId: "reviewer" }),
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as GatewayRequestHandlerOptions["client"];
+      const ownerClient = {
+        ...createClient({ deviceId: "reviewer" }),
+        internal: { operatorRoleActor: { kind: "system" } },
+      } as GatewayRequestHandlerOptions["client"];
+      const handlers = createApprovalHandlers({
+        execApprovalManager: managers.exec,
+        pluginApprovalManager: managers.plugin,
+        databaseOptions,
+      });
+
+      const hidden = await invoke({
+        handlers,
+        method: "approval.get",
+        body: { id: foreign.record.id },
+        client: roleClient,
+        context,
+      });
+      expect(hidden).toMatchObject({
+        ok: false,
+        error: { details: { reason: "APPROVAL_NOT_FOUND" } },
+      });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: own.record.id },
+          client: roleClient,
+          context,
+        }),
+      ).toMatchObject({ ok: true, result: { approval: { id: own.record.id } } });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: foreign.record.id },
+          client: createClient({ deviceId: "reviewer" }),
+          context,
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { details: { reason: "APPROVAL_NOT_FOUND" } },
+      });
+      expect(
+        await invoke({
+          handlers,
+          method: "approval.get",
+          body: { id: foreign.record.id },
+          client: ownerClient,
+          context,
+        }),
+      ).toMatchObject({ ok: true, result: { approval: { id: foreign.record.id } } });
+
+      for (const id of [own.record.id, foreign.record.id]) {
+        expect(
+          await invoke({
+            handlers,
+            method: "approval.resolve",
+            body: { id, kind: "exec", decision: "deny" },
+            client: ownerClient,
+            context,
+          }),
+        ).toMatchObject({ ok: true });
+      }
+      const history = await invoke({
+        handlers,
+        method: "approval.history",
+        body: {},
+        client: roleClient,
+        context,
+      });
+      expect(history).toMatchObject({
+        ok: true,
+        result: { items: [{ id: own.record.id, source: { sessionKey: ownerKey } }] },
+      });
+      await Promise.all([own.decision, foreign.decision]);
+    });
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const id = "exec:approval/with?reserved";
+    const id = "exec:approval.with_safe-punctuation";
     registerExec(managers.exec, {
       id,
       reviewerDeviceIds: ["reviewer-a"],
@@ -277,7 +651,7 @@ describe("unified approval handlers", () => {
     expect(approvalFromResult(response.result)).toMatchObject({
       id,
       status: "pending",
-      urlPath: "/operator/approve/exec%3Aapproval%2Fwith%3Freserved",
+      urlPath: "/operator/approve/exec%3Aapproval.with_safe-punctuation",
       presentation: {
         kind: "exec",
         commandText: "printf approval-handler",
@@ -452,17 +826,19 @@ describe("unified approval handlers", () => {
     await expect(pending.decision).resolves.toBe("deny");
   });
 
-  it.each([
+  it.for([
     ["approval.get", String.fromCharCode(0xd800)],
     ["approval.resolve", String.fromCharCode(0xd800)],
     ["approval.get", "."],
     ["approval.resolve", ".."],
-  ] as const)("rejects unsafe approval id through %s: %s", async (method, id) => {
+  ] as const)("rejects unsafe approval id through %s: %s", async ([method, id], testContext) => {
     const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unsafe-approval-id-"));
     tempDirs.push(databasePath);
     const handlers = createApprovalHandlers({
-      execApprovalManager: new ExecApprovalManager(),
-      pluginApprovalManager: new ExecApprovalManager<PluginApprovalRequestPayload>(),
+      execApprovalManager: createTestApprovalManager(testContext),
+      pluginApprovalManager: createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+      }),
       databaseOptions: { path: databasePath },
     });
 
@@ -480,15 +856,20 @@ describe("unified approval handlers", () => {
     expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
-  it.each(["approval.get", "approval.resolve"] as const)(
+  it.for(["approval.get", "approval.resolve"] as const)(
     "returns sanitized UNAVAILABLE when %s cannot read durable state",
-    async (method) => {
+    async (method, testContext) => {
       const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-broken-db-"));
       tempDirs.push(databasePath);
       const context = createContext();
       const handlers = createApprovalHandlers({
-        execApprovalManager: new ExecApprovalManager(),
-        pluginApprovalManager: new ExecApprovalManager<PluginApprovalRequestPayload>(),
+        execApprovalManager: createTestApprovalManager(testContext),
+        pluginApprovalManager: createTestApprovalManager<PluginApprovalRequestPayload>(
+          testContext,
+          {
+            approvalKind: "plugin",
+          },
+        ),
         databaseOptions: { path: databasePath },
       });
 
@@ -511,6 +892,171 @@ describe("unified approval handlers", () => {
       expect(context.logGateway.error).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("cancels only approvals owned by the aborted active run", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const aborted = registerExec(managers.exec, {
+      id: "aborted-run-approval",
+      request: { runId: "run-active", toolCallId: "tool-active" },
+      reviewerDeviceIds: ["later-surface"],
+    });
+    const completedRun = registerExec(managers.exec, {
+      id: "completed-run-approval",
+      request: { runId: "run-completed", toolCallId: "tool-completed" },
+    });
+    const context = createContext();
+    const publish = vi.fn();
+
+    expect(
+      cancelUnboundRunApprovals({
+        runId: "run-active",
+        manager: managers.exec,
+        publish,
+      }),
+    ).toBe(1);
+
+    await expect(aborted.decision).resolves.toBeNull();
+    expect(managers.exec.getSnapshot(aborted.record.id)).toMatchObject({
+      status: "cancelled",
+      terminalReason: "run-aborted",
+    });
+    const completedRunSnapshot = managers.exec.getSnapshot(completedRun.record.id);
+    expect(completedRunSnapshot).toMatchObject({
+      request: { runId: "run-completed" },
+    });
+    expect(completedRunSnapshot?.resolvedAtMs).toBeUndefined();
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ id: aborted.record.id, decision: "deny" }),
+      expect.objectContaining({ id: aborted.record.id }),
+    );
+
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const replay = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: aborted.record.id, kind: "exec", decision: "allow-once" },
+      client: createClient({ deviceId: "later-surface" }),
+      context,
+    });
+    expect(replay.result).toMatchObject({
+      applied: false,
+      approval: {
+        id: aborted.record.id,
+        status: "cancelled",
+        reason: "run-aborted",
+      },
+    });
+  });
+
+  it("cancels only approvals bound to the exact fenced worker claim", async (testContext) => {
+    const manager = createTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const claim = {
+      sessionId: "session-worker",
+      claimId: "claim-worker",
+      runId: "run-worker",
+      placementGeneration: 4,
+      owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 7 },
+    };
+    const bind = (id: string, ownerEpoch: number) => {
+      const record = manager.create({ command: "echo ok", runId: claim.runId }, 60_000, id);
+      record.agentRuntimeDelegatedAuthority = {
+        kind: "worker",
+        operationalRunInstance: { instanceId: `instance-${id}`, runId: claim.runId },
+        lifecycleGeneration: "lifecycle-1",
+        claimId: `run-claim-${id}`,
+        turnClaim: { ...claim, owner: { ...claim.owner, ownerEpoch } },
+      };
+      const decision = manager.register(record, 60_000);
+      return { record, decision };
+    };
+    const fenced = bind("worker-fenced", 7);
+    const successor = bind("worker-successor", 8);
+    const publish = vi.fn();
+
+    expect(cancelWorkerTurnClaimBoundApprovals({ claim, manager, publish })).toBe(1);
+    await expect(fenced.decision).resolves.toBeNull();
+    expect(successor.record.resolvedAtMs).toBeUndefined();
+    expect(publish).toHaveBeenCalledOnce();
+    manager.forceDenyDetailed(
+      successor.record.id,
+      "run-aborted",
+      { kind: "system", id: null },
+      "cancelled",
+    );
+    await expect(successor.decision).resolves.toBeNull();
+  });
+
+  it("cancels exact exec and plugin authority without touching a same-run successor", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const oldAuthority = {
+      kind: "local" as const,
+      operationalRunInstance: { instanceId: "instance-old", runId: "run-reused" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-old",
+    };
+    const successorAuthority = {
+      kind: "local" as const,
+      operationalRunInstance: { instanceId: "instance-new", runId: "run-reused" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-new",
+    };
+    const oldExec = registerExec(managers.exec, {
+      id: "old-exec-authority",
+      request: { runId: "run-reused" },
+    });
+    const successorExec = registerExec(managers.exec, {
+      id: "successor-exec-authority",
+      request: { runId: "run-reused" },
+    });
+    const oldPlugin = registerPlugin(managers.plugin, {
+      id: "old-plugin-authority",
+      request: { runId: "run-reused" },
+    });
+    const successorPlugin = registerPlugin(managers.plugin, {
+      id: "successor-plugin-authority",
+      request: { runId: "run-reused" },
+    });
+    oldExec.record.agentRuntimeDelegatedAuthority = oldAuthority;
+    oldPlugin.record.agentRuntimeDelegatedAuthority = oldAuthority;
+    successorExec.record.agentRuntimeDelegatedAuthority = successorAuthority;
+    successorPlugin.record.agentRuntimeDelegatedAuthority = successorAuthority;
+
+    expect(
+      cancelAgentRuntimeBoundApprovals({
+        authority: oldAuthority,
+        reason: "permission-change",
+        manager: managers.exec,
+        publish: () => {},
+      }),
+    ).toBe(1);
+    expect(
+      cancelAgentRuntimeBoundApprovals({
+        authority: oldAuthority,
+        reason: "permission-change",
+        manager: managers.plugin,
+        publish: () => {},
+      }),
+    ).toBe(1);
+
+    await expect(oldExec.decision).resolves.toBeNull();
+    await expect(oldPlugin.decision).resolves.toBeNull();
+    expect(oldExec.record.resolvedBy).toBe("permission-change");
+    expect(oldPlugin.record.resolvedBy).toBe("permission-change");
+    expect(managers.exec.getSnapshot(successorExec.record.id)?.resolvedAtMs).toBeUndefined();
+    expect(managers.plugin.getSnapshot(successorPlugin.record.id)?.resolvedAtMs).toBeUndefined();
+    managers.exec.resolve(successorExec.record.id, "deny");
+    managers.plugin.resolve(successorPlugin.record.id, "deny");
+    await successorExec.decision;
+    await successorPlugin.decision;
+  });
 
   it("keeps JSON Schema-sized astral plugin text visible", async () => {
     const databaseOptions = createDatabaseOptions();
@@ -762,8 +1308,14 @@ describe("unified approval handlers", () => {
       request: { allowedDecisions: ["allow-once"] },
       reviewerDeviceIds: ["phone-device"],
     });
-    const context = createContext();
+    const handleWebPushResolved = vi.fn(async () => {});
+    const context = createContext(undefined, {
+      handleRequested: vi.fn(() => false),
+      handleResolved: handleWebPushResolved,
+      handleExpired: vi.fn(async () => {}),
+    });
     const handlePluginApprovalResolved = vi.fn(async () => {});
+    const handlePluginIosPushResolved = vi.fn(async () => {});
     const forwarder = {
       handleRequested: vi.fn(async () => false),
       handleResolved: vi.fn(async () => {}),
@@ -775,6 +1327,7 @@ describe("unified approval handlers", () => {
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
       forwarder,
+      pluginIosPushDelivery: { handleResolved: handlePluginIosPushResolved },
       databaseOptions,
     });
 
@@ -812,14 +1365,30 @@ describe("unified approval handlers", () => {
       new Set(["approval-client"]),
       { dropIfSlow: true },
     );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({
+        id: pending.record.id,
+        decision: "deny",
+        resolvedBy: "Approval Test",
+      }),
+    );
     expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
       kind: "device",
       id: "phone-device",
     });
     expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
+    expect(handleWebPushResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { id: string },
@@ -827,6 +1396,7 @@ describe("unified approval handlers", () => {
           record?: { id: string };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("plugin");
     expect(
       recipientOptions?.filter?.(createClient({ deviceId: "unrelated" }), recipientOptions.record),
     ).toBe(false);
@@ -903,6 +1473,10 @@ describe("unified approval handlers", () => {
     );
     expect(context.logGateway.error).toHaveBeenCalledWith(
       expect.stringContaining("exec approvals: unified resolve forwarder failed"),
+    );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
     );
   });
 
@@ -1037,6 +1611,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { requestedByConnId?: string | null },
@@ -1044,6 +1619,7 @@ describe("unified approval handlers", () => {
           record?: { requestedByConnId?: string | null };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("exec");
     expect(recipientOptions?.record?.requestedByConnId).toBe("requester-connection");
     expect(
       recipientOptions?.filter?.(
@@ -1106,11 +1682,11 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves an overlong canonical id through its fixed-size transport reference", async () => {
+  it("resolves a maximum-length canonical id through its fixed-size transport reference", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
     const pending = registerExec(managers.exec, {
-      id: `approval/${"\u{1F4F1}".repeat(40)}/transport-limit`,
+      id: `approval-${"a".repeat(119)}`,
       reviewerDeviceIds: ["telegram"],
     });
     const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });

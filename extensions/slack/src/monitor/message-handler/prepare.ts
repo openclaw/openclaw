@@ -2,7 +2,6 @@
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
-  type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
@@ -10,14 +9,14 @@ import {
   classifyChannelInboundEvent,
   formatInboundEnvelope,
   implicitMentionKindWhen,
-  logInboundDrop,
   matchesMentionWithExplicit,
   recordDroppedChannelInboundHistory,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
   resolveUnmentionedGroupInboundPolicy,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -35,17 +34,20 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { normalizeSlackAppContextEntities, isSlackAppContext } from "../../agent-context.js";
 import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
+import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
+import { readSlackAssistantThreadContext } from "../assistant-thread-context.js";
 import {
   authorizeSlackBotRoomMessage,
   resolveSlackCommandIngress,
@@ -54,14 +56,13 @@ import {
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
-  readSessionUpdatedAt,
+  getSessionEntry,
   resolveChannelContextVisibilityMode,
   resolveStorePath,
 } from "../config.runtime.js";
 import {
   buildSlackAssistantThreadMetadata,
   normalizeSlackChannelType,
-  parseSlackAssistantThreadMetadata,
   resolveSlackChatType,
   type SlackAssistantThreadContext,
   type SlackMonitorContext,
@@ -70,9 +71,11 @@ import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
+import { qualifySlackRoutePeerId } from "../workspace-routing.js";
 import {
   discardSlackPreflightMedia,
   findCaptionlessSlackAudioFile,
@@ -97,6 +100,22 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
+const SLACK_CHANNEL_ACCESS_DOCS_URL =
+  "https://docs.openclaw.ai/channels/slack#access-control-and-routing";
+
+function resolveSlackGroupSessionSubject(params: {
+  channelId: string;
+  channelName?: string;
+  workspaceId: string;
+  workspaceName?: string;
+}): string {
+  const channelName = normalizeOptionalString(params.channelName);
+  const workspaceName = normalizeOptionalString(params.workspaceName);
+  if (channelName && workspaceName) {
+    return `${workspaceName} #${channelName}`;
+  }
+  return `Slack Channel (Workspace ID: ${params.workspaceId}, Channel ID: ${params.channelId})`;
+}
 
 function recordString(
   record: Record<string, unknown> | undefined,
@@ -183,33 +202,12 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
     return undefined;
   }
   try {
-    const response = (await (
-      params.eventScope?.client ?? params.ctx.app.client
-    ).conversations.replies({
-      channel: params.message.channel,
-      ts: threadTs,
-      oldest: threadTs,
-      include_all_metadata: true,
-      limit: 4,
-    })) as {
-      messages?: Array<{
-        metadata?: unknown;
-      }>;
-    };
-    for (const message of response.messages ?? []) {
-      const context = parseSlackAssistantThreadMetadata(message.metadata);
-      if (!context) {
-        continue;
-      }
-      return {
-        assistantChannelId: params.message.channel,
-        threadTs,
-        userId: params.message.user,
-        channelId: context.channelId,
-        teamId: context.teamId,
-        enterpriseId: context.enterpriseId,
-      };
-    }
+    return await readSlackAssistantThreadContext({
+      client: params.eventScope?.client ?? params.ctx.app.client,
+      channelId: params.message.channel,
+      threadTs,
+      userId: params.message.user,
+    });
   } catch (err) {
     logVerbose(
       `slack assistant context restore failed channel=${params.message.channel} ts=${threadTs}: ${formatErrorMessage(err)}`,
@@ -329,7 +327,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
     mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
     mediaTotalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
   });
-  return toInboundMediaFacts(content?.effectiveDirectMedia, {
+  return await toInboundMediaFactsWithMetadata(content?.effectiveDirectMedia, {
     kind: "image",
     messageId: params.message.ts,
   });
@@ -358,6 +356,25 @@ type SlackAuthorizationContext = {
   allowFromLower: string[];
 };
 
+type SlackInboundDropReason =
+  | "bot-disabled"
+  | "missing-user"
+  | "missing-sender"
+  | "channel-not-allowed"
+  | "dm-disabled"
+  | "dm-unauthorized"
+  | "configured-binding-unavailable"
+  | "ambiguous-thread"
+  | "unauthorized-sender"
+  | "unauthorized-bot"
+  | "control-command-unauthorized"
+  | "bot-missing-mention"
+  | "mention-detection-unavailable"
+  | "other-mention"
+  | "missing-mention"
+  | "empty-content"
+  | "final-route-denied";
+
 type SlackMentionMetadata = {
   mentionedUserIds: string[];
   mentionedSubteamIds: string[];
@@ -370,16 +387,6 @@ type SlackExplicitMentionState = {
   explicitlyMentionedBotSubteam: boolean;
   explicitlyMentioned: boolean;
 };
-
-type SlackMentionContextPayload = Pick<
-  FinalizedMsgContext,
-  | "WasMentioned"
-  | "ExplicitlyMentionedBot"
-  | "MentionedUserIds"
-  | "MentionedSubteamIds"
-  | "ImplicitMentionKinds"
-  | "MentionSource"
->;
 
 function collectUniqueSlackMentionIds(text: string, regex: RegExp): string[] {
   const ids: string[] = [];
@@ -458,32 +465,6 @@ function resolveSlackMentionSource(params: {
   return "none";
 }
 
-function buildSlackMentionContextPayload(params: {
-  isRoomish: boolean;
-  effectiveWasMentioned: boolean;
-  explicitlyMentioned: boolean;
-  mentionedUserIds: readonly string[];
-  mentionedSubteamIds: readonly string[];
-  matchedImplicitMentionKinds: readonly string[];
-  mentionSource: NonNullable<FinalizedMsgContext["MentionSource"]>;
-}): SlackMentionContextPayload {
-  if (!params.isRoomish) {
-    return {};
-  }
-  return {
-    WasMentioned: params.effectiveWasMentioned,
-    ExplicitlyMentionedBot: params.explicitlyMentioned,
-    MentionedUserIds: params.mentionedUserIds.length > 0 ? [...params.mentionedUserIds] : undefined,
-    MentionedSubteamIds:
-      params.mentionedSubteamIds.length > 0 ? [...params.mentionedSubteamIds] : undefined,
-    ImplicitMentionKinds:
-      params.matchedImplicitMentionKinds.length > 0
-        ? [...params.matchedImplicitMentionKinds]
-        : undefined,
-    MentionSource: params.mentionSource,
-  };
-}
-
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -518,6 +499,8 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -553,9 +536,12 @@ async function authorizeSlackInboundMessage(params: {
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   conversation: SlackConversationContext;
+  explicitBotMention: boolean;
   eventScope?: SlackEventScope;
+  onVisibleDrop?: () => void;
+  drop: (reason: SlackInboundDropReason) => null;
 }): Promise<SlackAuthorizationContext | null> {
-  const { ctx, account, message, conversation } = params;
+  const { ctx, account, message, conversation, drop } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
     conversation;
 
@@ -564,47 +550,79 @@ async function authorizeSlackInboundMessage(params: {
       return null;
     }
     if (allowBotsMode === "off") {
-      logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
-      return null;
+      return drop("bot-disabled");
     }
   }
 
   if (isDirectMessage && !message.user) {
-    logVerbose("slack: drop dm message (missing user id)");
-    return null;
+    return drop("missing-user");
   }
 
   const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
   if (!senderId) {
-    logVerbose("slack: drop message (missing sender id)");
-    return null;
+    return drop("missing-sender");
   }
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,
     })
   ) {
-    logVerbose("slack: drop message (channel not allowed)");
-    return null;
+    if (
+      conversation.isRoom &&
+      ctx.groupPolicy === "allowlist" &&
+      params.explicitBotMention &&
+      !isBotMessage &&
+      message.user
+    ) {
+      let subject = "This OpenClaw bot";
+      if (ctx.botUserId) {
+        try {
+          const botIdentity = await ctx.resolveUserName(ctx.botUserId, params.eventScope);
+          const botName = normalizeOptionalString(botIdentity?.name);
+          if (botName) {
+            subject = escapeSlackMrkdwn(botName);
+          }
+        } catch (error) {
+          logVerbose(`slack allowlist denial bot-name lookup failed: ${formatSlackError(error)}`);
+        }
+      }
+      try {
+        await (params.eventScope?.client ?? ctx.app.client).chat.postEphemeral({
+          token: ctx.botToken,
+          channel: message.channel,
+          user: message.user,
+          text: `${subject} can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <${SLACK_CHANNEL_ACCESS_DOCS_URL}|Learn how to configure Slack channel access.>`,
+        });
+        params.onVisibleDrop?.();
+      } catch (error) {
+        ctx.runtime.error?.(
+          `slack allowlist denial notice failed for channel ${message.channel}: ${formatSlackError(error)}`,
+        );
+      }
+    }
+    return drop("channel-not-allowed");
   }
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
+    eventScope: params.eventScope,
   });
 
   if (isDirectMessage) {
     const directUserId = message.user;
     if (!directUserId) {
-      logVerbose("slack: drop dm message (missing user id)");
-      return null;
+      return drop("missing-user");
     }
+    let dropReason: SlackInboundDropReason = "dm-unauthorized";
     const allowed = await authorizeSlackDirectMessage({
       ctx,
       accountId: account.accountId,
       senderId: directUserId,
+      eventScope: params.eventScope,
       allowFromLower,
       resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
       sendPairingReply: async (text) => {
@@ -613,10 +631,11 @@ async function authorizeSlackInboundMessage(params: {
           token: ctx.botToken,
           client: params.eventScope?.client ?? ctx.app.client,
           accountId: account.accountId,
+          eventScope: params.eventScope,
         });
       },
       onDisabled: () => {
-        logVerbose("slack: drop dm (dms disabled)");
+        dropReason = "dm-disabled";
       },
       onUnauthorized: ({ allowMatchMeta }) => {
         logVerbose(
@@ -626,7 +645,7 @@ async function authorizeSlackInboundMessage(params: {
       log: logVerbose,
     });
     if (!allowed) {
-      return null;
+      return drop(dropReason);
     }
   }
 
@@ -647,13 +666,34 @@ export async function prepareSlackMessage(params: {
     eventScope?: SlackEventScope;
     /** Handler-owned race check for suppressing a duplicate dropped-history record. */
     shouldRecordDroppedHistory?: () => boolean;
+    /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
+    onVisibleDrop?: () => void;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
+  const drop = (reason: SlackInboundDropReason, parentUserId?: string): null => {
+    // Record this preparation attempt; a later message/app_mention twin can still dispatch.
+    // Logical-message deduplication remains owned by the handler's dispatch claim.
+    ctx.logger.info(
+      {
+        provider: "slack",
+        accountId: account.accountId,
+        teamId: opts.eventScope?.teamId ?? ctx.teamId,
+        channelId: message.channel,
+        messageTs: message.ts,
+        source: opts.source,
+        reason,
+        ...(parentUserId ? { parentUserId } : {}),
+      },
+      "Slack inbound event rejected during preparation",
+    );
+    return null;
+  };
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
-  const threadStarterWorkspaceScope = opts.eventScope
-    ? { accountId: account.accountId, teamId: opts.eventScope.teamId }
-    : undefined;
+  const threadStarterWorkspaceScope = {
+    accountId: account.accountId,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
+  };
   const cfg = ctx.cfg;
   const conversation = await resolveSlackConversationContext({
     ctx,
@@ -672,18 +712,26 @@ export async function prepareSlackMessage(params: {
     allowBotsMode,
     isBotMessage,
   } = conversation;
+  const messageText = message.text ?? "";
+  const mentionMetadata = collectSlackMentionMetadata(messageText);
+  const normalizedBotUserId = normalizeSlackId(ctx.botUserId);
+  const explicitBotMention =
+    opts.source === "app_mention" ||
+    Boolean(normalizedBotUserId && mentionMetadata.mentionedUserIds.includes(normalizedBotUserId));
   const authorization = await authorizeSlackInboundMessage({
     ctx,
     account,
     message,
     conversation,
+    explicitBotMention,
     eventScope: opts.eventScope,
+    onVisibleDrop: opts.onVisibleDrop,
+    drop,
   });
   if (!authorization) {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
-  const messageText = message.text ?? "";
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
     if (resolvedSenderName) {
@@ -700,7 +748,6 @@ export async function prepareSlackMessage(params: {
     resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
     return resolvedSenderName;
   };
-  const mentionMetadata = collectSlackMentionMetadata(messageText);
   const { mentionedUserIds, mentionedSubteamIds, hasAnyMention } = mentionMetadata;
   const messageAssistantThreadContext = resolveSlackMessageAssistantThreadContext(message);
   const assistantContextLookupChannelId =
@@ -758,6 +805,50 @@ export async function prepareSlackMessage(params: {
   if (assistantThreadContextToCache) {
     ctx.saveSlackAssistantThreadContext(assistantThreadContextToCache, opts.eventScope);
   }
+  // app_context is Agent-only. Self-threaded roots are not enough: legacy
+  // Assistant View can emit the same shape, so its resolved context wins.
+  // Enterprise Grid remains on its documented V1 message path; org-wide
+  // manifests do not enable Agent View, so scoped events stay out of this mode.
+  const hasAgentViewMessageSignal =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    isSlackAppContext(message.app_context);
+  if (hasAgentViewMessageSignal) {
+    await ctx.recordSlackAgentView();
+  }
+  const managedViewThreadTs = message.thread_ts;
+  const isManagedViewRoot =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    !message.parent_user_id &&
+    Boolean(managedViewThreadTs && message.ts && managedViewThreadTs === message.ts);
+  if (isManagedViewRoot && managedViewThreadTs) {
+    // Slack-managed Agent and Assistant roots self-thread. Persist the specific
+    // root so first-message routing never waits on an app-wide capability probe.
+    await ctx.recordSlackManagedViewThread(message.channel, managedViewThreadTs);
+  }
+  const hasManagedViewThread =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    Boolean(
+      managedViewThreadTs &&
+      (await ctx.isSlackManagedViewThread(message.channel, managedViewThreadTs)),
+    );
+  const isAgentViewMessage =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    // Slack selects Agent View for the whole app, not individual messages.
+    // The durable marker is keyed by apiAppId so an app replacement cannot
+    // make ordinary DMs on the replacement inherit the old app's experience.
+    (hasAgentViewMessageSignal ||
+      isManagedViewRoot ||
+      hasManagedViewThread ||
+      (await ctx.isSlackAgentView()));
+  const agentViewThreadTs = isAgentViewMessage ? (message.thread_ts ?? message.ts) : undefined;
   const channelReplyToMode =
     channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
   const willImplicitlyThreadReply =
@@ -767,19 +858,22 @@ export async function prepareSlackMessage(params: {
     opts.wasMentioned === true ||
     explicitlyMentioned ||
     willImplicitlyThreadReply;
-  let routing = resolveSlackRoutingContext({
-    ctx,
-    account,
-    message,
-    isDirectMessage,
-    isGroupDm,
-    isRoom,
-    isRoomish,
-    channelConfig,
-    seedTopLevelRoomThread: seedTopLevelRoomThreadBySource,
-    assistantThreadTs: assistantThreadContext?.threadTs,
-    eventScope: opts.eventScope,
-  });
+  const resolveMessageRouting = (seedTopLevelRoomThread: boolean) =>
+    resolveSlackRoutingContext({
+      ctx,
+      account,
+      message,
+      isDirectMessage,
+      isGroupDm,
+      isRoom,
+      isRoomish,
+      channelConfig,
+      seedTopLevelRoomThread,
+      assistantThreadTs: assistantThreadContext?.threadTs,
+      agentViewThreadTs,
+      eventScope: opts.eventScope,
+    });
+  let routing = resolveMessageRouting(seedTopLevelRoomThreadBySource);
 
   let mentionCheckTranscript: string | undefined;
   const resolveWasMentioned = (mentionRegexes: RegExp[]) =>
@@ -798,7 +892,11 @@ export async function prepareSlackMessage(params: {
   const buildPolicyMentionRegexes = (agentId: string | undefined) =>
     resolveCachedMentionRegexes(ctx, agentId, {
       provider: "slack",
-      conversationId: message.channel,
+      conversationId: formatSlackTarget({
+        teamId: opts.eventScope?.teamId,
+        kind: "channel",
+        id: message.channel,
+      }),
       providerPolicy: account.config.mentionPatterns,
     });
   let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
@@ -826,6 +924,7 @@ export async function prepareSlackMessage(params: {
   const forcedAssistantReplyThreadTs = shouldForceAssistantReplyThread
     ? assistantThreadContext?.threadTs
     : undefined;
+  const forcedReplyThreadTs = agentViewThreadTs ?? forcedAssistantReplyThreadTs;
   if (runtimeBinding && shouldLogVerbose()) {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
@@ -848,13 +947,7 @@ export async function prepareSlackMessage(params: {
           `slack: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
         );
       }
-      logInboundDrop({
-        log: logVerbose,
-        channel: "slack",
-        reason: "configured ACP binding unavailable",
-        target: configuredBinding.record.conversation.conversationId,
-      });
-      return null;
+      return drop("configured-binding-unavailable");
     }
   }
   const senderNameForAuthPromise: Promise<
@@ -866,16 +959,10 @@ export async function prepareSlackMessage(params: {
       )
     : Promise.resolve({ ok: true, name: undefined });
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
-  if (
-    !isDirectMessage &&
-    ctx.botUserId &&
-    message.thread_ts &&
-    !ctx.threadRequireExplicitMention &&
-    !wasMentioned
-  ) {
+  if (!isDirectMessage && message.thread_ts && !wasMentioned) {
     const replyToBotKinds = implicitMentionKindWhen(
       "reply_to_bot",
-      message.parent_user_id === ctx.botUserId,
+      Boolean(ctx.botUserId && message.parent_user_id === ctx.botUserId),
     );
     implicitMentionKinds =
       replyToBotKinds.length > 0
@@ -886,7 +973,7 @@ export async function prepareSlackMessage(params: {
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
-              ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
+              teamId: opts.eventScope?.teamId,
             }),
           );
   }
@@ -1000,16 +1087,13 @@ export async function prepareSlackMessage(params: {
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   if (message["_ambiguousThreadReply"]) {
-    ctx.logger.info(
-      {
-        channel: message.channel,
-        ts: message.ts,
-        parentUserId: message.parent_user_id,
-      },
-      "skipping ambiguous slack thread reply",
-    );
-    return null;
+    return drop("ambiguous-thread", message.parent_user_id);
   }
   let canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
@@ -1018,32 +1102,39 @@ export async function prepareSlackMessage(params: {
   const hasAbortRequest = isAbortRequestText(textForCommandDetection);
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
-  const messageIngress = await resolveSlackCommandIngress({
-    ctx,
-    senderId,
-    senderName: senderNameForAuth,
-    channelType: conversation.resolvedChannelType ?? "channel",
-    channelId: message.channel,
-    ownerAllowFromLower: allowFromLower,
-    channelUsers: isRoom ? channelConfig?.users : undefined,
-    allowTextCommands,
-    hasControlCommand: hasControlCommandInMessage,
-    mentionFacts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention,
-      implicitMentionKinds,
-    },
-    activation: {
-      requireMention: shouldRequireMention,
+  const resolveMessageIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+    threadId?: string,
+  ) =>
+    await resolveSlackCommandIngress({
+      ctx,
+      teamId: opts.eventScope?.teamId ?? ctx.teamId,
+      senderId,
+      senderName: senderNameForAuth,
+      channelType: conversation.resolvedChannelType ?? "channel",
+      channelId: message.channel,
+      threadId,
+      ownerAllowFromLower: allowFromLower,
+      channelUsers: isRoom ? channelConfig?.users : undefined,
       allowTextCommands,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
-    },
-  });
+      hasControlCommand: hasControlCommandInMessage,
+      mentionFacts: {
+        canDetectMention,
+        wasMentioned,
+        hasAnyMention,
+        implicitMentionKinds,
+      },
+      activation: {
+        requireMention: shouldRequireMention,
+        allowTextCommands,
+        implicitMentions,
+      },
+      contextBinding,
+    });
+  let messageIngress = await resolveMessageIngress();
   const senderGate = messageIngress.senderAccess.gate;
   if (isRoomish && senderGate?.allowed === false) {
-    logVerbose(`Blocked unauthorized slack sender ${senderId} (not in sender allowlist)`);
-    return null;
+    return drop("unauthorized-sender");
   }
   if (
     isRoom &&
@@ -1059,7 +1150,7 @@ export async function prepareSlackMessage(params: {
       eventScope: opts.eventScope,
     }))
   ) {
-    return null;
+    return drop("unauthorized-bot");
   }
 
   const threadContextAllowFromLower = isRoom
@@ -1074,35 +1165,29 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: account.accountId,
   });
+  const preflightChannelTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: "channel",
+    id: message.channel,
+    explicitKind: true,
+  });
+  const replyRouteTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: isDirectMessage ? "user" : "channel",
+    id: isDirectMessage ? senderId : message.channel,
+    explicitKind: true,
+  });
   const commandAuthorized = messageIngress.commandAccess.authorized;
 
   if (isRoomish && messageIngress.commandAccess.shouldBlockControlCommand) {
-    logInboundDrop({
-      log: logVerbose,
-      channel: "slack",
-      reason: "control command (unauthorized)",
-      target: senderId,
-    });
-    return null;
+    return drop("control-command-unauthorized");
   }
 
   const canSeedMentionedRoomThread =
     !seedTopLevelRoomThreadBySource && isRoom && !routing.isThreadReply && !hasBoundSession;
   let seededMentionRouting: typeof routing | undefined;
   const getSeededMentionRouting = () => {
-    seededMentionRouting ??= resolveSlackRoutingContext({
-      ctx,
-      account,
-      message,
-      isDirectMessage,
-      isGroupDm,
-      isRoom,
-      isRoomish,
-      channelConfig,
-      seedTopLevelRoomThread: true,
-      assistantThreadTs: assistantThreadContext?.threadTs,
-      eventScope: opts.eventScope,
-    });
+    seededMentionRouting ??= resolveMessageRouting(true);
     return seededMentionRouting;
   };
 
@@ -1137,7 +1222,7 @@ export async function prepareSlackMessage(params: {
           media: preflightMedia,
           cfg,
           accountId: account.accountId,
-          originatingTo: `channel:${message.channel}`,
+          originatingTo: preflightChannelTarget,
           sessionKey: preflightRouting.sessionKey,
           messageThreadId: preflightRouting.threadContext.messageThreadId,
         })
@@ -1186,6 +1271,7 @@ export async function prepareSlackMessage(params: {
   }
   const directThreadRoutedToDmSession =
     !assistantThreadContext &&
+    !agentViewThreadTs &&
     isDirectMessage &&
     isThreadReply &&
     threadTs &&
@@ -1204,7 +1290,7 @@ export async function prepareSlackMessage(params: {
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+      implicitMentions,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
@@ -1221,38 +1307,26 @@ export async function prepareSlackMessage(params: {
   if (isBotMessage && allowBotsMode === "mentions") {
     const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;
     if (!botMentioned) {
-      logVerbose("slack: drop bot message (allowBots=mentions, missing mention)");
-      return null;
+      return drop("bot-missing-mention");
     }
   }
 
   if (isRoom && shouldRequireMention && !canDetectMention && !effectiveWasMentioned) {
-    ctx.logger.info(
-      { channel: message.channel, reason: "mention-detection-unavailable" },
-      "skipping channel message",
-    );
     await recordDroppedHistory("slack-mention-detection-unavailable");
-    return null;
+    return drop("mention-detection-unavailable");
   }
 
   // Thread participation is broad on Slack; only an explicit bot mention escapes this gate.
   // Native bot identity distinguishes bot pings from other Slack mentions.
   const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
   if (isRoom && ignoreOtherMentions && Boolean(ctx.botUserId) && hasAnyMention && !wasMentioned) {
-    logInboundDrop({
-      log: logVerbose,
-      channel: "slack",
-      reason: "other-mention",
-      target: senderId,
-    });
     await recordDroppedHistory("slack-other-mention");
-    return null;
+    return drop("other-mention");
   }
 
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     await recordDroppedHistory("slack-no-mention");
-    return null;
+    return drop("missing-mention");
   }
 
   const chatType = resolveSlackChatType(conversation.resolvedChannelType);
@@ -1269,9 +1343,10 @@ export async function prepareSlackMessage(params: {
   const threadStarter = await getThreadStarter();
   const resolvedMessageContent = await getMessageContent();
   if (!resolvedMessageContent) {
-    return null;
+    return drop("empty-content");
   }
-  const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
+  const { rawBody, effectiveDirectMedia, commandSourceText, mentionStripPatterns } =
+    resolvedMessageContent;
   const bodyForAgent = preflightAudioTranscript
     ? formatSlackAudioTranscriptForAgent({
         transcript: preflightAudioTranscript,
@@ -1294,12 +1369,11 @@ export async function prepareSlackMessage(params: {
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        scope: cfg.messages?.ackReactionScope,
         inboundEventKind,
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
-        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,
@@ -1307,12 +1381,9 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
-  const allowToolOnlyStatusReaction =
-    statusReactionsExplicitlyEnabled && (effectiveWasMentioned || shouldBypassMention);
-  const shouldSendConfiguredAck = shouldAckReaction();
   const shouldSendAckReaction =
-    shouldSendConfiguredAck &&
-    (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction || isRoomEvent);
+    shouldAckReaction() &&
+    (!sourceRepliesAreToolOnly || effectiveWasMentioned || shouldBypassMention || isRoomEvent);
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
     !isRoomEvent &&
@@ -1337,7 +1408,27 @@ export async function prepareSlackMessage(params: {
         : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
+  const workspaceId = opts.eventScope?.teamId || ctx.teamId;
+  const workspaceName =
+    ctx.installationIdentity?.kind === "workspace" &&
+    ctx.installationIdentity.teamId === workspaceId
+      ? ctx.installationIdentity.teamName
+      : undefined;
+  // Stable Slack ids already own routing. Session presentation uses both human names or an
+  // explicit id-labelled fallback so shared metadata never has to infer Slack identifiers.
+  const groupSessionSubject = isRoomish
+    ? resolveSlackGroupSessionSubject({
+        channelId: message.channel,
+        channelName,
+        workspaceId,
+        workspaceName,
+      })
+    : undefined;
   const senderName = await resolveSenderName();
+  const conversationAvatar =
+    isDirectMessage && message.user
+      ? ctx.resolveUserAvatar(message.user, opts.eventScope)
+      : undefined;
   const preview = truncateUtf16Safe(bodyForAgent.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -1348,10 +1439,13 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(inboundLabel, {
-    sessionKey,
-    contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
-  });
+  enqueueRoutedSystemEvent(
+    inboundLabel,
+    { ...route, sessionKey },
+    {
+      contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
+    },
+  );
 
   const envelopeFrom =
     resolveConversationLabel({
@@ -1369,10 +1463,11 @@ export async function prepareSlackMessage(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
+  const sessionEntry = getSessionEntry({
     storePath,
     sessionKey,
   });
+  const previousTimestamp = sessionEntry?.updatedAt;
   if (opts.source === "app_mention" && !ctx.botUserId && message.ts) {
     // The Slack message event can arrive first and queue the same timestamp as dropped history.
     // Remove only this route's copy before the trusted app_mention builds prompt context.
@@ -1405,7 +1500,12 @@ export async function prepareSlackMessage(params: {
 
   let combinedBody = body;
   const dmHistoryContext =
-    isDirectMessage && !isThreadReply && dmHistoryLimit > 0 && !previousTimestamp
+    isDirectMessage &&
+    !assistantThreadContext &&
+    !agentViewThreadTs &&
+    !isThreadReply &&
+    dmHistoryLimit > 0 &&
+    !previousTimestamp
       ? await resolveSlackDmHistoryContext({
           ctx,
           channelId: message.channel,
@@ -1438,9 +1538,7 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
-
-  const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+  const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
     channelInfo,
     channelConfig,
@@ -1454,8 +1552,10 @@ export async function prepareSlackMessage(params: {
     threadStarterMedia,
   } = await resolveSlackThreadContextData({
     ctx,
+    agentId: route.agentId,
     account,
     message,
+    isGroupDm,
     isThreadReply,
     threadTs,
     threadStarter,
@@ -1473,7 +1573,7 @@ export async function prepareSlackMessage(params: {
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
-  const inboundMedia = toInboundMediaFacts(effectiveMedia, {
+  const inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
     transcribed: (entry) =>
       effectiveMedia === effectiveDirectMedia && entry === preflightAudioMedia,
   });
@@ -1488,9 +1588,26 @@ export async function prepareSlackMessage(params: {
   const supplementalThreadHistoryBody =
     directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
   const effectiveMessageThreadId =
-    assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
+    assistantThreadContext?.threadTs ?? agentViewThreadTs ?? threadContext.messageThreadId;
+  const boundMessageThreadId = directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId;
+  messageIngress = await resolveMessageIngress(
+    {
+      agentId: route.agentId,
+      sessionKey,
+      messageId: threadContext.messageTs,
+      inboundEventKind,
+    },
+    boundMessageThreadId,
+  );
+  if (messageIngress.ingress.admission !== "dispatch") {
+    return drop("final-route-denied");
+  }
+  const agentContextEntities = isAgentViewMessage
+    ? normalizeSlackAppContextEntities(message.app_context)
+    : [];
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (ctx.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: messageIngress,
     channel: "slack",
     accountId: route.accountId,
     messageId: threadContext.messageTs,
@@ -1505,21 +1622,32 @@ export async function prepareSlackMessage(params: {
     conversation: {
       kind: chatType,
       id: message.channel,
+      routePeer: {
+        kind: chatType,
+        id: qualifySlackRoutePeerId({
+          id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
+          kind: isDirectMessage ? "user" : "channel",
+          eventScope: opts.eventScope,
+        }),
+      },
       label: envelopeFrom,
       spaceId: opts.eventScope?.teamId || ctx.teamId || undefined,
-      threadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
+      threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
+      avatar: conversationAvatar,
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
-      routeSessionKey: sessionKey,
+      routeSessionKey: route.sessionKey,
+      dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
-      to: slackTo,
+      to: replyRouteTarget,
       replyToId: threadContext.replyToId,
-      messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
+      messageThreadId: boundMessageThreadId,
       nativeChannelId: message.channel,
     },
     message: {
@@ -1529,6 +1657,9 @@ export async function prepareSlackMessage(params: {
       rawBody,
       commandBody,
       inboundHistory,
+    },
+    sessionTranscript: {
+      historyLimit: isRoomish ? ctx.historyLimit : dmHistoryLimit,
     },
     access: {
       mentions: {
@@ -1558,11 +1689,31 @@ export async function prepareSlackMessage(params: {
       },
       groupSystemPrompt,
     },
+    channelContext: {
+      chat: {
+        commandSourceText,
+        mentionStripPatterns,
+      },
+    },
     extra: {
-      GroupSubject: isRoomish ? roomLabel : undefined,
-      UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+      GroupSubject: groupSessionSubject,
+      ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
+      ChannelStructuredContext:
+        agentContextEntities.length > 0
+          ? [
+              {
+                label: "Slack active context",
+                source: "slack",
+                type: "active_view",
+                payload: { entities: agentContextEntities },
+              },
+            ]
+          : undefined,
       TransportThreadId: directThreadRoutedToDmSession ? threadContext.messageThreadId : undefined,
+      // Keep the child message identity, but never inject it as Slack's thread root.
+      ReplyThreading: isThreadReply ? { implicitCurrentMessage: "deny" } : undefined,
       SlackAssistantThread: assistantThreadContext ? true : undefined,
+      SlackAgentThread: agentViewThreadTs ? true : undefined,
       SlackAssistantThreadContextChannelId: assistantThreadContext?.channelId,
       SlackAssistantThreadContextTeamId: assistantThreadContext?.teamId,
       SlackAssistantThreadContextEnterpriseId: assistantThreadContext?.enterpriseId ?? undefined,
@@ -1574,15 +1725,18 @@ export async function prepareSlackMessage(params: {
         shouldSeedInitialThreadContext
           ? true
           : undefined,
-      ...buildSlackMentionContextPayload({
-        isRoomish,
-        effectiveWasMentioned,
-        explicitlyMentioned,
-        mentionedUserIds,
-        mentionedSubteamIds,
-        matchedImplicitMentionKinds,
-        mentionSource,
-      }),
+      ...(isRoomish
+        ? {
+            WasMentioned: effectiveWasMentioned,
+            ExplicitlyMentionedBot: explicitlyMentioned,
+            MentionedUserIds: mentionedUserIds.length > 0 ? [...mentionedUserIds] : undefined,
+            MentionedSubteamIds:
+              mentionedSubteamIds.length > 0 ? [...mentionedSubteamIds] : undefined,
+            ImplicitMentionKinds:
+              matchedImplicitMentionKinds.length > 0 ? [...matchedImplicitMentionKinds] : undefined,
+            MentionSource: mentionSource,
+          }
+        : {}),
     },
   }) satisfies FinalizedMsgContext;
   ctxPayload.ReplyToMode = replyToMode;
@@ -1603,7 +1757,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
@@ -1612,17 +1766,14 @@ export async function prepareSlackMessage(params: {
   // received on. This avoids depending on a follow-up conversations.open
   // round-trip for the normal reply path while keeping persisted routing
   // metadata user-scoped for later session deliveries.
-  const replyTarget = isDirectMessage ? `channel:${message.channel}` : (ctxPayload.To ?? undefined);
-  if (!replyTarget) {
-    return null;
-  }
+  const replyTarget = `channel:${message.channel}`;
 
   if (preflightAudioTranscript) {
     await sendSlackPreflightAudioTranscriptEcho({
       transcript: preflightAudioTranscript,
       cfg,
       accountId: account.accountId,
-      originatingTo: `channel:${message.channel}`,
+      originatingTo: preflightChannelTarget,
       messageThreadId: threadContext.messageThreadId,
     });
   }
@@ -1640,43 +1791,46 @@ export async function prepareSlackMessage(params: {
     account,
     message,
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
-    ...(opts.eventScope ? { eventScope: opts.eventScope } : {}),
+    eventScope: opts.eventScope,
     route,
     channelConfig,
     replyTarget,
     ctxPayload,
+    sessionDisplayName: sessionEntry?.displayName,
     turn: {
       storePath,
       record: {
-        updateLastRoute: isDirectMessage
-          ? {
-              sessionKey: updateLastRouteSessionKey,
-              channel: "slack",
-              to: `user:${message.user}`,
-              accountId: route.accountId,
-              threadId: effectiveMessageThreadId,
-              mainDmOwnerPin:
-                updateLastRouteSessionKey === route.mainSessionKey &&
-                pinnedMainDmOwner &&
-                message.user
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
-                      onSkip: ({
-                        ownerRecipient,
-                        senderRecipient,
-                      }: {
-                        ownerRecipient: string;
-                        senderRecipient: string;
-                      }) => {
-                        logVerbose(
-                          `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
+        updateLastRoute:
+          isDirectMessage || opts.eventScope
+            ? {
+                sessionKey: updateLastRouteSessionKey,
+                channel: "slack",
+                to: replyRouteTarget,
+                accountId: route.accountId,
+                threadId: effectiveMessageThreadId,
+                mainDmOwnerPin:
+                  isDirectMessage &&
+                  updateLastRouteSessionKey === route.mainSessionKey &&
+                  pinnedMainDmOwner &&
+                  message.user
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
+                        onSkip: ({
+                          ownerRecipient,
+                          senderRecipient,
+                        }: {
+                          ownerRecipient: string;
+                          senderRecipient: string;
+                        }) => {
+                          logVerbose(
+                            `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
+              }
+            : undefined,
         onRecordError: (err: unknown) => {
           ctx.logger.warn(
             {
@@ -1699,7 +1853,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(forcedAssistantReplyThreadTs ? { forcedReplyThreadTs: forcedAssistantReplyThreadTs } : {}),
+    ...(forcedReplyThreadTs ? { forcedReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }
       : {}),

@@ -12,6 +12,7 @@ import {
   slugifyWikiPageStem,
   slugifyWikiSegment,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -64,15 +65,21 @@ async function readExistingSourcePage(pagePath: string): Promise<string> {
   throw readError;
 }
 
-export async function ingestMemoryWikiSource(params: {
+async function ingestMemoryWikiSourceUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
   nowMs?: number;
+  signal?: AbortSignal;
 }): Promise<IngestMemoryWikiSourceResult> {
-  await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
+  await initializeMemoryWikiVault(params.config, {
+    ...(params.nowMs !== undefined ? { nowMs: params.nowMs } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  params.signal?.throwIfAborted();
   const sourcePath = path.resolve(params.inputPath);
   const buffer = await fs.readFile(sourcePath);
+  params.signal?.throwIfAborted();
   const content = assertUtf8Text(buffer, sourcePath);
   const title = resolveSourceTitle(sourcePath, params.title);
   const slug = slugifyWikiSegment(title);
@@ -114,11 +121,13 @@ export async function ingestMemoryWikiSource(params: {
   });
 
   const existing = created ? "" : await readExistingSourcePage(pagePath);
+  params.signal?.throwIfAborted();
   await fs.writeFile(
     pagePath,
     existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
     "utf8",
   );
+  params.signal?.throwIfAborted();
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
     timestamp,
@@ -130,7 +139,11 @@ export async function ingestMemoryWikiSource(params: {
       created,
     },
   });
-  const compile = await compileMemoryWikiVault(params.config);
+  params.signal?.throwIfAborted();
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
 
   return {
     sourcePath,
@@ -141,4 +154,19 @@ export async function ingestMemoryWikiSource(params: {
     created,
     indexUpdatedFiles: compile.updatedFiles,
   };
+}
+
+export async function ingestMemoryWikiSource(params: {
+  config: ResolvedMemoryWikiConfig;
+  inputPath: string;
+  title?: string;
+  nowMs?: number;
+  signal?: AbortSignal;
+}): Promise<IngestMemoryWikiSourceResult> {
+  // Ingest read-modify-writes the source page and recompiles the vault; hold
+  // the vault mutation lock across the whole span so it cannot interleave
+  // with the other serialized vault mutators (apply/compile/source-sync).
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    ingestMemoryWikiSourceUnlocked(params),
+  );
 }

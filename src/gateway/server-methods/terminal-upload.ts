@@ -1,12 +1,16 @@
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TerminalUploadParams,
   validateTerminalUploadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/terminal-upload-constants.js";
+import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
@@ -15,11 +19,7 @@ function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: strin
 export const terminalUploadHandlers: GatewayRequestHandlers = {
   "terminal.upload": async (opts) => {
     const { params, respond, context } = opts;
-    if (!validateTerminalUploadParams(params)) {
-      invalid(
-        respond,
-        `invalid terminal.upload params: ${formatValidationErrors(validateTerminalUploadParams.errors)}`,
-      );
+    if (!assertValidParams(params, validateTerminalUploadParams, "terminal.upload", respond)) {
       return;
     }
     const connId = opts.client?.connId;
@@ -49,7 +49,17 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, result);
+      respond(true, {
+        path: result.path,
+        size: result.size,
+        ...(result.uploadPathStyle &&
+        hasGatewayClientCap(
+          opts.client?.connect?.caps,
+          GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
+        )
+          ? { uploadPathStyle: result.uploadPathStyle }
+          : {}),
+      });
     } catch (error) {
       respond(
         false,

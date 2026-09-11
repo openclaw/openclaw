@@ -20,7 +20,7 @@ export function runRespawnChildWithSignalBridge(params: {
   detachForProcessTree?: boolean;
   stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
-  onError: (error: unknown) => void;
+  onError: (error: unknown) => void | Promise<void>;
 }): ChildProcess {
   const { command, args, env, runtime, onError } = params;
   const stdioIsTerminal = params.stdioIsTerminal ?? (process.stdin.isTTY || process.stdout.isTTY);
@@ -38,6 +38,8 @@ export function runRespawnChildWithSignalBridge(params: {
   let signalForceKillTimer: NodeJS.Timeout | undefined;
   let signalHardExitTimer: NodeJS.Timeout | undefined;
   let parentSignalReceived = false;
+  let firstForwardedSignal: NodeJS.Signals | undefined;
+  let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
@@ -73,6 +75,7 @@ export function runRespawnChildWithSignalBridge(params: {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         runtime.exit(1);
@@ -81,8 +84,9 @@ export function runRespawnChildWithSignalBridge(params: {
     }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = (): void => {
+  const scheduleParentExit = (signal: NodeJS.Signals): void => {
     parentSignalReceived = true;
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -102,16 +106,33 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
-      runtime.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      runtime.exit(forwardedSignalExitCode ?? 1);
       return;
     }
     runtime.exit(code ?? 1);
   });
 
-  child.once("error", (error) => {
+  child.on("error", (error) => {
+    if (child.pid !== undefined) {
+      return;
+    }
     clearSignalTimers();
-    onError(error);
-    runtime.exit(1);
+    const reporting = onError(error);
+    const exit = () => runtime.exit(1);
+    // A failed spawn retains async diagnostics until settled, including formatter failure.
+    if (reporting) {
+      void reporting.then(exit, exit);
+    } else {
+      exit();
+    }
   });
 
   return child;

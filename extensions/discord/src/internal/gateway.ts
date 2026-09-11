@@ -15,7 +15,9 @@ import {
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
 } from "discord-api-types/v10";
-import * as ws from "ws";
+import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
@@ -25,6 +27,7 @@ import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js"
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
 import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
+import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -67,6 +70,8 @@ const DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES = 4096;
 // bounding ws's 100 MiB default before an inbound payload reaches JSON parsing.
 export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
   maxPayload: 16 * 1024 * 1024,
+  // A silent opening handshake must close so the existing reconnect lifecycle can run.
+  handshakeTimeout: 30_000,
 }) satisfies ws.ClientOptions;
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
@@ -96,6 +101,11 @@ export class GatewayPlugin extends Plugin {
   private outboundLimiter = new GatewaySendLimiter(
     (payload) => this.sendSerializedGatewayEvent(payload),
     (error) => this.emitter.emit("error", error),
+    (warning) =>
+      this.emitter.emit(
+        "warning",
+        `Gateway outbound queue overflow policy=${warning.policy} droppedEvents=${warning.droppedEvents} queuedEvents=${warning.queuedEvents} maxQueuedEvents=${warning.maxQueuedEvents}`,
+      ),
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
@@ -113,8 +123,12 @@ export class GatewayPlugin extends Plugin {
     return null;
   }
 
-  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return this.client ? await this.client.fetchGuildEmojis(guildId, fetcher) : await fetcher();
   }
 
   takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
@@ -183,7 +197,7 @@ export class GatewayPlugin extends Plugin {
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
-    return new ws.WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
+    return new WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
   }
 
   private setupWebSocket(resume: boolean): void {
@@ -256,7 +270,10 @@ export class GatewayPlugin extends Plugin {
     switch (payload.op) {
       case GatewayOpcodes.Hello: {
         this.startHeartbeat(
-          (payload.d as { heartbeat_interval?: number }).heartbeat_interval ?? 45_000,
+          asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
+            min: 1,
+            max: MAX_TIMER_TIMEOUT_MS,
+          }) ?? 45_000,
         );
         const resumeState = resume ? this.getResumeState() : null;
         if (resumeState) {
@@ -414,7 +431,12 @@ export class GatewayPlugin extends Plugin {
     }
     this.voiceStateCache.apply(payload);
     dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
-    const data = mapGatewayDispatchData(this.client, payload.t, payload.d);
+    // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
+    // maps structures only after the queue claim; other events retain eager mapping.
+    const data =
+      payload.t === GatewayDispatchEvents.MessageCreate
+        ? payload.d
+        : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
     if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
       await this.client.handleInteraction(payload.d);

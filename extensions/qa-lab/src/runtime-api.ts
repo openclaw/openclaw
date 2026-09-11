@@ -37,8 +37,9 @@ export type {
   QaBusReactToMessageInput,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
   QaBusWaitForInput,
-} from "./protocol.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";

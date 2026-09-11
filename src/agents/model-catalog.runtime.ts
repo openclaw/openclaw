@@ -1,2 +1,7 @@
-/** Runtime barrel for model catalog loading helpers. */
-export { loadManifestModelCatalog, loadModelCatalog } from "./model-catalog.js";
+/** Runtime barrel for lifecycle-owned model catalog helpers. */
+export { loadManifestModelCatalog } from "./model-catalog.js";
+export {
+  readPreparedModelCatalog,
+  loadPreparedModelCatalogSnapshot,
+  loadProviderScopedThinkingCatalog,
+} from "./prepared-model-catalog.js";

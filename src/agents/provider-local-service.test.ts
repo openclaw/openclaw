@@ -1,5 +1,6 @@
 // Verifies managed local provider services start, lease, probe, and stop safely.
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -10,7 +11,11 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
+import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { getDeterministicFreePortBlock, getFreePort } from "../test-utils/ports.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
@@ -20,26 +25,13 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
-  stopManagedProviderLocalServicesForTest,
+  stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
 
-async function freePort(): Promise<number> {
-  // Allocate a real loopback port to exercise child process health probes.
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") {
-          resolve(address.port);
-        } else {
-          reject(new Error("missing test port"));
-        }
-      });
-    });
-  });
-}
+const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
+const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
+const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
 
 async function waitForProbeFailure(url: string): Promise<void> {
   // Idle-stop assertions wait until the local service no longer responds.
@@ -62,11 +54,122 @@ async function waitForProbeFailure(url: string): Promise<void> {
   }
 }
 
+async function withSpawnReadyHealthProbe<T>(run: () => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    try {
+      return await realFetch(input, init);
+    } catch (initialError) {
+      const requestUrl = input instanceof Request ? input.url : input.toString();
+      const spawned = getManagedProviderLocalServiceDiagnosticsForTest().some(
+        (diagnostics) => diagnostics.healthUrl === requestUrl && diagnostics.pid !== undefined,
+      );
+      if (!spawned || init?.signal?.aborted) {
+        throw initialError;
+      }
+
+      // Production probes before and after spawn. Once diagnostics prove the
+      // fixture child exists, wait for its real socket instead of its 250ms retry.
+      const deadline = Date.now() + 1_000;
+      let latestError = initialError;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        try {
+          return await realFetch(input, init);
+        } catch (error) {
+          latestError = error;
+          if (init?.signal?.aborted) {
+            break;
+          }
+        }
+      }
+      throw latestError;
+    }
+  });
+
+  try {
+    return await run();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+}
+
+async function waitForReadyOneShotHostExit(
+  child: ReturnType<typeof spawn>,
+  readStderr: () => string,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const finish = (error?: Error) => {
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { kind?: unknown }).kind === ONE_SHOT_HOST_READY_KIND
+      ) {
+        finish();
+      }
+    };
+    const onError = (error: Error) => finish(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(
+        new Error(
+          `one-shot host exited before readiness (code=${String(code)} signal=${String(signal)})${readStderr()}`,
+        ),
+      );
+    };
+    const timeout = setTimeout(() => {
+      finish(new Error(`one-shot host did not become ready${readStderr()}`));
+    }, ONE_SHOT_HOST_READY_TIMEOUT_MS);
+
+    child.on("message", onMessage);
+    child.on("error", onError);
+    child.on("exit", onExit);
+  });
+
+  const exitPromise = waitForOneShotHostExit(child, readStderr);
+  // The fixture-owned IPC channel gates the exit deadline. Once removed,
+  // only the managed service's diagnostic pipes can keep this host alive.
+  child.disconnect();
+  return await exitPromise;
+}
+
+async function waitForOneShotHostExit(
+  child: ReturnType<typeof spawn>,
+  readStderr: () => string,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+  try {
+    const [code, signal] = (await once(child, "exit", {
+      signal: AbortSignal.timeout(ONE_SHOT_HOST_EXIT_TIMEOUT_MS),
+    })) as [number | null, NodeJS.Signals | null];
+    return { code, signal };
+  } catch (error) {
+    throw new Error(`one-shot host did not exit after readiness${readStderr()}`, { cause: error });
+  }
+}
+
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(() => {
-    stopManagedProviderLocalServicesForTest();
+  afterEach(async () => {
+    await stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {
@@ -88,40 +191,79 @@ describe("provider local service", () => {
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
-    const model = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-demo",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
-        command: process.execPath,
-        args: [
-          "-e",
-          `const http=require("http");http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');}).listen(${port},"127.0.0.1");`,
-        ],
-        healthUrl,
-        readyTimeoutMs: 5_000,
-        idleStopMs: 1,
-      },
+    const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
+      expect((await fetch(healthUrl)).ok).toBe(true);
+    });
+    const model = attachModelProviderRuntimePluginHandle(
+      attachModelProviderLocalService(
+        {
+          provider: "local-demo",
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+        } as unknown as Model<"openai-completions">,
+        {
+          command: process.execPath,
+          args: [
+            "-e",
+            `const http=require("http");http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');}).listen(${port},"127.0.0.1");`,
+          ],
+          healthUrl,
+          readyTimeoutMs: 5_000,
+          idleStopMs: 1,
+        },
+      ),
+      { plugin: { reconcileLocalService: reconcile } } as never,
     );
 
-    const lease = await ensureModelProviderLocalService(model);
-
-    if (!lease) {
+    const acquire = (signal?: AbortSignal) =>
+      ensureModelProviderLocalService(model, undefined, signal);
+    const firstLease = await withSpawnReadyHealthProbe(acquire);
+    const secondLease = await acquire();
+    if (!firstLease || !secondLease) {
       throw new Error("Expected provider local service lease");
     }
+    reconcile.mockImplementationOnce(() => {
+      throw new Error("reconcile failed");
+    });
+    await expect(acquire()).rejects.toThrow("reconcile failed");
+    const controller = new AbortController();
+    const abort = new Error("reconcile aborted");
+    reconcile.mockImplementationOnce(async ({ signal }) => {
+      controller.abort(abort);
+      throw signal?.reason;
+    });
+    await expect(acquire(controller.signal)).rejects.toThrow(abort.message);
+
+    const reconciliation = createDeferredCore();
+    const reconcileStarted = createDeferredCore();
+    const lateController = new AbortController();
+    const lateAbort = new Error("late reconcile abort");
+    reconcile.mockImplementationOnce(() => {
+      reconcileStarted.resolve();
+      return reconciliation.promise;
+    });
+    const lateAcquire = acquire(lateController.signal);
+    await reconcileStarted.promise;
+    lateController.abort(lateAbort);
+    reconciliation.resolve();
+    await expect(lateAcquire).rejects.toThrow(lateAbort.message);
+
+    expect(reconcile).toHaveBeenCalledTimes(5);
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease.release();
+    firstLease.release();
+    expect((await fetch(healthUrl)).ok).toBe(true);
+    secondLease.release();
     await waitForProbeFailure(healthUrl);
+    expect(hasManagedProviderLocalServices()).toBe(false);
   });
 
-  it("resolves process configuration from the host config", async () => {
-    const port = await freePort();
-    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+  it("resolves process configuration for root and exact legacy baseURL endpoints", async () => {
+    const port = await getFreePort();
+    const providerId = "gpu-spark";
+    const rootBaseUrl = `http://127.0.0.1:${port}`;
+    const healthUrl = `${rootBaseUrl}/v1/models`;
+    const serverScript = `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(
       () =>
         ({
@@ -129,14 +271,11 @@ describe("provider local service", () => {
             providers: {
               "gpu-spark": {
                 baseUrl: "",
-                baseURL: `127.0.0.1:${port}/v1`,
+                baseURL: `127.0.0.1:${port}/V1`,
                 models: [],
                 localService: {
                   command: process.execPath,
-                  args: [
-                    "-e",
-                    `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
-                  ],
+                  args: ["-e", serverScript],
                   healthUrl,
                   readyTimeoutMs: 5_000,
                   idleStopMs: 1,
@@ -147,20 +286,23 @@ describe("provider local service", () => {
         }) as OpenClawConfig,
     );
 
-    const lease = await acquire({
-      providerId: "gpu-spark",
-      baseUrl: `http://127.0.0.1:${port}`,
-      service: { command: "caller-controlled" },
-    } as Parameters<typeof acquire>[0]);
+    const rootLease = await withSpawnReadyHealthProbe(() =>
+      acquire({
+        providerId,
+        baseUrl: rootBaseUrl,
+        service: { command: "caller-controlled" },
+      } as Parameters<typeof acquire>[0]),
+    );
+    const configuredLease = await acquire({ providerId, baseUrl: `${rootBaseUrl}/V1` });
 
-    expect(lease).toBeDefined();
+    expect(rootLease && configuredLease).toBeDefined();
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease?.release();
+    [rootLease, configuredLease].forEach((lease) => lease?.release());
     await waitForProbeFailure(healthUrl);
   });
 
   it("allows a default loopback endpoint when provider baseUrl is empty", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
       models: {
@@ -183,10 +325,12 @@ describe("provider local service", () => {
       },
     }));
 
-    const lease = await acquire({
-      providerId: "gpu-default",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-    });
+    const lease = await withSpawnReadyHealthProbe(() =>
+      acquire({
+        providerId: "gpu-default",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      }),
+    );
 
     expect(lease).toBeDefined();
     lease?.release();
@@ -243,7 +387,7 @@ describe("provider local service", () => {
 
   it("caps oversized local service idle stop timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
       {
@@ -265,7 +409,7 @@ describe("provider local service", () => {
     );
 
     try {
-      const lease = await ensureModelProviderLocalService(model);
+      const lease = await withSpawnReadyHealthProbe(() => ensureModelProviderLocalService(model));
 
       if (!lease) {
         throw new Error("Expected provider local service lease");
@@ -279,7 +423,7 @@ describe("provider local service", () => {
   });
 
   it("sends provider request headers on local service health probes", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
       {
@@ -300,10 +444,12 @@ describe("provider local service", () => {
     );
 
     const sentinel = mintSecretSentinel("health-secret", { label: "local-health-probe" });
-    const lease = await ensureModelProviderLocalService(model, {
-      Authorization: `Bearer ${sentinel}`,
-      "X-Tenant": "acme",
-    });
+    const lease = await withSpawnReadyHealthProbe(() =>
+      ensureModelProviderLocalService(model, {
+        Authorization: `Bearer ${sentinel}`,
+        "X-Tenant": "acme",
+      }),
+    );
 
     if (!lease) {
       throw new Error("Expected provider local service lease");
@@ -321,7 +467,7 @@ describe("provider local service", () => {
   });
 
   it("rejects unknown sentinels before starting a local service", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     const model = attachModelProviderLocalService(
       {
@@ -344,7 +490,7 @@ describe("provider local service", () => {
     );
   });
 
-  it("cancels local service health probe response bodies", async () => {
+  it("reconciles a healthy external process and cancels its health response body", async () => {
     let socketClosed = false;
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
@@ -369,24 +515,29 @@ describe("provider local service", () => {
     if (!address || typeof address === "string") {
       throw new Error("missing test server port");
     }
-    const model = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-body-cleanup",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
-        command: process.execPath,
-        args: ["--version"],
-        healthUrl: `http://127.0.0.1:${address.port}/v1/models`,
-        readyTimeoutMs: 1_000,
-        idleStopMs: 1,
-      },
+    const reconcile = vi.fn(async () => undefined);
+    const model = attachModelProviderRuntimePluginHandle(
+      attachModelProviderLocalService(
+        {
+          provider: "local-body-cleanup",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        } as unknown as Model<"openai-completions">,
+        {
+          command: process.execPath,
+          args: ["--version"],
+          healthUrl: `http://127.0.0.1:${address.port}/v1/models`,
+          readyTimeoutMs: 1_000,
+          idleStopMs: 1,
+        },
+      ),
+      { plugin: { reconcileLocalService: reconcile } } as never,
     );
 
     try {
-      await expect(ensureModelProviderLocalService(model)).resolves.toBeUndefined();
+      const lease = await ensureModelProviderLocalService(model);
+      expect(lease).toBeDefined();
+      expect(reconcile).toHaveBeenCalledOnce();
+      lease?.release();
       await expect.poll(() => socketClosed, { timeout: 1000, interval: 20 }).toBe(true);
     } finally {
       for (const socket of sockets) {
@@ -399,7 +550,7 @@ describe("provider local service", () => {
   });
 
   it("serializes concurrent chat and embedding starts with independent leases", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-"));
     const startsPath = path.join(tempDir, "starts.txt");
@@ -426,14 +577,16 @@ describe("provider local service", () => {
     );
 
     try {
-      const [chatLease, embeddingLease] = await Promise.all([
-        ensureModelProviderLocalService(model),
-        ensureProviderLocalService({
-          providerId: "local-concurrent",
-          baseUrl: `http://127.0.0.1:${port}/v1`,
-          service,
-        }),
-      ]);
+      const [chatLease, embeddingLease] = await withSpawnReadyHealthProbe(() =>
+        Promise.all([
+          ensureModelProviderLocalService(model),
+          ensureProviderLocalService({
+            providerId: "local-concurrent",
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            service,
+          }),
+        ]),
+      );
 
       expect(chatLease).toBeDefined();
       expect(embeddingLease).toBeDefined();
@@ -450,8 +603,8 @@ describe("provider local service", () => {
   });
 
   it("keeps configured provider aliases on different local endpoints independent", async () => {
-    const firstPort = await freePort();
-    const secondPort = await freePort();
+    const firstPort = await getDeterministicFreePortBlock({ offsets: [0, 1] });
+    const secondPort = firstPort + 1;
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-key-"));
@@ -476,18 +629,20 @@ describe("provider local service", () => {
     };
 
     try {
-      const leases = await Promise.all([
-        ensureProviderLocalService({
-          providerId: "ollama-spark",
-          baseUrl: `http://127.0.0.1:${firstPort}/v1`,
-          service: firstService,
-        }),
-        ensureProviderLocalService({
-          providerId: "ollama-studio",
-          baseUrl: `http://127.0.0.1:${secondPort}/v1`,
-          service: secondService,
-        }),
-      ]);
+      const leases = await withSpawnReadyHealthProbe(() =>
+        Promise.all([
+          ensureProviderLocalService({
+            providerId: "ollama-spark",
+            baseUrl: `http://127.0.0.1:${firstPort}/v1`,
+            service: firstService,
+          }),
+          ensureProviderLocalService({
+            providerId: "ollama-studio",
+            baseUrl: `http://127.0.0.1:${secondPort}/v1`,
+            service: secondService,
+          }),
+        ]),
+      );
 
       expect((await fetch(firstHealthUrl)).ok).toBe(true);
       expect((await fetch(secondHealthUrl)).ok).toBe(true);
@@ -506,7 +661,7 @@ describe("provider local service", () => {
   });
 
   it("restarts an OpenClaw-managed local service when its health endpoint is down", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-restart-"));
     const startsPath = path.join(tempDir, "starts.txt");
@@ -541,7 +696,9 @@ describe("provider local service", () => {
     );
 
     try {
-      const firstLease = await ensureModelProviderLocalService(model);
+      const firstLease = await withSpawnReadyHealthProbe(() =>
+        ensureModelProviderLocalService(model),
+      );
       firstLease?.release();
       expect((await fetch(healthUrl)).ok).toBe(true);
       firstForkedPid = await readPidFile(forkedPidPath);
@@ -566,7 +723,7 @@ describe("provider local service", () => {
   });
 
   it("reports a local service startup exit without waiting for readiness timeout", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const target = {
       providerId: "local-fast-exit",
       baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -584,8 +741,32 @@ describe("provider local service", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
+  it("preserves UTF-8 split across local service startup diagnostic chunks", async () => {
+    const port = await getFreePort();
+    const expected = "startup-😀-failure";
+    const serviceScript = [
+      `const bytes=Buffer.from(${JSON.stringify(expected)},"utf8");`,
+      `const split=Buffer.byteLength("startup-","utf8")+2;`,
+      `process.stderr.write(bytes.subarray(0,split));`,
+      `setTimeout(()=>process.stderr.write(bytes.subarray(split),()=>process.exit(17)),75);`,
+    ].join("");
+    const target = {
+      providerId: "local-utf8-exit",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
+        command: process.execPath,
+        args: ["-e", serviceScript],
+        readyTimeoutMs: 60_000,
+      },
+    };
+
+    await expect(ensureProviderLocalService(target)).rejects.toThrow(
+      `local-utf8-exit local service exited before readiness with code 17; stderr: ${expected}`,
+    );
+  });
+
   it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const model = attachModelProviderLocalService(
       {
         id: "demo",
@@ -608,13 +789,15 @@ describe("provider local service", () => {
   });
 
   it("does not keep one-shot hosts alive through diagnostic pipes", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const tempDir = tempDirs.make("openclaw-local-service-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
     const script = [
       `import fs from "node:fs/promises";`,
       `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl)};`,
+      `if (!process.send) throw new Error("missing one-shot host IPC");`,
+      `process.on("disconnect", () => {});`,
       `const port = ${port};`,
       `const lease = await ensureProviderLocalService({`,
       `  providerId: "local-unref",`,
@@ -631,37 +814,28 @@ describe("provider local service", () => {
       `if (diagnostics.stdoutTail || diagnostics.stderrTail) throw new Error("runtime output was retained");`,
       `await fs.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
       `lease?.release();`,
+      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
     const parent = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
     let stderr = "";
-    parent.stderr.on("data", (chunk: Buffer | string) => {
+    parent.stderr?.on("data", (chunk: Buffer | string) => {
       stderr += chunk.toString();
     });
     let servicePid: number | undefined;
-    let exitTimeout: NodeJS.Timeout | undefined;
 
     try {
-      const result = await Promise.race([
-        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          parent.once("exit", (code, signal) => resolve({ code, signal }));
-        }),
-        new Promise<"timeout">((resolve) => {
-          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
-        }),
-      ]);
-      clearTimeout(exitTimeout);
+      const result = await waitForReadyOneShotHostExit(parent, () => stderr);
       expect(result, stderr).toEqual({ code: 0, signal: null });
       servicePid = await readPidFile(servicePidPath);
       expect(await waitForPidToExit(servicePid)).toBe(true);
     } finally {
-      clearTimeout(exitTimeout);
       killPidIfAlive(parent.pid);
       if (servicePid === undefined) {
         servicePid = await readPidFile(servicePidPath).catch(() => undefined);
@@ -671,18 +845,38 @@ describe("provider local service", () => {
   });
 
   it("does not keep failed one-shot hosts alive through diagnostic pipes", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
       `fs.writeFileSync(${JSON.stringify(servicePidPath)},String(process.pid));`,
       `process.on("SIGTERM",()=>{});`,
       `setInterval(()=>process.stderr.write("tick\\n"),10);`,
     ].join("");
+    // Advance only the nested host's readiness clock after the service PID exists.
+    // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
+      `import fs from "node:fs";`,
       `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl)};`,
+      `if (!process.send) throw new Error("missing one-shot host IPC");`,
+      `process.on("disconnect", () => {});`,
+      `const realNow = Date.now.bind(Date);`,
+      `const realSetTimeout = globalThis.setTimeout.bind(globalThis);`,
+      `let clockOffsetMs = 0;`,
+      `Date.now = () => realNow() + clockOffsetMs;`,
+      `globalThis.setTimeout = (callback, delay, ...args) => {`,
+      `  if (clockOffsetMs === 0 && fs.existsSync(${JSON.stringify(servicePidPath)})) {`,
+      `    return realSetTimeout(() => {`,
+      `      clockOffsetMs = ${failedServiceReadyTimeoutMs + 1};`,
+      `      globalThis.setTimeout = realSetTimeout;`,
+      `      callback(...args);`,
+      `    }, 0);`,
+      `  }`,
+      `  return realSetTimeout(callback, delay, ...args);`,
+      `};`,
       `try {`,
       `  await ensureProviderLocalService({`,
       `    providerId: "local-failed-unref",`,
@@ -690,36 +884,34 @@ describe("provider local service", () => {
       `    service: {`,
       `      command: process.execPath,`,
       `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
-      `      readyTimeoutMs: 100,`,
+      `      readyTimeoutMs: ${failedServiceReadyTimeoutMs},`,
       `    },`,
       `  });`,
-      `} catch {}`,
+      `} catch (error) {`,
+      `  if (!(error instanceof Error) || !error.message.includes("did not become ready")) throw error;`,
+      `}`,
+      `if (clockOffsetMs === 0) throw new Error("test clock did not advance");`,
+      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
     const parent = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
+    let stderr = "";
+    parent.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
     let servicePid: number | undefined;
-    let exitTimeout: NodeJS.Timeout | undefined;
 
     try {
-      const result = await Promise.race([
-        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          parent.once("exit", (code, signal) => resolve({ code, signal }));
-        }),
-        new Promise<"timeout">((resolve) => {
-          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
-        }),
-      ]);
-      clearTimeout(exitTimeout);
-      expect(result).toEqual({ code: 0, signal: null });
+      const result = await waitForReadyOneShotHostExit(parent, () => stderr);
+      expect(result, stderr).toEqual({ code: 0, signal: null });
       servicePid = await readPidFile(servicePidPath);
     } finally {
-      clearTimeout(exitTimeout);
       killPidIfAlive(parent.pid);
       if (servicePid === undefined) {
         servicePid = await readPidFile(servicePidPath).catch(() => undefined);
@@ -729,7 +921,7 @@ describe("provider local service", () => {
   });
 
   it("honors request aborts while waiting for local service readiness", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const controller = new AbortController();
     const target = {
@@ -759,7 +951,7 @@ describe("provider local service", () => {
   });
 
   it("reports only bounded redacted startup diagnostics", async () => {
-    const port = await freePort();
+    const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const diagnosticSecret = "local-service-diagnostic-secret";
     const inheritedDiagnosticSecret = "inherited-local-service-diagnostic-secret";

@@ -7,11 +7,11 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   createChannelPairingChallengeIssuer,
   createChannelPairingController,
 } from "./channel-pairing.js";
+import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
 function createReplyCollector() {
   const replies: string[] = [];
@@ -30,16 +30,18 @@ afterEach(() => {
 describe("createChannelPairingController", () => {
   it("scopes store access and issues pairing challenges through the scoped store", async () => {
     const readAllowFromStore = vi.fn(async () => ["alice"]);
+    const removeAllowFromStoreEntry = vi.fn(async () => ({ changed: true, allowFrom: [] }));
     const upsertPairingRequest = vi.fn(async () => ({ code: "123456", created: true }));
     const { replies, sendPairingReply } = createReplyCollector();
-    const runtime = {
+    const runtime = createPluginRuntimeMock({
       channel: {
         pairing: {
           readAllowFromStore,
+          removeAllowFromStoreEntry,
           upsertPairingRequest,
         },
       },
-    } as unknown as PluginRuntime;
+    });
 
     const pairing = createChannelPairingController({
       core: runtime,
@@ -48,6 +50,10 @@ describe("createChannelPairingController", () => {
     });
 
     await expect(pairing.readAllowFromStore()).resolves.toEqual(["alice"]);
+    await expect(pairing.removeAllowFromStoreEntry("alice")).resolves.toEqual({
+      changed: true,
+      allowFrom: [],
+    });
     await pairing.issueChallenge({
       senderId: "user-1",
       senderIdLine: "Your id: user-1",
@@ -57,6 +63,11 @@ describe("createChannelPairingController", () => {
     expect(readAllowFromStore).toHaveBeenCalledWith({
       channel: "googlechat",
       accountId: "primary",
+    });
+    expect(removeAllowFromStoreEntry).toHaveBeenCalledWith({
+      channel: "googlechat",
+      accountId: "primary",
+      entry: "alice",
     });
     expect(upsertPairingRequest).toHaveBeenCalledWith({
       channel: "googlechat",
@@ -73,14 +84,15 @@ describe("createChannelPairingController", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "channel_pairing_requested", handler }]),
     );
-    const runtime = {
+    const runtime = createPluginRuntimeMock({
       channel: {
         pairing: {
           readAllowFromStore: vi.fn(async () => []),
+          removeAllowFromStoreEntry: vi.fn(async () => ({ changed: false, allowFrom: [] })),
           upsertPairingRequest: vi.fn(async () => ({ code: "ACCT1234", created: true })),
         },
       },
-    } as unknown as PluginRuntime;
+    });
 
     const pairing = createChannelPairingController({
       core: runtime,
@@ -132,7 +144,7 @@ describe("createChannelPairingChallengeIssuer", () => {
     expect(replies[0]).toContain("654321");
   });
 
-  it("normalizes account ids before sending channel_pairing_requested hooks", async () => {
+  it("keeps normalized bound scope in hooks despite conflicting challenge fields", async () => {
     const handler = vi.fn(async () => {});
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "channel_pairing_requested", handler }]),
@@ -143,11 +155,14 @@ describe("createChannelPairingChallengeIssuer", () => {
       upsertPairingRequest: vi.fn(async () => ({ code: "NORM1234", created: true })),
     });
 
-    await issueChallenge({
+    const challenge = {
       senderId: "user-3",
       senderIdLine: "Your id: user-3",
       sendPairingReply: async () => {},
-    });
+      channel: "other",
+      accountId: "other-account",
+    };
+    await issueChallenge(challenge);
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({

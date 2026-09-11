@@ -5,21 +5,24 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import {
-  filterWorkspaceSkillEntriesWithOptions,
-  loadVisibleWorkspaceSkillEntries,
-} from "../loading/workspace.js";
-import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
+import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
+import type {
+  SkillEligibilityContext,
+  SkillCommandSpec,
+  SkillEntry,
+  SkillSnapshot,
+} from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { filterUserInvocableSkillEntries } from "./skill-index.js";
+import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
+import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
-const skillCommandDebugOnce = new Set<string>();
-const SKILL_COMMAND_MAX_LENGTH = 32;
-const SKILL_COMMAND_FALLBACK = "skill";
+const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
 function debugSkillCommandOnce(
@@ -27,10 +30,9 @@ function debugSkillCommandOnce(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (skillCommandDebugOnce.has(messageKey)) {
+  if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillCommandDebugOnce.add(messageKey);
   skillsLogger.debug(message, meta);
 }
 
@@ -39,20 +41,10 @@ function traceSkillCommandOnce(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (skillCommandDebugOnce.has(messageKey)) {
+  if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillCommandDebugOnce.add(messageKey);
   skillsLogger.trace(message, meta);
-}
-
-function sanitizeSkillCommandName(raw: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(raw)
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const trimmed = normalized.slice(0, SKILL_COMMAND_MAX_LENGTH);
-  return trimmed || SKILL_COMMAND_FALLBACK;
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
@@ -81,26 +73,34 @@ export function buildWorkspaceSkillCommandSpecs(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
+    librarySelections?: SkillSnapshot["librarySelections"];
     agentId?: string;
     skillFilter?: string[];
+    includeAllowlistHidden?: boolean;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     reservedNames?: Set<string>;
   },
 ): SkillCommandSpec[] {
-  const effectiveSkillFilter =
-    opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
+  const effectiveSkillFilter = opts?.includeAllowlistHidden
+    ? undefined
+    : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId));
   const eligible = opts?.entries
-    ? filterWorkspaceSkillEntriesWithOptions(opts.entries, {
+    ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
       })
-    : loadVisibleWorkspaceSkillEntries(workspaceDir, {
+    : loadVisibleSkills(workspaceDir, {
         config: opts?.config,
         managedSkillsDir: opts?.managedSkillsDir,
         bundledSkillsDir: opts?.bundledSkillsDir,
+        librarySelections: opts?.librarySelections,
+        agentId: opts?.agentId,
+        agentSkillFilter: opts?.includeAllowlistHidden ? "ignore" : "apply",
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
+        pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
       });
   const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();
@@ -174,9 +174,11 @@ export function buildWorkspaceSkillCommandSpecs(
 
     specs.push({
       name: unique,
+      displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,
+      modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
     });
@@ -208,6 +210,7 @@ export function buildWorkspaceSkillCommandSpecs(
       name: unique,
       skillName: entry.rawName,
       description: entry.description,
+      modelVisible: false,
       promptTemplate: entry.promptTemplate,
       sourceFilePath: entry.sourceFilePath,
     });

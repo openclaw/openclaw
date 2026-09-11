@@ -7,9 +7,8 @@ import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
-import { handleCrestodianCommand } from "./commands-crestodian.js";
+import { handleDashboardCommand } from "./commands-dashboard.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
-import { handleDockCommand } from "./commands-dock.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
   handleCommandsListCommand,
@@ -22,6 +21,7 @@ import {
 } from "./commands-info.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import { handleLoginCommand } from "./commands-login.js";
+import { handleLoopCommand } from "./commands-loop.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleNameCommand } from "./commands-name.js";
@@ -39,16 +39,18 @@ import {
 } from "./commands-session.js";
 import { handleSteerCommand } from "./commands-steer.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { handleSystemAgentCommand } from "./commands-system-agent.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
+import { handleUpdateCommand } from "./commands-update.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 export function loadCommandHandlers(): CommandHandler[] {
   return [
+    // Plugin text commands must win before built-in auth routing handles /login.
     handlePluginCommand,
     handleLoginCommand,
-    handleDockCommand,
     handleBtwCommand,
     handleBashCommand,
     handleActivationCommand,
@@ -57,16 +59,18 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleUsageCommand,
     handleSessionCommand,
     handleRestartCommand,
+    handleUpdateCommand,
     handleTtsCommands,
     handleHelpCommand,
     handleCommandsListCommand,
-    // Keep deterministic /skill usage on the native command path before the
-    // broader tool/status handlers can fall through to an agent run.
+    // Keep deterministic /skill usage before broader tool/status fallthrough.
     handleSkillCommandUsage,
     handleToolsCommand,
     handleStatusCommand,
     handleGoalCommand,
+    handleDashboardCommand,
     handleLearnCommand,
+    handleLoopCommand,
     handleNameCommand,
     handleDiagnosticsCommand,
     handleTasksCommand,
@@ -77,7 +81,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleExportSessionCommand,
     handleExportTrajectoryCommand,
     handleWhoamiCommand,
-    handleCrestodianCommand,
+    handleSystemAgentCommand,
     handleSubagentsCommand,
     handleAcpCommand,
     handleMcpCommand,

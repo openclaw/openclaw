@@ -1,8 +1,14 @@
-// Imessage plugin module implements catchup behavior.
-import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+  IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  resolveIMessageCatchupCursorKey,
+  capFailureRetriesMap,
+  type IMessageCatchupCursor,
+} from "../state-contract.js";
 
 // iMessage inbound catchup. When the gateway is offline (crash, restart, mac
 // sleep, machine off), `imsg watch` resumes from current state and ignores
@@ -11,7 +17,7 @@ import { getIMessageRuntime } from "../runtime.js";
 //
 // This module keeps catchup on the same inbound evaluation and dispatch path
 // as live `imsg watch` notifications. The replay loop is pluggable via the
-// `dispatch` callback so `evaluateIMessageInbound` + `dispatchInboundMessage`
+// `dispatch` callback so `evaluateIMessageInbound` + `runChannelInboundEvent`
 // runs unchanged on replayed rows.
 //
 // See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
@@ -23,13 +29,6 @@ const MAX_PER_RUN_LIMIT = 500;
 const DEFAULT_FIRST_RUN_LOOKBACK_MINUTES = 30;
 const DEFAULT_MAX_FAILURE_RETRIES = 10;
 const MAX_MAX_FAILURE_RETRIES = 1_000;
-// Defense-in-depth bound on the retry map. The cursor is one plugin-state
-// value, so keep the retry payload well below the 64KB store limit.
-const MAX_FAILURE_RETRY_MAP_SIZE = 512;
-const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
-const textEncoder = new TextEncoder();
-export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
-export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
 type IMessageCatchupConfig = {
@@ -38,28 +37,6 @@ type IMessageCatchupConfig = {
   perRunLimit?: number;
   firstRunLookbackMinutes?: number;
   maxFailureRetries?: number;
-};
-
-export type IMessageCatchupCursor = {
-  /** Timestamp (ms since epoch) of the highest-watermark message we processed. */
-  lastSeenMs: number;
-  /** ROWID of the highest-watermark processed message. Monotonic in chat.db. */
-  lastSeenRowid: number;
-  /** UTC ms timestamp of the most recent cursor write. */
-  updatedAt: number;
-  /**
-   * Per-GUID failure counter, preserved across runs. Two states:
-   * - `1 <= count < maxFailureRetries`: the GUID is still retrying and
-   *   continues to hold the cursor back.
-   * - `count >= maxFailureRetries`: catchup has given up on the GUID. The
-   *   message is skipped on sight (no dispatch attempt) and the cursor no
-   *   longer waits on it. Entry stays in the map until the cursor naturally
-   *   advances past the message's timestamp.
-   *
-   * A successful dispatch removes the entry. Optional on the persisted shape
-   * so older cursor files without this field load cleanly.
-   */
-  failureRetries?: Record<string, number>;
 };
 
 export type IMessageCatchupRow = {
@@ -95,10 +72,6 @@ export type IMessageCatchupSummary = {
   windowStartMs: number;
   windowEndMs: number;
 };
-
-export function resolveIMessageCatchupCursorKey(accountId: string): string {
-  return createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-}
 
 function openCatchupCursorStore(): PluginStateSyncKeyedStore<IMessageCatchupCursor> {
   return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
@@ -208,35 +181,6 @@ async function saveIMessageCatchupCursor(
   });
 }
 
-/**
- * Bound the retry map so a pathological storm of unique failing GUIDs
- * cannot grow the cursor file without limit. Keeps the `maxSize` entries
- * with the highest counts (closest to give-up) when over the bound.
- */
-export function capFailureRetriesMap(
-  map: Record<string, number>,
-  maxSize: number = MAX_FAILURE_RETRY_MAP_SIZE,
-  maxBytes: number = MAX_FAILURE_RETRY_MAP_JSON_BYTES,
-): Record<string, number> {
-  const entries = Object.entries(map);
-  if (entries.length <= maxSize && textEncoder.encode(JSON.stringify(map)).byteLength <= maxBytes) {
-    return map;
-  }
-  // Sort by count desc; stable tiebreak on guid string so the retained set
-  // is deterministic across runs (important for cursor-file diffing during
-  // debugging).
-  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const capped: Record<string, number> = {};
-  for (const [guid, count] of entries.slice(0, maxSize)) {
-    capped[guid] = count;
-    if (textEncoder.encode(JSON.stringify(capped)).byteLength > maxBytes) {
-      delete capped[guid];
-      break;
-    }
-  }
-  return capped;
-}
-
 export type ResolvedCatchupConfig = {
   enabled: boolean;
   maxAgeMinutes: number;
@@ -246,10 +190,7 @@ export type ResolvedCatchupConfig = {
 };
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.floor(value)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 export function resolveCatchupConfig(
@@ -358,7 +299,7 @@ export async function advanceIMessageCatchupCursor(
  * The fetch and dispatch functions are injected so this loop is unit-testable
  * without standing up an `imsg` daemon. The wiring in `monitor-provider.ts`
  * passes the live `client.request("messages.history", ...)` adapter as
- * `fetch` and the `evaluateIMessageInbound` + `dispatchInboundMessage`
+ * `fetch` and the `evaluateIMessageInbound` + `runChannelInboundEvent`
  * pipeline as `dispatch`.
  */
 export async function performIMessageCatchup(
@@ -426,7 +367,7 @@ export async function performIMessageCatchup(
   // failure is held, the persisted cursor must NOT leapfrog it — otherwise
   // the next pass would filter the failed row out via `row.rowid <= sinceRowid`
   // and never retry. Already-successful rows above the held failure get
-  // re-replayed on the next pass and absorbed by the inbound-dedupe cache.
+  // re-replayed on the next pass and rejected by durable ingress tombstones.
   const cursorBeforeMs = cursor?.lastSeenMs ?? windowStartMs;
   const cursorBeforeRowid = cursor?.lastSeenRowid ?? 0;
   let highWatermarkMs = cursorBeforeMs;
@@ -526,8 +467,8 @@ export async function performIMessageCatchup(
   let lastSeenRowid: number;
   if (earliestHeldFailureRow !== null) {
     // Hold cursor strictly below the failed row. Already-successful rows
-    // above it get re-replayed next pass; the inbound-dedupe cache absorbs
-    // the duplicate dispatch.
+    // above it get re-replayed next pass; durable ingress tombstones reject
+    // the duplicate GUID before dispatch.
     lastSeenMs = Math.max(cursorBeforeMs, earliestHeldFailureRow.date - 1);
     lastSeenRowid = Math.max(cursorBeforeRowid, earliestHeldFailureRow.rowid - 1);
   } else {

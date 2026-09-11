@@ -5,7 +5,6 @@ import {
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
@@ -13,7 +12,7 @@ import {
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
+} from "./test-helpers/live-model-turn-probes.js";
 
 function createImageProbeRunner(responses: string[]) {
   const attempts: Array<1 | 2> = [];
@@ -107,9 +106,6 @@ describe("live model turn probes", () => {
       true,
     );
     expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "arcee-ai/trinity-mini" }),
-    ).toBe(true);
-    expect(
       shouldSkipLiveModelFileProbe({
         provider: "openrouter",
         id: "deepseek/deepseek-chat-v3.1",
@@ -181,9 +177,6 @@ describe("live model turn probes", () => {
   it("matches expected probe replies", () => {
     expect(fileProbeTextMatches(`The value is ${LIVE_MODEL_FILE_PROBE_TOKEN}.`)).toBe(true);
     expect(fileProbeTextMatches("amber")).toBe(false);
-    expect(imageProbeTextMatches("OK")).toBe(true);
-    expect(imageProbeTextMatches("blue")).toBe(false);
-    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
   });
 
   it("retries one mismatched image reply and accepts only a matching retry", async () => {

@@ -1,12 +1,25 @@
 // Mattermost plugin module implements monitor resources behavior.
-import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
+  formatMediaPlaceholderText,
+  toInboundMediaFactsWithMetadata,
+  type ChannelInboundMediaInput,
+  type ChannelInboundMediaPayload,
+  type InboundMediaFacts,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { MediaKind, SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  buildMattermostApiUrl,
   fetchMattermostChannel,
   fetchMattermostUser,
   sendMattermostTyping,
@@ -17,28 +30,47 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
-
-export type MattermostMediaInfo = {
-  path: string;
-  contentType?: string;
-  kind: MattermostMediaKind;
+type MattermostMediaInfo = Pick<ChannelInboundMediaInput, "contentType" | "fileName" | "path"> & {
+  kind: MediaKind;
 };
+
+export async function buildMattermostInboundMediaPayload(
+  media: readonly MattermostMediaInfo[],
+): Promise<ChannelInboundMediaPayload & { media: InboundMediaFacts[] }> {
+  const facts = await toInboundMediaFactsWithMetadata(media);
+  return { ...buildChannelInboundMediaPayload(facts), media: facts };
+}
+
+export function formatMattermostPendingMediaText(params: {
+  body: string;
+  media: readonly MediaPlaceholderTextFact[];
+}): string {
+  return [params.body, formatMediaPlaceholderText(params.media)].filter(Boolean).join("\n").trim();
+}
 
 export function formatMattermostInboundMediaText(params: {
   body: string;
-  mediaPlaceholder: string;
-  expectedCount: number;
-  mediaCount: number;
+  nativeMedia: readonly MediaPlaceholderTextFact[];
+  materializedMedia: readonly ChannelInboundMediaInput[];
 }): string {
-  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  const materializedCount = params.materializedMedia.filter(
+    (media) => Boolean(media.path) || Boolean(media.url),
+  ).length;
+  const unavailableCount = Math.max(0, params.nativeMedia.length - materializedCount);
   if (unavailableCount === 0) {
     return params.body;
   }
+  const unavailableFileNames = params.materializedMedia
+    .filter((media) => !media.path && !media.url && media.fileName)
+    .map((media) => sanitizeUntrustedFileName(media.fileName ?? "", ""))
+    .filter(Boolean)
+    .join(", ");
+  const fileNameNotice = unavailableFileNames
+    ? ` ${JSON.stringify(truncateUtf16Safe(unavailableFileNames, 512))}`
+    : "";
   return formatInboundMediaUnavailableText({
     body: params.body,
-    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
-    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]${fileNameNotice}`,
   });
 }
 
@@ -57,7 +89,7 @@ type SaveRemoteMedia = (params: {
   ssrfPolicy?: { allowedHostnames?: string[] };
   responseHeaderTimeoutMs?: number;
   readIdleTimeoutMs?: number;
-}) => Promise<{ path: string; contentType?: string | null }>;
+}) => Promise<Pick<SavedRemoteMedia, "contentType" | "fileName" | "path">>;
 
 export function createMattermostMonitorResources(params: {
   accountId: string;
@@ -66,7 +98,7 @@ export function createMattermostMonitorResources(params: {
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
   saveRemoteMedia: SaveRemoteMedia;
-  mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
+  mediaKindFromMime: (contentType?: string) => MediaKind | null | undefined;
 }) {
   const {
     accountId,
@@ -77,14 +109,16 @@ export function createMattermostMonitorResources(params: {
     saveRemoteMedia,
     mediaKindFromMime,
   } = params;
-  const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
-  const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
+  // Only resolved resources are cached: a cached failure would hide the channel or sender
+  // for a whole TTL and silently drop reactions, button clicks, and username-allowlisted senders.
+  const channelCache = new Map<string, { value: MattermostChannel; expiresAt: number }>();
+  const userCache = new Map<string, { value: MattermostUser; expiresAt: number }>();
 
   const getCachedValue = <T>(
-    cache: Map<string, { value: T | null; expiresAt: number }>,
+    cache: Map<string, { value: T; expiresAt: number }>,
     key: string,
     nowMs: number | undefined,
-  ): T | null | undefined => {
+  ): T | undefined => {
     const cached = cache.get(key);
     if (!cached) {
       return undefined;
@@ -97,9 +131,9 @@ export function createMattermostMonitorResources(params: {
   };
 
   const setCachedValue = <T>(
-    cache: Map<string, { value: T | null; expiresAt: number }>,
+    cache: Map<string, { value: T; expiresAt: number }>,
     key: string,
-    value: T | null,
+    value: T,
     ttlMs: number,
     rawNowMs: number,
   ): void => {
@@ -122,9 +156,19 @@ export function createMattermostMonitorResources(params: {
     }
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
+      let downloadUrl: string;
+      try {
+        downloadUrl = buildMattermostApiUrl(client.baseUrl, `/files/${fileId}`);
+      } catch (err) {
+        logger.debug?.(`mattermost: failed to resolve file ${fileId}: ${String(err)}`);
+        // Keep the fact list aligned one-per-native-file so a rejected ID cannot
+        // shift later attachments' payload positions; no download is attempted.
+        out.push({ kind: "unknown" });
+        continue;
+      }
       try {
         const saved = await saveRemoteMedia({
-          url: `${client.apiBaseUrl}/files/${fileId}`,
+          url: downloadUrl,
           requestInit: {
             headers: {
               Authorization: `Bearer ${client.token}`,
@@ -142,10 +186,26 @@ export function createMattermostMonitorResources(params: {
         out.push({
           path: saved.path,
           contentType,
+          ...(saved.fileName ? { fileName: saved.fileName } : {}),
           kind: mediaKindFromMime(contentType) ?? "unknown",
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
+        let info: { mime_type?: string | null; name?: string | null } | undefined;
+        try {
+          info = await client.request(`/files/${fileId}/info`);
+        } catch (infoErr) {
+          logger.debug?.(
+            `mattermost: failed to resolve metadata for file ${fileId}: ${String(infoErr)}`,
+          );
+        }
+        const contentType = info?.mime_type?.trim() || undefined;
+        const fileName = info?.name?.trim();
+        out.push({
+          contentType,
+          ...(fileName ? { fileName } : {}),
+          kind: mediaKindFromMime(contentType) ?? "unknown",
+        });
       }
     }
     return out;
@@ -167,7 +227,6 @@ export function createMattermostMonitorResources(params: {
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
-      setCachedValue(channelCache, channelId, null, CHANNEL_CACHE_TTL_MS, rawNow);
       return null;
     }
   };
@@ -184,7 +243,6 @@ export function createMattermostMonitorResources(params: {
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
-      setCachedValue(userCache, userId, null, USER_CACHE_TTL_MS, rawNow);
       return null;
     }
   };

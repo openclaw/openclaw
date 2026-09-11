@@ -1,18 +1,40 @@
 // Imessage tests cover monitor reply cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  findLatestIMessageEntryForChat,
-  isIMessageCurrentMessageInChat,
-  isKnownFromMeIMessageMessageId,
-  rememberIMessageReplyCache,
-  resetIMessageShortIdState,
-  resolveIMessageMessageId,
-} from "./monitor-reply-cache.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+  IMESSAGE_REPLY_CACHE_COUNTER_KEY,
+  IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_TTL_MS,
+  resolveIMessageReplyCacheEntryKey,
+} from "./state-contract.js";
+import {
+  createIMessagePluginStateSyncStoreForTest,
+  loadFreshIMessageReplyCacheForTest,
+} from "./test-support/runtime.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
+let isIMessageCurrentMessageInChat: ReplyCacheModule["isIMessageCurrentMessageInChat"];
+let isKnownFromMeIMessageMessageId: ReplyCacheModule["isKnownFromMeIMessageMessageId"];
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
+let resolveIMessageMessageId: ReplyCacheModule["resolveIMessageMessageId"];
+
+async function loadReplyCache(options?: { preservePersistentState?: boolean }): Promise<void> {
+  ({
+    findLatestIMessageEntryForChat,
+    isIMessageCurrentMessageInChat,
+    isKnownFromMeIMessageMessageId,
+    rememberIMessageReplyCache,
+    resolveIMessageCachedResourceBinding,
+    resolveIMessageMessageId,
+  } = await loadFreshIMessageReplyCacheForTest(options));
+}
+
+beforeEach(async () => {
+  await loadReplyCache();
 });
 
 afterEach(() => {
@@ -70,7 +92,16 @@ describe("imessage short message id resolution", () => {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
-    ).toThrow("belongs to a different chat");
+    ).toThrow("MessageSidFull from another chat is rejected");
+  });
+
+  it("recommends the full id when a short id has expired in the current chat", () => {
+    expect(() =>
+      resolveIMessageMessageId("9999", {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chat0000" },
+      }),
+    ).toThrow("is no longer available. Use MessageSidFull");
   });
 
   it("guards full guid reuse across chats when cached", () => {
@@ -310,8 +341,8 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 });
 
-describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
-  it("hydrates SQLite state before resolving a short id whose mapping predates this run", () => {
+describe("SQLite reply-cache hydration", () => {
+  it("hydrates SQLite state before resolving a short id whose mapping predates this run", async () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
     // process boot would otherwise miss the persisted mapping because the
@@ -328,7 +359,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
 
     // Simulate a restart: clear only the process-local maps and leave the
     // SQLite plugin-state rows intact.
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
 
     // Now resolve the short id we issued before the "restart". Without the
     // hydrate-on-resolve fix this throws "no longer available" because the
@@ -342,7 +373,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     ).toBe("outbound-guid-pre-restart");
   });
 
-  it("persists entries when optional chat fields are explicitly undefined", () => {
+  it("persists entries when optional chat fields are explicitly undefined", async () => {
     const issued = rememberIMessageReplyCache({
       accountId: "default",
       messageId: "guid-with-undefined-optionals",
@@ -352,7 +383,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
       timestamp: Date.now(),
     });
 
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
 
     expect(
       resolveIMessageMessageId(issued.shortId, {
@@ -362,7 +393,59 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     ).toBe("guid-with-undefined-optionals");
   });
 
-  it("does not reuse short ids after cached rows expire", () => {
+  it.each([
+    { name: "missing", counter: undefined },
+    { name: "lagging", counter: 6 },
+  ])(
+    "allocates above live SQLite short ids with a $name counter after reload",
+    async ({ counter }) => {
+      const context = { accountId: "default", chatId: 42, timestamp: Date.now() };
+      const entries = [
+        { shortId: "1", messageId: "00000000-0000-4000-8000-000000000001" },
+        { shortId: "7", messageId: "00000000-0000-4000-8000-000000000007" },
+      ];
+      const store = createIMessagePluginStateSyncStoreForTest<
+        ReturnType<ReplyCacheModule["rememberIMessageReplyCache"]>
+      >({
+        namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
+        maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+      });
+      for (const entry of entries) {
+        store.register(
+          resolveIMessageReplyCacheEntryKey(entry.messageId),
+          { ...context, ...entry },
+          {
+            ttlMs: IMESSAGE_REPLY_CACHE_TTL_MS,
+          },
+        );
+      }
+      if (counter !== undefined) {
+        createIMessagePluginStateSyncStoreForTest<{ counter: number }>({
+          namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+          maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+        }).register(IMESSAGE_REPLY_CACHE_COUNTER_KEY, { counter });
+      }
+
+      await loadReplyCache({ preservePersistentState: true });
+
+      // Allocate first so a resolver cannot pre-hydrate the cache.
+      const issued = rememberIMessageReplyCache({
+        ...context,
+        messageId: "00000000-0000-4000-8000-000000000008",
+      });
+      expect(issued.shortId).toBe("8");
+      for (const entry of [...entries, issued]) {
+        expect(
+          resolveIMessageMessageId(entry.shortId, {
+            requireKnownShortId: true,
+            chatContext: { chatId: context.chatId },
+          }),
+        ).toBe(entry.messageId);
+      }
+    },
+  );
+
+  it("does not reuse short ids after cached rows expire", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
     const first = rememberIMessageReplyCache({
@@ -373,7 +456,7 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     expect(first.shortId).toBe("1");
 
     vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
-    resetIMessageShortIdState({ clearPersistent: false });
+    await loadReplyCache({ preservePersistentState: true });
     const second = rememberIMessageReplyCache({
       accountId: "default",
       messageId: "new-guid",
@@ -385,6 +468,55 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
 });
 
 describe("current-message chat binding", () => {
+  it("preserves concrete service identity while allowing trusted any aliases", () => {
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "sms-guid",
+      chatGuid: "SMS;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "any-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+
+    expect(
+      resolveIMessageCachedResourceBinding("sms-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("mismatch");
+    expect(
+      resolveIMessageCachedResourceBinding("any-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("match");
+  });
+
+  it("treats expired entries as unknown before account or chat mismatches", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "expired-guid",
+      chatId: 42,
+      timestamp: Date.now(),
+    });
+    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
+
+    expect(
+      resolveIMessageCachedResourceBinding("expired-guid", {
+        accountId: "other",
+        chatId: 99,
+      }),
+    ).toBe("unknown");
+  });
+
   it.each([{ chatGuid: "any;-;+12069106512" }, { chatIdentifier: "+12069106512" }, { chatId: 42 }])(
     "matches a trusted current message through $chatGuid$chatIdentifier$chatId",
     (chatContext) => {
@@ -445,27 +577,5 @@ describe("current-message chat binding", () => {
         chatContext: { chatId: 42 },
       }),
     ).toBe(false);
-  });
-});
-
-describe("hydrate counter advancement (rowid-collision protection)", () => {
-  it("advances the short-id counter past a corrupt persisted line so new allocations don't collide", () => {
-    // Direct hydrate isn't easy to invoke without disk fixtures; instead
-    // verify the public contract: after rememberIMessageReplyCache fires,
-    // the next allocation never re-uses an existing live shortId.
-    const a = rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "msg-a",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-    const b = rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "msg-b",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-    expect(a.shortId).not.toBe(b.shortId);
-    expect(Number.parseInt(b.shortId, 10)).toBeGreaterThan(Number.parseInt(a.shortId, 10));
   });
 });

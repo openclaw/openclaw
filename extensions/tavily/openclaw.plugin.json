@@ -1,5 +1,6 @@
 {
   "id": "tavily",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
@@ -24,12 +25,20 @@
       "help": "Tavily API base URL override."
     }
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "webSearch.apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
   "contracts": {
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -104,21 +105,26 @@ internal fun SkillWorkshopSettingsScreen(
       onConfirm = {
         pendingAction = null
         when (action.action) {
-          SkillWorkshopProposalAction.Apply ->
+          SkillWorkshopProposalAction.Apply -> {
             viewModel.applySkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
-          SkillWorkshopProposalAction.Reject ->
+          }
+
+          SkillWorkshopProposalAction.Reject -> {
             viewModel.rejectSkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
-          SkillWorkshopProposalAction.Quarantine ->
+          }
+
+          SkillWorkshopProposalAction.Quarantine -> {
             viewModel.quarantineSkillWorkshopProposal(
               proposalId = action.proposalId,
               agentId = selectedAgentParam,
             )
+          }
         }
       },
     )
@@ -179,16 +185,20 @@ internal fun SkillWorkshopSettingsScreen(
     }
 
     when {
-      !isConnected ->
+      !isConnected -> {
         SkillWorkshopEmptyPanel(
           title = nativeString("Gateway offline"),
           detail = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
         )
-      filteredProposals.isEmpty() ->
+      }
+
+      filteredProposals.isEmpty() -> {
         SkillWorkshopEmptyPanel(
           title = nativeString("No proposals"),
           detail = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
         )
+      }
+
       else -> {
         SkillWorkshopProposalList(
           proposals = filteredProposals,
@@ -269,12 +279,17 @@ private fun SkillWorkshopActionConfirmDialog(
     }
   val dialogBody =
     when (action.action) {
-      SkillWorkshopProposalAction.Apply ->
+      SkillWorkshopProposalAction.Apply -> {
         nativeString("This will apply \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      SkillWorkshopProposalAction.Reject ->
+      }
+
+      SkillWorkshopProposalAction.Reject -> {
         nativeString("This will reject \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
-      SkillWorkshopProposalAction.Quarantine ->
+      }
+
+      SkillWorkshopProposalAction.Quarantine -> {
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
+      }
     }
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -334,6 +349,7 @@ private fun SkillWorkshopControls(
         options = skillWorkshopFilterLabels.map(::nativeString),
         selected = skillWorkshopFilterLabel(statusFilter),
         onSelect = { label -> onStatusFilterChange(skillWorkshopFilterFromLabel(label)) },
+        maxOptionsPerRow = 4,
       )
       ClawTextField(
         value = query,
@@ -353,9 +369,10 @@ private fun SkillWorkshopAgentMenu(
   modifier: Modifier = Modifier,
 ) {
   var expanded by remember { mutableStateOf(false) }
+  val selectableAgents = agents.selectableAgents()
   val label =
     skillWorkshopAgentLabel(
-      agents = agents,
+      agents = selectableAgents,
       defaultAgentId = defaultAgentId,
       selectedAgentId = selectedAgentId,
     )
@@ -365,7 +382,7 @@ private fun SkillWorkshopAgentMenu(
       onClick = { expanded = true },
       icon = Icons.Default.ArrowDropDown,
       modifier = Modifier.fillMaxWidth(),
-      enabled = agents.isNotEmpty(),
+      enabled = selectableAgents.isNotEmpty(),
     )
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
@@ -375,7 +392,7 @@ private fun SkillWorkshopAgentMenu(
           onAgentChange("")
         },
       )
-      agents
+      selectableAgents
         .filter { agent -> agent.id.trim().isNotEmpty() && agent.id != defaultAgentId }
         .sortedBy { it.name ?: it.id }
         .forEach { agent ->
@@ -428,7 +445,7 @@ private fun SkillWorkshopProposalRow(
         Text(
           text = proposal.title,
           style = ClawTheme.type.body,
-          color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.text,
+          color = ClawTheme.colors.text,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )

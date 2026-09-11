@@ -1,12 +1,13 @@
 // Copilot tests cover BYOK provider mapping behavior.
 import { describe, expect, it } from "vitest";
-import {
-  COPILOT_BYOK_PROVIDER_ERROR,
-  COPILOT_BYOK_ENDPOINT_POLICY_ERROR,
-  COPILOT_BYOK_TRANSPORT_POLICY_ERROR,
-  resolveCopilotProvider,
-  supportsCopilotByokProviderShape,
-} from "./provider-bridge.js";
+import { resolveCopilotProvider, supportsCopilotByokProviderShape } from "./provider-bridge.js";
+
+const COPILOT_BYOK_PROVIDER_ERROR =
+  "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
+const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
+  "[copilot-attempt] BYOK does not support OpenClaw provider request proxy, TLS, or private-network policy overrides";
+const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
+  "[copilot-attempt] BYOK endpoint is blocked by OpenClaw SSRF policy";
 
 describe("resolveCopilotProvider", () => {
   it("keeps the subscription provider on the native Copilot auth path", () => {
@@ -229,15 +230,19 @@ describe("resolveCopilotProvider", () => {
     });
   });
 
-  it("does not synthesize SDK apiKey auth when request auth already prepared headers", () => {
+  it.each([
+    { mode: "header", headers: { "x-api-key": "header-secret" } },
+    { mode: "bearer", headers: { Authorization: "Bearer header-secret" } },
+    { mode: "none", headers: undefined },
+  ])("does not synthesize SDK auth for prepared $mode request auth", ({ mode, headers }) => {
     const result = resolveCopilotProvider({
       model: {
         provider: "custom-header-proxy",
         api: "openai-responses",
         id: "proxy-model",
         baseUrl: "https://proxy.example/v1",
-        headers: { "x-api-key": "header-secret" },
-        requestAuthMode: "header",
+        headers,
+        requestAuthMode: mode,
       },
       resolvedApiKey: "header-secret",
     });
@@ -248,7 +253,7 @@ describe("resolveCopilotProvider", () => {
       baseUrl: "https://proxy.example/v1",
       modelId: "proxy-model",
       wireModel: "proxy-model",
-      headers: { "x-api-key": "header-secret" },
+      ...(headers ? { headers } : {}),
     });
   });
 

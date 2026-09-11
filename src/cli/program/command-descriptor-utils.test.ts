@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   addCommandDescriptorsToProgram,
   collectUniqueCommandDescriptors,
-  defineCommandDescriptorCatalog,
 } from "./command-descriptor-utils.js";
 
 describe("command-descriptor-utils", () => {
@@ -31,16 +30,6 @@ describe("command-descriptor-utils", () => {
       { name: "beta", description: "Beta" },
       { name: "gamma", description: "Gamma" },
     ]);
-  });
-
-  it("defines a reusable descriptor catalog", () => {
-    const catalog = defineCommandDescriptorCatalog(descriptors);
-
-    expect(catalog.descriptors).toBe(descriptors);
-    expect(catalog.getDescriptors()).toBe(descriptors);
-    expect(catalog.getNames()).toEqual(["alpha", "beta", "gamma"]);
-    expect(catalog.getCommandsWithSubcommands()).toEqual(["beta", "gamma"]);
-    expect(catalog.getParentDefaultHelpCommands()).toEqual(["gamma"]);
   });
 
   it("adds descriptors without duplicating existing commands", () => {
@@ -75,6 +64,18 @@ describe("command-descriptor-utils", () => {
     ]);
 
     expect(program.commands[0]?.description()).toBe("Open link now");
+  });
+
+  it("keeps hidden descriptors out of help", () => {
+    const program = new Command();
+    addCommandDescriptorsToProgram(program, [
+      { name: "visible", description: "Visible" },
+      { name: "retired", description: "Retired", hidden: true },
+    ]);
+
+    expect(program.commands.map((command) => command.name())).toContain("retired");
+    expect(program.helpInformation()).toContain("visible");
+    expect(program.helpInformation()).not.toContain("retired");
   });
 
   it("rejects unsafe descriptor command names before rendering", () => {

@@ -6,6 +6,13 @@ import { closedObject } from "./closed-object.js";
 /** Empty request payload for Gateway host system information. */
 export const SystemInfoParamsSchema = closedObject({});
 
+const UtilityModelStatusSchema = Type.Union([
+  closedObject({ status: Type.Literal("auto"), model: Type.String({ minLength: 1 }) }),
+  closedObject({ status: Type.Literal("configured"), model: Type.String({ minLength: 1 }) }),
+  closedObject({ status: Type.Literal("disabled") }),
+  closedObject({ status: Type.Literal("unavailable") }),
+]);
+
 /** Gateway host identity and resource snapshot. */
 export const SystemInfoResultSchema = closedObject({
   machineName: Type.String(),
@@ -29,6 +36,17 @@ export const SystemInfoResultSchema = closedObject({
   diskTotalBytes: Type.Optional(Type.Integer()),
   diskAvailableBytes: Type.Optional(Type.Integer()),
   diskPath: Type.Optional(Type.String()),
+  disks: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: Type.String({ minLength: 1 }),
+        totalBytes: Type.Integer({ minimum: 1 }),
+        availableBytes: Type.Integer({ minimum: 0 }),
+      }),
+    ),
+  ),
+  /** Resolved utility model for the configured default agent. */
+  defaultAgentUtilityModel: Type.Optional(UtilityModelStatusSchema),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

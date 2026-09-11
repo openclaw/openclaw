@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Verifies status/doctor UX for a configured plugin channel whose setup entry
 # fails because a staged dependency tree is corrupt.
 set -euo pipefail
@@ -24,7 +28,11 @@ cat > "$PLUGIN_DIR/package.json" <<'JSON'
   "version": "1.0.0",
   "openclaw": {
     "extensions": ["./index.cjs"],
-    "setupEntry": "./setup-entry.cjs"
+    "setupEntry": "./setup-entry.cjs",
+    "channel": {
+      "id": "e2e-corrupt-chat",
+      "configuredState": { "env": { "anyOf": ["E2E_CORRUPT_CHAT_TOKEN"] } }
+    }
   }
 }
 JSON
@@ -51,10 +59,7 @@ cat > "$PLUGIN_DIR/openclaw.plugin.json" <<'JSON'
       }
     }
   },
-  "channels": ["e2e-corrupt-chat"],
-  "channelEnvVars": {
-    "e2e-corrupt-chat": ["E2E_CORRUPT_CHAT_TOKEN"]
-  }
+  "channels": ["e2e-corrupt-chat"]
 }
 JSON
 

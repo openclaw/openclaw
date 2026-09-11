@@ -1,29 +1,30 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { expectDefined } from "@openclaw/normalization-core";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import {
+  SANDBOX_MEDIA_MAX_BYTES,
   stageSandboxMedia,
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
+  discardPreparedInboundMedia,
   MediaOffloadError,
   type OffloadedRef,
+  logAttachmentFailure,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
 import {
   explicitOriginTargetsAcpSession,
   explicitOriginTargetsPluginBinding,
@@ -33,47 +34,6 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  if (!causeText || causeText === primary) {
-    return primary;
-  }
-  return `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestHandlerOptions["context"]["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
-
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
-}
 
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {
   const mime = ref.mimeType.trim().toLowerCase();
@@ -97,9 +57,8 @@ function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
 }
 
 function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  // Oversized managed PDFs remain host-readable. A sandbox copy only hits the
-  // 5 MB staging cap without making the attachment more available.
-  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
+  // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+  return ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
 }
 
 // Stage media before ACK so permanent client errors stay 4xx and retryable
@@ -110,6 +69,7 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  abortSignal: AbortSignal;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
@@ -134,6 +94,7 @@ async function prestageMediaPathOffloads(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
     });
@@ -143,22 +104,21 @@ async function prestageMediaPathOffloads(params: {
 
     // The parser admits more than the sandbox can stage. Reject non-PDF files
     // in that gap as permanent 4xx instead of a retryable staging failure.
-    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    const oversizedForSandbox = refsToStage.filter(
+      (ref) => ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES,
+    );
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
       throw new UnsupportedAttachmentError(
         "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
+        `attachments exceed sandbox staging limit (${SANDBOX_MEDIA_MAX_BYTES} bytes): ${details}`,
       );
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: expectDefined(refsToStage[0], "refs to stage entry at 0").path,
-      MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: expectDefined(refsToStage[0], "refs to stage entry at 0").mimeType,
-      MediaTypes: refsToStage.map((ref) => ref.mimeType),
+      media: refsToStage.map((ref) => ({ path: ref.path, contentType: ref.mimeType })),
     };
     let stageResult: StageSandboxMediaResult;
     try {
@@ -166,13 +126,18 @@ async function prestageMediaPathOffloads(params: {
         ctx: stagingCtx,
         sessionCtx: stagingCtx as TemplateContext,
         cfg: params.cfg,
+        agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
-      // Only managed inbound PDFs have a host-readable fallback. Other files
-      // must fail before ACK or the agent silently loses the attachment.
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+      // Cancellation is terminal; only ordinary managed-PDF failures can use
+      // the host-readable fallback. Other files must fail before ACK.
+      if (
+        (params.abortSignal.aborted && Object.is(stageErr, params.abortSignal.reason)) ||
+        refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))
+      ) {
         throw stageErr;
       }
       return refsByManagedPath(mediaPathRefs);
@@ -181,22 +146,21 @@ async function prestageMediaPathOffloads(params: {
     // stageSandboxMedia preserves an absolute source path when no copy lands;
     // the staged map is the authoritative success signal.
     const stagedSources = stageResult.staged;
-    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
+    const missing = refsToStage.filter((_ref, index) => !stagedSources.has(index));
     const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
     if (unstageable.length > 0) {
       throw new Error(
         `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
       );
     }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
+    const stagedMedia = stagingCtx.media ?? [];
     // Preserve request order while mixing sandbox-relative paths with managed
     // host paths used by pass-through or fallback PDFs.
     const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
     refsToStage.forEach((ref, index) => {
       resolvedByRef.set(ref, {
-        path: stagedPaths[index] ?? ref.path,
-        mimeType: stagedTypes[index] ?? ref.mimeType,
+        path: stagedMedia[index]?.path ?? ref.path,
+        mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
       });
     });
     for (const ref of passThroughRefs) {
@@ -211,10 +175,11 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
-    if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
+    if (
+      (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof MediaOffloadError ||
+      err instanceof UnsupportedAttachmentError
+    ) {
       throw err;
     }
     throw new MediaOffloadError(
@@ -235,7 +200,13 @@ export async function prepareChatSendAttachments(params: {
   const { request, session, admission, respond, context } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
-  const { chatSendTraceAttributes, cleanupAdmittedRun, lifecycleGeneration } = admission;
+  const {
+    activeRunAbort,
+    chatSendTraceAttributes,
+    cleanupAdmittedRun,
+    finishAbortedChatSend,
+    lifecycleGeneration,
+  } = admission;
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
@@ -252,30 +223,36 @@ export async function prepareChatSendAttachments(params: {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
-          const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-            provider: resolvedSessionModel.provider,
-            model: resolvedSessionModel.model,
-          });
-          const supportsImages =
-            supportsSessionModelImages ||
-            explicitOriginTargetsAcpSession(explicitOrigin) ||
-            explicitOriginTargetsPlugin;
-          const routeImageOffloadsAsMediaPaths = !supportsImages;
+          const imageSupport: { value: boolean | undefined } = {
+            value:
+              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
+                ? true
+                : undefined,
+          };
+          const resolveSupportsImages = async (): Promise<boolean> => {
+            imageSupport.value ??= await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
+              agentId,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
+            });
+            return imageSupport.value;
+          };
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
-            supportsImages,
+            supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
           });
-          parsedMessage = stripTrailingOffloadedMediaMarkers(
-            parsed.message,
-            routeImageOffloadsAsMediaPaths
-              ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-              : [],
-          );
+          // The parser owns MIME classification. An unresolved capability means no image was seen,
+          // so post-processing must not trigger catalog discovery for a non-image attachment.
+          const parsedSupportsImages = imageSupport.value !== false;
+          parsedMessage = parsedSupportsImages
+            ? parsed.message
+            : stripImageMediaMarkers(parsed.message, parsed.offloadedRefs);
           parsedImages = parsed.images;
-          imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
+          imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
           ({
             paths: mediaPathOffloadPaths,
@@ -283,10 +260,11 @@ export async function prepareChatSendAttachments(params: {
             workspaceDir: mediaPathOffloadWorkspaceDir,
           } = await prestageMediaPathOffloads({
             offloadedRefs,
-            includeImageRefs: routeImageOffloadsAsMediaPaths,
+            includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,
+            abortSignal: activeRunAbort.controller.signal,
           }));
         },
         {
@@ -298,11 +276,27 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      // Pass-through media still needs awaited cleanup when preparation was cancelled.
+      activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
     } catch (err) {
-      cleanupAdmittedRun({ force: true });
+      const aborted =
+        activeRunAbort.controller.signal.aborted &&
+        (context.chatRunState.hasAbortMarker(clientRunId) ||
+          Object.is(err, activeRunAbort.controller.signal.reason));
+      // Retire failed-run cancellation before cleanup yields, but retain work
+      // admission until deletion finishes so a late abort cannot replace the error.
+      if (!aborted) {
+        activeRunAbort.cleanup();
+      }
+      await discardPreparedInboundMedia(offloadedRefs);
+      if (aborted) {
+        finishAbortedChatSend();
+        return { ok: false as const };
+      }
+      cleanupAdmittedRun();
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
       respond(

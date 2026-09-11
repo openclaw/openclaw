@@ -29,6 +29,117 @@ describe("performMatrixRequest", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("loads a profile through the real SDK default guarded fetch and closes the client", async () => {
+    const { MatrixClient } = await import("../sdk.js");
+    const { resolveRuntimeMatrixClientWithReadiness } = await import("../client-bootstrap.js");
+    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const profile = { displayname: "Matrix loopback fixture" };
+    const server = http.createServer((request, response) => {
+      requests.push({ url: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(profile));
+    });
+    let client: InstanceType<typeof MatrixClient> | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+      client = new MatrixClient(`http://127.0.0.1:${address.port}/matrix-proxy`, "fixture-token", {
+        encryption: false,
+        autoBootstrapCrypto: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+
+      const resolved = await resolveRuntimeMatrixClientWithReadiness({ client, readiness: "none" });
+      await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
+        profile,
+      );
+      expect(requests).toEqual([
+        {
+          url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
+          authorization: "Bearer fixture-token",
+        },
+      ]);
+    } finally {
+      try {
+        await client?.stopWithoutPersist();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
+  });
+
+  it.each([
+    {
+      name: "a root homeserver",
+      homeserverPath: "",
+      expectedPath: "/_matrix/client/v3/account/whoami",
+    },
+    {
+      name: "a proxy prefix without a trailing slash",
+      homeserverPath: "/matrix-proxy",
+      expectedPath: "/matrix-proxy/_matrix/client/v3/account/whoami",
+    },
+    {
+      name: "a proxy prefix with a trailing slash",
+      homeserverPath: "/matrix-proxy/",
+      expectedPath: "/matrix-proxy/_matrix/client/v3/account/whoami",
+    },
+    {
+      name: "an encoded nested proxy prefix",
+      homeserverPath: "/proxy%20base/tenant/",
+      expectedPath: "/proxy%20base/tenant/_matrix/client/v3/account/whoami",
+    },
+  ])(
+    "preserves $name through the real HTTP transport",
+    async ({ homeserverPath, expectedPath }) => {
+      const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+      const server = http.createServer((request, response) => {
+        requests.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ user_id: "@bot:example.org" }));
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const { port } = server.address() as { port: number };
+
+      try {
+        const result = await performMatrixRequest({
+          homeserver: `http://127.0.0.1:${port}${homeserverPath}`,
+          accessToken: "test-token",
+          method: "GET",
+          endpoint: "/_matrix/client/v3/account/whoami",
+          qs: { via: "proxy path" },
+          timeoutMs: 5000,
+          ssrfPolicy: { allowPrivateNetwork: true },
+        });
+
+        expect(result.response.status).toBe(200);
+        expect(JSON.parse(result.text)).toEqual({ user_id: "@bot:example.org" });
+        expect(requests).toEqual([
+          {
+            url: `${expectedPath}?via=proxy+path`,
+            authorization: "Bearer test-token",
+          },
+        ]);
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
   it("rejects oversized raw responses before buffering the whole body", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
@@ -475,6 +586,45 @@ describe("createMatrixGuardedFetch", () => {
 
   afterEach(() => {
     clearTestUndiciRuntimeDepsOverride();
+  });
+
+  it("preserves redirect success when the discarded body fails to cancel", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("cancel failed");
+    });
+    const runtimeFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "/final" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    stubRuntimeFetch(runtimeFetch);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const guardedFetch = createMatrixGuardedFetch({
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      const response = await guardedFetch("http://127.0.0.1:8008/start");
+
+      await expect(response.json()).resolves.toEqual({});
+      expect(runtimeFetch).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
   });
 
   it("rejects and cancels SDK responses above the declared size limit", async () => {

@@ -6,8 +6,14 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { appendBoundedTail } from "../../../lib/bounded-output-tail.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+  toLintErrorObject,
+} from "../../../lib/bounded-response.mjs";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
-import { readBoundedResponseText } from "../bounded-response-text.mjs";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
 const RUNTIME_PORT_BASE_ENV = "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE";
@@ -320,6 +326,22 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
   };
 }
 
+export function withSmokeTtsConfig(config, tts) {
+  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
+    return {
+      ...config,
+      messages: { ...config.messages, tts: { ...config.messages?.tts, ...tts } },
+    };
+  }
+  return { ...config, tts: { ...config.tts, ...tts } };
+}
+
+export function readSmokeTtsConfig(config) {
+  return process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy"
+    ? config.messages?.tts
+    : config.tts;
+}
+
 function channelActivationEnvName(channel) {
   return `${channel
     .replace(/[^a-z0-9]+/giu, "_")
@@ -371,15 +393,6 @@ function buildPluginPlan(manifest) {
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
-  const nextText = buffer.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: buffer.truncatedChars };
-  }
-  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
 }
 
 function formatCapturedOutput(label, buffer) {
@@ -447,11 +460,11 @@ export function runCommand(command, args, options = {}) {
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let settled = false;
-    child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk);
+    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
+      stdout = appendBoundedTail(stdout, chunk, OUTPUT_CAPTURE_CHARS);
     });
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk);
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+      stderr = appendBoundedTail(stderr, chunk, OUTPUT_CAPTURE_CHARS);
     });
     const clearCommandTimer = timeoutMs
       ? setTimeout(() => {
@@ -752,7 +765,7 @@ async function fetchHttpProbeStatus(port, pathName, options = {}) {
         res,
         `${pathName} probe`,
         HTTP_PROBE_BODY_MAX_BYTES,
-        timeoutPromise,
+        { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
       );
       status.bodyText = text;
       if (text.trim()) {
@@ -993,10 +1006,6 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -1055,26 +1064,23 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port = resolveRuntimeSmokePort(pluginIndex);
-  const config = ensureGatewayConfig(
+  let config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
   );
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    config.messages = {
-      ...config.messages,
-      tts: {
-        ...config.messages?.tts,
-        provider,
-        providers: {
-          ...config.messages?.tts?.providers,
-          [provider]: {
-            ...config.messages?.tts?.providers?.[provider],
-          },
+    const existingTts = readSmokeTtsConfig(config);
+    config = withSmokeTtsConfig(config, {
+      provider,
+      providers: {
+        ...existingTts?.providers,
+        [provider]: {
+          ...existingTts?.providers?.[provider],
         },
       },
-    };
+    });
   }
   writeConfig(config);
 
@@ -1088,6 +1094,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   });
   try {
     await waitForReady({ child, port, logPath });
+    assertPluginLoaded(logPath, pluginId);
     await assertBaseGatewayProbes({
       entrypoint,
       port,
@@ -1265,6 +1272,19 @@ export function assertGatewayLogNotTruncated(logPath) {
   }
 }
 
+export function assertPluginLoaded(logPath, pluginId) {
+  let text;
+  try {
+    text = fs.readFileSync(logPath, "utf8");
+  } catch {
+    return;
+  }
+  const failurePrefix = `[plugins] ${pluginId} failed to load`;
+  if (text.includes(failurePrefix)) {
+    throw new Error(`${failurePrefix}: ${tailText(text)}`);
+  }
+}
+
 export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
   let stat;
   try {
@@ -1390,16 +1410,16 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
-      {
-        plugins: {
-          enabled: false,
-        },
-        messages: {
-          tts: {
-            provider: selectedProvider,
+      withSmokeTtsConfig(
+        {
+          plugins: {
+            enabled: false,
           },
         },
-      },
+        {
+          provider: selectedProvider,
+        },
+      ),
       port,
     ),
     env,
@@ -1442,25 +1462,25 @@ async function smokeOpenAiTts(pluginIndex) {
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(
-      {
-        plugins: {
-          enabled: true,
-          allow: ["openai"],
-          entries: {
-            openai: { enabled: true },
-          },
-        },
-        messages: {
-          tts: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+      withSmokeTtsConfig(
+        {
+          plugins: {
+            enabled: true,
+            allow: ["openai"],
+            entries: {
+              openai: { enabled: true },
             },
           },
         },
-      },
+        {
+          provider: "openai",
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        },
+      ),
       port,
     ),
     env,
@@ -1524,7 +1544,7 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
     argv;
   const pluginIndex = readNonNegativeInt(pluginIndexRaw, 0, "bundled plugin runtime index");
@@ -1542,18 +1562,4 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
-}
-
-function toLintErrorObject(value, fallbackMessage) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

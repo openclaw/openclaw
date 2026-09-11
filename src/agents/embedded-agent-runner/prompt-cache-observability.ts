@@ -2,9 +2,17 @@
  * Tracks prompt-cache snapshot changes for observability diagnostics.
  */
 import crypto from "node:crypto";
+import {
+  sortPromptCacheToolsByName,
+  splitSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { NormalizedUsage } from "../usage.js";
 
 type PromptCacheChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -15,6 +23,18 @@ type PromptCacheChangeCode =
 export type PromptCacheChange = {
   code: PromptCacheChangeCode;
   detail: string;
+};
+
+type PromptCacheToolSnapshot = {
+  name: string;
+  descriptionDigest?: string;
+  schemaDigest?: string;
+};
+
+type PromptCacheToolDescriptor = {
+  readonly name?: string;
+  readonly description?: string;
+  readonly parameters?: unknown;
 };
 
 type PromptCacheSnapshot = {
@@ -36,7 +56,7 @@ type PromptCacheObservationStart = {
   previousCacheRead: number | null;
 };
 
-export type PromptCacheBreak = {
+type PromptCacheBreak = {
   previousCacheRead: number;
   cacheRead: number;
   changes: PromptCacheChange[] | null;
@@ -45,11 +65,17 @@ export type PromptCacheBreak = {
 type PromptCacheTracker = {
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
+  /** Missing usage must not bind an older hit to a new request fingerprint. */
+  lastCacheReadSnapshot?: PromptCacheSnapshot;
   pendingChanges: PromptCacheChange[] | null;
 };
 
 const trackers = new Map<string, PromptCacheTracker>();
 const MAX_TRACKERS = 512;
+const MAX_TOOL_SCHEMA_FINGERPRINT_DEPTH = 24;
+const MAX_TOOL_SCHEMA_FINGERPRINT_NODES = 2_048;
+const MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES = 128;
+const MAX_TOOL_SCHEMA_FINGERPRINT_STRING_CHARS = 4_096;
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
@@ -70,20 +96,84 @@ function buildTrackerKey(params: {
   return params.sessionKey?.trim() || params.sessionId;
 }
 
-function buildToolDigest(toolNames: string[]): string {
-  // Treat diagnostics as set-stable here: order changes alone should not look
-  // like a real cache break when the same tool set is still present.
-  return digestText(JSON.stringify([...toolNames].toSorted()));
+function normalizeToolSchemaFingerprint(
+  value: unknown,
+  state: { remainingNodes: number; stack: WeakSet<object> },
+  depth = 0,
+): unknown {
+  if (depth >= MAX_TOOL_SCHEMA_FINGERPRINT_DEPTH || state.remainingNodes <= 0) {
+    return "[schema fingerprint limit]";
+  }
+  state.remainingNodes -= 1;
+  if (value === null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : "[non-finite number]";
+  }
+  if (typeof value === "string") {
+    return truncateUtf16Safe(value, MAX_TOOL_SCHEMA_FINGERPRINT_STRING_CHARS);
+  }
+  if (typeof value !== "object") {
+    return `[${typeof value}]`;
+  }
+  if (state.stack.has(value)) {
+    return "[circular schema]";
+  }
+  state.stack.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const entries = value
+        .slice(0, MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES)
+        .map((entry) => normalizeToolSchemaFingerprint(entry, state, depth + 1));
+      if (value.length > MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES) {
+        entries.push({ omitted: value.length - MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES });
+      }
+      return entries;
+    }
+    const record = value as Record<string, unknown>;
+    const keys: string[] = [];
+    for (const key in record) {
+      if (!Object.hasOwn(record, key)) {
+        continue;
+      }
+      // A schema above this limit receives one order-independent marker. Do
+      // not materialize or sort an attacker-controlled complete key list.
+      if (keys.length >= MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES) {
+        return "[schema key limit]";
+      }
+      keys.push(key);
+    }
+    keys.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    // Schema property names are untrusted; a null prototype keeps "__proto__"
+    // as an own fingerprinted key instead of invoking a prototype setter.
+    const entries = Object.create(null) as Record<string, unknown>;
+    for (const key of keys) {
+      try {
+        entries[key] = normalizeToolSchemaFingerprint(record[key], state, depth + 1);
+      } catch {
+        entries[key] = "[unreadable schema value]";
+      }
+    }
+    return entries;
+  } catch {
+    return "[unreadable schema]";
+  } finally {
+    state.stack.delete(value);
+  }
+}
+
+function buildToolDigest(tools: readonly PromptCacheToolSnapshot[]): string {
+  // Cache identity includes the exact visible descriptor, not just its name;
+  // canonical ordering prevents discovery order from looking like a break.
+  return digestText(stableStringify(sortPromptCacheToolsByName(tools)));
 }
 
 function setTracker(key: string, tracker: PromptCacheTracker): void {
   if (trackers.has(key)) {
     trackers.delete(key);
   } else if (trackers.size >= MAX_TRACKERS) {
-    const oldestKey = trackers.keys().next().value;
-    if (typeof oldestKey === "string") {
-      trackers.delete(oldestKey);
-    }
+    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   }
   trackers.set(key, tracker);
 }
@@ -140,19 +230,44 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
-export function collectPromptCacheToolNames(tools: readonly { name?: string }[]): string[] {
-  const names: string[] = [];
+export function collectPromptCacheTools(
+  tools: readonly PromptCacheToolDescriptor[],
+): PromptCacheToolSnapshot[] {
+  const snapshots: PromptCacheToolSnapshot[] = [];
   for (const tool of tools) {
     try {
       const name = tool.name?.trim();
-      if (name) {
-        names.push(name);
+      if (!name) {
+        continue;
       }
+      const snapshot: PromptCacheToolSnapshot = { name };
+      try {
+        if (typeof tool.description === "string") {
+          snapshot.descriptionDigest = digestText(tool.description);
+        }
+      } catch {
+        snapshot.descriptionDigest = digestText("[unreadable tool description]");
+      }
+      try {
+        if (tool.parameters !== undefined) {
+          snapshot.schemaDigest = digestText(
+            stableStringify(
+              normalizeToolSchemaFingerprint(tool.parameters, {
+                remainingNodes: MAX_TOOL_SCHEMA_FINGERPRINT_NODES,
+                stack: new WeakSet(),
+              }),
+            ),
+          );
+        }
+      } catch {
+        snapshot.schemaDigest = digestText("[unreadable tool schema]");
+      }
+      snapshots.push(snapshot);
     } catch {
       continue;
     }
   }
-  return names;
+  return sortPromptCacheToolsByName(snapshots);
 }
 
 export function beginPromptCacheObservation(params: {
@@ -166,9 +281,10 @@ export function beginPromptCacheObservation(params: {
   streamStrategy: string;
   transport?: string;
   systemPrompt: string;
-  toolNames: string[];
+  tools: readonly PromptCacheToolSnapshot[];
 }): PromptCacheObservationStart {
   const key = buildTrackerKey(params);
+  const tools = sortPromptCacheToolsByName(params.tools);
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -176,23 +292,52 @@ export function beginPromptCacheObservation(params: {
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: digestText(params.systemPrompt),
-    toolDigest: buildToolDigest(params.toolNames),
-    toolCount: params.toolNames.length,
-    toolNames: [...params.toolNames],
+    systemPromptDigest: digestText(
+      splitSystemPromptCacheBoundary(params.systemPrompt)?.stablePrefix ?? params.systemPrompt,
+    ),
+    toolDigest: buildToolDigest(tools),
+    toolCount: tools.length,
+    toolNames: tools.map((tool) => tool.name),
   };
   const previous = trackers.get(key);
-  const changes = previous ? diffSnapshots(previous.snapshot, snapshot) : null;
+  const changes = previous
+    ? [
+        ...(previous.pendingChanges?.filter(
+          (change) => change.code === "aggregateToolResultTruncation",
+        ) ?? []),
+        ...(diffSnapshots(previous.snapshot, snapshot) ?? []),
+      ]
+    : [];
   setTracker(key, {
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
-    pendingChanges: changes,
+    lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
+    pendingChanges: changes.length > 0 ? changes : null,
   });
   return {
     snapshot,
-    changes,
+    changes: changes.length > 0 ? changes : null,
     previousCacheRead: previous?.lastCacheRead ?? null,
   };
+}
+
+export function recordAggregateTruncation(params: {
+  sessionId: string;
+  promptCacheKey?: string;
+  sessionKey?: string;
+}): void {
+  const tracker = trackers.get(buildTrackerKey(params));
+  const changes = tracker?.pendingChanges ?? [];
+  if (!tracker || changes.some((change) => change.code === "aggregateToolResultTruncation")) {
+    return;
+  }
+  tracker.pendingChanges = [
+    ...changes,
+    {
+      code: "aggregateToolResultTruncation",
+      detail: "aggregate tool-result truncation changed provider prompt",
+    },
+  ];
 }
 
 export function completePromptCacheObservation(params: {
@@ -213,7 +358,9 @@ export function completePromptCacheObservation(params: {
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;
+  const previousSnapshot = tracker.lastCacheReadSnapshot;
   tracker.lastCacheRead = cacheRead;
+  tracker.lastCacheReadSnapshot = tracker.snapshot;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
     tracker.pendingChanges = null;
@@ -224,17 +371,19 @@ export function completePromptCacheObservation(params: {
   const hasMeaningfulDrop =
     cacheRead < previousCacheRead * MAX_STABLE_CACHE_READ_RATIO &&
     tokenDrop >= MIN_CACHE_BREAK_TOKEN_DROP;
-  const result = hasMeaningfulDrop
-    ? {
-        previousCacheRead,
-        cacheRead,
-        changes: tracker.pendingChanges,
-      }
-    : null;
+  const completeMiss =
+    cacheRead === 0 &&
+    (params.usage?.input ?? 0) > 0 &&
+    previousSnapshot !== undefined &&
+    diffSnapshots(previousSnapshot, tracker.snapshot) === null;
+  const result =
+    hasMeaningfulDrop || completeMiss
+      ? {
+          previousCacheRead,
+          cacheRead,
+          changes: tracker.pendingChanges,
+        }
+      : null;
   tracker.pendingChanges = null;
   return result;
-}
-
-export function resetPromptCacheObservabilityForTest(): void {
-  trackers.clear();
 }

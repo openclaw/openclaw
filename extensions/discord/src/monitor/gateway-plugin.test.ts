@@ -1,9 +1,10 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
-  parseDiscordGatewayInfoBody,
+  fetchDiscordGatewayInfoWithTimeout,
   resolveDiscordGatewayInfoTimeoutMs,
 } from "./gateway-metadata.js";
 
@@ -18,6 +19,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     GuildPresences: 1 << 6,
     GuildMembers: 1 << 7,
     GuildVoiceStates: 1 << 8,
+    GuildExpressions: 1 << 9,
   } as const;
 
   class TestEmitter {
@@ -70,10 +72,16 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  danger: (value: string) => value,
-  warn: (value: string) => value,
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: string) => value,
+    warn: (value: string) => value,
+  };
+});
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
@@ -87,11 +95,7 @@ describe("createDiscordGatewayPlugin", () => {
   function createPlugin(
     testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
-    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
   ) {
     return createDiscordGatewayPlugin({
       discordConfig,
@@ -100,8 +104,11 @@ describe("createDiscordGatewayPlugin", () => {
     });
   }
 
-  it("omits GuildVoiceStates by default for text-only Discord configs", () => {
-    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(0);
+  it("subscribes to guild emoji changes without enabling voice by default", () => {
+    const intents = resolveDiscordGatewayIntents();
+
+    expect(intents & GatewayIntents.GuildExpressions).toBe(GatewayIntents.GuildExpressions);
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
   it("includes GuildVoiceStates when voice is enabled", () => {
@@ -114,6 +121,16 @@ describe("createDiscordGatewayPlugin", () => {
     const intents = resolveDiscordGatewayIntents({ voiceEnabled: false });
 
     expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("omits MessageContent only when explicitly disabled", () => {
+    const defaultIntents = resolveDiscordGatewayIntents();
+    const mentionOnlyIntents = resolveDiscordGatewayIntents({
+      intentsConfig: { messageContent: false },
+    });
+
+    expect(defaultIntents & GatewayIntents.MessageContent).toBe(GatewayIntents.MessageContent);
+    expect(mentionOnlyIntents & GatewayIntents.MessageContent).toBe(0);
   });
 
   it("lets intents.voiceStates override voice enablement", () => {
@@ -139,8 +156,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
   });
 
-  it("resolves gateway metadata timeout from config, env, then default", () => {
-    expect(resolveDiscordGatewayInfoTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
+  it("resolves gateway metadata timeout from env, then default", () => {
     expect(
       resolveDiscordGatewayInfoTimeoutMs({
         env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
@@ -149,21 +165,25 @@ describe("createDiscordGatewayPlugin", () => {
     expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
   });
 
-  it("parses valid Discord gateway metadata", () => {
-    expect(
-      parseDiscordGatewayInfoBody(
-        JSON.stringify({
-          url: "wss://gateway.discord.gg",
-          shards: 1,
-          session_start_limit: {
-            total: 1000,
-            remaining: 999,
-            reset_after: 0,
-            max_concurrency: 1,
-          },
-        }),
-      ),
-    ).toEqual({
+  it("parses valid Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 1,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).resolves.toEqual({
       url: "wss://gateway.discord.gg",
       shards: 1,
       session_start_limit: {
@@ -175,21 +195,25 @@ describe("createDiscordGatewayPlugin", () => {
     });
   });
 
-  it("rejects malformed Discord gateway metadata", () => {
-    expect(() =>
-      parseDiscordGatewayInfoBody(
-        JSON.stringify({
-          url: "",
-          shards: 0,
-          session_start_limit: {
-            total: 1000,
-            remaining: 999,
-            reset_after: 0,
-            max_concurrency: 1,
-          },
-        }),
-      ),
-    ).toThrow(/url|shards/);
+  it("rejects malformed Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 0,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).rejects.toThrow(/url|shards/);
   });
 
   it("omits voice states when Discord voice is disabled in account config", () => {
@@ -232,6 +256,7 @@ describe("createDiscordGatewayPlugin", () => {
       autoInteractions: false,
       intents:
         GatewayIntents.Guilds |
+        GatewayIntents.GuildExpressions |
         GatewayIntents.GuildMessages |
         GatewayIntents.MessageContent |
         GatewayIntents.DirectMessages |
@@ -239,22 +264,6 @@ describe("createDiscordGatewayPlugin", () => {
         GatewayIntents.DirectMessageReactions,
       reconnect: { maxAttempts: 50 },
     });
-  });
-
-  it("keeps OpenClaw metadata timeout out of gateway options", () => {
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: { gatewayInfoTimeoutMs: 5_000 },
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    });
-
-    expect(
-      (plugin as unknown as { options?: { gatewayInfoTimeoutMs?: number } }).options
-        ?.gatewayInfoTimeoutMs,
-    ).toBeUndefined();
   });
 
   it("emits transport activity for current gateway socket messages", () => {
@@ -318,11 +327,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("logs Discord gateway websocket error and abnormal close details", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {
@@ -356,11 +361,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("keeps gateway close reason logs UTF-16 safe", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {

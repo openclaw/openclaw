@@ -1,29 +1,22 @@
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
-import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
-  applyCodeModeCatalog,
   createCodeModeTools,
-  resolveCodeModeConfig,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
-  isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
-  shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import {
-  applyToolSchemaDirectoryCatalog,
-  applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
-  estimateToolSchemaDirectoryToolNames,
-  resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -31,7 +24,9 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../tool-search.js";
+import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 
 const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -48,6 +43,7 @@ export type AgentHarnessToolSurfaceRuntime = {
     options?: { hookContext?: HookContext; localModelLeanApplied?: boolean },
   ) => {
     tools: AnyAgentTool[];
+    promptToolPolicy: ReturnType<typeof createAgentHarnessPromptToolPolicy<AnyAgentTool>>;
   };
   config: OpenClawConfig | undefined;
   includeToolSearchControls: boolean;
@@ -58,7 +54,7 @@ export type AgentHarnessToolSurfaceRuntime = {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
 };
 
-export function createAgentHarnessToolSurfaceRuntime(params: {
+export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   abortSignal?: AbortSignal;
   agentId?: string;
   config?: OpenClawConfig;
@@ -66,42 +62,42 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   executeTool: ToolSearchCatalogToolExecutor;
   forceMessageTool?: boolean;
   isRawModelRun?: boolean;
+  /** Prepared model row carrying catalog compat; required for `"auto"` code-mode resolution. */
+  model?: { compat?: unknown; contextWindow?: number; toolSearchMode?: "tools" | false };
+  contextTokenBudget?: number;
   modelId?: string;
   modelProvider?: string;
+  codeModeOverride?: boolean | "auto";
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
-  const forceDirectMessageTool =
-    params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanEnabled = isLocalModelLeanEnabled({
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
+  const {
+    codeModeControlsEnabled,
+    toolSearchControlsEnabled,
+    toolSearchConfig,
+    toolSearchRuntimeConfig,
+  } = resolveAgentToolSurfacePlan({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    forceDirectMessageTool,
+    model: params.model,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    codeModeOverride: params.codeModeOverride,
+    toolsEnabled: params.modelToolsEnabled,
+    disableTools: params.disableTools,
+    isRawModelRun: params.isRawModelRun === true,
+    toolsAllow: params.toolsAllow,
   });
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
-  const toolSearchRuntimeConfig = forceDirectMessageTool
-    ? params.config
-    : applyLocalModelLeanToolSearchDefaults({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
-  const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
-  const toolsAvailable =
-    params.modelToolsEnabled &&
-    params.disableTools !== true &&
-    params.isRawModelRun !== true &&
-    params.toolsAllow?.length !== 0;
-  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
-  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
-  const toolSearchControlsEnabled =
-    toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
   const runtimeToolAllowlist =
@@ -125,6 +121,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     runtimeToolAllowlist,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
@@ -134,7 +131,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   const compactTools = (
     tools: AnyAgentTool[],
     options: { hookContext?: HookContext; localModelLeanApplied?: boolean } = {},
-  ): { tools: AnyAgentTool[] } => {
+  ) => {
     // Native harness callers may supply raw tools, while the bundled tool constructor
     // already applied the full prepared policy and must not be filtered a second time.
     const projectedUncompactedTools = options.localModelLeanApplied
@@ -146,12 +143,12 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           sessionKey: params.sessionKey,
           preserveToolNames,
         });
-    const uncompactedProjection = filterRuntimeCompatibleTools(projectedUncompactedTools);
-    let effectiveTools = [...uncompactedProjection.tools];
+    let effectiveTools = filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
           runtimeConfig: params.config,
+          modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -161,59 +158,22 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           executeTool: params.executeTool,
         })
       : [];
-    const directoryRequiredToolNames = forceDirectMessageTool ? ["message"] : [];
-    const directoryHydratedToolNames =
-      toolSearchControlsEnabled && toolSearchConfig.mode === "directory"
-        ? (() => {
-            try {
-              return estimateToolSchemaDirectoryToolNames({
-                tools: effectiveTools,
-                query: params.prompt ?? "",
-                maxTools: 4,
-                requiredToolNames: directoryRequiredToolNames,
-              });
-            } catch {
-              return directoryRequiredToolNames;
-            }
-          })()
-        : [];
-    const compacted = codeModeControlsEnabled
-      ? applyCodeModeCatalog({
-          tools: [...codeModeTools, ...effectiveTools],
-          config: params.config,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          toolHookContext: options.hookContext,
-        })
-      : toolSearchConfig.mode === "directory"
-        ? applyToolSchemaDirectoryCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            hydrateToolNames: directoryHydratedToolNames,
-          })
-        : applyToolSearchCatalog({
-            tools: effectiveTools,
-            config: toolSearchRuntimeConfig,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-            toolHookContext: options.hookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
-          });
+    const compacted = applyAgentToolSurfaceCatalog({
+      // `codeModeTools` is empty unless code-mode controls are on, so this stays
+      // exactly `effectiveTools` for the tool-search branches.
+      tools: [...codeModeTools, ...effectiveTools],
+      config: params.config,
+      toolSearchRuntimeConfig,
+      codeModeControlsEnabled,
+      toolSearchConfig,
+      forceDirectMessageTool,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      catalogRef: toolSearchCatalogRef,
+      toolHookContext: options.hookContext,
+    });
     const projectedCompactedTools = options.localModelLeanApplied
       ? compacted.tools
       : filterLocalModelLeanTools({
@@ -223,8 +183,18 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           sessionKey: params.sessionKey,
           preserveToolNames,
         });
-    effectiveTools = [...filterRuntimeCompatibleTools(projectedCompactedTools).tools];
-    return { tools: effectiveTools };
+    effectiveTools = filterRuntimeCompatibleTools(projectedCompactedTools).tools;
+    if (!compacted.catalogRegistered) {
+      finalizeAgentToolAvailability(effectiveTools);
+    }
+    return {
+      tools: effectiveTools,
+      promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        tools: effectiveTools,
+        catalogRef: toolSearchCatalogRef,
+        codeModeControlsEnabled,
+      }),
+    };
   };
   return {
     codeModeControlsEnabled,

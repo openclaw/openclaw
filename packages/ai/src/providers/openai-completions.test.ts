@@ -2,12 +2,19 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { Context, Model, SimpleStreamOptions } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
+  reasoning?: string;
+  reasoning_text?: string;
 };
 type OpenAICompatibleChoice = Omit<
   DeepPartial<ChatCompletionChunk["choices"][number]>,
@@ -24,10 +31,12 @@ type OpenAICompatibleChatCompletionChunk = Omit<
   choices?: OpenAICompatibleChoice[];
   usage?: DeepPartial<ChatCompletionChunk["usage"]> & { cost?: unknown };
 };
-type FirstEventSimpleStreamOptions = SimpleStreamOptions & {
+type FirstEventOptions = {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
 };
+type FirstEventOpenAIStreamOptions = OpenAICompletionsOptions & FirstEventOptions;
+type FirstEventSimpleStreamOptions = SimpleStreamOptions & FirstEventOptions;
 
 const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
@@ -76,7 +85,14 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { createZeroUsage } from "../usage.test-support.js";
+import {
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
+  type OpenAICompletionsOptions,
+} from "./openai-completions.js";
 
 beforeEach(() => {
   mockChunksRef.chunks = [];
@@ -204,6 +220,32 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it.each([
+    { thinkingFormat: "zai", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "qwen", expected: { enable_thinking: false } },
+    { thinkingFormat: "deepseek", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "together", expected: { reasoning: { enabled: false } } },
+  ] as const)(
+    "treats reasoningEffort none as disabled for $thinkingFormat payloads",
+    async ({ thinkingFormat, expected }) => {
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        compat: { thinkingFormat, supportsReasoningEffort: true },
+      } satisfies Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        reasoningEffort: "none",
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject(expected);
+      expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
   it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
@@ -227,6 +269,34 @@ describe("OpenAI-compatible completions params", () => {
     });
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
   });
+
+  it.each([
+    { name: "model compat mapping", reasoningEffort: "low", expected: "high" },
+    { name: "thinkingLevelMap fallback", reasoningEffort: "medium", expected: "xhigh" },
+    { name: "requested effort fallback", reasoningEffort: "high", expected: "high" },
+  ] as const)(
+    "uses $name in the emitted reasoning_effort payload",
+    async ({ reasoningEffort, expected }) => {
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        thinkingLevelMap: { low: "medium", medium: "xhigh" },
+        compat: {
+          supportsReasoningEffort: true,
+          reasoningEffortMap: { low: "high" },
+        },
+      } as unknown as Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        reasoningEffort,
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: expected });
+    },
+  );
 
   it("configures the OpenAI SDK client with the host-built model fetch", async () => {
     mockOpenAIOptionsRef.options = [];
@@ -252,6 +322,28 @@ describe("OpenAI-compatible completions params", () => {
     }
   });
 
+  it("keeps explicit authorization headers when API-key auth is also present", async () => {
+    mockOpenAIOptionsRef.options = [];
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+
+    const result = await streamOpenAICompletions(
+      {
+        ...model,
+        provider: "llama-cpp",
+        headers: { Authorization: "Bearer proxy-key" },
+      },
+      context,
+      { apiKey: "ambient-key" },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockOpenAIOptionsRef.options).toHaveLength(1);
+    expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
+      apiKey: "ambient-key",
+      defaultHeaders: { Authorization: "Bearer proxy-key" },
+    });
+  });
+
   it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
     mockChunksRef.chunks = [makeRefusalChunk("I can't help with that.")];
 
@@ -274,6 +366,52 @@ describe("OpenAI-compatible completions params", () => {
       { type: "text", text: "Requests like this are not allowed." },
     ]);
     expect(result.stopReason).toBe("stop");
+  });
+
+  it("tags pre-tool narration as commentary on tool turns", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Importing ORDER-1234 into the tracker…"),
+      makeToolCallChunk("call_import", "import_order", '{"id":"ORDER-1234"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+    const textBlock = result.content.find((block) => block.type === "text") as
+      | TextContent
+      | undefined;
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(JSON.parse(String(textBlock?.textSignature))).toMatchObject({
+      v: 1,
+      phase: "commentary",
+    });
+  });
+
+  it("rolls back provisional tags when spurious tool calls are stripped", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Here is the answer."),
+      makeToolCallChunk("call_spurious", "noop", "{}"),
+      makeFinishChunk("stop"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
+  });
+
+  it("does not tag ordinary text when a provider emits an empty tool_calls array", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Ordinary answer."),
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { tool_calls: [] }, finish_reason: "stop" }],
+      },
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+
+    expect(result.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
   });
 
   it("preserves a valid provider-reported usage cost", async () => {
@@ -332,7 +470,7 @@ describe("OpenAI-compatible completions params", () => {
         apiKey: "sk-test",
         firstEventTimeoutMs: 5,
         onFirstEventTimeout,
-      } as FirstEventSimpleStreamOptions);
+      } as FirstEventOpenAIStreamOptions);
       const resultPromise = stream.result();
 
       await vi.advanceTimersByTimeAsync(5);
@@ -435,6 +573,46 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("keeps request bytes stable across equivalent tool input order", async () => {
+    const tools = [
+      {
+        name: "zeta_tool",
+        description: "Zeta tool",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "alpha_tool",
+        description: "Alpha tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    const payloads: string[] = [];
+
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      const stream = streamOpenAICompletions(
+        model,
+        { ...context, tools: orderedTools },
+        {
+          apiKey: "sk-test",
+          onPayload(payload) {
+            payloads.push(JSON.stringify(payload));
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+    }
+
+    expect(payloads[0]).toBe(payloads[1]);
+    expect(
+      (
+        JSON.parse(payloads[0] ?? "{}") as {
+          tools: Array<{ function: { name: string } }>;
+        }
+      ).tools.map((tool) => tool.function.name),
+    ).toEqual(["alpha_tool", "zeta_tool"]);
+  });
+
   it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
     const stream = streamOpenAICompletions(
       model,
@@ -524,14 +702,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
             timestamp: 1,
@@ -565,6 +736,55 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("does not emit image turns or placeholders for payload-less tool media", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: createZeroUsage(),
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_husk",
+    });
+    expect(JSON.stringify(capturedMessages)).not.toContain("image_url");
+    expect(JSON.stringify(capturedMessages)).not.toContain("see attached image");
+  });
+
   it("preserves image-bearing tool results with image placeholders and attachments", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
@@ -578,14 +798,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
             timestamp: 1,
@@ -620,7 +833,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
       role: "user",
       content: [
-        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
         { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
       ],
     });
@@ -665,6 +878,55 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedMaxTokens).toBe(32_000);
+  });
+
+  it("uses Z.AI max_tokens and disables thinking by default", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        maxTokens: 1_024,
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      max_tokens: 1_024,
+      thinking: { type: "disabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("max_completion_tokens");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
+  });
+
+  it("enables Z.AI thinking with the documented payload when requested", async () => {
+    const stream = streamSimpleOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoning: "max",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled", clear_thinking: false },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
   it("forwards simple stop sequences to request params", async () => {
@@ -759,12 +1021,12 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
-  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+  it("carries bounded Runtime facts on the first user turn for OpenAI-compatible providers", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       createModel(32_000),
       {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
         messages: [{ role: "user", content: "hi", timestamp: 1 }],
       },
       {
@@ -780,10 +1042,18 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // The stable prefix must not fork; tool schemas are serialized after it.
     expect(messages[0]).toEqual({
       role: "system",
       content: "Stable prefix\nDynamic suffix",
     });
+    // Only the non-behavioral tail rides behind the tools on the user turn.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: "hi\n\nRuntime facts",
+    });
+    // The internal marker must never reach the provider.
+    expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("splits the cache boundary before applying Anthropic cache control for OpenRouter Anthropic models", async () => {
@@ -825,6 +1095,59 @@ describe("OpenAI-compatible completions params", () => {
           text: "Dynamic suffix",
         },
       ],
+    });
+  });
+
+  it("keeps the relocatable marker out of the OpenRouter Anthropic cache-control payload", async () => {
+    // This route preserves the cache boundary for its breakpoint and relocates
+    // nothing, so the relocatable marker must not survive into the payload.
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}## Runtime\nRuntime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    const serialized = JSON.stringify(messages);
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    // The breakpoint still lands on the stable prefix, and nothing is relocated.
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Reactions guidance\n## Runtime\nRuntime: session=alpha",
+        },
+      ],
+    });
+    // The user turn carries the conversation breakpoint and nothing relocated.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }],
     });
   });
 
@@ -884,24 +1207,13 @@ describe("OpenAI-compatible completions params", () => {
       },
       {
         messages: [
-          {
-            role: "user",
-            content: "search first",
-            timestamp: 1,
-          },
+          makeUserMessage("search first", 1),
           {
             role: "assistant",
             api: "openai-completions",
             provider: "xiaomi",
             model: "mimo-v2.5-pro",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [
               {
@@ -913,19 +1225,8 @@ describe("OpenAI-compatible completions params", () => {
             ],
             timestamp: 2,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_search",
-            toolName: "search",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 3,
-          },
-          {
-            role: "user",
-            content: "continue",
-            timestamp: 4,
-          },
+          makeTextToolResult("call_search", "search", "ok", false, 3),
+          makeUserMessage("continue", 4),
         ],
       },
       {
@@ -949,68 +1250,29 @@ describe("OpenAI-compatible completions params", () => {
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
-  it("keeps literal reasoning tag examples visible when no reasoning field is mirrored", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use `<think>private</think>` only as an example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+  it.each([
+    {
+      title: "keeps literal reasoning tag examples visible when no reasoning field is mirrored",
       text: "Use `<think>private</think>` only as an example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("The <reasoning> tag is deprecated in this example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "Use `<think>private</think>` only as an example.",
+    },
+    {
+      title: "keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning",
       text: "The <reasoning> tag is deprecated in this example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unmatched close tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use </think> to close the tag."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "The <reasoning> tag is deprecated in this example.",
+    },
+    {
+      title: "keeps prose mentions of unmatched close tags visible without mirrored reasoning",
       text: "Use </think> to close the tag.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("strips content-only reasoning tags from visible text", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Before <think>private reasoning</think> after"),
-      makeFinishChunk("stop"),
-    ];
+      expectedText: "Use </think> to close the tag.",
+    },
+    {
+      title: "strips content-only reasoning tags from visible text",
+      text: "Before <think>private reasoning</think> after",
+      expectedText: "Before  after",
+    },
+  ])("$title", async ({ text, expectedText }) => {
+    mockChunksRef.chunks = [makeTextChunk(text), makeFinishChunk("stop")];
 
     const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
@@ -1020,7 +1282,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.content).toContainEqual({
       type: "text",
-      text: "Before  after",
+      text: expectedText,
     });
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
@@ -1220,6 +1482,40 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
+  it.each(["reasoning_content", "reasoning", "reasoning_text"] as const)(
+    "reports hidden %s chunks as request activity",
+    async (reasoningField) => {
+      mockChunksRef.chunks = [
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "private reasoning" } }],
+        },
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "still private" } }],
+        },
+        makeTextChunk("visible answer"),
+        makeFinishChunk("stop"),
+      ];
+      const abortController = new AbortController();
+      const onActivity = vi.fn();
+      const unsubscribe = onLlmRequestActivity(abortController.signal, onActivity);
+
+      try {
+        const result = await streamOpenAICompletions(model, context, {
+          apiKey: "sk-test",
+          signal: abortController.signal,
+        }).result();
+
+        expect(onActivity).toHaveBeenCalledTimes(mockChunksRef.chunks.length);
+        expect(result.content).toContainEqual({ type: "text", text: "visible answer" });
+        expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it("seals the native reasoning block before the answer text begins", async () => {
     // deepseek streams reasoning_content, then switches to content with no
     // boundary event; thinking_end must precede the answer so channels do not
@@ -1404,6 +1700,194 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
+  it("preserves the first tool identity and publishes argument-free tool fragments", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_original", "original", ""),
+      makeToolCallChunk("call_replaced", "replaced", '{"value":1}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const toolDeltas: string[] = [];
+    for await (const event of stream) {
+      if (event.type === "toolcall_delta") {
+        toolDeltas.push(event.delta);
+      }
+    }
+
+    expect(toolDeltas).toEqual(["", '{"value":1}']);
+    expect((await stream.result()).content).toContainEqual({
+      type: "toolCall",
+      id: "call_original",
+      name: "original",
+      arguments: { value: 1 },
+    });
+  });
+
+  it("replaces the stored function name on a same-id fragmented continuation", async () => {
+    // A stable tool-call id that repeats across deltas signals a continuation of
+    // the same call, so the latest nonempty function-name snapshot must replace
+    // the stored name — mirroring the pinned OpenAI SDK and the managed
+    // transport. Without this the first fragment (e.g. "get_") freezes and the
+    // call is published under a stale, partial name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_", '{"city":'),
+      makeToolCallChunk("call_name", "weather", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("replaces the stored name when an index-resolved continuation omits the id", async () => {
+    // A continuation delta that re-uses the established index but omits the id
+    // is still the same tool call — the block was already resolved by index
+    // above, so an absent id is a continuation, not a conflicting identity. The
+    // latest nonempty function-name snapshot must replace the stored name,
+    // matching the pinned OpenAI SDK accumulator. Only an explicitly conflicting
+    // id (next test) keeps the first name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "second", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "second",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("keeps the first name when a continuation carries a conflicting id", async () => {
+    // A continuation whose id explicitly conflicts with the established block
+    // id is not the same call, so in direct mode the first tool identity wins
+    // and the stored name is preserved.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      makeToolCallChunk("call_B", "second", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "first",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("does not erase the stored name when a continuation carries an empty name", async () => {
+    // An empty function-name snapshot must not replace the stored name — the
+    // guard checks truthiness, so "" is skipped. This mirrors the pinned SDK
+    // (which only replaces on nonempty fn.name) and satisfies the issue's
+    // "empty-name continuation" assertion requirement.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_weather", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("publishes post-tool text immediately and closes blocks in their original order", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "lookup", '{"value":1}'),
+      makeTextChunk("following text"),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+      if (event.type === "text_delta") {
+        expect(event.partial).toBeDefined();
+      }
+    }
+
+    expect(eventTypes.indexOf("text_delta")).toBeLessThan(eventTypes.indexOf("toolcall_end"));
+    expect(eventTypes.indexOf("toolcall_end")).toBeLessThan(eventTypes.indexOf("text_end"));
+    expect((await stream.result()).content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { value: 1 } },
+      {
+        type: "text",
+        text: "following text",
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
+      },
+    ]);
+  });
+
+  it("rolls back provisional commentary when an unfinished tool stream is interrupted", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ordinary narration"),
+      makeToolCallChunk("call_1", "lookup", '{"value":1}'),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Stream ended without finish_reason");
+    expect(result.content).toEqual([{ type: "text", text: "ordinary narration" }]);
+    expect(eventTypes.indexOf("text_end")).toBeLessThan(eventTypes.indexOf("error"));
+    expect(eventTypes).not.toContain("toolcall_end");
+  });
+
   it("strips toolCall blocks when finish_reason is stop after visible text", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("Hello"),
@@ -1449,7 +1933,13 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
     const result = await stream.result();
 
-    expect(result.content[0]).toEqual({ type: "text", text: "Use <" });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "Use <",
+      textSignature: expect.stringMatching(
+        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+      ),
+    });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });
 

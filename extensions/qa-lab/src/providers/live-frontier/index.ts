@@ -31,7 +31,7 @@ function isClaudeOpusModel(modelRef: string) {
 export const liveFrontierProviderDefinition: QaProviderDefinition = {
   mode: "live-frontier",
   kind: "live",
-  defaultModel: (options) => options?.preferredLiveModel ?? "openai/gpt-5.6",
+  defaultModel: (options) => options?.preferredLiveModel ?? "openai/gpt-5.6-sol",
   defaultImageGenerationProviderIds: ["openai"],
   defaultImageGenerationModel: ({ modelProviderIds }) =>
     modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
@@ -39,7 +39,7 @@ export const liveFrontierProviderDefinition: QaProviderDefinition = {
   resolveModelParams: ({ modelRef, fastMode, thinkingDefault }) => ({
     transport: "sse",
     openaiWsWarmup: false,
-    ...(fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+    ...((fastMode ?? isQaFastModeModelRef(modelRef)) ? { fastMode: true } : {}),
     ...(thinkingDefault ? { thinking: thinkingDefault } : {}),
   }),
   resolveTurnTimeoutMs: ({ fallbackMs, modelRef }) => {

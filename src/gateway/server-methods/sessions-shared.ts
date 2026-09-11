@@ -1,67 +1,32 @@
 // Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
   type SessionOperationEvent,
-  type SessionPlacement,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
-import {
-  isWorkerPlacementSessionRuntimeSupported,
-  resolveWorkerPlacementSessionRuntime,
-} from "../worker-environments/placement-session-runtime.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
+import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
-export class SessionWorkerPlacementMutationError extends Error {
-  constructor(
-    readonly placementState: SessionPlacement["state"],
-    action: "delete" | "reset" | "restore",
-    key: string,
-  ) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
-  }
-}
-
-export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "reset" | "restore";
-  context: GatewayRequestContext;
-  key: string;
-  sessionId: string | undefined;
-}): SessionWorkerPlacementMutationError | undefined {
-  if (!params.sessionId) {
-    return undefined;
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
-  if (
-    !placement ||
-    placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed")
-  ) {
-    return undefined;
-  }
-  return new SessionWorkerPlacementMutationError(placement.state, params.action, params.key);
-}
-
 export function respondSessionWorkerPlacementMutationError(
-  error: SessionWorkerPlacementMutationError,
+  error: { message: string },
   respond: RespondFn,
 ): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
@@ -85,52 +50,42 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  if (params.patch.archived !== undefined) {
-    return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+  if (
+    "permissionMode" in params.patch &&
+    placement.executionMode === "worker-turn" &&
+    placement.turnClaim
+  ) {
+    return "This remote worker cannot apply permissions while active. Stop the worker run, then change permissions.";
   }
-  if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
+  if (params.patch.archived === false) {
+    const restoreError = resolveWorkerPlacementArchiveRestoreError({
+      context: params.context,
+      key: params.key,
+      placement,
+    });
+    if (restoreError) {
+      return restoreError;
+    }
+  }
+  if (
+    !params.validateModelRuntime ||
+    params.patch.model === undefined ||
+    !params.entry?.sessionId
+  ) {
     return undefined;
   }
-  const runtime = resolveWorkerPlacementSessionRuntime({
+  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
     cfg: params.cfg,
     entry: params.entry,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  if (isWorkerPlacementSessionRuntimeSupported(runtime)) {
+  if (executionMode === placement.executionMode) {
     return undefined;
   }
-  return `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
-}
-
-export function filterSessionStoreToConfiguredAgents(
-  cfg: OpenClawConfig,
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
-  const isConfiguredSessionKey = (key: string | undefined) => {
-    const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return false;
-    }
-    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
-    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-    return configuredAgentIds.has(normalizeAgentId(agentId));
-  };
-  return Object.fromEntries(
-    Object.entries(store).filter(([key, entry]) => {
-      if (key === "global" || key === "unknown") {
-        return true;
-      }
-      if (isConfiguredSessionKey(key)) {
-        return true;
-      }
-      // Keep spawned child sessions visible when their parent belongs to a configured agent.
-      return (
-        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
-      );
-    }),
-  );
+  return executionMode
+    ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `Session ${params.key} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
 }
 
 export const loadSessionsRuntimeModule = createLazyRuntimeModule(
@@ -154,30 +109,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeDeleteMismatch(params: {
-  client: GatewayClient | null;
-  key: string;
-  entry: SessionEntry | undefined;
-  respond: RespondFn;
-}): boolean {
-  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
-  if (!pluginOwnerId || !params.entry) {
-    return false;
-  }
-  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
-    ),
-  );
-  return true;
-}
-
 export function resolveGatewaySessionTargetFromKey(
   key: string,
   cfg: OpenClawConfig,
@@ -199,36 +130,16 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
-    clone: false,
+    exactRead: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  let best:
-    | {
-        entry: SessionEntry;
-        sessionStoreKey: string;
-      }
-    | undefined;
-  for (const sessionStoreKey of target.storeKeys) {
-    const entry = target.store[sessionStoreKey];
-    if (entry) {
-      if (!best || (entry.updatedAt ?? 0) > (best.entry.updatedAt ?? 0)) {
-        best = { entry, sessionStoreKey };
-      }
-    }
-  }
-  if (best) {
-    return {
-      target,
-      storePath: target.storePath,
-      entry: best.entry,
-      canonicalKey: target.canonicalKey,
-      sessionStoreKey: best.sessionStoreKey,
-    };
-  }
   return {
     target,
     storePath: target.storePath,
-    entry: undefined,
+    // Exact probes include internal-effects rows that operator inventory reads hide.
+    entry: isInternalSessionEffectsKey(target.canonicalKey)
+      ? undefined
+      : resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
     canonicalKey: target.canonicalKey,
     sessionStoreKey: target.canonicalKey,
   };
@@ -238,15 +149,20 @@ export function loadSessionEntriesForTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  includeStoreChildEntries?: boolean;
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,
+    exactRead: true,
+    includeStoreChildEntries: params.includeStoreChildEntries,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = isInternalSessionEffectsKey(target.canonicalKey)
+    ? undefined
+    : resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 
@@ -267,29 +183,6 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
-}
-
-export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore" | "dispatch";
-  client: GatewayClient | null;
-  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
-  respond: RespondFn;
-}): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
-    ),
-  );
-  return true;
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {

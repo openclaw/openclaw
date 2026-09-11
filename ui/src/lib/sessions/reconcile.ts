@@ -1,407 +1,168 @@
-import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
-import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
-import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
+import {
+  isPersistedSessionRow,
+  isSessionRowOutsideResultScope,
+  matchesExistingSession,
+  preserveRosterPresentationMetadata,
+  readSessionChangedEvent,
+  reconcileSessionChangedRow,
+  reconcileSessionRow,
+  type SessionChangedRowProjection,
+  type SessionChangedRowResult,
+  type SessionReconcileOptions,
+  type SessionRowObservation,
+} from "./session-row-reconcile.ts";
+import { preserveOmittedThinkingMetadata } from "./session-thinking-metadata.ts";
 
-export type SessionReconcileOptions = {
-  resultAgentId?: string | null;
-  selectedGlobalAgentId?: string | null;
-  showArchived?: boolean;
-};
+export {
+  preserveRosterPresentationMetadata,
+  readSessionChangedEvent,
+  reconcileSessionChangedRow,
+  reconcileSessionRow,
+} from "./session-row-reconcile.ts";
+export type { SessionReconcileOptions, SessionRowObservation } from "./session-row-reconcile.ts";
 
-export type SessionChangedResult = {
-  applied: boolean;
-  key?: string;
-  agentId?: string | null;
-  runId?: string | null;
-  clientRunId?: string | null;
-  hasActiveRun?: boolean | null;
-  status?: SessionRunStatus | null;
-  isChatTurn?: boolean;
-  row?: GatewaySessionRow;
-  deletedKey?: string;
-  result: SessionsListResult | null;
-};
+export type SessionChangedResult = Omit<
+  SessionChangedRowResult,
+  "reconciled" | "eventTs" | "ownershipChanged" | "disposition"
+> & { result: SessionsListResult | null };
 
-type SessionChangedEventInfo = {
-  key: string;
-  agentId: string | null;
-  runId: string | null;
-  clientRunId: string | null;
-  hasActiveRun: boolean | null;
-  status: SessionRunStatus | null;
-  archived: boolean | null;
-  isChatTurn: boolean;
-};
-
-type ThinkingMetadataCarrier = {
-  modelProvider?: string | null;
-  model?: string | null;
-  agentRuntime?: { id: string } | null;
-  thinkingLevels?: Array<{ id: string; label: string }>;
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-};
-
-function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
-  const next: Partial<GatewaySessionRow> = {};
-  for (const [key, value] of Object.entries(row) as Array<[keyof GatewaySessionRow, unknown]>) {
-    if (value === undefined) {
-      continue;
+/** Merge canonical and filtered pages with the same cursor/deduplication contract. */
+export function appendSessionResults(
+  previous: SessionsListResult,
+  page: SessionsListResult,
+): SessionsListResult {
+  const seen = new Set<string>();
+  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
+    if (!row.key || seen.has(row.key)) {
+      return false;
     }
-    if (key === "totalTokensFresh" && value === false && row.totalTokens === undefined) {
-      continue;
-    }
-    next[key] = value as never;
-  }
-  return next as GatewaySessionRow;
-}
-
-function isPersistedSessionRow(row: GatewaySessionRow): boolean {
-  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
-  return Boolean(sessionId || typeof row.updatedAt === "number");
-}
-
-function thinkingMetadataIdentityMatches(
-  incoming: ThinkingMetadataCarrier,
-  existing: ThinkingMetadataCarrier,
-): boolean {
-  const incomingRuntime = incoming.agentRuntime?.id?.trim();
-  const existingRuntime = existing.agentRuntime?.id?.trim();
-  // Provider profiles can differ by runtime for the same model (for example Luna Ultra).
-  return !(
-    (incoming.modelProvider &&
-      existing.modelProvider &&
-      incoming.modelProvider !== existing.modelProvider) ||
-    (incoming.model && existing.model && incoming.model !== existing.model) ||
-    (incomingRuntime && existingRuntime && incomingRuntime !== existingRuntime)
-  );
-}
-
-function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
-  incoming: T,
-  existing: ThinkingMetadataCarrier | undefined,
-): T {
-  if (existing && !thinkingMetadataIdentityMatches(incoming, existing)) {
-    return incoming;
-  }
-  const existingLevels = existing?.thinkingLevels;
-  if (!existingLevels?.length || (incoming.thinkingLevels?.length ?? 0) >= existingLevels.length) {
-    return incoming;
-  }
-  return {
-    ...incoming,
-    thinkingLevels: existingLevels,
-    ...(existing?.thinkingOptions ? { thinkingOptions: existing.thinkingOptions } : {}),
-    ...(incoming.thinkingDefault === undefined && existing?.thinkingDefault !== undefined
-      ? { thinkingDefault: existing.thinkingDefault }
-      : {}),
-  };
-}
-
-function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
-  const next = { ...value };
-  delete next.thinkingLevels;
-  delete next.thinkingOptions;
-  delete next.thinkingDefault;
-  return next;
-}
-
-function isOlderSessionSnapshot(
-  incoming: GatewaySessionRow,
-  existing: GatewaySessionRow | undefined,
-): boolean {
-  return (
-    typeof incoming.updatedAt === "number" &&
-    typeof existing?.updatedAt === "number" &&
-    incoming.updatedAt < existing.updatedAt
-  );
-}
-
-function isStaleForActiveSession(
-  incoming: GatewaySessionRow,
-  existing: GatewaySessionRow | undefined,
-): boolean {
-  if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
-    return false;
-  }
-  const incomingUpdatedAt = incoming.updatedAt ?? 0;
-  return (
-    (existing.updatedAt ?? 0) >= incomingUpdatedAt ||
-    (typeof existing.startedAt === "number" && existing.startedAt >= incomingUpdatedAt)
-  );
-}
-
-function matchesExistingSession(
-  existing: GatewaySessionRow,
-  incoming: GatewaySessionRow,
-  selectedGlobalAgentId: string | null,
-): boolean {
-  if (areUiSessionKeysEquivalent(existing.key, incoming.key)) {
+    seen.add(row.key);
     return true;
+  });
+  const totalCount = page.totalCount ?? previous.totalCount;
+  const hasMore =
+    page.hasMore ??
+    (typeof totalCount === "number" && Number.isFinite(totalCount)
+      ? sessions.length < totalCount
+      : false);
+  return {
+    ...page,
+    count: sessions.length,
+    totalCount,
+    hasMore,
+    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
+    sessions,
+  };
+}
+
+export function reconcileRosterPresentationMetadata(
+  incoming: SessionsListResult | null,
+  existing: SessionsListResult | null,
+): SessionsListResult | null {
+  if (!incoming || !existing) {
+    return incoming;
   }
-  if (!isUiGlobalSessionKey(incoming.key) || existing.kind !== "global") {
-    return false;
+  const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
+  let changed = false;
+  const sessions = incoming.sessions.map((session) => {
+    const reconciled = preserveRosterPresentationMetadata(session, existingByKey.get(session.key));
+    changed ||= reconciled !== session;
+    return reconciled;
+  });
+  return changed ? { ...incoming, sessions } : incoming;
+}
+
+export function preserveCurrentSessionRow(
+  result: SessionsListResult,
+  state: { result: Pick<SessionsListResult, "sessions"> | null; agentId: string | null },
+  snapshot: UiSessionDefaultsHost & { sessionKey?: string },
+  backgroundHydrate: boolean,
+): SessionsListResult {
+  const currentKey = snapshot.sessionKey?.trim();
+  if (!currentKey) {
+    return result;
   }
-  const parsed = parseAgentSessionKey(existing.key);
-  return (
-    parsed?.agentId !== undefined &&
-    normalizeAgentId(parsed.agentId) === normalizeAgentId(selectedGlobalAgentId ?? "")
+  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
+  const currentAgentId = normalizeAgentId(
+    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
   );
-}
-
-function sessionAgentId(
-  row: GatewaySessionRow,
-  selectedGlobalAgentId: string | null,
-): string | null {
-  const parsed = parseAgentSessionKey(row.key);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
+  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
+    return result;
   }
-  if (row.kind === "global" && selectedGlobalAgentId?.trim()) {
-    return normalizeAgentId(selectedGlobalAgentId);
+  const matchesCurrent = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
+  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
+  if (
+    previousCurrentRow &&
+    (backgroundHydrate || previousCurrentRow.archived === true) &&
+    !result.sessions.some(matchesCurrent)
+  ) {
+    const sessions = [...result.sessions, previousCurrentRow];
+    return { ...result, count: sessions.length, sessions };
   }
-  return null;
-}
-
-function recordValue(record: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function sessionRunStatus(value: unknown): SessionRunStatus | null {
-  return value === "running" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "killed" ||
-    value === "timeout"
-    ? value
-    : null;
-}
-
-type ParsedSessionChangedEvent = SessionChangedEventInfo & {
-  event: Record<string, unknown>;
-  source: Record<string, unknown>;
-  reason: string | null;
-};
-
-function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
-  const event = recordOrNull(payload);
-  if (!event) {
-    return null;
-  }
-  const source = recordOrNull(event.session) ?? event;
-  const key =
-    stringValue(recordValue(source, "key")) ?? stringValue(recordValue(event, "sessionKey"));
-  if (!key) {
-    return null;
-  }
-  const reason =
-    stringValue(recordValue(event, "reason")) ?? stringValue(recordValue(source, "reason")) ?? null;
-  const phase =
-    stringValue(recordValue(event, "phase")) ?? stringValue(recordValue(source, "phase"));
-  const hasActiveRun =
-    typeof recordValue(source, "hasActiveRun") === "boolean"
-      ? (recordValue(source, "hasActiveRun") as boolean)
-      : typeof recordValue(event, "hasActiveRun") === "boolean"
-        ? (recordValue(event, "hasActiveRun") as boolean)
-        : null;
-  return {
-    event,
-    source,
-    key,
-    reason,
-    agentId: stringValue(recordValue(event, "agentId")) ?? null,
-    runId:
-      stringValue(recordValue(event, "runId")) ?? stringValue(recordValue(source, "runId")) ?? null,
-    clientRunId:
-      stringValue(recordValue(event, "clientRunId")) ??
-      stringValue(recordValue(source, "clientRunId")) ??
-      null,
-    hasActiveRun,
-    status:
-      sessionRunStatus(recordValue(source, "status")) ??
-      sessionRunStatus(recordValue(event, "status")),
-    archived:
-      typeof recordValue(source, "archived") === "boolean"
-        ? (recordValue(source, "archived") as boolean)
-        : null,
-    isChatTurn:
-      phase === "start" ||
-      phase === "message" ||
-      phase === "end" ||
-      phase === "error" ||
-      reason === "send" ||
-      reason === "steer",
-  };
-}
-
-export function readSessionChangedEvent(payload: unknown): SessionChangedEventInfo | null {
-  const parsed = parseSessionChangedEvent(payload);
-  if (!parsed) {
-    return null;
-  }
-  return {
-    key: parsed.key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    archived: parsed.archived,
-    isChatTurn: parsed.isChatTurn,
-  };
+  return result;
 }
 
 export function reconcileSessionChanged(
   result: SessionsListResult | null,
   payload: unknown,
   options: SessionReconcileOptions = {},
+  project?: SessionChangedRowProjection,
 ): SessionChangedResult {
-  const parsed = parseSessionChangedEvent(payload);
-  if (!parsed) {
-    return { applied: false, result };
+  const info = readSessionChangedEvent(payload);
+  const selectedGlobalAgentId = info?.agentId ?? options.selectedGlobalAgentId ?? null;
+  const existing = info
+    ? result?.sessions.find((candidate) =>
+        matchesExistingSession(candidate, info.key, selectedGlobalAgentId),
+      )
+    : undefined;
+  const { row, admittedRow, reconciled, eventTs, ownershipChanged, disposition, ...eventResult } =
+    reconcileSessionChangedRow(existing, payload, options, project);
+  if (disposition === "outside-scope") {
+    // A foreign row cannot advance this query's clock or invalidate its owner facet.
+    return { ...eventResult, row: existing, result };
   }
-  const { event, source, key, reason } = parsed;
-  if (reason === "delete" && !result) {
-    return {
-      applied: true,
-      key,
-      agentId: parsed.agentId,
-      deletedKey: key,
-      result,
-    };
-  }
-  if (!result) {
-    return { applied: false, result };
-  }
-  const selectedGlobalAgentId = parsed.agentId ?? options.selectedGlobalAgentId ?? null;
-  const existing = result.sessions.find((candidate) =>
-    matchesExistingSession(
-      candidate,
-      { key, kind: "global", updatedAt: null },
-      selectedGlobalAgentId,
-    ),
-  );
-
-  if (reason === "delete") {
-    if (!existing) {
-      return { applied: true, result, key, agentId: parsed.agentId, deletedKey: key };
+  if (eventResult.deletedKey) {
+    if (!result || !existing) {
+      return { ...eventResult, result };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
-    return {
-      applied: true,
-      key,
-      agentId: parsed.agentId,
-      result: {
-        ...result,
-        count: sessions.length,
-        sessions,
-      },
-      deletedKey: existing.key,
-    };
+    return { ...eventResult, result: { ...result, count: sessions.length, sessions } };
   }
-
-  const {
-    agentId: _agentId,
-    clientRunId: _clientRunId,
-    compacted: _compacted,
-    key: _key,
-    phase: _phase,
-    reason: _reason,
-    runId: _runId,
-    session: _session,
-    sessionKey: _sessionKey,
-    ts: _ts,
-    ...rowFields
-  } = source;
-  const kind =
-    rowFields.kind === "cron" ||
-    rowFields.kind === "direct" ||
-    rowFields.kind === "group" ||
-    rowFields.kind === "global" ||
-    rowFields.kind === "unknown"
-      ? rowFields.kind
-      : existing?.kind;
-  const updatedAt =
-    typeof rowFields.updatedAt === "number" ? rowFields.updatedAt : existing?.updatedAt;
-  const sessionId = stringValue(rowFields.sessionId) ?? existing?.sessionId;
-  if (!kind || (!existing && sessionId === undefined && typeof updatedAt !== "number")) {
+  if (!reconciled) {
+    // With no roster, ordinary event fields never establish list admission.
+    return !result && eventResult.applied ? { applied: false, result } : { ...eventResult, result };
+  }
+  if (!result || !existing) {
     return { applied: false, result };
   }
-  const incomingRuntime = recordOrNull(rowFields.agentRuntime);
-  const incomingThinkingIdentity: ThinkingMetadataCarrier = {
-    modelProvider: stringValue(rowFields.modelProvider),
-    model: stringValue(rowFields.model),
-    ...(incomingRuntime ? { agentRuntime: { id: stringValue(incomingRuntime.id) ?? "" } } : {}),
-  };
-  const existingFields =
-    existing && !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
-      ? stripThinkingMetadata(existing)
-      : existing;
-  const row = {
-    ...existingFields,
-    ...rowFields,
-    key: existing?.key ?? key,
-    kind,
-    updatedAt: updatedAt ?? null,
-    ...(sessionId ? { sessionId } : {}),
-  } as GatewaySessionRow;
-  if (rowFields.archivedAt === null) {
-    delete row.archivedAt;
+  let next = result;
+  if (row !== existing) {
+    const sessions = row
+      ? [...result.sessions.filter((candidate) => candidate.key !== existing.key), row].toSorted(
+          compareSessionRowsByUpdatedAt,
+        )
+      : result.sessions.filter((candidate) => candidate.key !== existing.key);
+    next = { ...result, count: sessions.length, sessions };
   }
-  if (rowFields.pinnedAt === null) {
-    delete row.pinnedAt;
-  }
-  if (rowFields.label === null) {
-    delete row.label;
-  }
-  if (rowFields.category === null) {
-    delete row.category;
-  }
-  if (rowFields.displayName === null) {
-    delete row.displayName;
-  }
-  if (rowFields.thinkingLevel === null) {
-    delete row.thinkingLevel;
-  }
-  const next = reconcileSessionHistory(result, row, undefined, {
-    ...options,
-    selectedGlobalAgentId,
-  });
-  if (!next) {
-    return { applied: false, result };
-  }
-  const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
-  const reconciledResult = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
-  const reconciledRow = reconciledResult.sessions.find((candidate) =>
-    matchesExistingSession(
-      candidate,
-      { key, kind: "global", updatedAt: null },
-      selectedGlobalAgentId,
-    ),
-  );
-  return {
-    applied: true,
-    key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    isChatTurn: parsed.isChatTurn,
-    row: reconciledRow,
-    result: reconciledResult,
-  };
+  const timestamped = eventTs !== undefined && eventTs > next.ts ? { ...next, ts: eventTs } : next;
+  // Facets describe the whole query, so the list adapter owns their invalidation.
+  const published = ownershipChanged ? { ...timestamped, owners: undefined } : timestamped;
+  const retainedRow = info
+    ? published.sessions.find((candidate) =>
+        matchesExistingSession(candidate, info.key, selectedGlobalAgentId),
+      )
+    : undefined;
+  return { ...eventResult, row: retainedRow, admittedRow, result: published };
 }
 
 export function reconcileSessionHistory(
@@ -409,73 +170,65 @@ export function reconcileSessionHistory(
   row: GatewaySessionRow | undefined,
   defaults: SessionsListResult["defaults"] | undefined,
   options: SessionReconcileOptions = {},
+  preserveMatchingExistingRow = false,
+  observation?: SessionRowObservation,
 ): SessionsListResult | null {
-  if (!row?.key) {
+  if (!row?.key || isSessionRowOutsideResultScope(row, options)) {
     return result;
   }
-  const session = sanitizeSessionRow(row);
-  const showArchived = options.showArchived === true;
-  const selectedGlobalAgentId = options.selectedGlobalAgentId ?? null;
-  const resultAgentId = options.resultAgentId?.trim()
-    ? normalizeAgentId(options.resultAgentId)
-    : null;
-  const incomingAgentId = sessionAgentId(session, selectedGlobalAgentId);
-  const isOutsideResultScope =
-    resultAgentId !== null && incomingAgentId !== null && incomingAgentId !== resultAgentId;
   if (!result) {
-    if ((!isPersistedSessionRow(session) || isOutsideResultScope) && !defaults) {
+    if (!isPersistedSessionRow(row) && !defaults) {
       return null;
     }
-    const sessions =
-      isPersistedSessionRow(session) &&
-      !isOutsideResultScope &&
-      (session.archived === true) === showArchived
-        ? [session]
-        : [];
+    // An excluded first row never enters a list or its observation callbacks.
+    const reduced =
+      isPersistedSessionRow(row) &&
+      sessionMatchesArchivedFilter(row, options.archivedFilter ?? "active")
+        ? reconcileSessionRow(row, undefined, { ...options, archivedFilter: "all" }, observation)
+        : undefined;
+    const sessions = reduced?.row ? [reduced.row] : [];
     return {
       ts: Date.now(),
       path: "",
       count: sessions.length,
-      defaults: defaults ?? {
-        modelProvider: null,
-        model: null,
-        contextTokens: null,
-      },
+      defaults: defaults ?? { modelProvider: null, model: null, contextTokens: null },
       sessions,
     };
   }
-
-  const existing = result.sessions.find((candidate) =>
-    matchesExistingSession(candidate, session, selectedGlobalAgentId),
+  const matching = result.sessions.find((candidate) =>
+    matchesExistingSession(
+      candidate,
+      row.key,
+      row.agentId ?? options.selectedGlobalAgentId ?? null,
+    ),
   );
-  if (isOlderSessionSnapshot(session, existing)) {
+  const nextDefaults = defaults
+    ? preserveOmittedThinkingMetadata(defaults, result.defaults)
+    : result.defaults;
+  const resultWithDefaults =
+    nextDefaults === result.defaults ? result : { ...result, defaults: nextDefaults };
+  const reduced = reconcileSessionRow(
+    row,
+    matching,
+    { ...options, preserveExisting: preserveMatchingExistingRow },
+    observation,
+  );
+  if (
+    reduced.disposition === "older" ||
+    reduced.disposition === "outside-scope" ||
+    reduced.disposition === "invalid"
+  ) {
     return result;
   }
-  const nextDefaults = defaults
-    ? preserveRicherThinkingMetadata(defaults, result.defaults)
-    : result.defaults;
-  if (isOutsideResultScope || (!existing && !isPersistedSessionRow(session))) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+  if (reduced.disposition !== "accepted") {
+    return resultWithDefaults;
   }
-  const visibleKey = existing?.key ?? session.key;
-  const visibleSession = preserveRicherThinkingMetadata(
-    visibleKey === session.key ? session : { ...session, key: visibleKey },
-    existing,
-  );
-  if (isStaleForActiveSession(visibleSession, existing)) {
-    return { ...result, defaults: nextDefaults };
-  }
-  const sessions =
-    (visibleSession.archived === true) === showArchived
-      ? [
-          ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
-          visibleSession,
-        ].toSorted(compareSessionRowsByUpdatedAt)
-      : result.sessions.filter((candidate) => candidate.key !== visibleKey);
-  return {
-    ...result,
-    defaults: nextDefaults,
-    count: sessions.length,
-    sessions,
-  };
+  const visibleKey = matching?.key ?? row.key;
+  const sessions = reduced.row
+    ? [
+        ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
+        reduced.row,
+      ].toSorted(compareSessionRowsByUpdatedAt)
+    : result.sessions.filter((candidate) => candidate.key !== visibleKey);
+  return { ...result, defaults: nextDefaults, count: sessions.length, sessions };
 }

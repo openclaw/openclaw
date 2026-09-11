@@ -1,3 +1,10 @@
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Thinking-level policy for Claude models on Amazon Bedrock. It maps Bedrock
  * model ids to the provider SDK thinking levels that are actually supported.
@@ -6,12 +13,6 @@ import type {
   ProviderRuntimeModel,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "openclaw/plugin-sdk/provider-model-shared";
 
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
@@ -21,8 +22,14 @@ const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "high" },
 ] as const satisfies ProviderThinkingProfile["levels"];
 
-function isOpus48BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]8(?:$|[-.:/])/i.test(
+function isOpus5BedrockModelRef(modelRef: string): boolean {
+  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-5(?:$|[-.:/])/i.test(
+    modelRef,
+  );
+}
+
+function isOpus47Or48BedrockModelRef(modelRef: string): boolean {
+  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-][78](?:$|[-.:/])/i.test(
     modelRef,
   );
 }
@@ -33,16 +40,9 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
   );
 }
 
-/** Return whether a Bedrock model ref names Claude Opus 4.7. */
-function isOpus47BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]7(?:$|[-.:/])/i.test(
-    modelRef,
-  );
-}
-
 /** Return whether a Bedrock model ref names Claude Opus 4.7 or newer. */
 export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
-  return isOpus47BedrockModelRef(modelRef) || isOpus48BedrockModelRef(modelRef);
+  return isOpus5BedrockModelRef(modelRef) || isOpus47Or48BedrockModelRef(modelRef);
 }
 
 function isMythosPreviewBedrockModelRef(modelRef: string): boolean {
@@ -61,6 +61,7 @@ export function isLatestAdaptiveBedrockModelRef(
   return (
     resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
     resolveClaudeMythos5ModelIdentity(modelRef) !== undefined ||
+    resolveClaudeOpus5ModelIdentity(modelRef) !== undefined ||
     resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined ||
     [modelId, canonicalModelId].some(
       (candidate) =>
@@ -77,6 +78,7 @@ export function supportsBedrockNativeMaxEffort(
   if (
     resolveClaudeFable5ModelIdentity({ id: modelId, params }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId, params }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId, params }) ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId, params })
   ) {
     return true;
@@ -95,6 +97,9 @@ export function resolveBedrockNativeThinkingLevelMap(
   const modelRef = { id: modelId, params };
   if (resolveClaudeFable5ModelIdentity(modelRef) || resolveClaudeMythos5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
+  }
+  if (resolveClaudeOpus5ModelIdentity(modelRef)) {
+    return { xhigh: "xhigh", max: "max" };
   }
   if (resolveClaudeSonnet5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
@@ -128,13 +133,13 @@ export function resolveBedrockClaudeThinkingProfile(
       preserveWhenCatalogReasoningFalse: true,
     };
   }
-  if (modelRefs.some(isOpus48BedrockModelRef)) {
+  if (resolveClaudeOpus5ModelIdentity({ id: trimmed, params })) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "off",
+      defaultLevel: "high",
     };
   }
-  if (modelRefs.some(isOpus47BedrockModelRef)) {
+  if (modelRefs.some(isOpus47Or48BedrockModelRef)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
       defaultLevel: "off",

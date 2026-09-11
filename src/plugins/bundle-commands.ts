@@ -10,8 +10,12 @@ import {
   stripFrontmatterBlock,
 } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { parseFrontmatterBool } from "../shared/frontmatter.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
@@ -32,19 +36,8 @@ type ClaudeBundleCommandSpec = {
   sourceFilePath: string;
 };
 
-function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return fallback;
-  }
-  if (normalized === "true" || normalized === "yes" || normalized === "1") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "no" || normalized === "0") {
-    return false;
-  }
-  return fallback;
-}
+const BUNDLE_COMMAND_MAX_BYTES = 1 * 1024 * 1024;
+const log = createSubsystemLogger("plugins/bundle-commands");
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
   const result = readRootJsonObjectSync({
@@ -100,12 +93,10 @@ function toDefaultCommandName(rootDir: string, filePath: string): string {
   return withoutExt.split(path.sep).join(":");
 }
 
-function toDefaultDescription(rawName: string, promptTemplate: string): string {
-  const firstLine = promptTemplate
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .find(Boolean);
-  return firstLine || rawName;
+function toDefaultDescription(promptTemplate: string): string {
+  // stripFrontmatterBlock already normalized line endings and trimmed the nonempty body.
+  const lineEnd = promptTemplate.indexOf("\n");
+  return (lineEnd < 0 ? promptTemplate : promptTemplate.slice(0, lineEnd)).trimEnd();
 }
 
 function loadBundleCommandsFromRoot(params: {
@@ -116,12 +107,15 @@ function loadBundleCommandsFromRoot(params: {
   for (const filePath of listMarkdownFilesRecursive(params.commandRoot)) {
     let raw: string;
     try {
-      raw = fs.readFileSync(filePath, "utf-8");
-    } catch {
+      raw = readRegularFileSync({ filePath, maxBytes: BUNDLE_COMMAND_MAX_BYTES }).buffer.toString(
+        "utf-8",
+      );
+    } catch (error) {
+      log.warn(`skipping unreadable bundle command file ${filePath}: ${formatErrorMessage(error)}`);
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);
-    if (parseFrontmatterBool(frontmatter["disable-model-invocation"], false)) {
+    if (!parseFrontmatterBool(frontmatter["user-invocable"], true)) {
       continue;
     }
     const promptTemplate = stripFrontmatterBlock(raw);
@@ -135,8 +129,7 @@ function loadBundleCommandsFromRoot(params: {
       continue;
     }
     const description =
-      normalizeOptionalString(frontmatter.description) ||
-      toDefaultDescription(rawName, promptTemplate);
+      normalizeOptionalString(frontmatter.description) || toDefaultDescription(promptTemplate);
     entries.push({
       pluginId: params.pluginId,
       rawName,
@@ -174,6 +167,7 @@ export function loadEnabledClaudeBundleCommands(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });

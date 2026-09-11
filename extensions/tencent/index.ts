@@ -1,7 +1,7 @@
 // Tencent plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   TOKENHUB_MODEL_CATALOG,
   TOKENHUB_PROVIDER_ID,
@@ -10,111 +10,98 @@ import {
 } from "./models.js";
 import {
   applyTokenHubConfig,
-  TOKENHUB_DEFAULT_MODEL_REF,
   applyTokenPlanConfig,
+  TOKENHUB_DEFAULT_MODEL_REF,
   TOKENPLAN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildTokenHubProvider, buildTokenPlanProvider } from "./provider-catalog.js";
 import { wrapTencentProviderStream } from "./stream.js";
 
-function buildStaticCatalogEntries(providerId: string, catalog: typeof TOKENHUB_MODEL_CATALOG) {
-  return catalog.map((entry) => ({
-    provider: providerId,
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    contextWindow: entry.contextWindow,
-  }));
-}
-
-function createTokenHubApiKeyAuthMethod() {
-  return createProviderApiKeyAuthMethod({
+const TENCENT_PROVIDERS = [
+  {
     providerId: TOKENHUB_PROVIDER_ID,
-    methodId: "api-key",
     label: "Tencent TokenHub",
-    hint: "Hy via Tencent TokenHub Gateway",
     optionKey: "tokenhubApiKey",
     flagName: "--tokenhub-api-key",
     envVar: "TOKENHUB_API_KEY",
-    promptMessage: "Enter Tencent TokenHub API key",
     defaultModel: TOKENHUB_DEFAULT_MODEL_REF,
-    expectedProviders: [TOKENHUB_PROVIDER_ID],
     applyConfig: applyTokenHubConfig,
-    wizard: {
-      choiceId: "tokenhub-api-key",
-      choiceLabel: "Tencent TokenHub",
-      groupId: "tencent",
-      groupLabel: "Tencent Cloud",
-      groupHint: "Tencent TokenHub",
-    },
-  });
-}
+    choiceId: "tokenhub-api-key",
+    buildProvider: buildTokenHubProvider,
+    modelCatalog: TOKENHUB_MODEL_CATALOG,
+  },
+  {
+    providerId: TOKENPLAN_PROVIDER_ID,
+    label: "Tencent TokenPlan",
+    optionKey: "tokenplanApiKey",
+    flagName: "--tokenplan-api-key",
+    envVar: "TOKENPLAN_API_KEY",
+    defaultModel: TOKENPLAN_DEFAULT_MODEL_REF,
+    applyConfig: applyTokenPlanConfig,
+    choiceId: "tokenplan-api-key",
+    buildProvider: buildTokenPlanProvider,
+    modelCatalog: TOKENPLAN_MODEL_CATALOG,
+  },
+] as const;
 
 export default definePluginEntry({
   id: "tencent",
   name: "Tencent Cloud Provider",
   description: "Bundled Tencent Cloud provider plugin (TokenHub, TokenPlan)",
   register(api) {
-    api.registerProvider({
-      id: TOKENHUB_PROVIDER_ID,
-      label: "Tencent TokenHub",
-      docsPath: "/providers/tencent",
-      envVars: ["TOKENHUB_API_KEY"],
-      auth: [createTokenHubApiKeyAuthMethod()],
-      catalog: {
-        order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
-            ctx,
-            providerId: TOKENHUB_PROVIDER_ID,
-            buildProvider: buildTokenHubProvider,
+    for (const provider of TENCENT_PROVIDERS) {
+      api.registerProvider({
+        id: provider.providerId,
+        label: provider.label,
+        docsPath: "/providers/tencent",
+        envVars: [provider.envVar],
+        auth: [
+          createProviderApiKeyAuthMethod({
+            providerId: provider.providerId,
+            methodId: "api-key",
+            label: provider.label,
+            hint: `Hy via ${provider.label} Gateway`,
+            optionKey: provider.optionKey,
+            flagName: provider.flagName,
+            envVar: provider.envVar,
+            promptMessage: `Enter ${provider.label} API key`,
+            defaultModel: provider.defaultModel,
+            expectedProviders: [provider.providerId],
+            applyConfig: provider.applyConfig,
+            wizard: {
+              choiceId: provider.choiceId,
+              choiceLabel: provider.label,
+              groupId: "tencent",
+              groupLabel: "Tencent Cloud",
+              groupHint: provider.label,
+            },
           }),
-      },
-      augmentModelCatalog: () =>
-        buildStaticCatalogEntries(TOKENHUB_PROVIDER_ID, TOKENHUB_MODEL_CATALOG),
-      wrapStreamFn: wrapTencentProviderStream,
-    });
-
-    api.registerProvider({
-      id: TOKENPLAN_PROVIDER_ID,
-      label: "Tencent TokenPlan",
-      docsPath: "/providers/tencent",
-      envVars: ["TOKENPLAN_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: TOKENPLAN_PROVIDER_ID,
-          methodId: "api-key",
-          label: "Tencent TokenPlan",
-          hint: "Hy via Tencent TokenPlan Gateway",
-          optionKey: "tokenplanApiKey",
-          flagName: "--tokenplan-api-key",
-          envVar: "TOKENPLAN_API_KEY",
-          promptMessage: "Enter Tencent TokenPlan API key",
-          defaultModel: TOKENPLAN_DEFAULT_MODEL_REF,
-          expectedProviders: [TOKENPLAN_PROVIDER_ID],
-          applyConfig: applyTokenPlanConfig,
-          wizard: {
-            choiceId: "tokenplan-api-key",
-            choiceLabel: "Tencent TokenPlan",
-            groupId: "tencent",
-            groupLabel: "Tencent Cloud",
-            groupHint: "Tencent TokenPlan",
-          },
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
-            ctx,
-            providerId: TOKENPLAN_PROVIDER_ID,
-            buildProvider: buildTokenPlanProvider,
-          }),
-      },
-      augmentModelCatalog: () =>
-        buildStaticCatalogEntries(TOKENPLAN_PROVIDER_ID, TOKENPLAN_MODEL_CATALOG),
-      wrapStreamFn: wrapTencentProviderStream,
-    });
+        ],
+        catalog: {
+          order: "simple",
+          run: (ctx) =>
+            buildOpenAICompatibleProviderCatalog({
+              discoveryMode: "strict",
+              ctx,
+              providerId: provider.providerId,
+              buildProvider: provider.buildProvider,
+            }),
+        },
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({ provider: provider.buildProvider() }),
+        },
+        augmentModelCatalog: () =>
+          provider.modelCatalog.map((entry) => ({
+            provider: provider.providerId,
+            id: entry.id,
+            name: entry.name,
+            reasoning: entry.reasoning,
+            input: [...entry.input],
+            contextWindow: entry.contextWindow,
+          })),
+        wrapStreamFn: wrapTencentProviderStream,
+      });
+    }
   },
 });

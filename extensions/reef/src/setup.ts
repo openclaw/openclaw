@@ -1,8 +1,28 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import { fingerprint } from "../protocol/index.js";
-import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
-import { generateAndStoreKeys, resolveStateDir } from "./state.js";
-import { ReefTransportClient } from "./transport.js";
+import {
+  OpenAiOAuthProfileIdSchema,
+  parseReefRelayUrl,
+  ReefChannelConfigSchema,
+  type ReefChannelConfig,
+} from "./config-schema.js";
+import { assertLegacyReefKeysMigrated } from "./legacy-key-guard.js";
+import { getReefRuntime } from "./runtime.js";
+import {
+  finalizeReefIdentityBinding,
+  generateAndStoreKeys,
+  loadKeys,
+  loadReefIdentityBinding,
+  releaseReefIdentityReservation,
+  reserveReefIdentityBinding,
+} from "./state.js";
+import {
+  isDefinitiveReefRegistrationFailure,
+  isReefOwnershipRejection,
+  ReefTransportClient,
+} from "./transport.js";
 
 type Prompt = {
   note(message: string, title?: string): Promise<void>;
@@ -18,9 +38,10 @@ type Prompt = {
     options: Array<{ value: T; label: string; hint?: string }>;
     initialValue?: T;
   }): Promise<T>;
+  confirm(params: { message: string; initialValue?: boolean }): Promise<boolean>;
 };
 
-export const reefSetupAdapter = {
+const reefSetupAdapter = {
   applyAccountConfig: ({
     cfg,
     input,
@@ -28,15 +49,13 @@ export const reefSetupAdapter = {
     cfg: OpenClawConfig;
     accountId: string;
     input: Record<string, unknown>;
-  }) =>
-    ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        reef: { ...(cfg.channels?.reef as object), ...input, dmPolicy: "pairing" },
-      },
-    }) as OpenClawConfig,
+  }) => patchTopLevelChannelConfigSection({ cfg, channel: "reef", patch: input }),
 };
+
+export const reefSetupContract = defineChannelSetupContract({
+  fields: {},
+  adapter: reefSetupAdapter,
+});
 
 export const reefSetupWizard = {
   channel: "reef",
@@ -52,11 +71,27 @@ export const reefSetupWizard = {
     };
   },
   configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }),
-  configureInteractive: async ({ cfg, prompter }: { cfg: OpenClawConfig; prompter: Prompt }) => {
-    const relayUrl = await prompter.text({
-      message: "Reef relay URL",
+  configureInteractive: async ({
+    cfg,
+    prompter,
+    options,
+  }: {
+    cfg: OpenClawConfig;
+    prompter: Prompt;
+    options?: { beforePersistentEffect?: () => Promise<void> };
+  }) => {
+    const rawRelayUrl = await prompter.text({
+      message: "Reef relay origin URL",
       initialValue: "https://reefwire.ai",
+      validate: (value) => {
+        const parsed = ReefChannelConfigSchema.safeParse({ relayUrl: value });
+        return parsed.success
+          ? undefined
+          : (parsed.error.issues.find((issue) => issue.path[0] === "relayUrl")?.message ??
+              "Valid Reef relay origin required");
+      },
     });
+    const relayUrl = parseReefRelayUrl(rawRelayUrl);
     const email = await prompter.text({
       message: "Email",
       validate: (value) => (value.includes("@") ? undefined : "Valid email required"),
@@ -92,23 +127,84 @@ export const reefSetupWizard = {
         },
       ],
     });
-    const stateDir = resolveStateDir(
-      await prompter.text({
-        message: "Local Reef state directory",
-        initialValue: resolveStateDir(),
-      }),
-    );
-    const keys = await generateAndStoreKeys(stateDir);
+    const runtime = getReefRuntime();
+    const identity = loadReefIdentityBinding(runtime);
+    if (identity && (identity.handle !== handle || identity.relayUrl !== relayUrl)) {
+      throw new Error(
+        `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
+      );
+    }
+    const configuredStateDir = (cfg.channels?.reef as { stateDir?: unknown } | undefined)?.stateDir;
+    await options?.beforePersistentEffect?.();
+    const keys = await loadKeys(runtime).catch(async (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      await assertLegacyReefKeysMigrated(
+        typeof configuredStateDir === "string" ? configuredStateDir : undefined,
+      );
+      return await generateAndStoreKeys(runtime);
+    });
     const client = new ReefTransportClient(relayUrl, handle, keys);
+    let token: string | undefined;
     if (!setupSession) {
       const started = await client.authStart(email);
       if (started.magicLink) {
         await prompter.note(started.magicLink, "Development magic link");
       }
-      const token = await prompter.text({ message: "Magic-link token", sensitive: true });
-      setupSession = (await client.authComplete(token)).session;
+      token = await prompter.text({ message: "Magic-link token", sensitive: true });
     }
-    await client.createHandle(setupSession, requestPolicy);
+    // Reserve the keys immediately before consuming auth or claiming a handle.
+    // Definitive relay rejection releases it; ambiguous transport failure keeps
+    // the binding because the relay may have committed the request.
+    const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
+    let effectiveRequestPolicy = requestPolicy;
+    try {
+      if (!setupSession) {
+        setupSession = (await client.authComplete(token ?? "")).session;
+      }
+      try {
+        await client.createHandle(setupSession, requestPolicy);
+      } catch (error) {
+        const unavailable = error instanceof Error && error.message.includes("handle_unavailable");
+        if (!unavailable) {
+          throw error;
+        }
+        try {
+          await client.listFriends();
+        } catch (verificationError) {
+          if (isReefOwnershipRejection(verificationError)) {
+            releaseReefIdentityReservation(runtime, reservation);
+            throw error;
+          }
+          finalizeReefIdentityBinding(runtime, reservation);
+          throw verificationError;
+        }
+        // Signed access proves these keys already own the handle. Finalize
+        // before checking account ownership so an account mismatch cannot
+        // redirect the same keys to a different handle.
+        finalizeReefIdentityBinding(runtime, reservation);
+        const { handles } = await client.listOwnHandles(setupSession);
+        const existing = handles.find((entry) => entry.handle === handle);
+        if (!existing) {
+          throw new Error(
+            `Handle @${handle} is owned by this claw's keys, but the setup session belongs to a different relay account`,
+            { cause: error },
+          );
+        }
+        effectiveRequestPolicy = ReefChannelConfigSchema.shape.requestPolicy.parse(
+          existing.request_policy,
+        );
+      }
+      finalizeReefIdentityBinding(runtime, reservation);
+    } catch (error) {
+      if (isDefinitiveReefRegistrationFailure(error)) {
+        releaseReefIdentityReservation(runtime, reservation);
+      } else {
+        finalizeReefIdentityBinding(runtime, reservation);
+      }
+      throw error;
+    }
     const provider = await prompter.select({
       message: "Guard provider",
       options: [
@@ -116,33 +212,177 @@ export const reefSetupWizard = {
         { value: "openai" as const, label: "OpenAI" },
       ],
     });
+    const authMode =
+      provider === "openai"
+        ? await prompter.select({
+            message: "OpenAI guard authentication",
+            options: [
+              {
+                value: "oauth" as const,
+                label: "Existing OpenClaw OAuth profile",
+                hint: "Uses host-managed OAuth without exposing tokens to Reef",
+              },
+              { value: "api-key" as const, label: "API key environment variable" },
+            ],
+          })
+        : ("api-key" as const);
     const pinnedModel = await prompter.text({ message: "Pinned guard model snapshot" });
-    const apiKeyEnv = await prompter.text({
-      message: "Guard API key environment variable name",
-      initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
-    });
+    const configureSharedRuntime =
+      authMode === "oauth" &&
+      (await confirmReefOAuthAgentRuntime({ cfg, pinnedModel, prompter, runtime }));
+    const authProfileId =
+      authMode === "oauth"
+        ? await prompter.text({
+            message: "OpenAI OAuth auth profile id",
+            initialValue: "openai:default",
+            validate: (value) =>
+              OpenAiOAuthProfileIdSchema.safeParse(value).success
+                ? undefined
+                : "Enter an OpenAI profile id without spaces or slashes",
+          })
+        : undefined;
+    const apiKeyEnv =
+      authMode === "api-key"
+        ? await prompter.text({
+            message: "Guard API key environment variable name",
+            initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
+          })
+        : undefined;
     const policyVersion = await prompter.text({
       message: "Guard policy version",
       initialValue: "reef-v1",
     });
+    const guard =
+      authMode === "oauth"
+        ? {
+            provider: "openai" as const,
+            authMode,
+            authProfileId,
+            pinnedModel,
+            policyVersion,
+            // ChatGPT OAuth can include profile refresh and a reasoning-model
+            // cold start. Keep the hard fail-closed deadline, but give that
+            // host-owned path the full bounded budget accepted by the schema.
+            timeoutMs: 120_000,
+          }
+        : { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 };
     const reef: ReefChannelConfig = ReefChannelConfigSchema.parse({
       relayUrl,
       handle,
       email,
-      requestPolicy,
-      stateDir,
-      friends: {},
-      dmPolicy: "pairing",
-      allowFrom: [],
-      guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
+      requestPolicy: effectiveRequestPolicy,
+      guard,
     });
     await prompter.note(
       fingerprint(keys.signing.publicKey, keys.encryption.publicKey),
       "Reef safety fingerprint — share out of band",
     );
+    const nextConfig = { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig;
     return {
-      cfg: { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig,
+      cfg:
+        authMode === "oauth"
+          ? authorizeReefOAuthGuardModel(nextConfig, pinnedModel, configureSharedRuntime)
+          : nextConfig,
       accountId: "default",
     };
   },
 };
+
+async function confirmReefOAuthAgentRuntime(params: {
+  cfg: OpenClawConfig;
+  pinnedModel: string;
+  prompter: Prompt;
+  runtime: ReturnType<typeof getReefRuntime>;
+}): Promise<boolean> {
+  const { resolveSessionAgentIdStrict } = await import("openclaw/plugin-sdk/agent-scope-runtime");
+  // Reef's unbound completion uses the system owner, then the legacy/sole owner.
+  const agentId = resolveSessionAgentIdStrict({
+    config: params.cfg,
+    agentId: params.cfg.agents?.defaults?.systemAgent?.agentId,
+  });
+  const modelRef = `openai/${params.pinnedModel}`;
+  const resolveRuntimeId = (config: OpenClawConfig) =>
+    params.runtime.modelConfig
+      .resolveModelRuntimePolicy({
+        config,
+        agentId,
+        provider: "openai",
+        modelId: params.pinnedModel,
+      })
+      .policy?.id?.trim();
+  const configuredRuntimeId = resolveRuntimeId(params.cfg);
+  if (configuredRuntimeId === "codex") {
+    return false;
+  }
+  if (!configuredRuntimeId) {
+    return true;
+  }
+  if (
+    resolveRuntimeId(authorizeReefOAuthGuardModel(params.cfg, params.pinnedModel, true)) !== "codex"
+  ) {
+    throw new Error(
+      `Reef OAuth cannot change the agent-specific runtime policy for ${modelRef} on agent ${agentId}. Choose another guard model or explicitly configure that agent's model runtime as codex.`,
+    );
+  }
+  const replaceRuntime = await params.prompter.confirm({
+    message: `${modelRef} currently uses the ${configuredRuntimeId} agent runtime. Reef OAuth requires codex; change this shared model runtime?`,
+    initialValue: false,
+  });
+  if (!replaceRuntime) {
+    throw new Error(
+      `Reef OAuth setup left ${modelRef} on the ${configuredRuntimeId} agent runtime. Choose another guard model or change the shared model runtime explicitly.`,
+    );
+  }
+  return true;
+}
+
+function authorizeReefOAuthGuardModel(
+  cfg: OpenClawConfig,
+  pinnedModel: string,
+  configureSharedRuntime: boolean,
+): OpenClawConfig {
+  const modelRef = `openai/${pinnedModel}`;
+  const entry = cfg.plugins?.entries?.reef ?? {};
+  const llm = entry.llm ?? {};
+  const configuredModel = cfg.agents?.defaults?.models?.[modelRef] ?? {};
+  const addModel = (values: string[] | undefined): string[] =>
+    values?.includes(modelRef) ? values : [...(values ?? []), modelRef];
+  const addPlugin = (values: string[] | undefined, pluginId: string): string[] | undefined =>
+    values ? (values.includes(pluginId) ? values : [...values, pluginId]) : undefined;
+  return {
+    ...cfg,
+    ...(configureSharedRuntime
+      ? {
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              models: {
+                ...cfg.agents?.defaults?.models,
+                [modelRef]: {
+                  ...configuredModel,
+                  agentRuntime: { ...configuredModel.agentRuntime, id: "codex" },
+                },
+              },
+            },
+          },
+        }
+      : {}),
+    plugins: {
+      ...cfg.plugins,
+      allow: addPlugin(cfg.plugins?.allow, "codex"),
+      entries: {
+        ...cfg.plugins?.entries,
+        reef: {
+          ...entry,
+          llm: {
+            ...llm,
+            allowModelOverride: true,
+            allowedModels: addModel(llm.allowedModels),
+            allowedCompletionModels: addModel(llm.allowedCompletionModels),
+          },
+        },
+      },
+    },
+  };
+}

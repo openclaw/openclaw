@@ -6,7 +6,7 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "../shared/config-eval.js";
 import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
-import type { HookEligibilityContext, HookEntry } from "./types.js";
+import type { HookEligibilityContext, HookPolicyEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -26,8 +26,12 @@ export function isHookConfigPathTruthy(
 
 export { resolveHookConfig };
 
+export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): boolean {
+  return Boolean(process.env[envName]?.trim() || hookConfig?.env?.[envName]?.trim());
+}
+
 function evaluateHookRuntimeEligibility(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   hookConfig?: HookConfig;
   eligibility?: HookEligibilityContext;
@@ -47,14 +51,14 @@ function evaluateHookRuntimeEligibility(params: {
   return evaluateRuntimeEligibility({
     ...base,
     hasBin: hasBinary,
-    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
     isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),
   });
 }
 
 /** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {

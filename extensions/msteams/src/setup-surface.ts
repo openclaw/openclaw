@@ -4,6 +4,8 @@ import {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
+  patchTopLevelChannelConfigSection,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -11,7 +13,6 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -130,17 +131,7 @@ function setMSTeamsTeamsAllowlist(
       teams[teamKey] = existing;
     }
   }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-        teams: teams as Record<string, MSTeamsTeamConfig>,
-      },
-    },
-  };
+  return patchTopLevelChannelConfigSection({ cfg, channel, enabled: true, patch: { teams } });
 }
 
 function listMSTeamsGroupEntries(cfg: OpenClawConfig): string[] {
@@ -267,16 +258,11 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         initialValue: false,
       });
       if (enableDelegated) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              delegatedAuth: { enabled: true },
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          patch: { delegatedAuth: { enabled: true } },
+        });
         const noteDelegatedAuthFailure = async (err: unknown) => {
           await params.prompter.note(
             `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
@@ -333,11 +319,5 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: { ...cfg.channels?.msteams, enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

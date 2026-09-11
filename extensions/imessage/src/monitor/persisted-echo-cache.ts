@@ -1,28 +1,16 @@
-// Imessage plugin module implements persisted echo cache behavior.
-import { createHash } from "node:crypto";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  resolveIMessageSentEchoEntryKey,
+  resolveIMessageEchoMediaKey,
+  type PersistedEchoEntry,
+} from "../state-contract.js";
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
-
-type PersistedEchoEntry = {
-  scope: string;
-  text?: string;
-  messageId?: string;
-  timestamp: number;
-  expiresAt?: number;
-  pending?: true;
-};
-
-// 12h comfortably outlives the inbound replay guard window
-// (IMESSAGE_INBOUND_DEDUPE_TTL_MS) so an own-outbound row that imsg re-emits
-// after a bridge reconnect is still recognized as the agent's own echo rather
-// than re-ingested as an external send. A shorter window would let own rows
-// fall out of the dedupe set before a reconnect burst replays the messages
-// around them.
-export const IMESSAGE_SENT_ECHOES_TTL_MS = 12 * 60 * 60 * 1000;
-export const IMESSAGE_SENT_ECHOES_NAMESPACE = "imessage.sent-echoes";
-export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 
 type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
@@ -46,7 +34,6 @@ function normalizeMessageId(messageId: string | undefined): string | undefined {
   return normalized;
 }
 
-let mirror: PersistedEchoEntry[] | null = null;
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
   if (persistenceFailureLogged) {
@@ -56,11 +43,16 @@ function reportFailure(scope: string, err: unknown): void {
   logVerbose(`imessage echo-cache: ${scope} disabled after first failure: ${String(err)}`);
 }
 
-export function resolveIMessageSentEchoEntryKey(entry: PersistedEchoEntry): string {
-  return createHash("sha256")
-    .update(JSON.stringify([entry.scope, entry.text ?? "", entry.messageId ?? "", entry.timestamp]))
-    .digest("hex")
-    .slice(0, 32);
+function normalizeMedia(
+  media: MediaPlaceholderTextFact | null | undefined,
+): MediaPlaceholderTextFact | undefined {
+  const key = resolveIMessageEchoMediaKey(media);
+  if (!key) {
+    return undefined;
+  }
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind ?? undefined;
+  return { ...(kind ? { kind } : {}), ...(contentType ? { contentType } : {}) };
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
@@ -87,9 +79,9 @@ function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
   return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
 }
 
-function loadMirrorFromStore(): void {
+function readRecentEntries(): PersistedEchoEntry[] {
   try {
-    mirror = openPersistedEchoStore()
+    return openPersistedEchoStore()
       .entries()
       .map(({ value }) => value)
       .filter((entry) => isLiveEntry(entry))
@@ -97,13 +89,8 @@ function loadMirrorFromStore(): void {
       .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
     reportFailure("read", err);
-    mirror = [];
+    return [];
   }
-}
-
-function readRecentEntries(): PersistedEchoEntry[] {
-  loadMirrorFromStore();
-  return mirror ?? [];
 }
 
 function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
@@ -126,31 +113,29 @@ function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undef
 export function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
   ttlMs?: number;
   pending?: boolean;
 }): string | undefined {
   const text = normalizeText(params.text);
+  const media = normalizeMedia(params.media);
   const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
     ...(text ? { text } : {}),
+    ...(media ? { media } : {}),
     ...(messageId ? { messageId } : {}),
     ...(params.pending ? { pending: true } : {}),
   };
   if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
     entry.expiresAt = entry.timestamp + params.ttlMs;
   }
-  if (!entry.text && !entry.messageId) {
+  if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
-  loadMirrorFromStore();
-  const key = persistEntry(entry, params.ttlMs);
-  mirror = [...(mirror ?? []), entry]
-    .filter((candidate) => isLiveEntry(candidate))
-    .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
-  return key;
+  return persistEntry(entry, params.ttlMs);
 }
 
 export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
@@ -162,18 +147,20 @@ export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
   } catch (err) {
     reportFailure("delete", err);
   }
-  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
 export function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
+  skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
+  const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
-  if (!text && !messageId) {
+  if (!text && !mediaKey && !messageId) {
     return false;
   }
   for (const entry of readRecentEntries()) {
@@ -183,7 +170,26 @@ export function hasPersistedIMessageEcho(params: {
     if (messageId && entry.messageId === messageId) {
       return true;
     }
-    if (text && entry.text === text && (!entry.pending || params.includePendingText)) {
+    const hasConflictingMessageIds = Boolean(
+      messageId && entry.messageId && messageId !== entry.messageId,
+    );
+    // Same-id echoes match on the messageId branch above. Known conflicting
+    // GUIDs identify new messages, while no-GUID self-chat rows opt into text
+    // fallback because their numeric SQLite IDs cannot equal outbound GUIDs.
+    if (
+      text &&
+      (!hasConflictingMessageIds || params.skipIdShortCircuit) &&
+      entry.text === text &&
+      (!entry.pending || params.includePendingText)
+    ) {
+      return true;
+    }
+    if (
+      mediaKey &&
+      !hasConflictingMessageIds &&
+      resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
+      (!entry.pending || params.includePendingText)
+    ) {
       return true;
     }
   }
