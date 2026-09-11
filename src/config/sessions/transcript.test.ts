@@ -993,6 +993,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("preserves the sender of a stored voice transcript", async () => {
+    await writeTranscriptStore();
+    await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "user",
+            content: "[Audio] Transcript: It is late, what are you doing?",
+            __openclaw: { senderId: "42", senderName: "Alice", senderUsername: "alice" },
+          },
+        },
+      ],
+    });
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        text: "[Audio] Transcript: It is late, what are you doing?",
+        senderId: "42",
+        senderName: "Alice",
+        senderUsername: "alice",
+      }),
+    ]);
+  });
+
   it("resolves recent transcript context from session identity", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(createFixtureTranscriptScope(), {

@@ -136,13 +136,20 @@ export async function mergeSessionTranscriptContext(params: {
   });
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
   const transcript = turns.map((turn) => {
+    const username = turn.senderUsername?.replace(/^@+/, "");
+    const sender =
+      turn.role === "user"
+        ? [turn.senderName, username ? `@${username}` : undefined].filter(Boolean).join(" ") ||
+          turn.senderId ||
+          labels.user
+        : labels.assistant;
     const item: {
       entry: HistoryEntry;
       role: "assistant" | "user";
       transcriptId?: string;
     } = {
       entry: {
-        sender: `${labels[turn.role]}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
+        sender: `${sender}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
         body: turn.text,
       },
       role: turn.role,

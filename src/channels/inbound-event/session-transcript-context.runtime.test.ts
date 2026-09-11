@@ -38,6 +38,45 @@ describe("session transcript inbound context", () => {
     readRecent.mockReset();
   });
 
+  it.each([false, true])(
+    "keeps voice authors in model context (chatWindow=%s)",
+    async (chatWindow) => {
+      readRecent.mockResolvedValue([
+        {
+          id: "voice",
+          role: "user",
+          text: "[Audio] Transcript: It is late",
+          timestamp: 1_000,
+          senderName: "Alice",
+          senderUsername: "@alice",
+          senderId: "42",
+        },
+        {
+          id: "other",
+          role: "user",
+          text: "Who sent that?",
+          timestamp: 2_000,
+          senderName: "Bob",
+          senderUsername: "bob",
+          senderId: "43",
+        },
+      ]);
+      const ctx = context({
+        ChatType: "group",
+        SessionTranscriptContext: { historyLimit: 3, chatWindow },
+      });
+      await mergeSessionTranscriptContext({
+        ctx,
+        sessionKey: ctx.SessionKey!,
+        storePath: "/tmp/sessions.json",
+      });
+      const prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
+      expect(prompt).toContain("Alice @alice");
+      expect(prompt).toContain("Bob @bob");
+      expect(prompt).toContain("[Audio] Transcript: It is late");
+    },
+  );
+
   it("restores Slack assistant context when the live window is empty after restart", async () => {
     readRecent.mockResolvedValue([
       { id: "u1", role: "user", text: "deploy at noon", timestamp: 1_000 },
