@@ -579,6 +579,7 @@ export async function prepareGatewayLifecycle(params: {
           lifecycleUnsub: runtimeState.lifecycleUnsub,
           taskUnsub: runtimeState.taskUnsub,
           chatRunState,
+          retiredFollowupRunIds,
           clients,
           finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
           ...(transport

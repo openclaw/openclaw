@@ -156,13 +156,15 @@ export function retireFollowupRunId(
 
 /**
  * Remove expired entries from the retired follow-up runId map. Entries older
- * than `ttlMs` (or the whole map above `maxSize`) are dropped so the map
- * cannot accumulate stale identity mappings across the Gateway lifetime.
+ * than their inline `expiresAtMs` (or the whole map above `maxSize`) are
+ * dropped so the map cannot accumulate stale identity mappings across the
+ * Gateway lifetime. `ttlMs` is the historical TTL used when encoding
+ * expiries; retained for call-site compatibility but expiry is inline.
  */
 export function pruneRetiredFollowupRunIds(
   retiredFollowupRunIds: Map<string, string>,
   nowMs: number,
-  ttlMs = RETIRED_FOLLOWUP_RUNID_TTL_MS,
+  _ttlMs = RETIRED_FOLLOWUP_RUNID_TTL_MS,
   maxSize = RETIRED_FOLLOWUP_RUNID_MAX_SIZE,
 ): void {
   if (retiredFollowupRunIds.size === 0) {
