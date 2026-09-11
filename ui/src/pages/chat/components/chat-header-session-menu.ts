@@ -24,7 +24,10 @@ import {
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.ts";
 
-export type HeaderMenuAction = SessionManagementAction | { kind: "continue-in-terminal" };
+export type HeaderMenuAction =
+  | SessionManagementAction
+  | { kind: "continue-in-terminal" }
+  | { kind: "stop-sharing" };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
 
 export type HeaderMenuQuickAction = {
@@ -68,6 +71,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>
   > = {};
+  /** Live local session the viewer may unshare (owner or admin). */
+  @property({ attribute: false }) stopSharingAllowed = false;
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
@@ -182,7 +187,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       event.preventDefault();
       return;
     }
-    if (value === "continue-in-terminal" && !this.actionDisabled(value)) {
+    if (
+      (value === "continue-in-terminal" || value === "stop-sharing") &&
+      !this.actionDisabled(value)
+    ) {
       event.currentTarget.open = false;
       this.onAction({ kind: value });
     }
@@ -349,8 +357,24 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       <div class="session-menu__separator" role="separator"></div>
       ${this.managementActions.renderTransferActions()}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderDeleteAction()}
+      ${this.renderStopSharingAction()} ${this.managementActions.renderDeleteAction()}
     `;
+  }
+
+  private renderStopSharingAction() {
+    if (!this.stopSharingAllowed) {
+      return nothing;
+    }
+    return html`<wa-dropdown-item
+      class="session-menu__item session-menu__item--destructive"
+      variant="danger"
+      value="stop-sharing"
+      ?disabled=${this.actionDisabled("stop-sharing")}
+      title=${this.actionTitle("stop-sharing")}
+    >
+      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.x}</span>
+      <span class="session-menu__text">${t("chat.localSession.stopSharing")}</span>
+    </wa-dropdown-item>`;
   }
 
   private renderTerminalAction(inline: boolean) {

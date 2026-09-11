@@ -138,3 +138,7 @@ Schema 11 removes the `skill_lifecycle` and `skill_workshop_proposal_origin_runs
 ### State schema 9
 
 Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
+
+### Live local session sharing (same version, additive)
+
+Sharing a paired device's live Codex or Claude Code sessions adds lazy tables on first use: `local_session_enrollments` (which profile publishes which source from which device into which agent, with a pending/active/declined/revoked/expired state), `local_session_exclusions` (per-thread unshare that survives re-enrollment), and `local_session_connect_intents` (a profile-minted connect link's sharing intent, bound to its pairing setup and activated once by the device that redeems it). `local_session_enrollments.setup_id TEXT` is a bare nullable first-use additive column that binds an enrollment to that setup. None of these bump the state schema version.

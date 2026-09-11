@@ -27,6 +27,7 @@ import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branc
 import { sleep } from "./chat-history-retry.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { applyLocalInputEvent } from "./chat-local-input.ts";
 import {
   pullRequestLinksIn,
   refreshPullRequestsForFinalReply,
@@ -687,6 +688,12 @@ export function handlePageGatewayEvent(
   }
   if (event.event === "chat.send_timing") {
     recordChatSendServerTiming(state, event.payload);
+    return;
+  }
+  if (event.event === "session.localInput") {
+    if (applyLocalInputEvent(state, event.payload)) {
+      requestChatPageUpdate(state, "animation-frame");
+    }
     return;
   }
   if (event.event === "session.message") {

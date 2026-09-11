@@ -112,6 +112,11 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
+  /**
+   * Live local session follow-up: the device runs the turn, so steer/queue
+   * choices come from the source's input modes rather than an abortable run.
+   */
+  localFollowUp?: { modes: readonly ChatFollowUpMode[]; active: boolean };
   pendingAttachmentReads?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: {

@@ -26,7 +26,7 @@ import {
 } from "../../shared/device-bootstrap-profile.js";
 import { isLoopbackHost } from "../net.js";
 import { respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 // Keep the rendered QR within the result schema's qrDataUrl bound. A pathological
@@ -35,6 +35,47 @@ import { assertValidParams } from "./validation.js";
 // rather than return a response that violates the protocol schema.
 const MAX_QR_DATA_URL_LENGTH = 16_384;
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
+
+/** Register a single-use join code for an already-resolved node pairing setup. */
+export function buildDevicePairingJoinUrl(
+  payload: PairingSetupPayload,
+  expiresAtMs: number,
+): string {
+  const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(payload);
+  const shortcode = registerDevicePairingJoinCode({ payload, expiresAtMs });
+  const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
+  parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
+  parsedJoinUrl.search = "";
+  parsedJoinUrl.hash = "";
+  return parsedJoinUrl.toString();
+}
+
+/** Mint a node join link the way `openclaw devices join-code` does, for callers that own the pairing intent. */
+export async function mintNodeJoinUrl(
+  context: GatewayRequestHandlerOptions["context"],
+): Promise<
+  { ok: true; setupId: string; expiresAtMs: number; joinUrl: string } | { ok: false; error: string }
+> {
+  const config = context.getRuntimeConfig();
+  const resolved = await resolvePairingSetupFromConfig(config, {
+    env: process.env,
+    publicUrl: resolveConfiguredPairingPublicUrl(config),
+    preferRemoteUrl: false,
+    localTlsFingerprint: context.gatewayTlsFingerprint,
+    bootstrapProfile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    runCommandWithTimeout: async (argv, runOpts) =>
+      await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
+  });
+  if (!resolved.ok) {
+    return { ok: false, error: resolved.error };
+  }
+  return {
+    ok: true,
+    setupId: resolved.setupId,
+    expiresAtMs: resolved.expiresAtMs,
+    joinUrl: buildDevicePairingJoinUrl(resolved.payload, resolved.expiresAtMs),
+  };
+}
 
 function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   for (const candidate of payload.urls ?? [payload.url]) {
@@ -110,16 +151,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       const setupCode = encodePairingSetupCode(resolved.payload);
       let joinUrl: string | undefined;
       if (params.joinUrl === true) {
-        const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
-        const shortcode = registerDevicePairingJoinCode({
-          payload: resolved.payload,
-          expiresAtMs: resolved.expiresAtMs,
-        });
-        const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
-        parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
-        parsedJoinUrl.search = "";
-        parsedJoinUrl.hash = "";
-        joinUrl = parsedJoinUrl.toString();
+        joinUrl = buildDevicePairingJoinUrl(resolved.payload, resolved.expiresAtMs);
       }
       // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;

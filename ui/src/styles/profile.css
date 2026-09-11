@@ -129,3 +129,42 @@
 .model-accounts-error .settings-row__desc {
   color: var(--danger);
 }
+
+/* Profile: share my local sessions */
+.profile-local-sessions {
+  display: grid;
+  gap: 12px;
+}
+.profile-local-sessions__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.profile-local-sessions__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.profile-local-sessions__mint {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.profile-local-sessions__heading {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.profile-local-sessions__shared {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.profile-local-sessions__enrollment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

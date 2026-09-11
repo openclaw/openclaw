@@ -12,6 +12,7 @@ import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { recordLocalInputSubmission } from "./chat-local-input.ts";
 import {
   flushStoredChatOutbox,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
@@ -369,9 +370,13 @@ async function sendQueuedChatMessage(
       });
       return "failed";
     }
+    // A live local session hands the input to the device; the Gateway owns
+    // delivery from here, so the outbox copy retires like an ok ack.
+    const localInput = ack.status === "submitted" ? ack.localInput : undefined;
     const retireOnAck =
       storageMode === "memory" ||
       ack.messageSeq !== undefined ||
+      localInput !== undefined ||
       (ack.status === "ok" && !requiresChatInputConsumption(prepared));
     let retirementFailed = false;
     if (retireOnAck) {
@@ -379,20 +384,28 @@ async function sendQueuedChatMessage(
       retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
     }
     if (isVisible()) {
-      if (retireOnAck) {
+      const sentMessage = {
+        text: message,
+        mentions: submitted.mentions,
+        ...(attachments.length ? { attachments } : {}),
+        createdAt: startedAt,
+        ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
+        ...(prepared.sender ? { sender: prepared.sender } : {}),
+      };
+      if (localInput) {
+        recordLocalInputSubmission(host, {
+          inputId: localInput.inputId,
+          runId,
+          sessionKey,
+          agentId: prepared.agentId,
+          message: sentMessage,
+        });
+      } else if (retireOnAck) {
         const projectionScope = readChatSessionProjectionScope(host, {
           sessionKey,
           agentId: prepared.agentId,
         });
-        const projectedMessage = buildLocalUserMessage({
-          text: message,
-          mentions: submitted.mentions,
-          ...(attachments.length ? { attachments } : {}),
-          createdAt: startedAt,
-          runId,
-          ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
-          ...(prepared.sender ? { sender: prepared.sender } : {}),
-        });
+        const projectedMessage = buildLocalUserMessage({ ...sentMessage, runId });
         if (projectedMessage) {
           reduceChatSessionProjection(
             host,

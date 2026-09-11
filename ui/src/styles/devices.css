@@ -137,7 +137,39 @@
   background: var(--bg-hover);
 }
 
-/* Details spans body and controls; narrow layouts use the full row width. */
+/* Live local session sharing rows sit inside the node body, one per source. */
+.device-local-sessions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.device-local-session {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.device-local-session__command,
+.device-local-session__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.device-local-session__command code {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow-wrap: anywhere;
+}
+
+/* Details spans body and controls so the facts panel and token table get the
+   full row width; the 640px rule keeps it in the body column. */
 .device-entry__details {
   grid-column: 2 / -1;
   font-size: var(--control-ui-text-sm);

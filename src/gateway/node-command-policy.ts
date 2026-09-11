@@ -302,13 +302,22 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
       policy.commands.forEach((command) => commands.push(command));
     }
   });
-  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
-    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
-      commands.push(command);
-    }
-  });
+  registry.nodeHostCommands.forEach(
+    ({ command: { dangerous, agentTool, command, localSessionSource } }) => {
+      if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+        commands.push(command);
+      }
+      // Live local session sources only ever run on the person's own desktop; the
+      // node-local consent step is the gate, so the command is allowed by default.
+      if (localSessionSource && LOCAL_SESSION_SOURCE_PLATFORMS.has(platformId)) {
+        commands.push(command);
+      }
+    },
+  );
   return normalizeUniqueStringEntries(commands);
 }
+
+const LOCAL_SESSION_SOURCE_PLATFORMS = new Set<PlatformId>(["macos", "linux", "windows"]);
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
   const registry = getActivePluginGatewayNodePolicyRegistry();

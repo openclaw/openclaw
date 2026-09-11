@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import { handleLocalSessionChatSend } from "./chat-send-local-session.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
@@ -55,6 +56,17 @@ export async function prepareAndAdmitChatSend(
         ? errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error)
         : preparedSession.error,
     );
+    return undefined;
+  }
+  // A live local session never enters Gateway run admission: the device bridge
+  // relays the text and answers with a typed receipt instead of a started run.
+  if (preparedSession.value.entry?.localSource) {
+    await handleLocalSessionChatSend({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      respond,
+      client,
+    });
     return undefined;
   }
   if (normalizedRequest.value.mentions) {

@@ -99,6 +99,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "execHost",
   "execNode",
   "execCwd",
+  "localSource",
   "responseUsage",
   "usageFamilyKey",
   "usageFamilySessionIds",

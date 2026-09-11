@@ -20,6 +20,7 @@ import {
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { resolveActiveRunSend } from "./chat-local-input.ts";
 import {
   admitQueuedMessageForSession,
   enqueueChatMessage,
@@ -570,14 +571,13 @@ export async function handleSendChat(
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     let waitingForSettings = Boolean(pendingSettings);
-    const directRunActive = hasDirectSessionRun(host);
     // Only an explicit browser override replaces inherited Gateway policy.
     const followUpMode =
       opts?.followUpMode ??
       host.chatFollowUpMode ??
       normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
-    const activeRunQueueMode =
-      !intent && directRunActive && followUpMode !== "queue" ? followUpMode : undefined;
+    const activeRun = resolveActiveRunSend(host, submittedSessionKey, followUpMode);
+    const activeRunQueueMode = intent ? undefined : activeRun.queueMode;
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
     const resumedEdit =
@@ -700,9 +700,7 @@ export async function handleSendChat(
           previousDraft: cleared.previousDraft,
           previousAttachments: cleared.previousAttachments,
           previousMentions: cleared.previousMentions,
-          ...(intent || (directRunActive && followUpMode !== "queue")
-            ? { allowActiveRunSend: true }
-            : {}),
+          ...(intent || activeRun.sendNow ? { allowActiveRunSend: true } : {}),
           ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
           ...(pendingSettings ? { pendingSettings } : {}),
           restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),

@@ -254,6 +254,7 @@ function sameChatItemsStructuralInput(
     previous.sessionKey === next.sessionKey &&
     previous.archiveNotice?.key === next.archiveNotice?.key &&
     previous.archiveNotice?.label === next.archiveNotice?.label &&
+    previous.historyNotice?.key === next.historyNotice?.key &&
     previous.runId === next.runId &&
     previous.compactionStatus === next.compactionStatus &&
     previous.locale === next.locale &&

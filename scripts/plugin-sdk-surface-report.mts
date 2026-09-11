@@ -203,7 +203,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical node CLI owners for plugin-provided node commands.
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
       // +1: public provider-owned asynchronous embedding batch contract.
-      153,
+      // +1: live local session sources (node-host duplex command + wire protocol).
+      154,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -366,7 +367,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choices for channel consumers.
       // +3: public provider-owned asynchronous embedding batch contract.
-      4451,
+      // +12: live local session source command, envelope/clip helpers, limits, and frame types.
+      4463,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -499,7 +501,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
       // +1: prepared model-specific runtime choice reader.
-      2630,
+      // +3: live local session source command factory, input envelope, and record clipping.
+      2633,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

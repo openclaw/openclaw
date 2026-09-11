@@ -3,6 +3,7 @@
  * migration provider, CLI-session commands, and binding hooks.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLocalSessionSourceNodeCommand } from "openclaw/plugin-sdk/local-session-source";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -43,6 +44,7 @@ import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding-hooks.js";
+import { createCodexLocalSessionSource } from "./src/local-session-source.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
@@ -295,6 +297,9 @@ export default definePluginEntry({
     }
     api.registerNodeHostCommand(createCodexNodeExecServerCommand());
     api.registerNodeInvokePolicy(createCodexNodeExecServerInvokePolicy());
+    api.registerNodeHostCommand(
+      createLocalSessionSourceNodeCommand(createCodexLocalSessionSource()),
+    );
     api.registerCommand(
       createCodexCommand({
         pluginConfig: api.pluginConfig,

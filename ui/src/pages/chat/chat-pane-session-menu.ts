@@ -8,6 +8,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -92,6 +93,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     if (action.kind === "continue-in-terminal") {
       this.openContinueInTerminalDialog(row);
+      return;
+    }
+    if (action.kind === "stop-sharing") {
+      await this.stopSharingLocalSession(row);
       return;
     }
     const scope = this.captureHeaderSessionActionScope();
@@ -507,6 +512,35 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.headerCopiedAction = null;
       this.headerCopiedTimer = null;
     }, 1_500);
+  }
+
+  /** The sharing teammate or an admin may stop publishing a live local session. */
+  protected canStopSharingLocalSession(row: GatewaySessionRow): boolean {
+    const source = row.localSource;
+    if (!source) {
+      return false;
+    }
+    const snapshot = this.context.gateway.snapshot;
+    const selfIdentity = snapshot.selfUser?.identity;
+    const isOwner = selfIdentity?.type === "profile" && selfIdentity.id === source.ownerProfileId;
+    return isOwner || hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+  }
+
+  private async stopSharingLocalSession(row: GatewaySessionRow): Promise<void> {
+    const client = this.connectedClient;
+    const owner = this.headerOutcomeOwner;
+    if (!client) {
+      this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
+      return;
+    }
+    try {
+      await client.request("sessions.local.unshare", { sessionKey: row.key });
+      if (this.ownsHeaderOutcome(owner)) {
+        showToast({ message: t("chat.localSession.stopSharingDone") });
+      }
+    } catch (error) {
+      this.publishHeaderError(error, owner);
+    }
   }
 
   protected handleHeaderMenuAction(

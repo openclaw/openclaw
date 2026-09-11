@@ -21,6 +21,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
+import { readLocalInputFooter } from "../chat-local-input-footer.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   persistedMessageEntryId,
@@ -41,7 +42,11 @@ import {
   resolveMessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
-import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
+import {
+  renderChatLocalInputStatus,
+  renderChatSendStatus,
+  type ChatSendStatusActions,
+} from "./chat-message-send-status.ts";
 import {
   renderStreamGroupParts,
   type StreamGroupOptions,
@@ -424,7 +429,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       : normalizedRole === "user" && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
+  const lastMessage = group.messages.at(-1)?.message;
+  const sendFailure = readPendingSendFailure(lastMessage);
+  const localInputFooter = readLocalInputFooter(lastMessage);
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
@@ -549,6 +556,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                         "chat-sender-name",
                       )
                 }
+                ${renderChatLocalInputStatus(localInputFooter)}
                 ${renderChatSendStatus(sendFailure, opts)}
                 ${renderMessageMeta(group.timestamp, meta)}
               </div>

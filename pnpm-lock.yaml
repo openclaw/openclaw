@@ -638,6 +638,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/anthropic:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

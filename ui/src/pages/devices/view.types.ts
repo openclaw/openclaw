@@ -7,6 +7,7 @@ import type {
   ExecApprovalsSnapshot,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
+import type { LocalSessionSharingProps } from "./view-local-sessions.ts";
 
 export type DevicesProps = {
   loading: boolean;
@@ -36,6 +37,7 @@ export type DevicesProps = {
   execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
+  localSessions: LocalSessionSharingProps;
   onDevicePairSetupOpen: () => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;

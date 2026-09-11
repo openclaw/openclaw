@@ -428,6 +428,30 @@ openclaw-chat-pane {
   font-weight: 600;
 }
 
+/* Live local session chip: the device, not a worker, runs this thread. */
+.chat-pane__local-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.chat-pane__local-source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chat-pane__local-source[data-local-state="active"][data-local-connected="true"]
+  .chat-pane__local-source-dot {
+  background: var(--ok);
+}
+
+.chat-pane__local-source[data-local-connected="false"] {
+  opacity: 0.6;
+}
+
 .chat-pane__placement-facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

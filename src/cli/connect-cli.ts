@@ -23,6 +23,7 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "../node-host/gateway-cloudflare-access.js";
+import { recordLocalSessionPreconsent } from "../node-host/local-session-consent-store.js";
 import { runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -37,7 +38,21 @@ type ConnectCommandOptions = {
   sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  /** Local session sources (e.g. "codex", "claude") this person shares with the team. */
+  share?: string[];
+  /** Pairing setup id the Profile page minted with the command; scopes the consent to it. */
+  shareRequest?: string;
 };
+
+const SHARE_SOURCE_ID = /^[a-z][a-z0-9-]{0,63}$/u;
+
+function collectShareSource(value: string, previous: string[] = []): string[] {
+  const sourceId = value.trim();
+  if (!SHARE_SOURCE_ID.test(sourceId)) {
+    throw new Error(`--share expects a source id such as "codex" or "claude", got ${value}`);
+  }
+  return previous.includes(sourceId) ? previous : [...previous, sourceId];
+}
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
@@ -188,6 +203,11 @@ async function runConnectCommand(
   if (opts.ephemeral && opts.service) {
     throw new Error("--ephemeral cannot be combined with --service.");
   }
+  if ((opts.share?.length ?? 0) > 0 && !opts.shareRequest?.trim()) {
+    throw new Error(
+      "--share needs the --share-request <id> the Profile page minted with this command; without it, share from the Gateway's Devices page instead.",
+    );
+  }
   const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
   const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();
@@ -242,6 +262,19 @@ async function runConnectCommand(
     displayName: opts.displayName,
   };
 
+  // Typing --share on this machine is the sharing consent; the offer the team
+  // Gateway sends after pairing is accepted without a second command.
+  for (const sourceId of opts.share ?? []) {
+    recordLocalSessionPreconsent({
+      sourceId,
+      gateway: { host: pair.host, port: pair.port, contextPath: pair.contextPath ?? "" },
+      setupId: opts.shareRequest!.trim(),
+    });
+    defaultRuntime.log(
+      `Sharing ${sourceId} sessions with the team once the Gateway pairs this device.`,
+    );
+  }
+
   if (!opts.service) {
     await runNodeHost(nodeRunOptions);
     return;
@@ -281,6 +314,16 @@ export function registerConnectCli(program: Command): void {
     )
     .option("--target-file <path>", "Read the connect target from a private file and remove it")
     .option("--display-name <name>", "Override the node display name")
+    .option(
+      "--share <source>",
+      "Share this machine's live sessions of a local source (codex, claude) with the team; repeatable",
+      collectShareSource,
+      [],
+    )
+    .option(
+      "--share-request <id>",
+      "Pairing request id minted with --share on the Gateway's Profile page",
+    )
     .addHelpText(
       "after",
       () =>
@@ -293,6 +336,10 @@ export function registerConnectCli(program: Command): void {
           [
             "openclaw connect https://gateway.example/j/<code> --service --session-host",
             "Install a worker-session host service.",
+          ],
+          [
+            "openclaw connect https://gateway.example/j/<code> --share codex --share-request <id>",
+            "Connect and share your live Codex sessions with the team.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
     )

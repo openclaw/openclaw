@@ -62,6 +62,11 @@ type OpenClawPluginNodeHostCommandBase = {
   onDisconnect?: () => Promise<void> | void;
   /** Optional Computer Use declaration published with this command's node manifest. */
   computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
+  /**
+   * Marks a duplex command as a live local session source; the Gateway bridge
+   * discovers sources from this single registration instead of a second registry.
+   */
+  localSessionSource?: { sourceId: string; label: string };
   agentTool?: {
     name: string;
     description: string;

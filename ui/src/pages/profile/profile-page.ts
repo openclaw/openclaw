@@ -43,6 +43,7 @@ import "../../styles/profile.css";
 import "../../features/github-connections/github-connections.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
+import "./local-sessions-section.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { renderProfileHero } from "./profile-hero.ts";
@@ -392,6 +393,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     return renderSettingsPage(html`
       ${this.renderHero()} ${this.renderIdentity()} ${this.renderModelAccounts()}
+      <openclaw-profile-local-sessions></openclaw-profile-local-sessions>
       <openclaw-github-connections></openclaw-github-connections>
       ${renderSettingsGroup(
         renderSettingsNavRow({

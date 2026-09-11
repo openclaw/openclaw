@@ -12,6 +12,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { resolveLocalSessionExecutionError } from "../local-sessions/guard.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
@@ -306,6 +307,7 @@ export function createAgentTurnService(
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
         const sessionAuthorizationError =
+          resolveLocalSessionExecutionError(entry, "run") ??
           authorizeGatewaySessionCreation({
             cfg: cfgLocal,
             client: principal,

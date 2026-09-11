@@ -74,6 +74,7 @@ export function renderSessionRowBadges(params: {
   placementMachine?: SessionPlacementMachine;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
+  localSource?: { label: string; live: boolean; offline: boolean };
 }) {
   const pullRequestLabel = params.pullRequest
     ? formatSessionPullRequestSummary(params.pullRequest)
@@ -114,10 +115,19 @@ export function renderSessionRowBadges(params: {
     attentionCount === 0 &&
     !params.hasComposerDraft &&
     !displayedPlacementState &&
-    !hasWorkspaceConflict
+    !hasWorkspaceConflict &&
+    !params.localSource
   ) {
     return nothing;
   }
+  const localSource = params.localSource;
+  const localSourceLabel = localSource
+    ? localSource.offline
+      ? t("sessionsView.localSessionOffline", { source: localSource.label })
+      : localSource.live
+        ? t("sessionsView.localSessionLive", { source: localSource.label })
+        : localSource.label
+    : "";
   const placementLabel = displayedPlacementState
     ? params.placementProviderId && params.placementProfileId
       ? [
@@ -150,6 +160,21 @@ export function renderSessionRowBadges(params: {
     : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
+    ${
+      localSource
+        ? html`<openclaw-tooltip .content=${localSourceLabel}>
+            <span
+              class="session-row-badge session-row-badge--local-source"
+              data-local-live=${localSource.live ? "true" : nothing}
+              data-local-offline=${localSource.offline ? "true" : nothing}
+              role="img"
+              aria-label=${localSourceLabel}
+              ><span class="session-row-badge__dot" aria-hidden="true"></span
+              ><span class="session-row-badge__text">${localSource.label}</span></span
+            >
+          </openclaw-tooltip>`
+        : nothing
+    }
     ${
       params.incognito
         ? renderSessionRowBadge(

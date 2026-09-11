@@ -2529,6 +2529,7 @@
                       "gateway/background-process",
                       "gateway/restart-recovery",
                       "gateway/cloud-sessions",
+                      "gateway/local-sessions",
                       "gateway/cloud-workers",
                       {
                         "group": "Cloud Workers",

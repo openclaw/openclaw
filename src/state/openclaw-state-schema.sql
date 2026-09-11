@@ -675,6 +675,52 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
+-- Live local sessions: a verified team profile publishes one native catalog from one
+-- paired device into one agent namespace. Lazy additive; folds into the next state bump.
+CREATE TABLE IF NOT EXISTS local_session_enrollments (
+  enrollment_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  owner_label TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  plugin_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'active', 'declined', 'revoked', 'expired')),
+  requested_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  confirmed_at_ms INTEGER,
+  ended_at_ms INTEGER,
+  reason TEXT,
+  setup_id TEXT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_local_session_enrollments_device
+  ON local_session_enrollments(device_id, source_id, state);
+
+-- A profile-minted connect link: which sources the person asked to share, bound
+-- to the pairing setup so the paired device enrolls under that profile at once.
+CREATE TABLE IF NOT EXISTS local_session_connect_intents (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  owner_label TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  source_ids_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  activated_device_id TEXT,
+  activated_at_ms INTEGER
+) STRICT;
+
+-- Per-thread unshare survives enrollment recreation until the owner reshares explicitly.
+CREATE TABLE IF NOT EXISTS local_session_exclusions (
+  device_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  excluded_by_profile_id TEXT NOT NULL,
+  excluded_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (device_id, source_id, thread_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,

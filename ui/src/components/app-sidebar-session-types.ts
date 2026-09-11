@@ -106,6 +106,8 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   execNode?: string;
+  /** Live local session badge facts: "Codex · owner", live turn, device offline. */
+  localSource?: { label: string; live: boolean; offline: boolean };
   placementState?: SessionPlacementState;
   placementProviderId?: string;
   placementProfileId?: string;

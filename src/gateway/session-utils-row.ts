@@ -37,6 +37,7 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { getLocalSessionBridge } from "./local-sessions/bridge.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
@@ -526,5 +527,12 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
+    ...(entry?.localSource
+      ? {
+          localSource:
+            getLocalSessionBridge()?.getStatus(key) ??
+            getLocalSessionBridge()?.describeOffline(entry),
+        }
+      : {}),
   };
 }

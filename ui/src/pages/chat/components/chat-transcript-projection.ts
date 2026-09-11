@@ -13,6 +13,7 @@ import {
   resolveUiGlobalAliasAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
+import { localSessionHistoryNotice } from "../chat-local-input.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
@@ -113,10 +114,15 @@ export function projectChatTranscript(
           timestamp: activeSession.archivedAt,
         } satisfies Extract<ChatItem, { kind: "notice" }>)
       : undefined;
+  const historyNotice = localSessionHistoryNotice(
+    activeSession?.localSource,
+    activeSession?.key ?? props.sessionKey,
+  );
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
     archiveNotice,
+    historyNotice,
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,

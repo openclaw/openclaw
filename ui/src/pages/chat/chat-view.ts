@@ -77,6 +77,8 @@ export type ChatProps = Omit<
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
+    /** Rejected live local input keeps its bubble; Retry resubmits it as a fresh send. */
+    localInputRetry?: { id: string; onRetry: () => void };
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;
@@ -199,7 +201,12 @@ export function renderChat(props: ChatProps) {
                   : undefined,
               onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
             }
-          : undefined,
+          : props.localInputRetry
+            ? {
+                id: props.localInputRetry.id,
+                onAction: props.connected ? props.localInputRetry.onRetry : undefined,
+              }
+            : undefined,
         onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:

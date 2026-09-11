@@ -6,6 +6,7 @@ import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { retireLocalInputsForMessages } from "./chat-local-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
@@ -77,6 +78,10 @@ export function applySessionMessagePayload(
     return;
   }
   const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
+  if (incoming.role === "user") {
+    // The device's mirrored record replaces the optimistic local-input bubble.
+    retireLocalInputsForMessages(state, [sourceMessage]);
+  }
   const isPreviousRunAssistant = Boolean(
     incoming.role === "assistant" &&
     incoming.sequence !== null &&

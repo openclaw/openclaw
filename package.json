@@ -4,7 +4,7 @@
   "openclaw": {
     "schemaVersions": {
       "state": 17,
-      "agent": 19
+      "agent": 20
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1167,6 +1167,10 @@
     },
     "./plugin-sdk/session-catalog-runtime": {
       "default": "./dist/plugin-sdk/session-catalog-runtime.js"
+    },
+    "./plugin-sdk/local-session-source": {
+      "types": "./dist/plugin-sdk/local-session-source.d.ts",
+      "default": "./dist/plugin-sdk/local-session-source.js"
     },
     "./plugin-sdk/session-discussion": {
       "types": "./dist/plugin-sdk/session-discussion.d.ts",

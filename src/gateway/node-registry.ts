@@ -34,6 +34,7 @@ import {
   removeRemoteNodeSkills,
   replaceRemoteNodeSkills,
 } from "../skills/runtime/remote-skills.js";
+import { getLocalSessionBridge } from "./local-sessions/bridge.js";
 import {
   resolveNodeCommandAllowlist,
   retainFulfilledNodeCapabilities,
@@ -658,6 +659,13 @@ export class NodeRegistry {
       this.publishActiveNodeContext();
     }
     reconcileNodeRunnerAvailability(this, nodeId);
+    // Node liveness is recorded here for every transport; the live local session
+    // bridge follows it so an enrolled device gets its channel on (re)connect.
+    try {
+      getLocalSessionBridge()?.onNodeConnected(session);
+    } catch (error) {
+      log.warn(`local session bridge connect hook failed for ${nodeId}: ${String(error)}`);
+    }
     return session;
   }
 
@@ -676,6 +684,11 @@ export class NodeRegistry {
       this.nodesById.delete(nodeId);
       removeConnectedNodePluginTools(nodeId);
       removeRemoteNodeSkills(nodeId);
+      try {
+        getLocalSessionBridge()?.onNodeDisconnected(nodeId);
+      } catch (error) {
+        log.warn(`local session bridge disconnect hook failed for ${nodeId}: ${String(error)}`);
+      }
       if (hadPresence) {
         this.publishActiveNodeContext();
       }

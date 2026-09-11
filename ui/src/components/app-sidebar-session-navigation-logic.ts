@@ -21,6 +21,7 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
+import { localSourceRowLabel } from "../lib/sessions/local-source.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -226,6 +227,13 @@ export function buildSidebarSessionNavigationState(input: {
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       execNode: row.execNode,
+      localSource: row.localSource
+        ? {
+            label: localSourceRowLabel(row.localSource),
+            live: row.localSource.connected && row.localSource.state === "active",
+            offline: !row.localSource.connected,
+          }
+        : undefined,
       placementState: row.placement?.state,
       placementProviderId:
         row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,

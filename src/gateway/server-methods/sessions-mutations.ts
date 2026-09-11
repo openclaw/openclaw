@@ -14,6 +14,7 @@ import {
 import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { resolveLocalSessionExecutionError } from "../local-sessions/guard.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   projectAssignableSessionOwner,
@@ -29,6 +30,7 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -394,6 +396,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
+    const localSessionError = resolveLocalSessionExecutionError(
+      loadSessionEntry(key, p.agentId ? { agentId: p.agentId } : undefined).entry,
+      "reset",
+    );
+    if (localSessionError) {
+      respond(false, undefined, localSessionError);
+      return;
+    }
     const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
     const result = await performGatewaySessionReset({
       key,

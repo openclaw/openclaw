@@ -69,7 +69,7 @@ describe("creator namespace upgrades", () => {
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          if (sql === "PRAGMA user_version = 19;") {
+          if (sql === "PRAGMA user_version = 20;") {
             throw new Error("injected commit failure");
           }
           return execute(sql);
@@ -91,11 +91,11 @@ describe("creator namespace upgrades", () => {
             .every((row) => row.source === null),
         ).toBe(true);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => migrate());
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(20);
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
             ?.schema_version,
-        ).toBe(19);
+        ).toBe(20);
         expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       } finally {

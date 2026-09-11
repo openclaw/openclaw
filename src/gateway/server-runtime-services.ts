@@ -22,6 +22,7 @@ import {
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
+import { startLocalSessionBridge, stopLocalSessionBridge } from "./local-sessions/bridge.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import {
   fenceScheduledGatewayContextResolver,
@@ -419,6 +420,12 @@ export function activateGatewayScheduledServices(params: {
       : {}),
   });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor();
+  const localSessionBridgeLifetime = new AbortController();
+  void startLocalSessionBridge({
+    resolveGatewayContext: () => params.resolveGatewayContext?.(),
+    getRuntimeConfig,
+    signal: localSessionBridgeLifetime.signal,
+  });
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({
     deps: params.deps,
     log: params.log,
@@ -454,6 +461,8 @@ export function activateGatewayScheduledServices(params: {
     stop: () => {
       void stopDeliveryRecovery();
       sessionUpstreamMonitor.stop();
+      localSessionBridgeLifetime.abort();
+      stopLocalSessionBridge();
       heartbeatRunner.stop();
     },
   };

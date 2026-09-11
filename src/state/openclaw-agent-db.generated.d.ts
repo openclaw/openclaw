@@ -256,6 +256,30 @@ export interface SessionKeyContract {
   updated_at: number;
 }
 
+export interface SessionLocalInputs {
+  accepted_at: number;
+  input_id: string;
+  native_ref: string | null;
+  queue_mode: string;
+  reason: string | null;
+  sender_label: string;
+  sender_profile_id: string | null;
+  session_id: string;
+  session_key: string;
+  settled_at: number | null;
+  state: string;
+  text: string;
+}
+
+export interface SessionLocalMirrorCheckpoints {
+  accepted_seq: number;
+  device_id: string;
+  earliest_seq: number | null;
+  session_id: string;
+  thread_id: string;
+  updated_at: number;
+}
+
 export interface SessionMembers {
   added_at: number;
   added_by: string;
@@ -543,6 +567,8 @@ export interface DB {
   session_conversations: SessionConversations;
   session_goal_operations: SessionGoalOperations;
   session_key_contract: SessionKeyContract;
+  session_local_inputs: SessionLocalInputs;
+  session_local_mirror_checkpoints: SessionLocalMirrorCheckpoints;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_participants: SessionParticipants;

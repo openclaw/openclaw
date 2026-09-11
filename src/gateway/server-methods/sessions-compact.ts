@@ -29,6 +29,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
+import { resolveLocalSessionExecutionError } from "../local-sessions/guard.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -110,6 +111,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       primaryKey: compactPrimaryKey,
     };
     const entry = compactTarget.entry;
+    const localSessionError = resolveLocalSessionExecutionError(entry, "compact");
+    if (localSessionError) {
+      respond(false, undefined, localSessionError);
+      return;
+    }
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(

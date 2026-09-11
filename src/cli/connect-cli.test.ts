@@ -12,11 +12,13 @@ import { registerConnectCli } from "./connect-cli.js";
 
 const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
+  recordLocalSessionPreconsent: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   mutateConfigFileWithRetry: vi.fn(),
   runtime: {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   },
@@ -37,6 +39,9 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   return { fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
 });
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
+vi.mock("../node-host/local-session-consent-store.js", () => ({
+  recordLocalSessionPreconsent: mocks.recordLocalSessionPreconsent,
+}));
 
 const payload = {
   url: "wss://192.168.1.20:8443/openclaw-gw",
@@ -74,6 +79,41 @@ describe("connect cli", () => {
     expect(help).toMatch(/^[ \t]+--target-file <path>(?:[ \t]|$)/mu);
     expect(help).toMatch(/^[ \t]+--service(?:[ \t]|$)/mu);
     expect(help).toMatch(/^[ \t]+--session-host(?:[ \t]|$)/mu);
+    expect(help).toMatch(/^[ \t]+--share <source>(?:[ \t]|$)/mu);
+  });
+
+  it("records a pre-consent per shared source before the node host starts", async () => {
+    mocks.recordLocalSessionPreconsent.mockReset();
+    await runConnect([
+      setupCode(),
+      "--share",
+      "codex",
+      "--share",
+      "claude",
+      "--share",
+      "codex",
+      "--share-request",
+      "setup-1",
+    ]);
+    expect(mocks.recordLocalSessionPreconsent.mock.calls.map((call) => call[0].sourceId)).toEqual([
+      "codex",
+      "claude",
+    ]);
+    expect(mocks.recordLocalSessionPreconsent.mock.calls[0]?.[0]).toMatchObject({
+      gateway: { host: expect.any(String), port: expect.any(Number) },
+      setupId: "setup-1",
+    });
+    expect(mocks.recordLocalSessionPreconsent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runNodeHost.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it("refuses --share without the minted request id", async () => {
+    mocks.recordLocalSessionPreconsent.mockReset();
+    mocks.runtime.error.mockReset();
+    await runConnect([setupCode(), "--share", "codex"]);
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("--share-request"));
+    expect(mocks.recordLocalSessionPreconsent).not.toHaveBeenCalled();
   });
 
   it.each([

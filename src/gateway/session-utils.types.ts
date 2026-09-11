@@ -26,6 +26,7 @@ import type {
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { LocalSessionStatus } from "./local-sessions/bridge.js";
 import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
 // Shared Gateway session response contracts. Server methods, UI adapters, and
@@ -109,6 +110,8 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
+  /** Live local session projection; present only for device-hosted rows. */
+  localSource?: LocalSessionStatus;
 };
 
 /**

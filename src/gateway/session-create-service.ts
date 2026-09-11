@@ -262,6 +262,8 @@ type TrustedInitialSessionEntry = {
   initializationPending?: true;
   modelSelectionLocked?: true;
   pluginExtensions?: SessionEntry["pluginExtensions"];
+  /** Live local session identity; only the Gateway bridge creates such rows. */
+  localSource?: SessionEntry["localSource"];
 };
 
 type GatewaySessionCommitResult =
@@ -1304,6 +1306,11 @@ export async function createGatewaySession(params: {
           ...(params.atomicInitialization === true ? { initializationPending: true } : {}),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
+            : {}),
+          // A live local session is execution-fenced: the lock keeps cron/raw-model
+          // paths out and `localSource` routes chat input to the device bridge.
+          ...(authorizedPluginCreation && params.initialEntry?.localSource
+            ? { localSource: params.initialEntry.localSource, modelSelectionLocked: true }
             : {}),
           ...(params.initialEntry?.pluginExtensions !== undefined
             ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }

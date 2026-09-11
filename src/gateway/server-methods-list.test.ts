@@ -188,6 +188,12 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.local.sources",
+      "sessions.local.enrollments",
+      "sessions.local.enroll",
+      "sessions.local.revoke",
+      "sessions.local.unshare",
+      "sessions.local.connectCode",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -216,6 +222,12 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.local.sources",
+      "sessions.local.enrollments",
+      "sessions.local.enroll",
+      "sessions.local.revoke",
+      "sessions.local.unshare",
+      "sessions.local.connectCode",
     ]);
   });
 
@@ -371,6 +383,12 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.local.sources",
+      "sessions.local.enrollments",
+      "sessions.local.enroll",
+      "sessions.local.revoke",
+      "sessions.local.unshare",
+      "sessions.local.connectCode",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

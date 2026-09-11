@@ -4,12 +4,35 @@
   "private": true,
   "description": "OpenClaw Anthropic provider, Claude CLI, and native session catalog plugin",
   "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./claude-channel/openclaw-channel-server.mjs",
+          "output": "claude-channel/openclaw-channel-server.mjs"
+        },
+        {
+          "source": "./claude-channel/openclaw-channel-hook.mjs",
+          "output": "claude-channel/openclaw-channel-hook.mjs"
+        },
+        {
+          "source": "./claude-channel/hooks.json",
+          "output": "claude-channel/hooks.json"
+        },
+        {
+          "source": "./claude-channel/README.md",
+          "output": "claude-channel/README.md"
+        }
+      ]
+    }
   }
 }

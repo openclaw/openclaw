@@ -536,6 +536,16 @@ export const validateChatToolTitlesParams = compile(S.ChatToolTitlesParamsSchema
 export const validateChatSendParams = compile(S.ChatSendParamsSchema);
 export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
 export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
+export const validateSessionsLocalSourcesParams = compile(S.SessionsLocalSourcesParamsSchema);
+export const validateSessionsLocalEnrollmentsParams = compile(
+  S.SessionsLocalEnrollmentsParamsSchema,
+);
+export const validateSessionsLocalEnrollParams = compile(S.SessionsLocalEnrollParamsSchema);
+export const validateSessionsLocalRevokeParams = compile(S.SessionsLocalRevokeParamsSchema);
+export const validateSessionsLocalUnshareParams = compile(S.SessionsLocalUnshareParamsSchema);
+export const validateSessionsLocalConnectCodeParams = compile(
+  S.SessionsLocalConnectCodeParamsSchema,
+);
 export const validateUpdateStatusParams = compile(S.UpdateStatusParamsSchema);
 export const validateUpdateStatusResult = compile(S.UpdateStatusResultSchema);
 export const validateUpdateHoldParams = compile(S.UpdateHoldParamsSchema);

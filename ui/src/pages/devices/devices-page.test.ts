@@ -416,7 +416,12 @@ describe("DevicesPage gateway lifecycle", () => {
       const snapshot = inventorySnapshot(client, ["system.info", "desktop.observe"]);
       const page = mountInventoryPage(gateway(client, snapshot));
       await page.updateComplete;
-      expect(request).toHaveBeenCalledTimes(2);
+      // Live local session loads share the client; only host details are under test here.
+      expect(
+        request.mock.calls.filter(
+          ([method]) => method === "system.info" || method === "environments.list",
+        ),
+      ).toHaveLength(2);
       if (transition === "detach") {
         page.remove();
       } else {

@@ -1,10 +1,6 @@
 // Chat-owned composer orchestration.
 import { nothing } from "lit";
-import {
-  normalizeChatSendShortcut,
-  patchSettings,
-  type ChatFollowUpMode,
-} from "../../../app/settings.ts";
+import { normalizeChatSendShortcut, patchSettings } from "../../../app/settings.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -18,7 +14,11 @@ import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
 import { renderContextNotice } from "./chat-composer-context.ts";
-import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
+import {
+  alternateChatFollowUpMode,
+  renderMicrophonePicker,
+  type ChatRunControlsProps,
+} from "./chat-composer-controls.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -208,18 +208,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: commitMenuDraft,
   };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
-  // Keyboard and tooltip share the opposite action, including inherited queue modes.
-  const alternateFollowUpMode: ChatFollowUpMode | undefined =
-    props.connected &&
-    sendShortcut === "enter" &&
-    showAbortableUi &&
-    !props.suggestionComposer &&
-    props.followUpMode !== undefined &&
-    props.followUpMode !== "interrupt"
-      ? props.followUpMode === "steer"
-        ? "queue"
-        : "steer"
-      : undefined;
+  const followUpActive = showAbortableUi || props.localFollowUp?.active === true;
+  const alternateFollowUpMode = alternateChatFollowUpMode(props, sendShortcut, followUpActive);
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
@@ -632,6 +622,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     isBusy,
     followUpMode: props.followUpMode,
+    followUpActive,
     alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
     submissionLabel: goalComposer.submissionLabel,

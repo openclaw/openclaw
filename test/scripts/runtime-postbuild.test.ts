@@ -126,6 +126,10 @@ describe("runtime postbuild static assets", () => {
     expect(payload.outputs).toEqual([
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/anthropic/claude-channel/hooks.json",
+      "dist/extensions/anthropic/claude-channel/openclaw-channel-hook.mjs",
+      "dist/extensions/anthropic/claude-channel/openclaw-channel-server.mjs",
+      "dist/extensions/anthropic/claude-channel/README.md",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",

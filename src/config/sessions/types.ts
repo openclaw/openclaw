@@ -54,6 +54,17 @@ export type SessionChatType = ChatType;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
+/** Closed identity of the native thread a live local session projects. */
+export type SessionLocalSource = {
+  /** Plugin that owns the node-side source adapter (e.g. "codex", "anthropic"). */
+  pluginId: string;
+  /** Source catalog id the enrollment named (e.g. "codex", "claude"). */
+  sourceId: string;
+  deviceId: string;
+  threadId: string;
+  enrollmentId: string;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -501,6 +512,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     execNode?: string;
     /** Working directory interpreted only by the bound exec node. */
     execCwd?: string;
+    /**
+     * Live local session: the paired device's native harness owns execution and
+     * canonical thread state; the Gateway only projects and relays input. Rows
+     * carrying this never enter Gateway run admission (agent schema 20 fence).
+     */
+    localSource?: SessionLocalSource;
     responseUsage?: "on" | "off" | "tokens" | "full";
     providerOverride?: string;
     modelOverride?: string;

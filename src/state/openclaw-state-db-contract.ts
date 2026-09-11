@@ -81,9 +81,13 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_proposals",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
+  "local_session_enrollments",
+  "local_session_connect_intents",
+  "local_session_exclusions",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "idx_local_session_enrollments_device",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",

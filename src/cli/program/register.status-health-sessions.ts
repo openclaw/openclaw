@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { formatHelpExamples } from "../help-format.js";
+import type { SessionsShareCliOptions } from "../sessions-share-cli.js";
 import { registerTasksCommand } from "./register.tasks.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
@@ -323,6 +324,31 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
     await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
   });
+
+  sessionsCmd
+    .command("share")
+    .description(
+      "Review or answer requests to share this device's local coding sessions with a team Gateway",
+    )
+    .option("--accept <enrollmentId>", "Accept a pending sharing request")
+    .option("--decline <enrollmentId>", "Decline a pending sharing request")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions share", "List pending sharing requests for this device."],
+          ["openclaw sessions share --accept <id>", "Start publishing that source to the team."],
+          ["openclaw sessions share --decline <id>", "Refuse the request."],
+        ])}`,
+    )
+    .action(async (opts) => {
+      const { runSessionsShareCli } = await import("../sessions-share-cli.js");
+      await runCommandWithRuntime(defaultRuntime, () =>
+        // SAFETY: commander parses only the options declared on this subcommand.
+        runSessionsShareCli(opts as SessionsShareCliOptions),
+      );
+    });
 
   sessionsCmd
     .command("cleanup")

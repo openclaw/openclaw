@@ -10,10 +10,6 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  resolveControlUiFollowUpMode,
-  resolveControlUiServerQueueMode,
-} from "../../lib/chat/follow-up-mode.ts";
-import {
   chatModelUnavailableMessage,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
@@ -32,6 +28,7 @@ import { showToast } from "../../lib/toast.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { resolveLocalSessionComposer, resolveSessionFollowUpMode } from "./chat-local-input.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -110,19 +107,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       layout: state.sidebarLayout,
       paneWidth: this.paneWidth,
     });
-    state.chatFollowUpMode = resolveControlUiFollowUpMode(
-      state.settings.chatFollowUpMode,
-      resolveControlUiServerQueueMode(
-        this.context.runtimeConfig.state.configSnapshot?.runtimeConfig,
-        {
-          configNeedsApply: this.context.runtimeConfig.state.configNeedsApply,
-          effectiveMode: state.chatEffectiveQueueMode,
-          sessionMetadataLoaded:
-            selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
-          sessionMode: state.chatQueueModeOverride,
-        },
-      ),
-    );
+    const liveLocalSession = Boolean(selectedSession?.localSource);
+    const localSource = resolveLocalSessionComposer(state, selectedSession?.localSource);
+    state.chatFollowUpMode = resolveSessionFollowUpMode(state, {
+      localSource,
+      runtimeConfig: this.context.runtimeConfig.state,
+      settingFollowUpMode: state.settings.chatFollowUpMode,
+      sessionMetadataLoaded: selectedSession !== undefined,
+    });
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
@@ -183,11 +175,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
     const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
-    const disabledReason =
-      modelUnavailableMessage ??
-      (sessionParticipationBlocked && !suggestionViewer
-        ? t("chat.sessionSharing.readOnlyNotice")
-        : null);
+    // A live local session runs on the sharer's laptop with its own model; the
+    // Gateway's model availability says nothing about whether it can take input.
+    const disabledReason = localSource
+      ? localSource.blockedReason
+      : (modelUnavailableMessage ??
+        (sessionParticipationBlocked && !suggestionViewer
+          ? t("chat.sessionSharing.readOnlyNotice")
+          : null));
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -253,20 +248,23 @@ export class ChatPane extends ChatPaneLayoutRender {
       state.requestUpdate?.();
     };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
-    const composerControls = catalogKey
-      ? undefined
-      : renderChatPaneComposerControls({
-          state,
-          selectedSession,
-          agentDefaultModel,
-          agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
-          modelAccess: mutationAccess.model,
-          effortAccess: mutationAccess.effort,
-          permissionAccess: mutationAccess.permission,
-          canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          onModelSetup: () => this.context.navigate("model-setup"),
-          onModelAccounts: () => this.context.navigate("profile"),
-        });
+    // Model, thinking, effort, and permission pickers configure a Gateway run;
+    // the device's native harness owns those for a live local session.
+    const composerControls =
+      catalogKey || localSource
+        ? undefined
+        : renderChatPaneComposerControls({
+            state,
+            selectedSession,
+            agentDefaultModel,
+            agentDefaultPermissionMode: selectedAgent?.defaultPermissionMode,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
+            permissionAccess: mutationAccess.permission,
+            canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
+            onModelSetup: () => this.context.navigate("model-setup"),
+            onModelAccounts: () => this.context.navigate("profile"),
+          });
     const composerState = getChatComposerState(this.presentationId);
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
@@ -380,7 +378,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       onRetrySessionPlacementStartup: placementStartup?.retryable
         ? () => this.context.placementStartup.retry(state.sessionKey)
         : undefined,
-      canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
+      // No Gateway run to stop: the device owns the turn.
+      canAbort: sessionParticipationBlocked || localSource ? false : hasAbortableSessionRun(state),
       runActive: hasDirectSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
@@ -417,6 +416,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
+      localFollowUp: localSource?.followUp,
+      localInputRetry: localSource?.retry,
       draft: state.chatMessage,
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
@@ -611,7 +612,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         dismissRealtimeTalkError(state as never);
         state.requestUpdate?.();
       },
-      onAbort: sessionActionCallbacks.onAbort,
+      onAbort: localSource ? undefined : sessionActionCallbacks.onAbort,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: sessionParticipationBlocked
@@ -647,9 +648,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
-      onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
-      onForkMessage: sessionActionCallbacks.onForkMessage,
-      onClearHistory: sessionActionCallbacks.onClearHistory,
+      // The Gateway owns no run for a live local session and rejects rewind,
+      // fork, and reset for it; hide those actions rather than let them fail.
+      onRewindMessage:
+        selectedSessionArchived || liveLocalSession
+          ? undefined
+          : sessionActionCallbacks.onRewindMessage,
+      onForkMessage: liveLocalSession ? undefined : sessionActionCallbacks.onForkMessage,
+      onClearHistory: liveLocalSession ? undefined : sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
       ...chatProps,

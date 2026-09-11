@@ -27,6 +27,7 @@ title: "Agent schema history"
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
 | 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
+| 20      | Live local session mirror checkpoints and team-input ledger (`session_local_mirror_checkpoints`, `session_local_inputs`) for sessions mirrored from a paired device's Codex or Claude Code                                                             |
 
 Version 3 was an unshipped development step folded into version 4.
 
@@ -53,3 +54,7 @@ Membership and recorded contribution aggregates survive. Historical profile time
 The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
 
 Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
+
+### Live local session fence (version 20)
+
+Agent schema **20** adds `session_local_mirror_checkpoints` (per mirrored session: device, native thread id, the last accepted record sequence, and the earliest sequence the device still holds) and `session_local_inputs` (every team message sent into a live local session with its sender, queue mode, and recorded outcome: `accepted`, `submitted`, `committed`, or `rejected`). Both reference `session_windows` and are created by the normal migration path; no data is backfilled. Older builds refuse version 20; roll back only by restoring the verified pre-upgrade backup with the matching older build. See [Live local sessions](/gateway/local-sessions).

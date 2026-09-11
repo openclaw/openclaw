@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
+import { localInputFooterLabel, type LocalInputFooter } from "../chat-local-input-footer.ts";
 import type { readPendingSendFailure } from "../chat-thread-items.ts";
 
 export type ChatSendStatusActions = {
@@ -66,5 +67,19 @@ export function renderChatSendStatus(
           `
         : nothing
     }
+  </span>`;
+}
+
+/** Receipt line for a message relayed to a teammate's device (live local session). */
+export function renderChatLocalInputStatus(footer: LocalInputFooter | null) {
+  if (!footer) {
+    return nothing;
+  }
+  return html`<span
+    class="chat-send-status chat-send-status--local-input"
+    data-local-input-state=${footer.state}
+  >
+    <span aria-hidden="true">·</span>
+    <span>${localInputFooterLabel(footer)}</span>
   </span>`;
 }

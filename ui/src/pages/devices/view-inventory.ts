@@ -34,6 +34,7 @@ import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { renderCapabilityChips } from "./capability-chips.ts";
 import { deviceDesktopEnvironment, renderDeviceEntryMenu } from "./entry-menu.ts";
 import { renderHostStats } from "./host-stats.ts";
+import { renderLocalSessionSharing } from "./view-local-sessions.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
@@ -394,6 +395,16 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           !rowConnected ? entry.node?.hostStats?.updatedAtMs : undefined,
         )}
         ${renderCapabilityChips(entry.node?.caps ?? [])}
+        ${
+          rowConnected && isApprovedNodeEntry(entry)
+            ? renderLocalSessionSharing({
+                deviceId: entry.id,
+                commands: entry.node?.commands ?? [],
+                props: props.localSessions,
+                configForm: props.configForm,
+              })
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${capacity?.meter ?? nothing} ${entryWarnStatuses(entry, props.gatewayVersion)}

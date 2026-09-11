@@ -57,6 +57,24 @@ npx openclaw connect https://gateway.example/j/<shortcode> --session-host
 Foreground consent applies only to that process. It does not change
 `openclaw.json`, so the next normal node-host start remains non-hosting.
 
+## Share your live sessions with the team
+
+Add `--share <source>` for each local harness whose live sessions the team may
+read and send into (`codex`, `claude`). Typing the flag on your own machine is
+the consent: when the Gateway offers the sharing enrollment after pairing, this
+node accepts it without a separate `openclaw sessions share --accept`.
+
+```bash
+npx openclaw connect https://gateway.example/j/<shortcode> --share codex --share claude --share-request <id>
+```
+
+The Profile page on the Gateway mints this exact command for you, bound to your
+profile, so the sessions appear under your name. `--share-request` names that
+minted request; the node accepts only the enrollment created for it, so a
+request from anyone else still prompts you. `--share claude` also installs
+the Claude Code hooks and channel server on this machine and prints the launch
+flag Claude Code needs. See [Live local sessions](/gateway/local-sessions).
+
 ## Environment-managed cloud nodes
 
 Worker providers use `--ephemeral` for disposable cloud machines:

@@ -5911,6 +5911,33 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
+/* Live local session: text badge with a live-turn dot; offline rows dim. */
+.session-row-badge--local-source {
+  gap: 4px;
+  max-width: 160px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.session-row-badge--local-source .session-row-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-row-badge--local-source .session-row-badge__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.session-row-badge--local-source[data-local-live] .session-row-badge__dot {
+  background: var(--ok);
+  opacity: 1;
+}
+
 .session-row-badge svg {
   width: 12px;
   height: 12px;

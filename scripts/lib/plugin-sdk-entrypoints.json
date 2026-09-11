@@ -232,6 +232,7 @@
   "session-catalog",
   "session-catalog-paging",
   "session-catalog-runtime",
+  "local-session-source",
   "session-discussion",
   "session-key-runtime",
   "session-store-runtime",

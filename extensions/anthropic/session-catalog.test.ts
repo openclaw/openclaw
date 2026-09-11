@@ -2969,6 +2969,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
       CLAUDE_TERMINAL_START_COMMAND,
+      "anthropic.claude.localSessions.source.v1",
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
     await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(

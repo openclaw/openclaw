@@ -32,6 +32,7 @@ import {
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { resolveLocalSessionExecutionError } from "../local-sessions/guard.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import {
@@ -375,6 +376,14 @@ async function mutateSessionAtMessage(
         return;
       }
       if (rejectInitializing(current.entry.initializationPending)) {
+        return;
+      }
+      const localSessionError = resolveLocalSessionExecutionError(
+        current.entry,
+        action === "fork" ? "fork" : "rewind",
+      );
+      if (localSessionError) {
+        respond(false, undefined, localSessionError);
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);

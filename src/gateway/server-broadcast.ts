@@ -93,6 +93,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
+  "sessions.local.enrollment": [READ_SCOPE],
+  "session.localInput": [READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],

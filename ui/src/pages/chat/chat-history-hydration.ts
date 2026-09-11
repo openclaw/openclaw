@@ -35,6 +35,7 @@ import {
   readRunProjections,
   applyHistoryRun,
 } from "./chat-history-stream.ts";
+import { retireLocalInputsForMessages } from "./chat-local-input.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
@@ -270,6 +271,8 @@ export async function hydrateChatHistory(
         ? { activeLeafEntryId: nextDisplayedLeafEntryId }
         : {}),
     });
+    // A missed session.message event still lands here as history.
+    retireLocalInputsForMessages(state, authoritativeMessages);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.

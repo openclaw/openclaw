@@ -1,10 +1,9 @@
-import { statSync } from "node:fs";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLocalSessionSourceNodeCommand } from "openclaw/plugin-sdk/local-session-source";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -12,8 +11,9 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-constants.js";
+import { createClaudeLocalSessionSource } from "./local-session-source.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
-import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
+import { claudeProjectsAvailable } from "./session-catalog-home.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
@@ -38,20 +38,6 @@ function isClaudeSessionCatalogEnabled(pluginConfig: unknown): boolean {
     typeof sessionCatalog === "object" &&
     (sessionCatalog as { enabled?: unknown }).enabled === false
   );
-}
-
-// Node declarations expose catalog commands only when this machine owns a
-// Claude session store; otherwise the gateway must skip the node capability.
-function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
-  const homeDir = resolveClaudeCatalogHomeDir(env);
-  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
-  try {
-    return statSync(
-      path.join(configDir ? path.resolve(configDir) : path.join(homeDir, ".claude"), "projects"),
-    ).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
@@ -123,6 +109,12 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       isAvailable: ({ env }) => Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) =>
         await (await loadClaudeSessionNodeCommands()).startClaudeSession(paramsJSON, io),
+    },
+    // Live team projection of this machine's Claude sessions; same store gate as the catalog.
+    {
+      ...createLocalSessionSourceNodeCommand(createClaudeLocalSessionSource()),
+      cap: CLAUDE_SESSIONS_CAPABILITY,
+      dangerous: false,
     },
   ];
 }

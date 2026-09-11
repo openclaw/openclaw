@@ -56,6 +56,7 @@ import {
   renderChatPaneHeader,
   resolveChatPaneParentSession,
 } from "./components/chat-pane-header.ts";
+import { renderChatPaneLocalSource } from "./components/chat-pane-local-source.ts";
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
@@ -589,18 +590,21 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           : nothing,
       publicAccessIndicator:
         this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
-      placementControl: renderChatPanePlacement({
-        session: row,
-        placementStartupStatus,
-        placementMoving: placement.moving,
-        placementRestarting: placement.restarting,
-        placementMoveDisabledReason: placement.moveDisabledReason,
-        placementReclaimDisabledReason: placement.reclaimDisabledReason,
-        placementRestartDisabledReason: placement.restartDisabledReason,
-        onPlacementMove: () => row && void this.moveHeaderPlacement(row),
-        onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
-        onPlacementRestart: () => row && void this.restartHeaderPlacement(row),
-      }),
+      // The device chip replaces Runs-on: no Gateway placement can move or restart it.
+      placementControl: row?.localSource
+        ? renderChatPaneLocalSource(row.localSource)
+        : renderChatPanePlacement({
+            session: row,
+            placementStartupStatus,
+            placementMoving: placement.moving,
+            placementRestarting: placement.restarting,
+            placementMoveDisabledReason: placement.moveDisabledReason,
+            placementReclaimDisabledReason: placement.reclaimDisabledReason,
+            placementRestartDisabledReason: placement.restartDisabledReason,
+            onPlacementMove: () => row && void this.moveHeaderPlacement(row),
+            onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
+            onPlacementRestart: () => row && void this.restartHeaderPlacement(row),
+          }),
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
@@ -637,6 +641,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
+              .stopSharingAllowed=${this.canStopSharingLocalSession(row)}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
               .archiveAllowed=${archiveAllowed}

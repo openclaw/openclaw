@@ -8,6 +8,7 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodScope,
 } from "./descriptor.js";
+import { SESSIONS_LOCAL_METHOD_SPECS } from "./sessions-local-descriptors.js";
 
 type CoreGatewayMethodSpec = {
   name: string;
@@ -26,7 +27,7 @@ type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
   "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
 >;
-type CoreGatewayMethodSpecRow = readonly [
+export type CoreGatewayMethodSpecRow = readonly [
   name: string,
   family: string | null,
   scope: GatewayMethodScope,
@@ -669,6 +670,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  // New methods append here: advertised order is index-stable for older clients.
+  ...SESSIONS_LOCAL_METHOD_SPECS,
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

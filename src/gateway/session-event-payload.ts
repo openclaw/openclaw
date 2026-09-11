@@ -142,6 +142,7 @@ export function buildGatewaySessionEventFields(params: {
     compactionCheckpointCount: sessionRow.compactionCheckpointCount,
     latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
+    ...(sessionRow.localSource ? { localSource: sessionRow.localSource } : {}),
   };
 }
 

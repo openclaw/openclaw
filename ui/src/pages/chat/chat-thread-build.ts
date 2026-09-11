@@ -82,6 +82,8 @@ export type BuildChatItemsProps = {
   paneId: string;
   sessionKey: string;
   archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
+  /** Leading notice for transcript that exists only outside the Gateway (live local sessions). */
+  historyNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
   compactionStatus?: CompactionStatus | null;
   /** Invalidates cached display copy when the active UI language changes. */
@@ -495,6 +497,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (!searchFiltering) {
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
+    }
+    if (props.historyNotice) {
+      projections.push({ item: props.historyNotice });
     }
     for (const notice of props.guardianNotices ?? []) {
       projections.push({

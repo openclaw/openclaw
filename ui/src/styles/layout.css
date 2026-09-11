@@ -1927,13 +1927,17 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session--archived {
+.sidebar-session--archived,
+.sidebar-session--offline {
   opacity: 0.62;
 }
 
 .sidebar-session--archived:hover,
 .sidebar-session--archived.sidebar-recent-session--active,
-.sidebar-session--archived.sidebar-recent-session--selected {
+.sidebar-session--archived.sidebar-recent-session--selected,
+.sidebar-session--offline:hover,
+.sidebar-session--offline.sidebar-recent-session--active,
+.sidebar-session--offline.sidebar-recent-session--selected {
   opacity: 0.82;
 }
 

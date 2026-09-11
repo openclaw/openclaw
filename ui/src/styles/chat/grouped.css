@@ -430,6 +430,11 @@
   color: var(--warn);
 }
 
+/* Live local session receipts read as metadata until the device rejects the input. */
+.chat-send-status--local-input:not([data-local-input-state="rejected"]) {
+  color: var(--muted);
+}
+
 .chat-group-footer .chat-send-status__action {
   width: auto;
   min-width: 0;

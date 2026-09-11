@@ -14,11 +14,38 @@ import {
 } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
+
+/**
+ * Keyboard and tooltip share the opposite follow-up action, including inherited
+ * queue modes; a live local source with one input mode offers no alternate.
+ */
+export function alternateChatFollowUpMode(
+  props: Pick<
+    ChatComposerProps,
+    "connected" | "suggestionComposer" | "followUpMode" | "localFollowUp"
+  >,
+  sendShortcut: string,
+  followUpActive: boolean,
+): ChatFollowUpMode | undefined {
+  const available =
+    props.connected &&
+    sendShortcut === "enter" &&
+    followUpActive &&
+    !props.suggestionComposer &&
+    props.followUpMode !== undefined &&
+    props.followUpMode !== "interrupt" &&
+    (!props.localFollowUp || props.localFollowUp.modes.length > 1);
+  if (!available) {
+    return undefined;
+  }
+  return props.followUpMode === "steer" ? "queue" : "steer";
+}
 
 export type ChatRunControlsProps = {
   canAbort: boolean;
@@ -28,6 +55,8 @@ export type ChatRunControlsProps = {
   hasAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
+  /** Follow-up wording applies: an abortable run, or a device turn in a live local session. */
+  followUpActive?: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
   submissionLabel?: string;
@@ -485,11 +514,12 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
   const interruptsActiveRun = props.followUpMode === "interrupt";
+  const followUpActive = props.followUpActive ?? props.canAbort;
   const activeRunActionLabel =
     props.submissionLabel ??
     (props.suggestionComposer
       ? t("chat.sessionSuggestions.suggest")
-      : !props.canAbort || props.followUpMode === undefined
+      : !followUpActive || props.followUpMode === undefined
         ? t("chat.runControls.send")
         : steersActiveRun
           ? t("chat.queue.steer")
@@ -500,7 +530,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     props.submissionLabel ??
     (props.suggestionComposer
       ? t("chat.sessionSuggestions.suggestMessage")
-      : !props.canAbort || props.followUpMode === undefined
+      : !followUpActive || props.followUpMode === undefined
         ? t("chat.runControls.sendMessage")
         : steersActiveRun
           ? t("chat.followUpModeSteer")

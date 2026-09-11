@@ -30,6 +30,7 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { activateLocalSessionConnectIntentForDevice } from "../../local-sessions/connect-intent.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import {
@@ -226,6 +227,18 @@ export async function sendGatewayHello(
             return;
           }
           bootstrapHandoff = consumed;
+          try {
+            // A failed sharing activation must not cost the node its pairing.
+            activateLocalSessionConnectIntentForDevice({
+              setupId: consumed.record.setupId,
+              deviceId: device.id,
+              broadcast: buildRequestContext().broadcast,
+            });
+          } catch (error) {
+            logGateway.warn(
+              `local session connect intent failed device=${device.id}: ${formatForLog(error)}`,
+            );
+          }
         }
       }
     } catch (err) {

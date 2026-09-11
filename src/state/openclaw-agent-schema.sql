@@ -757,6 +757,39 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
 
+-- Live local sessions: the paired device's harness owns the thread; the Gateway
+-- keeps a projection cursor per session so reconnects replay only new records.
+CREATE TABLE IF NOT EXISTS session_local_mirror_checkpoints (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  accepted_seq INTEGER NOT NULL,
+  earliest_seq INTEGER,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+-- Team input sent into a live local session; every submission ends in a recorded outcome.
+CREATE TABLE IF NOT EXISTS session_local_inputs (
+  input_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  sender_profile_id TEXT,
+  sender_label TEXT NOT NULL,
+  queue_mode TEXT NOT NULL CHECK (queue_mode IN ('steer', 'followup')),
+  text TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('accepted', 'submitted', 'committed', 'rejected')),
+  native_ref TEXT,
+  reason TEXT,
+  accepted_at INTEGER NOT NULL,
+  settled_at INTEGER,
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_local_inputs_session
+  ON session_local_inputs(session_key, accepted_at DESC);
+
 -- Accepted input stays outside the active transcript until its exact turn owns execution.
 CREATE TABLE IF NOT EXISTS session_pending_inputs (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,

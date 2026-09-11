@@ -95,6 +95,27 @@ const SessionSwarmSummarySchema = closedObject({
   ),
   otherActiveGroups: Type.Integer({ minimum: 0 }),
 });
+/** Live local session projection: the paired device's harness owns execution. */
+const SessionLocalSourceSchema = closedObject({
+  sourceId: Type.String(),
+  sourceLabel: Type.String(),
+  deviceId: Type.String(),
+  threadId: Type.String(),
+  ownerProfileId: Type.String(),
+  ownerLabel: Type.String(),
+  connected: Type.Boolean(),
+  state: Type.Union([
+    Type.Literal("idle"),
+    Type.Literal("active"),
+    Type.Literal("closed"),
+    Type.Literal("unavailable"),
+  ]),
+  canInput: Type.Boolean(),
+  inputModes: Type.Array(Type.Union([Type.Literal("steer"), Type.Literal("followup")])),
+  reason: Type.Optional(Type.String()),
+  earliestSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+export type SessionLocalSource = Static<typeof SessionLocalSourceSchema>;
 
 /** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
 export const SessionRowSchema = Type.Object(
@@ -234,6 +255,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
+    /** Live local session projection; present only for device-hosted rows. */
+    localSource: Type.Optional(SessionLocalSourceSchema),
   },
   { additionalProperties: true },
 );
