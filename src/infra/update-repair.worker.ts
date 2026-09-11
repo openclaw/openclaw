@@ -69,14 +69,14 @@ process.on("message", (raw: unknown) => {
         throw new Error("Repair worker already owns an execution.");
       }
       started = true;
-      // Agent execution temporarily projects isolated state into process.env.
-      // Run liveness must always read the admitting installation's ledger.
+      // The process is pinned to rehearsal state. Only these read-only checks
+      // use the admitting installation, so revocation never follows a snapshot.
       const ledgerEnv = {
         ...process.env,
         ...installationTargetEnv({
-          stateDir: message.target.stateDir,
-          configPath: message.target.configPath,
-          defaultWorkspaceDir: message.target.workspaceDir,
+          stateDir: message.authority.stateDir,
+          configPath: message.authority.configPath,
+          defaultWorkspaceDir: message.authority.workspaceDir,
         }),
       };
       void (async () => {
@@ -85,7 +85,7 @@ process.on("message", (raw: unknown) => {
           : undefined;
         return runUpdateRepairLoop({
           target: message.target,
-          context: { ...message.failure, ...message.context, phase: "verifying" },
+          context: { ...message.failure, ...message.context },
           budget: message.budget,
           signal: controller.signal,
           isCurrent: () => {
@@ -135,4 +135,5 @@ process.on("message", (raw: unknown) => {
     }
   }
 });
-send({ type: "ready" });
+// A parent must not entrust rehearsal repair to an older target-only guard.
+send({ type: "ready", liveAuthority: true });

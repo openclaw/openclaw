@@ -161,7 +161,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       return stop("aborted", "tool-call-budget");
     }
     const baselineScore = finalValidation.score;
-    const selected = await runtime.withUpdateRepairEnvironment(params.target, () =>
+    const selected = await runtime.withUpdateRepairTargetConfig(() =>
       runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
     );
     assertCurrent();
@@ -194,7 +194,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       let outcome;
       try {
         outcome = await cleanup.run(() =>
-          runtime.withUpdateRepairEnvironment(params.target, () =>
+          runtime.withUpdateRepairTargetConfig(() =>
             runtime.runUpdateRepairTurn({
               target: params.target,
               route,
@@ -299,9 +299,6 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
 export async function prepareUnattendedUpdateRepair(
   params: UpdateRepairParams,
 ): Promise<UpdateRepairResult> {
-  if (params.context.phase !== "verifying") {
-    return runUpdateRepairLoop(params);
-  }
   if (repairActive) {
     const reason = "Another installation repair is already running.";
     params.onEvent?.({ type: "stopped", status: "unavailable", reason });

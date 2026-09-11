@@ -38,7 +38,7 @@ const event = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
 export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("ready") }),
+  z.object({ type: z.literal("ready"), liveAuthority: z.literal(true) }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
   z.object({ type: z.literal("event"), event }),
@@ -59,14 +59,22 @@ export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
     requester: z
       .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
       .optional(),
+    // Live authority is read-only and independent of the disposable repair target.
+    authority: z.object({
+      stateDir: z.string(),
+      configPath: z.string(),
+      workspaceDir: z.string(),
+    }),
     target: z.object({
       stateDir: z.string(),
       configPath: z.string(),
       workspaceDir: z.string(),
+      /** The installation that owns the target state and hosts the repair. */
       installRoot: z.string(),
     }),
     failure: updateFailureSchema,
     context: z.object({
+      phase: z.enum(["validating", "verifying"]),
       beforeVersion: text.optional(),
       targetVersion: text.optional(),
       symptoms: z.array(text).max(20).optional(),
@@ -86,7 +94,7 @@ export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessage
 export const UPDATE_REPAIR_IPC_MAX_BYTES = 64 * 1024;
 
 export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"] & {
-  candidateRoot?: string;
+  /** Rehearsal isolation for the repair child; the launcher applies it, never the wire. */
   environment?: NodeJS.ProcessEnv;
 };
 export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
@@ -94,6 +102,8 @@ export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "res
 export type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
 export type UpdateRepairParams = {
   target: UpdateRepairTarget;
+  /** Original installation for read-only run and requester checks; defaults to the target. */
+  authority?: Extract<UpdateRepairParentMessage, { type: "start" }>["authority"];
   nodeRunner?: string;
   runId?: string;
   requester?: { channel?: string; accountId?: string; senderId?: string };

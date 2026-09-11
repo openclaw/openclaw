@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -12,15 +12,6 @@ import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
-
-// Exercise the built runtime through Node's loader; Vitest's source-module graph
-// stalls inside agent command execution before the synthetic provider is called.
-vi.mock("./update-repair-agent.runtime.js", async () => {
-  const { createRequire } = await import("node:module");
-  return createRequire(import.meta.url)(
-    "../../dist/update-repair-agent.runtime.js",
-  ) as typeof import("./update-repair-agent.runtime.js");
-});
 
 type ModelRequest = {
   model?: string;
@@ -70,9 +61,14 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
 }
 
 describe("update repair with a local model provider", () => {
-  it.each(["validating", "verifying"] as const)(
-    "runs host exec on the pinned target during %s",
-    async (phase) => {
+  it.each([
+    { phase: "validating", revoke: "none" },
+    { phase: "verifying", revoke: "none" },
+    { phase: "validating", revoke: "requester" },
+    { phase: "validating", revoke: "run" },
+  ] as const)(
+    "checks live authority before host exec during $phase ($revoke)",
+    async ({ phase, revoke }) => {
       await withOpenClawTestState(
         { prefix: "update-repair-boundary-", layout: "home" },
         async (state) => {
@@ -80,6 +76,7 @@ describe("update repair with a local model provider", () => {
           const errors: unknown[] = [];
           let issuedRepair = false;
           let issuedScopeProbe = false;
+          let revokeAuthority = async () => {};
           await withServer(
             (request, response) => {
               void (async () => {
@@ -101,6 +98,8 @@ describe("update repair with a local model provider", () => {
                 }
                 if (body.tools?.some((tool) => tool.name === "exec") && !issuedRepair) {
                   issuedRepair = true;
+                  // Revoke after inference begins but before its tool effect is dispatched.
+                  await revokeAuthority();
                   writeRepairToolCall(response, "exec");
                   return;
                 }
@@ -119,6 +118,7 @@ describe("update repair with a local model provider", () => {
             async (baseUrl) => {
               const modelRef = "repair-test/repair-model";
               const config: OpenClawConfig = {
+                commands: { ownerAllowFrom: ["owner"] },
                 plugins: { slots: { memory: "none" } },
                 tools: { exec: { mode: "ask", safeBins: ["cat"] }, fs: { workspaceOnly: false } },
                 agents: {
@@ -157,23 +157,49 @@ describe("update repair with a local model provider", () => {
               };
               await state.writeConfig(config);
               const marker = path.join(state.workspaceDir, "repair-proof.txt");
-              const expected = `${state.stateDir} 0 0 external`;
+              const targetStateDir =
+                phase === "validating" ? state.path("rehearsal") : state.stateDir;
+              const targetConfigPath =
+                phase === "validating"
+                  ? path.join(targetStateDir, "openclaw.json")
+                  : state.configPath;
+              if (phase === "validating") {
+                await fs.mkdir(targetStateDir, { recursive: true });
+                await fs.writeFile(targetConfigPath, JSON.stringify(config));
+              }
+              const expected = `${targetStateDir} 0 0 external`;
               const ledgerEnv = { ...process.env };
               const run = createUpdateRun({ trigger: "cli" }, { env: ledgerEnv });
               recordUpdateRunPhase(run.runId, "repairing", undefined, { env: ledgerEnv });
-              if (phase === "verifying") {
-                await fs.symlink(
-                  path.join(process.cwd(), "dist"),
-                  path.join(state.workspaceDir, "dist"),
-                  "dir",
-                );
-              }
+              revokeAuthority = async () => {
+                if (revoke === "requester") {
+                  await state.writeConfig({
+                    ...config,
+                    commands: { ownerAllowFrom: ["different-owner"] },
+                  });
+                } else if (revoke === "run") {
+                  recordUpdateRunPhase(run.runId, "verifying", undefined, { env: ledgerEnv });
+                }
+              };
+              // The rehearsal has no live run ledger; authorization must use the source.
+              // Both phases host repair in the installation that owns the target state.
+              await fs.symlink(
+                path.join(process.cwd(), "dist"),
+                path.join(state.workspaceDir, "dist"),
+                "dir",
+              );
               const result = await prepareUnattendedUpdateRepair({
                 runId: run.runId,
-                isCurrent: () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "running",
-                target: {
+                requester: { channel: "synthetic", senderId: "owner" },
+                authority: {
                   stateDir: state.stateDir,
                   configPath: state.configPath,
+                  workspaceDir: state.workspaceDir,
+                },
+                isCurrent: () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "running",
+                target: {
+                  stateDir: targetStateDir,
+                  configPath: targetConfigPath,
                   workspaceDir: state.workspaceDir,
                   installRoot: state.workspaceDir,
                 },
@@ -191,6 +217,17 @@ describe("update repair with a local model provider", () => {
               });
 
               expect(errors).toEqual([]);
+              if (revoke !== "none") {
+                expect(issuedRepair).toBe(true);
+                expect(result, JSON.stringify(result)).toMatchObject({ status: "aborted" });
+                await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                if (phase === "validating") {
+                  expect(
+                    JSON.parse(await fs.readFile(targetConfigPath, "utf8")).commands.ownerAllowFrom,
+                  ).toEqual(["owner"]);
+                }
+                return;
+              }
               expect(result, JSON.stringify(result)).toMatchObject({
                 status: "repaired",
                 finalValidation: { ok: true, score: 1 },

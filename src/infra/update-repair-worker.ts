@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { createCommandTerminationController } from "../process/exec-termination.js";
+import { sanitizeHostExecEnv } from "./host-env-security.js";
 import { installationTargetEnv } from "./installation-target-context.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
@@ -12,10 +13,70 @@ import {
   type UpdateRepairParentMessage,
   type UpdateRepairParams,
   type UpdateRepairResult,
+  type UpdateRepairTarget,
   type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
-/** Loaded before replacement; inference imports belong entirely to the candidate child. */
+/** Rehearsal owns these selectors; every other value stays host-owned. */
+const REPAIR_ISOLATION_ENV_VARS = [
+  "HOME",
+  "USERPROFILE",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "OPENCLAW_HOME",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+] as const;
+
+/**
+ * Build the repair child's complete environment. A rehearsal target contributes
+ * isolation paths and withholds the serving generation's update-continuation
+ * selectors, but executable lookup and credentials remain host-owned. The child
+ * never adjusts this environment again, so its installation selectors and Doctor
+ * policy are fixed for the whole repair.
+ */
+function buildUpdateRepairChildEnv(target: UpdateRepairTarget): NodeJS.ProcessEnv {
+  let inherited: NodeJS.ProcessEnv = { ...process.env };
+  if (target.environment) {
+    const projected: NodeJS.ProcessEnv = {};
+    for (const key of Object.keys(process.env)) {
+      if (target.environment[key] !== undefined) {
+        projected[key] = process.env[key];
+      }
+    }
+    for (const key of REPAIR_ISOLATION_ENV_VARS) {
+      projected[key] = target.environment[key];
+    }
+    inherited = sanitizeHostExecEnv({ baseEnv: projected });
+  }
+  return {
+    ...inherited,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    ...installationTargetEnv({
+      stateDir: target.stateDir,
+      configPath: target.configPath,
+      defaultWorkspaceDir: target.workspaceDir,
+    }),
+    ...buildUpdateDoctorEnv({
+      allowGatewayServiceRepair: false,
+      allowGatewayActivation: false,
+      serviceRepairPolicy: "external",
+      deferConfiguredPluginInstallRepair: Boolean(target.environment),
+    }),
+  };
+}
+
+/**
+ * Run the repair agent inside the installation that owns the target state: the
+ * staged candidate before activation, the replaced install after it. The serving
+ * generation cannot open state a newer candidate has already migrated.
+ */
 export async function runUpdateRepairWorker(
   params: UpdateRepairParams,
 ): Promise<UpdateRepairResult> {
@@ -66,15 +127,7 @@ export async function runUpdateRepairWorker(
     () => controller.abort(new Error("wall-clock-budget")),
     budget.wallClockMs,
   );
-  const env = {
-    ...process.env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    ...installationTargetEnv({
-      stateDir: params.target.stateDir,
-      configPath: params.target.configPath,
-      defaultWorkspaceDir: params.target.workspaceDir,
-    }),
-  };
+  const env = buildUpdateRepairChildEnv(params.target);
   let child;
   try {
     child = spawn(
@@ -168,20 +221,15 @@ export async function runUpdateRepairWorker(
           throw new Error("Candidate repair worker repeated startup.");
         }
         started = true;
-        const {
-          phase: _phase,
-          beforeVersion,
-          targetVersion,
-          symptoms,
-          ...failureContext
-        } = params.context;
+        const { phase, beforeVersion, targetVersion, symptoms, ...failureContext } = params.context;
         const start = updateRepairParentMessageSchema.parse({
           type: "start",
           runId: params.runId,
           requester: params.requester,
+          authority: params.authority ?? params.target,
           target: params.target,
           failure: failureContext,
-          context: { beforeVersion, targetVersion, symptoms },
+          context: { phase, beforeVersion, targetVersion, symptoms },
           budget: { ...budget, wallClockMs: Math.max(1, deadline - Date.now()) },
         });
         send(start);
