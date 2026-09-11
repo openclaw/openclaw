@@ -913,10 +913,8 @@ suite.define(() => {
     expect((await showEarlier.boundingBox())?.y ?? 0).toBeLessThan(0);
     const initialRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    await thread.hover();
+    await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
     await showEarlier.waitFor();
     const idleHistoryAction = await showEarlier.boundingBox();
     expect(idleHistoryAction).not.toBeNull();
