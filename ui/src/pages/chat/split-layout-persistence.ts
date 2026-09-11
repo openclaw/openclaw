@@ -96,6 +96,7 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
       id: uniqueId(rawColumn.id, usedColumnIds, () => `c${++columnSequence}`),
       panes,
       paneWeights,
+      customPaneWeights: rawColumn.customPaneWeights === true,
     });
     sourceColumnIndexes.push(columnIndex);
   }
@@ -117,5 +118,10 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
   const activePaneId = allPanes.some((pane) => pane.id === requestedActivePaneId)
     ? requestedActivePaneId
     : expectDefined(allPanes[0], "normalized split layout first pane").id;
-  return { columns, columnWeights, activePaneId };
+  return {
+    columns,
+    columnWeights,
+    activePaneId,
+    customColumnWeights: value.customColumnWeights === true,
+  };
 }

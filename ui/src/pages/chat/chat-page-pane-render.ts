@@ -1,5 +1,6 @@
 import { html, noChange, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { normalizeSessionColorValue } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -45,6 +46,7 @@ type ChatPagePaneRenderOptions = {
   ) => void;
   onSplitDown?: (paneId: string) => void;
   onSplitRight?: (paneId: string) => void;
+  onBalancePanes?: () => void;
   ownerKey: string;
   pane: ChatSplitPane;
   sessionSlots: readonly (string | undefined)[];
@@ -56,13 +58,24 @@ type ChatPagePaneRenderOptions = {
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const nativeGateways = options.showGatewayPicker ? nativeGatewaysCapability() : null;
   const sessions = options.context?.sessions?.state.result?.sessions ?? [];
+  const paneSessionKey =
+    resolveSessionKey(options.pane.sessionKey, options.context?.gateway?.snapshot?.hello) ||
+    options.pane.sessionKey;
+  const paneColor = normalizeSessionColorValue(
+    sessions.find((row) => areUiSessionKeysEquivalent(row.key, paneSessionKey))?.color ?? "",
+  );
+  const cellStyle = paneColor
+    ? `flex: ${options.weight} 1 0; --pane-session-color: var(--session-color-${paneColor})`
+    : `flex: ${options.weight} 1 0`;
   return html`
     <div
       class="chat-split-view__cell ${
         options.splitMode && options.active ? "chat-split-view__cell--active" : ""
-      } ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
+      } ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""} ${
+        options.splitMode && paneColor ? "chat-split-view__cell--tinted" : ""
+      }"
       aria-current=${options.splitMode && options.active ? "true" : nothing}
-      style="flex: ${options.weight} 1 0"
+      style=${cellStyle}
       @pointerdown=${() => options.onFocusPane(options.pane.id)}
       @focusin=${() => options.onFocusPane(options.pane.id)}
     >
@@ -127,6 +140,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .onOpenSplitView=${options.onOpenSplitView}
               .onSplitDown=${options.onSplitDown}
               .onSplitRight=${options.onSplitRight}
+              .onBalancePanes=${options.onBalancePanes}
               .onClosePane=${options.onClosePane}
               .onFocusPane=${options.onFocusPane}
               .onPaneSessionChange=${(

@@ -94,6 +94,7 @@ type ChatPaneHeaderProps = {
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
   onSplitRight?: (paneId: string) => void;
+  onBalancePanes?: () => void;
   onClosePane?: (paneId: string) => void;
 };
 
@@ -604,6 +605,20 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                       @click=${() => props.onSplitRight?.(props.paneId)}
                     >
                       ${icons.panelRightOpen}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing
+            }
+            ${
+              !props.narrow && props.onBalancePanes
+                ? html`<openclaw-tooltip .content=${t("chat.splitView.balancePanes")}>
+                    <button
+                      class="btn btn--ghost btn--icon chat-icon-btn chat-pane__balance-panes"
+                      type="button"
+                      aria-label=${t("chat.splitView.balancePanes")}
+                      @click=${() => props.onBalancePanes?.()}
+                    >
+                      ${icons.layoutGrid}
                     </button>
                   </openclaw-tooltip>`
                 : nothing

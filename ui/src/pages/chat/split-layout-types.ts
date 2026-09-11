@@ -8,6 +8,8 @@ export type ChatSplitColumn = {
   id: string;
   panes: ChatSplitPane[];
   paneWeights: number[];
+  /** True once a user dragged a divider in this column; even splits stop being applied. */
+  customPaneWeights?: boolean;
 };
 
 export type ChatSplitEdge = "left" | "right" | "up" | "down";
@@ -16,4 +18,6 @@ export type ChatSplitLayout = {
   columns: ChatSplitColumn[];
   columnWeights: number[];
   activePaneId: string;
+  /** True once a user dragged a column divider; even splits stop being applied. */
+  customColumnWeights?: boolean;
 };

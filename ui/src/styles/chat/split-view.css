@@ -1035,3 +1035,16 @@ html.openclaw-native-macos
   .chat-split-view__column:first-child {
   min-width: calc(308px + var(--shell-titlebar-inset));
 }
+
+/* Session colour carried onto the pane so split panes read apart at a glance:
+   a coloured top edge, a tinted header, and a faint wash on the pane surface. */
+.chat-split-view__cell--tinted {
+  --chat-surface: color-mix(in srgb, var(--pane-session-color) 6%, var(--bg-content, var(--bg)));
+
+  border-top: 3px solid var(--pane-session-color);
+  background: var(--chat-surface);
+}
+
+.chat-split-view__cell--tinted .chat-pane__header {
+  background: color-mix(in srgb, var(--pane-session-color) 14%, var(--bg-content, var(--bg)));
+}

@@ -28,6 +28,7 @@ import {
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { BALANCE_PANES_REQUEST_EVENT } from "../lib/split-pane-events.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
@@ -424,6 +425,11 @@ export class ShellChromeOwner {
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT));
+      return;
+    }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.balancePanes, event)) {
+      event.preventDefault();
+      window.dispatchEvent(new CustomEvent(BALANCE_PANES_REQUEST_EVENT));
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, event)) {
