@@ -1187,12 +1187,13 @@ describe("handleTelegramAction", () => {
       status: "suppressed",
       deliveryStatus: "suppressed",
       reason: "cancelled_by_message_sending_hook",
-      cancelReason: "duplicate suppressed by hook",
       receipt: {
         threadId: "77",
         replyToId: "456",
       },
     });
+    expect(details).not.toHaveProperty("cancelReason");
+    expect(details).not.toHaveProperty("hookEffect");
     expect(result.content).toStrictEqual([
       { type: "text", text: JSON.stringify(details, null, 2) },
     ]);
