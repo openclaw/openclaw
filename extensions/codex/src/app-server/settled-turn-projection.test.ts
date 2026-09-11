@@ -366,4 +366,37 @@ describe("projectSettledCodexMessages", () => {
       "byte_limit",
     );
   });
+
+  it("skips OpenClaw custom messages instead of rejecting the history", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "If nothing needs attention, reply HEARTBEAT_OK.",
+          details: { runtimeContextCarrier: true },
+        }),
+        message({ role: "user", content: "Send the update." }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Send the update." }],
+      },
+      {
+        type: "function_call",
+        call_id: "call-1",
+        name: "message",
+        arguments: '{"action":"send"}',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "Message sent.",
+      },
+    ]);
+  });
 });

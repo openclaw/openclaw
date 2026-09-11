@@ -286,6 +286,12 @@ class HistoryProjection {
       projectAssistantMessage(message, this);
     } else if (message.role === "toolResult") {
       projectToolResult(message, this);
+    } else if (message.role === "custom") {
+      // Custom messages (e.g. openclaw.runtime-context carriers such as the
+      // heartbeat prompt) are OpenClaw-internal annotations, not part of the
+      // user/assistant/tool transcript Codex replays. Skip them like private
+      // reasoning rather than rejecting the entire history.
+      return;
     } else {
       throw new CodexHistoryRejection("unsupported_content");
     }
