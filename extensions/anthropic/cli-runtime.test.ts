@@ -138,7 +138,9 @@ describe("Claude native stdio boundary", () => {
     const argv = first.argv as string[];
     expect(argv).not.toContain("--allowedTools");
     const settingsPath = argv[argv.indexOf("--settings") + 1];
-    expect(typeof settingsPath).toBe("string");
+    if (typeof settingsPath !== "string") {
+      throw new Error("Relocated transport argv is missing the --settings file path.");
+    }
     const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
       permissions?: { allow?: string[] };
     };
@@ -186,6 +188,9 @@ describe("Claude native stdio boundary", () => {
     expect(argv).not.toContain(inlineSettings);
     expect(argv.filter((arg) => arg === "--settings")).toHaveLength(1);
     const settingsPath = argv[argv.indexOf("--settings") + 1];
+    if (typeof settingsPath !== "string") {
+      throw new Error("Relocated transport argv is missing the --settings file path.");
+    }
     const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
       disableAllHooks?: boolean;
       enabledPlugins?: Record<string, unknown>;
