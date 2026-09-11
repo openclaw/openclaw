@@ -580,6 +580,11 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   min-width: 0;
 }
 
+.plugin-catalog-load-more {
+  display: flex;
+  justify-content: center;
+}
+
 .plugin-catalog-section {
   display: grid;
   gap: var(--space-3);

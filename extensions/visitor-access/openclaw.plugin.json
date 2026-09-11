@@ -1,6 +1,6 @@
 {
   "id": "visitor-access",
-  "categories": ["tools"],
+  "categories": ["security"],
   "name": "Visitor Access",
   "description": "Manage expiring visitor grants through one Cloudflare Access email policy.",
   "activation": {

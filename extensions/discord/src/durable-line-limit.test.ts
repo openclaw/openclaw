@@ -31,7 +31,7 @@ async function runDurableLineLimitScenario(params: {
   text?: string;
   replyToIdSource?: "implicit" | "explicit";
   replyToMode?: "first" | "all";
-  formatting?: { maxLinesPerMessage?: number };
+  formatting?: Parameters<typeof sendDurableMessageBatch>[0]["formatting"];
 }) {
   let messageCount = 0;
   const loopback = await createDiscordLoopbackRest({
@@ -172,6 +172,24 @@ describe("durable Discord configured line limits", () => {
 });
 
 describe.each([false, true])("durable Discord transport webhook=%s", (webhook) => {
+  it("reapplies the explicit character limit after expanding mentions", async () => {
+    const userId = "123456789012345678";
+    const { chunks, replies, result } = await runDurableLineLimitScenario({
+      cfg: { channels: { discord: { token: "fixture-token", mentionAliases: { op: userId } } } },
+      webhook,
+      text: Array.from({ length: 30 }, () => "@op").join(" "),
+      replyToMode: "first",
+      formatting: { textLimit: 500 },
+    });
+
+    expect(result.status).toBe("sent");
+    expect(chunks.every((chunk) => chunk.length <= 500)).toBe(true);
+    expect(chunks.join(""), JSON.stringify(chunks)).toBe(
+      Array.from({ length: 30 }, () => `<@${userId}>`).join(" "),
+    );
+    expect(replies).toEqual(chunks.map((_, index) => (index === 0 ? "fixture-reply" : undefined)));
+  });
+
   it.each([
     {
       name: "default 17",

@@ -49,7 +49,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   textChunkLimit: 5000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
-  renderPresentation: ({ payload, presentation }) => renderLinePresentation(payload, presentation),
+  renderPresentation: ({ payload, presentation, sourcePresentation, ctx }) =>
+    renderLinePresentation(payload, presentation, ctx.to, sourcePresentation),
   sendPayload: async ({ to, payload, accountId, cfg, replyToId, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();

@@ -3099,6 +3099,8 @@ export const en: TranslationMap & {
     noFeaturedResults: "No featured plugins are available right now.",
     exploreTitle: "Explore plugins",
     loadingDiscovery: "Loading ClawHub plugins…",
+    loadMore: "Load more",
+    loadingMore: "Loading more…",
     discoveryOffline: "Connect to browse plugins from ClawHub.",
     noDiscoveryResults: "No ClawHub plugins match this view.",
     searchClawHub: "Search ClawHub plugins",

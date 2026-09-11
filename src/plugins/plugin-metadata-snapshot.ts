@@ -5,6 +5,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
@@ -58,9 +59,14 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function throwReadonlyPluginMetadataMutation(): never {
-  throw new TypeError("Plugin metadata snapshots are immutable");
-}
+// Retained snapshots cross source/require module graphs. Frozen descriptors
+// require the same function identity when another graph finalizes them again.
+const throwReadonlyPluginMetadataMutation = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginMetadataReadonlyMutation"),
+  () => (): never => {
+    throw new TypeError("Plugin metadata snapshots are immutable");
+  },
+);
 
 function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object") {
