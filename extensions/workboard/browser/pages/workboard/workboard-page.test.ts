@@ -617,7 +617,9 @@ it("shows independent metadata and linked-session failures together", async () =
   page.fixture.notify();
 
   await vi.waitFor(() => {
-    const message = page.container.querySelector('.workboard-detail [role="alert"]')?.textContent;
+    const message = visibleToast(page.container)?.shadowRoot?.querySelector(
+      '[role="alert"]',
+    )?.textContent;
     expect(message).toContain("Agent metadata temporarily unavailable");
     expect(message).toContain("Linked session temporarily unavailable");
   });

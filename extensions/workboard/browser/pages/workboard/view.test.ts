@@ -1527,7 +1527,12 @@ describe("renderWorkboard", () => {
     expect(container.textContent).not.toContain("Invalid Date");
     buttonByLabel(container, "View details")!.click();
     renderView();
-    const details = expectDefined(container.querySelector(".workboard-detail"), "Details drawer");
+    buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
+    renderView();
+    const details = expectDefined(
+      container.querySelector("#workboard-detail-panel-details"),
+      "Details panel",
+    );
     expect(details.textContent).toContain("Attempt evidence survives invalid dates");
     expect(details.textContent).toContain("Proof evidence survives invalid dates");
     expect(details.textContent).not.toContain("Invalid Date");
@@ -1824,6 +1829,7 @@ describe("renderWorkboard", () => {
     });
     renderView();
 
+    expect(container.querySelector(".workboard-card")?.textContent).not.toContain("task linked");
     const status = expectDefined(
       container.querySelector<HTMLElement & { presentation: { label: string; detail: string } }>(
         "openclaw-workboard-session-status",
@@ -2018,7 +2024,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("Finished session");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
+    expect(container.querySelector("#workboard-detail-panel-overview")?.textContent).not.toContain(
       "Still running according to stale cache.",
     );
   });
@@ -2702,11 +2708,11 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Worker asked for owner input.",
     );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Automation");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Card automation");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("ops");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("review, test");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Workspace: worktree /tmp/workboard proof",
+      "worktree · /tmp/workboard · proof",
     );
   });
 
