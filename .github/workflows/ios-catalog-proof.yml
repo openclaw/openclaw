@@ -20,8 +20,6 @@ jobs:
     runs-on: blacksmith-12vcpu-macos-26
     timeout-minutes: 90
     env:
-      OPENCLAW_STATE_DIR: ${{ runner.temp }}/catalog-proof/state
-      OPENCLAW_CONFIG_PATH: ${{ runner.temp }}/catalog-proof/state/openclaw.json
       OPENCLAW_GATEWAY_PORT: "19876"
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
@@ -36,6 +34,8 @@ jobs:
       - name: Retain proof identity and overlay UI test
         run: |
           mkdir -p "$RUNNER_TEMP/catalog-proof/state"
+          echo "OPENCLAW_STATE_DIR=$RUNNER_TEMP/catalog-proof/state" >> "$GITHUB_ENV"
+          echo "OPENCLAW_CONFIG_PATH=$RUNNER_TEMP/catalog-proof/state/openclaw.json" >> "$GITHUB_ENV"
           git rev-parse HEAD > "$RUNNER_TEMP/catalog-proof/source-sha.txt"
           git -C proof-source rev-parse HEAD > "$RUNNER_TEMP/catalog-proof/harness-sha.txt"
           cp proof-source/apps/ios/UITests/ChatCatalogUITests.swift apps/ios/UITests/
