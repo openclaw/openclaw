@@ -977,6 +977,8 @@ describe("OpenClawTerminalPanel", () => {
     });
     panel.client = newClient;
     await panel.updateComplete;
+    // Reconnect restoration waits for the lazy service-worker refresh module.
+    await vi.dynamicImportSettled();
 
     await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");

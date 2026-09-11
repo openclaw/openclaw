@@ -160,6 +160,25 @@ describe("model-selection plugin runtime normalization", () => {
     }
   });
 
+  it("normalizes an unrestricted reply default before selecting it", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+    const cfg = { agents: { defaults: { modelPolicy: { allow: [] } } } };
+    const state = await createModelSelectionStateForTest({
+      cfg,
+      agentCfg: cfg.agents.defaults,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      provider: "custom-provider",
+      model: "custom-legacy-model",
+      hasModelDirective: false,
+    });
+
+    expect({ provider: state.provider, model: state.model }).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+  });
+
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
     // Stored session overrides are runtime inputs, so provider-owned
     // normalization keeps old persisted ids usable without resetting them.

@@ -27,8 +27,9 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { loadSettings } from "../../app/settings.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import {
   createTestGatewayClient,
@@ -201,24 +202,41 @@ export function createGatewayBrowserClientFixture(
   return client;
 }
 
-function withLivePreferences(
-  context: Omit<ApplicationContext, "theme" | "agentIdentity">,
+type FixtureContextServices = "theme" | "agentIdentity" | "agents" | "sessions";
+
+function withLiveCapabilities(
+  context: Omit<ApplicationContext, FixtureContextServices> & { sessions?: SessionCapability },
 ): ApplicationContext {
   const theme = createApplicationTheme(
     loadSettings(context.gateway.connection.gatewayUrl),
     context.gateway,
   );
-  onTestFinished(() => theme.dispose());
-  return { ...context, theme, agentIdentity: createAgentIdentityCapability(context.gateway) };
+  const agents = createAgentCapability(context.gateway);
+  const sessions =
+    context.sessions ?? createSessionCapability(context.gateway, context.agentSelection);
+  onTestFinished(() => {
+    if (!context.sessions) {
+      sessions.dispose();
+    }
+    agents.dispose();
+    theme.dispose();
+  });
+  return {
+    ...context,
+    theme,
+    agents,
+    sessions,
+    agentIdentity: createAgentIdentityCapability(context.gateway),
+  };
 }
 
-export function createInitializationContext(): ApplicationContext {
-  return withLivePreferences({
+export function createInitializationContext(client?: GatewayBrowserClient): ApplicationContext {
+  return withLiveCapabilities({
     basePath: "",
     gateway: {
       snapshot: {
-        client: null,
-        phase: "stopped",
+        client: client ?? null,
+        phase: client ? "connected" : "stopped",
         offlineStable: false,
         hello: null,
         canvasPluginSurfaceUrl: null,
@@ -252,8 +270,10 @@ export function createInitializationContext(): ApplicationContext {
         terminalEnabled: false,
       },
     },
-    agentSelection: { state: { selectedId: "main" } },
-    agents: { state: { agentsList: null } },
+    agentSelection: {
+      state: { selectedId: "main" },
+      subscribe: () => () => {},
+    },
     runtimeConfig: {
       state: { configNeedsApply: false, configSnapshot: null },
       subscribe: () => () => {},
@@ -268,8 +288,7 @@ export function createInitializationContext(): ApplicationContext {
     navigate: () => undefined,
     chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
-    sessions: { state: { modelOverrides: {} } },
-  } as unknown as Omit<ApplicationContext, "theme" | "agentIdentity">);
+  } as unknown as Omit<ApplicationContext, FixtureContextServices>);
 }
 
 export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
@@ -293,24 +312,35 @@ export function createSessionCapabilityFixture(
 
 export function createSessionContext(
   client: GatewayBrowserClient,
-  sessions: SessionCapability,
-): ApplicationContext {
+  sessions?: SessionCapability,
+): ApplicationContext & {
+  publishGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
+} {
   const eventListeners = new Set<GatewayEventListener>();
   const agentSelectionListeners = new Set<(state: { selectedId: string | null }) => void>();
   const agentSelectionState = { selectedId: "main" as string | null };
   const snapshotListeners = new Set<
     (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
   >();
-  return withLivePreferences({
+  let snapshot: ApplicationContext["gateway"]["snapshot"] = {
+    client,
+    phase: "connected",
+    offlineStable: false,
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "taskSuggestions.list",
+      "session.suggestions.list",
+    ]),
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "",
+    lastError: null,
+    lastErrorCode: null,
+  };
+  const context = withLiveCapabilities({
     gateway: {
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        hello: gatewayHelloForMethods([
-          ...SESSION_MUTATION_TEST_METHODS,
-          "taskSuggestions.list",
-          "session.suggestions.list",
-        ]),
+      get snapshot() {
+        return snapshot;
       },
       connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
       eventLog: [],
@@ -333,7 +363,6 @@ export function createSessionContext(
         }
       },
     },
-    agents: { state: { agentsList: null } },
     agentSelection: {
       state: agentSelectionState,
       set: (agentId: string | null) => {
@@ -358,13 +387,25 @@ export function createSessionContext(
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
     sessions,
-  } as unknown as Omit<ApplicationContext, "theme" | "agentIdentity">);
+  } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
+    sessions?: SessionCapability;
+  });
+  return {
+    ...context,
+    publishGatewaySnapshot(next) {
+      snapshot = next;
+      for (const listener of snapshotListeners) {
+        listener(next);
+      }
+    },
+  };
 }
 
 export function createTestChatPane(params: {
   client: GatewayBrowserClient;
-  sessions: SessionCapability;
+  sessions?: SessionCapability;
 }) {
+  const context = createSessionContext(params.client, params.sessions);
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
     configurable: true,
@@ -395,7 +436,7 @@ export function createTestChatPane(params: {
     modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
-    sessions: params.sessions,
+    sessions: context.sessions,
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
@@ -417,10 +458,32 @@ export function createTestChatPane(params: {
     state.sidebarFocusPanelId = panelId;
     state.sidebarFocusVersion += 1;
   };
-  pane.context = createSessionContext(params.client, params.sessions);
+  pane.context = context;
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  const applyGatewaySnapshot = pane.applyGatewaySnapshot.bind(pane);
+  let publishingSnapshot = false;
+  let paneReceivedSnapshot = false;
+  vi.spyOn(pane, "applyGatewaySnapshot").mockImplementation((snapshot) => {
+    if (publishingSnapshot) {
+      paneReceivedSnapshot = true;
+      applyGatewaySnapshot(snapshot);
+      return;
+    }
+    publishingSnapshot = true;
+    paneReceivedSnapshot = false;
+    try {
+      // Direct pane calls must notify capability owners first. A mounted pane's
+      // subscription already delivers the snapshot, so do not deliver it twice.
+      context.publishGatewaySnapshot(snapshot);
+      if (!paneReceivedSnapshot) {
+        applyGatewaySnapshot(snapshot);
+      }
+    } finally {
+      publishingSnapshot = false;
+    }
+  });
   onTestFinished(async () => {
     pane.disconnectedCallback();
     // Let lazy pane imports observe disconnect before Vitest removes their environment.
@@ -428,6 +491,7 @@ export function createTestChatPane(params: {
   });
   return {
     pane,
+    sessions: context.sessions,
     requestUpdate,
     state,
     emitGatewayEvent: (event: string, payload: unknown) => {

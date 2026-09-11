@@ -13,11 +13,20 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  captureBackupSqliteSourceGroup,
+  planBackupSqliteSourceGroups,
+  type BackupSqliteSourceGroup,
+} from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
+import {
+  isAppleDoubleMetadataFile,
+  resolveSqliteDatabaseFilePaths,
+  SQLITE_SIDECAR_SUFFIXES,
+} from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -120,10 +129,10 @@ export function classifyBackupSqliteSource(
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
-  if (transient) {
+  if (transient || !inventory.isIncluded(resolvedSourcePath)) {
     return "excluded";
   }
-  return inventory.isIncluded(resolvedSourcePath) ? "sqlite" : "excluded";
+  return isAppleDoubleMetadataFile(resolvedSourcePath) ? "excluded" : "sqlite";
 }
 
 async function discoverBackupSqliteSources(params: {
@@ -299,7 +308,11 @@ export async function createBackupSqliteSnapshotPlan(params: {
     });
   }
 
-  const snapshots: SqliteBackupAsset[] = [];
+  const sources: Array<{
+    archiveSourcePath: string;
+    identity: Stats;
+    canonicalSource: CanonicalSqliteSource | undefined;
+  }> = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     const archiveSourceIdentity = await fs.stat(archiveSourcePath);
     const exactCanonicalSource = canonicalSources.find(
@@ -325,41 +338,71 @@ export async function createBackupSqliteSnapshotPlan(params: {
       );
     }
     const canonicalSource = matchingCanonicalSources[0];
-    const sourceDatabasePath = canonicalSource?.sourcePath ?? archiveSourcePath;
+    sources.push({ archiveSourcePath, identity: archiveSourceIdentity, canonicalSource });
+  }
+  const genericGroups = await planBackupSqliteSourceGroups(
+    sources
+      .filter((source) => !source.canonicalSource)
+      .map((source) => ({ path: source.archiveSourcePath, identity: source.identity })),
+  );
+  const capturedGroups = new Map<BackupSqliteSourceGroup, string>();
+  const snapshots: SqliteBackupAsset[] = [];
+  for (const { archiveSourcePath, canonicalSource } of sources) {
+    if (
+      canonicalSource &&
+      !sameFileIdentity(canonicalSource.identity, await fs.stat(archiveSourcePath))
+    ) {
+      throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+    }
+    const genericGroup = genericGroups.get(archiveSourcePath);
+    const sourceDatabasePath =
+      canonicalSource?.sourcePath ?? genericGroup?.sourcePath ?? archiveSourcePath;
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
-      await createVerifiedSqliteSnapshot({
-        sourcePath: sourceDatabasePath,
-        targetPath: sourcePath,
-        requireNonEmptySource: Boolean(canonicalSource),
-        validate:
-          canonicalSource?.role === "global"
-            ? (database, pathname) => assertOpenClawStateDatabaseOwner(database, { pathname })
-            : canonicalSource?.role === "agent"
-              ? (database, pathname) =>
-                  assertOpenClawAgentDatabaseOwner(database, {
-                    agentId: canonicalSource.agentId,
-                    pathname,
-                  })
-              : undefined,
-        transform:
-          canonicalSource?.role === "global"
-            ? (database) => {
-                if (
-                  params.legacyAuditDatabaseWitness !== undefined &&
-                  createLegacyAuditDatabaseWitness(database) !== params.legacyAuditDatabaseWitness
-                ) {
-                  throw new LegacyAuditBackupStateChangedError(
-                    "Legacy audit database rows changed during SQLite backup",
-                  );
+      const capture = () =>
+        createVerifiedSqliteSnapshot({
+          sourcePath: sourceDatabasePath,
+          targetPath: sourcePath,
+          requireNonEmptySource: Boolean(canonicalSource),
+          validate:
+            canonicalSource?.role === "global"
+              ? (database, pathname) => assertOpenClawStateDatabaseOwner(database, { pathname })
+              : canonicalSource?.role === "agent"
+                ? (database, pathname) =>
+                    assertOpenClawAgentDatabaseOwner(database, {
+                      agentId: canonicalSource.agentId,
+                      pathname,
+                    })
+                : undefined,
+          transform:
+            canonicalSource?.role === "global"
+              ? (database) => {
+                  if (
+                    params.legacyAuditDatabaseWitness !== undefined &&
+                    createLegacyAuditDatabaseWitness(database) !== params.legacyAuditDatabaseWitness
+                  ) {
+                    throw new LegacyAuditBackupStateChangedError(
+                      "Legacy audit database rows changed during SQLite backup",
+                    );
+                  }
+                  sanitizeOpenClawGlobalStateSnapshot(database);
+                  rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
                 }
-                sanitizeOpenClawGlobalStateSnapshot(database);
-                rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
-              }
-            : canonicalSource?.role === "agent"
-              ? sanitizeOpenClawStateLeaseRows
-              : undefined,
-      });
+              : canonicalSource?.role === "agent"
+                ? sanitizeOpenClawStateLeaseRows
+                : undefined,
+        });
+      const capturedPath = genericGroup && capturedGroups.get(genericGroup);
+      if (capturedPath) {
+        // Each archive name needs its own staged path; the remap owner keys by
+        // staged path. Copy only the already verified, compacted private image.
+        await fs.copyFile(capturedPath, sourcePath, fs.constants.COPYFILE_EXCL);
+      } else if (genericGroup) {
+        await captureBackupSqliteSourceGroup(genericGroup, capture);
+        capturedGroups.set(genericGroup, sourcePath);
+      } else {
+        await capture();
+      }
     } catch (error) {
       const stateChange = findLegacyAuditBackupStateChange(error);
       if (stateChange) {

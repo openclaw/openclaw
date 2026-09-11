@@ -105,6 +105,10 @@ const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿|必須|務必|一律|紅線)/iu;
+const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
 
 type TrimBootstrapResult = {
   content: string;
@@ -120,31 +124,36 @@ type PolicyDigest = {
   omittedLines: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+function resolveBootstrapCharLimit(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | null | undefined,
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  fallback: number,
+): number {
   const raw =
     cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapMaxChars ??
-        cfg.agents?.defaults?.bootstrapMaxChars)
-      : cfg?.agents?.defaults?.bootstrapMaxChars;
+      ? (resolveAgentConfig(cfg, agentId)?.[key] ?? cfg.agents?.defaults?.[key])
+      : cfg?.agents?.defaults?.[key];
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
-  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+  return fallback;
+}
+
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "bootstrapMaxChars", DEFAULT_BOOTSTRAP_MAX_CHARS);
 }
 
 export function resolveBootstrapTotalMaxChars(
   cfg?: OpenClawConfig,
   agentId?: string | null,
 ): number {
-  const raw =
-    cfg && agentId
-      ? (resolveAgentConfig(cfg, agentId)?.bootstrapTotalMaxChars ??
-        cfg.agents?.defaults?.bootstrapTotalMaxChars)
-      : cfg?.agents?.defaults?.bootstrapTotalMaxChars;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+  return resolveBootstrapCharLimit(
+    cfg,
+    agentId,
+    "bootstrapTotalMaxChars",
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  );
 }
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {
@@ -159,9 +168,7 @@ function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
   }
-  return /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b/iu.test(
-    line,
-  );
+  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -218,8 +225,6 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
   // Budget refinement reselects these distinct source-ordered lines without reparsing them.
   const candidates: PolicyDigestCandidate[] = [];
   if (!(digestBudget <= 0)) {
-    const highPriorityPattern =
-      /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b/iu;
     let lastProseLine: string | null = null;
     for (const sourceLine of trimmed.split(/\r?\n/u)) {
       const line = normalizePolicyDigestLine(sourceLine);
@@ -234,7 +239,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
         candidates.push({
           // Select framing and its candidate as one indivisible text unit.
           text: lastProseLine === null ? line : `${lastProseLine}\n${line}`,
-          highPriority: highPriorityPattern.test(line),
+          highPriority: AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN.test(line),
         });
         lastProseLine = null;
       } else {

@@ -40,6 +40,7 @@ function createStressReviewer(params: {
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
+    release: () => {},
   }));
   const complete = vi.fn(params.complete);
   const reviewer = createModelExecAutoReviewer({
@@ -47,8 +48,8 @@ function createStressReviewer(params: {
     signal: params.signal,
     ...(params.timeoutMs === undefined ? {} : { reviewer: { timeoutMs: params.timeoutMs } }),
     deps: {
-      prepareSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      acquireSimpleCompletionModelForAgent:
+        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
       completeWithPreparedSimpleCompletionModel:
         complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
     },
@@ -737,6 +738,7 @@ describe("exec auto-review concurrency stress", () => {
           selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
           model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
           auth: { apiKey: "redacted", mode: "env" as const },
+          release: () => {},
         };
       });
       const complete = vi.fn(async () => {
@@ -755,8 +757,8 @@ describe("exec auto-review concurrency stress", () => {
       const reviewer = createModelExecAutoReviewer({
         cfg: {},
         deps: {
-          prepareSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel:
             complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
         },

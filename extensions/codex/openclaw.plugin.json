@@ -1,5 +1,9 @@
 {
   "id": "codex",
+  "categories": ["agent-runtimes"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "backupResources": [
     {
       "disposition": "regenerable",

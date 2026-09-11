@@ -159,6 +159,121 @@ module.exports = { stateMigrations: [{
   expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["kept-owner"]);
 });
 
+it("keeps supported discovery and execution order stable when a configured alias is removed", async () => {
+  const root = await tempDirs.make("openclaw-doctor-order-discovery-");
+  const stateDir = path.join(root, "state");
+  const bundledRoot = path.join(root, "bundled");
+  const markerPaths = {
+    acpx: path.join(stateDir, "acpx-migrated"),
+    codex: path.join(stateDir, "codex-migrated"),
+  };
+  const writePlugin = (pluginRoot: string, pluginId: "acpx" | "codex", markerPath: string) => {
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const actionId = `${pluginId}-session-action`;
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: `@test/${pluginId}`,
+        version: "0.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: {},
+        doctorContract: {
+          stateMigrations: [{ id: actionId, doctorOnly: true, phase: "after-session-repair" }],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      `const fs = require("node:fs");
+module.exports = { stateMigrations: [{
+  id: ${JSON.stringify(actionId)},
+  label: ${JSON.stringify(`${pluginId} session action`)},
+  phase: "after-session-repair",
+  doctorOnly: true,
+  detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
+  migrateLegacyState: () => {
+    fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });
+    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
+    return { changes: [${JSON.stringify(`migrated ${pluginId}`)}], warnings: [] };
+  },
+}] };\n`,
+    );
+  };
+  writePlugin(path.join(bundledRoot, "acpx"), "acpx", markerPaths.acpx);
+  writePlugin(path.join(bundledRoot, "codex"), "codex", markerPaths.codex);
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  const baseConfig: OpenClawConfig = {
+    plugins: { entries: { acpx: { enabled: true }, codex: { enabled: true } } },
+  };
+  const aliasConfig: OpenClawConfig = {
+    ...baseConfig,
+    plugins: {
+      ...baseConfig.plugins,
+      // Model the supported configured-alias path directly to the bundled artifact.
+      load: { paths: [path.join(bundledRoot, "codex")] },
+    },
+  };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+  };
+
+  const frozenActions = resolveLivePluginDoctorStateMigrationInventory({
+    config: aliasConfig,
+    env,
+  }).descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
+  expect(frozenActions).toEqual([
+    { pluginId: "acpx", id: "acpx-session-action" },
+    { pluginId: "codex", id: "codex-session-action" },
+  ]);
+
+  const afterAliasRemoval = resolveLivePluginDoctorStateMigrationInventory({
+    config: baseConfig,
+    env,
+  }).descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
+  expect(afterAliasRemoval).toEqual(frozenActions);
+
+  const runRepair = (config: OpenClawConfig, plannedActions: typeof frozenActions) =>
+    withDoctorSqliteMaintenanceLock({
+      env,
+      operation: "plugin doctor order",
+      run: (maintenanceAuthority) =>
+        runPostSessionPluginDoctorStateRepairs({
+          config,
+          env,
+          maintenanceAuthority,
+          plannedActions,
+        }),
+    });
+  const refused = await runRepair(baseConfig, frozenActions.toReversed());
+  expect(refused).toEqual({
+    changes: [],
+    warnings: [expect.stringContaining("immutable action order")],
+  });
+
+  await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
+    changes: ["migrated acpx", "migrated codex"],
+    warnings: [],
+  });
+  expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
+  expect(fs.readFileSync(markerPaths.codex, "utf8")).toBe("migrated");
+});
+
 it.each([
   "readable",
   "staging-unavailable",

@@ -13,20 +13,6 @@ import { setupWizardShellCompletion } from "./setup.completion.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function withLocale(locale: string, run: () => Promise<void>): Promise<void> {
-  const previousLocale = process.env.OPENCLAW_LOCALE;
-  process.env.OPENCLAW_LOCALE = locale;
-  try {
-    await run();
-  } finally {
-    if (previousLocale === undefined) {
-      delete process.env.OPENCLAW_LOCALE;
-    } else {
-      process.env.OPENCLAW_LOCALE = previousLocale;
-    }
-  }
-}
-
 function createPrompter(confirmValue = false) {
   return {
     confirm: vi.fn(async () => confirmValue),
@@ -100,7 +86,7 @@ describe("setupWizardShellCompletion", () => {
     ])(
       "offers session recovery when $description fails",
       async ({ profileInstalled, usesSlowPattern }) => {
-        await withLocale(locale, async () => {
+        await withEnvAsync({ OPENCLAW_LOCALE: locale }, async () => {
           const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
           const prompter = createPrompter();
           const deps = createDeps();
@@ -190,7 +176,7 @@ describe("setupWizardShellCompletion", () => {
   );
 
   it("localizes advanced prompts and install notes", async () => {
-    await withLocale("zh-CN", async () => {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       const prompter = createPrompter(true);
       const deps = createDeps();
 
@@ -271,9 +257,7 @@ describe("setupWizardShellCompletion", () => {
   });
 
   it("shows a concrete PowerShell profile reload command after setup", async () => {
-    const previousHome = process.env.HOME;
-    process.env.HOME = "/Users/ada";
-    try {
+    await withEnvAsync({ HOME: "/Users/ada" }, async () => {
       const prompter = createPrompter();
       const deps = createDeps("powershell");
 
@@ -284,12 +268,6 @@ describe("setupWizardShellCompletion", () => {
         "Shell completion installed. Restart your shell or run: . '/Users/ada/.config/powershell/Microsoft.PowerShell_profile.ps1'",
         "Shell completion",
       );
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-    }
+    });
   });
 });

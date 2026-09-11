@@ -43,7 +43,9 @@ instead of the broad `config-runtime` compatibility barrel.
 `openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
 `openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
 are deprecated compatibility shims for older plugins. New code should import
-narrower generic primitives instead.
+narrower generic primitives instead. The compatibility registry records a
+`removeAfter` date of 2026-10-01 for the `config-runtime`, `infra-runtime`,
+and `channel-lifecycle` subpaths.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -59,7 +61,7 @@ Facade-loaded entry points prefer the active runtime config snapshot when one
 exists, then fall back to the resolved config file on disk.
 
 Capability-specific subpaths such as `image-generation`, `media-understanding`,
-and `speech` exist because bundled plugins use them today. They are not
+and `speech` exist because bundled plugins import them. They are not
 automatically long-term frozen external contracts — check the relevant SDK
 reference page when relying on them.
 

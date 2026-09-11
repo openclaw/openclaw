@@ -11,7 +11,13 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 describe("subscribeEmbeddedAgentSession reply tags", () => {
-  type ReplyPayload = { text?: string; replyToCurrent?: boolean; replyToTag?: boolean };
+  type ReplyPayload = {
+    text?: string;
+    replyToId?: string;
+    replyToCurrent?: boolean;
+    replyToTag?: boolean;
+    audioAsVoice?: boolean;
+  };
 
   function replyPayloadAt(mock: ReturnType<typeof vi.fn>, index: number): ReplyPayload {
     const call = mock.mock.calls[index];
@@ -49,6 +55,79 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
 
     return { emit, onBlockReply, subscription };
   }
+
+  it.each([
+    {
+      name: "split inline code",
+      chunks: ["Use `", "[[reply_to:example-id]]` literally.\n\n"],
+      text: "Use `[[reply_to:example-id]]` literally.",
+      replyToId: undefined,
+    },
+    {
+      name: "inline code split by block chunking",
+      chunks: ["Use `" + "x".repeat(60), "[[reply_to:example-id]]` literally.\n\n"],
+      literal: "[[reply_to:example-id]]",
+      replyToId: undefined,
+    },
+    {
+      name: "complete inline code",
+      chunks: ["Use `[[reply_to:example-id]]` literally.\n\n"],
+      text: "Use `[[reply_to:example-id]]` literally.",
+      replyToId: undefined,
+    },
+    {
+      name: "a reply directive outside code",
+      chunks: ["[[reply_to:example-id]]", "Visible reply.\n\n"],
+      text: "Visible reply.",
+      replyToId: "example-id",
+    },
+    {
+      name: "a voice directive followed by ordinary blocks",
+      chunks: [
+        "[[audio_as_voice]]Hello.\n\n",
+        "An ordinary paragraph is long enough to drain the earlier voice block.\n\n",
+      ],
+      text: "Hello.",
+      audioAsVoice: true,
+      replyToId: undefined,
+    },
+  ])("delivers $name before text_end with matching reply metadata", async (scenario) => {
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness();
+    const message = { role: "assistant", phase: "final_answer", content: [] };
+
+    emit({ type: "message_start", message });
+    for (const delta of [
+      ...scenario.chunks,
+      "A second paragraph gives the first completed block enough text to drain.",
+    ]) {
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
+      });
+    }
+    await subscription.waitForPendingEvents();
+
+    const payload = replyPayloadAt(onBlockReply, 0);
+    if (scenario.text) {
+      expect(payload.text).toBe(scenario.text);
+    }
+    if (scenario.literal) {
+      expect(replyTexts(onBlockReply).join("")).toContain(scenario.literal);
+    }
+    expect(payload.replyToId).toBe(scenario.replyToId);
+    expect(Boolean(payload.replyToTag)).toBe(Boolean(scenario.replyToId));
+    expect(payload.replyToCurrent).toBeFalsy();
+    expect(Boolean(payload.audioAsVoice)).toBe(Boolean(scenario.audioAsVoice));
+    for (const [later] of onBlockReply.mock.calls.slice(1)) {
+      expect(later.audioAsVoice).toBeFalsy();
+      if (!scenario.replyToId) {
+        expect(later.replyToId).toBeUndefined();
+        expect(later.replyToTag).toBeFalsy();
+        expect(later.replyToCurrent).toBeFalsy();
+      }
+    }
+  });
 
   it("carries reply_to_current across tag-only block chunks", () => {
     const { emit, onBlockReply } = createBlockReplyHarness();
@@ -182,23 +261,48 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     }
   });
 
-  it("strips a malformed reply prefix from the final block reply", async () => {
+  it.each([
+    {
+      name: "a split malformed prefix",
+      chunks: ["[[reply_to_", "current] Visible reply"],
+      source: "[[reply_to_current] Visible reply",
+      text: "Visible reply",
+      replyToId: undefined,
+    },
+    {
+      name: "a genuine tag without streamed deltas",
+      chunks: [],
+      source: "[[reply_to:target]] Visible reply",
+      text: "Visible reply",
+      replyToId: "target",
+    },
+    {
+      name: "a literal tag without streamed deltas",
+      chunks: [],
+      source: "Use `[[reply_to:target]]` literally.",
+      text: "Use `[[reply_to:target]]` literally.",
+      replyToId: undefined,
+    },
+  ])("prepares the final block reply for $name", async (scenario) => {
     const { emit, onBlockReply, subscription } = createBlockReplyHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
-    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
-    emitAssistantTextEnd({ emit });
+    for (const delta of scenario.chunks) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+    if (scenario.chunks.length > 0) {
+      emitAssistantTextEnd({ emit });
+    }
 
-    const assistantMessage = textAssistant("[[reply_to_current] Visible reply") as AssistantMessage;
+    const assistantMessage = textAssistant(scenario.source) as AssistantMessage;
     emit({ type: "message_end", message: assistantMessage });
     await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = replyPayloadAt(onBlockReply, 0);
-    expect(payload.text).toBe("Visible reply");
+    expect(payload.text).toBe(scenario.text);
+    expect(payload.replyToId).toBe(scenario.replyToId);
     expect(payload.replyToCurrent).toBeFalsy();
-    expect(payload.replyToTag).toBeFalsy();
-    expect(payload.text).not.toContain("[[reply_to");
+    expect(Boolean(payload.replyToTag)).toBe(Boolean(scenario.replyToId));
   });
 });

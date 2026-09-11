@@ -27,6 +27,9 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+`openclaw sessions list` is an explicit spelling of the default listing action and
+accepts the same flags.
+
 Human-readable lists and cleanup previews use terminal-width tables. Long model
 names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
@@ -150,8 +153,17 @@ with transcript cleanup enabled. The Gateway removes the live session row,
 transcript generations, session-owned runtime state, bindings, boards, and
 other lifecycle artifacts. For ordinary sessions it retains the transcript as
 a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
-removed without an archive. If a managed worktree cannot be removed safely,
-the command reports the preserved branch and path for manual cleanup.
+removed without an archive. Retained deleted-session archives can remain
+eligible for memory search. To remove indexed memories, run
+`openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway
+host or container using that Gateway's state and configuration. Select the agent
+that owned the deleted session, including for `global` keys. Memory cleanup runs
+locally; deleting through `--url` or a configured remote Gateway does not forward
+the cleanup command to that Gateway. See [Memory forget](/cli/memory#memory-forget)
+for preview and deletion details.
+
+If a managed worktree cannot be removed safely, the command reports the preserved
+branch and path for manual cleanup.
 
 Both lifecycle commands:
 
@@ -320,7 +332,7 @@ check filesystem permissions and retry after resolving the deletion failure.
   "stores": [
     {
       "agentId": "main",
-      "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite",
       "beforeCount": 120,
       "afterCount": 80,
       "missing": 0,
@@ -330,7 +342,7 @@ check filesystem permissions and retry after resolving the deletion failure.
     },
     {
       "agentId": "work",
-      "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite",
       "beforeCount": 18,
       "afterCount": 18,
       "missing": 0,
@@ -412,3 +424,5 @@ Example truncate response (`--max-lines 200`):
 - [Session management](/concepts/session)
 - [Compaction](/concepts/compaction)
 - [CLI reference](/cli)
+- [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
+- [Cloud Workers](/gateway/cloud-workers) — sessions hosted on remote workers

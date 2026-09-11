@@ -2823,12 +2823,6 @@ button.chat-pr__diff {
     height: 16px;
     flex-basis: 16px;
   }
-
-  .agent-chat__input--chat .chat-controls__permission-icon svg,
-  .agent-chat__input--chat .chat-controls__permission-lock svg {
-    width: 100%;
-    height: 100%;
-  }
 }
 @media (max-width: 560px) {
   .agent-chat__input--chat .chat-mobile-primary-action {

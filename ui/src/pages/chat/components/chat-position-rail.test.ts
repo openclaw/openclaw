@@ -44,7 +44,11 @@ describe("conversation position rail", () => {
       key: `row-${index}`,
       content: html`<div>${index}</div>`,
     }));
-    const { container, session } = await mountTestTranscript("rail-notification", rows, transcript);
+    const { container, session, renderRows } = await mountTestTranscript(
+      "rail-notification",
+      rows,
+      transcript,
+    );
     try {
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
@@ -54,7 +58,11 @@ describe("conversation position rail", () => {
         observer.emitTarget(container, 800, 600);
       }
       const ids = rows.map((row) => row.key);
-      session.syncMessageRows(new Map(ids.map((id) => [id, id])));
+      session.syncMessageRows(
+        new Map(ids.map((id) => [id, id])),
+        new Map(ids.map((id) => [id, id])),
+      );
+      renderRows(rows);
       const currentId = () => session.activeMessageId(["row-2", "row-3"]);
       container.scrollTop = 50;
       container.dispatchEvent(new Event("scroll"));
@@ -99,7 +107,10 @@ describe("conversation position rail", () => {
       key: `row-${index}`,
       content: html`<div>${index}</div>`,
     }));
-    const { container, transcript, session } = await mountTestTranscript("rail-offset", rows);
+    const { container, transcript, session, renderRows } = await mountTestTranscript(
+      "rail-offset",
+      rows,
+    );
     try {
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
@@ -110,7 +121,11 @@ describe("conversation position rail", () => {
         observer.emitTarget(container, 800, 600);
       }
       const ids = rows.map((row) => row.key);
-      session.syncMessageRows(new Map(ids.map((id) => [id, id])));
+      session.syncMessageRows(
+        new Map(ids.map((id) => [id, id])),
+        new Map(ids.map((id) => [id, id])),
+      );
+      renderRows(rows);
       // No scroll event or render between these queries: mounted rows are stale.
       container.scrollTop = 100;
       expect(session.activeMessageId(ids)).toBe("row-2");
@@ -229,39 +244,56 @@ describe("conversation position rail", () => {
     }
   });
 
-  it.each(["user", "assistant"])("renders safe Markdown in %s previews", (role) => {
-    const messages = [
-      message(
-        "formatted",
-        role,
-        "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
-        1,
-      ),
-      message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
-    ];
-    const props = threadProps("rail-markdown", "agent:main:markdown", messages);
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    };
-    props.onRequestUpdate = rerender;
-    try {
-      rerender();
-      transcript.hostConnected();
-      container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
-      const preview = container.querySelector(".chat-position-rail__preview-copy")!;
-      expect(preview.querySelector("strong")?.textContent).toBe("Important");
-      expect(preview.querySelector("em")?.textContent).toBe("detail");
-      expect(preview.querySelector("code")?.textContent).toBe("code");
-      expect(preview.querySelector("li a")?.textContent).toBe("Guide");
-      expect(preview.querySelector("script")).toBeNull();
-      expect(preview.closest("[inert]")).not.toBeNull();
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
+  it.each([
+    { role: "user", senderName: undefined, label: "User message" },
+    { role: "user", senderName: "Alice Example", label: "Alice Example" },
+    { role: "assistant", senderName: "Alice Example", label: "Assistant message" },
+  ])(
+    "renders safe Markdown and attribution in $role previews ($label)",
+    ({ role, senderName, label }) => {
+      const messages = [
+        message(
+          "formatted",
+          role,
+          "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
+          1,
+        ),
+        message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
+      ];
+      Object.assign(messages[0]!["__openclaw"], { senderName });
+      const props = threadProps("rail-markdown", "agent:main:markdown", messages);
+      props.userName = "Local Viewer";
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      props.onRequestUpdate = rerender;
+      try {
+        rerender();
+        transcript.hostConnected();
+        container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+        const preview = container.querySelector(".chat-position-rail__preview-copy")!;
+        expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
+          label,
+        );
+        const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
+        expect(avatar?.getAttribute("aria-label") ?? null).toBe(
+          role === "user" ? (senderName ?? null) : null,
+        );
+        expect(preview.querySelector("strong")?.textContent).toBe("Important");
+        expect(preview.querySelector("em")?.textContent).toBe("detail");
+        expect(preview.querySelector("code")?.textContent).toBe("code");
+        expect(preview.querySelector("li a")?.textContent).toBe("Guide");
+        expect(preview.querySelector("script")).toBeNull();
+        expect(preview.closest("[inert]")).not.toBeNull();
+      } finally {
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("uses the visible completed answer and keeps attachment-only user landmarks", () => {
     const messages = [
@@ -291,7 +323,7 @@ describe("conversation position rail", () => {
     transcript.hostDisconnected();
   });
 
-  it("does not target a final-answer action owner folded behind dashboard work", () => {
+  it("targets the visible final answer before later dashboard commentary and tools", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),
       { ...message("final", "assistant", "Design ready", 2, "run-1"), phase: "final_answer" },
@@ -322,7 +354,7 @@ describe("conversation position rail", () => {
       landmarks = projectChatTranscript(props, session).positionMessages;
       return html``;
     });
-    expect(landmarks).toEqual([messages[0], messages[3]]);
+    expect(landmarks).toEqual([messages[0], messages[1]]);
     transcript.hostDisconnected();
   });
 });

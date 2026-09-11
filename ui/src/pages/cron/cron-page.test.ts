@@ -126,7 +126,7 @@ describe("CronPage editor state sync", () => {
       jobs.resolve(inventory);
 
       await waitForCronPage(() => {
-        expect(page.cron.cronEditingJobId).toBe(job.id);
+        expect(page.cron.cronEditingJob?.id).toBe(job.id);
         expect(
           page
             .querySelector('[data-test-id="cron-detail-tab-history"]')
@@ -181,7 +181,7 @@ describe("CronPage editor state sync", () => {
     }
     const expectedJobId =
       action === "selecting another job" || action === "opening another link" ? selected.id : null;
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(expectedJobId));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id ?? null).toBe(expectedJobId));
     pending.resolve(linked);
     // Drain the held response and its page update before checking the user's selection.
     await pending.promise;
@@ -189,7 +189,7 @@ describe("CronPage editor state sync", () => {
       setTimeout(resolve, 0);
     });
     await page.updateComplete;
-    expect(page.cron.cronEditingJobId).toBe(expectedJobId);
+    expect(page.cron.cronEditingJob?.id ?? null).toBe(expectedJobId);
     expect(page.cron.cronError).toBeNull();
   });
 
@@ -206,7 +206,7 @@ describe("CronPage editor state sync", () => {
     page.routeSearch = "?job=removed-job";
 
     await waitForCronPage(() => expect(page.textContent).toContain("Automation no longer exists"));
-    expect(page.cron.cronEditingJobId).toBeNull();
+    expect(page.cron.cronEditingJob).toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(1);
   });
 
@@ -245,7 +245,7 @@ describe("CronPage editor state sync", () => {
       }
       await waitForCronPage(() =>
         expect(
-          destination === "a new task" ? page.cron.cronCreateOpen : page.cron.cronEditingJobId,
+          destination === "a new task" ? page.cron.cronCreateOpen : page.cron.cronEditingJob?.id,
         ).toBe(destination === "a new task" ? true : job.id),
       );
       expect(page.cron.cronError).toBeNull();
@@ -382,7 +382,7 @@ describe("CronPage editor state sync", () => {
       expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).not.toBeNull(),
     );
     (page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]') as HTMLElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(staleJob.id));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
     page.cron.cronJobsQuery = "missing from filtered results";
     page.requestUpdate();
@@ -393,7 +393,7 @@ describe("CronPage editor state sync", () => {
     (page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement).click();
 
     await waitForCronPage(() =>
-      expect(page.cron.cronEditingConfigRevision).toBe("revision-current"),
+      expect(page.cron.cronEditingJob?.configRevision).toBe("revision-current"),
     );
     expect(page.cron.cronEditingJob).toEqual(authoritativeJob);
     expect(request).toHaveBeenCalledWith(
@@ -413,8 +413,7 @@ describe("CronPage editor state sync", () => {
     expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
 
     (page.querySelector('[data-test-id="cron-back"]') as HTMLButtonElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
-    expect(page.cron.cronEditingJob).toBeNull();
+    await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
     expect(page.querySelector('[data-test-id="cron-row-filtered-conflict-job"]')).toBeNull();
   });
 
@@ -698,7 +697,7 @@ describe("CronPage editor state sync", () => {
 
     await waitForCronPage(() => expect(page.querySelector(".cron-table__row")).not.toBeNull());
     (page.querySelector(".cron-table__row") as HTMLElement).click();
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe("job-1"));
+    await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe("job-1"));
     expect(page.cron.cronRunsScope).toBe("job");
     expect(page.cron.cronForm.enabled).toBe(true);
 
@@ -731,7 +730,7 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(findConfirmButton()).toBeDefined());
     findConfirmButton()?.click();
     await removeRequested.promise;
-    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
+    await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));
   });
 

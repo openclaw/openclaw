@@ -345,3 +345,25 @@ export function installAcpSessionManagerTestLifecycle(): void {
     resetAcpManagerTaskStateForTests();
   });
 }
+
+export function installMutableAcpSessionMetaUpsert(state: {
+  currentMeta: SessionAcpMeta | undefined;
+}): void {
+  hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      mutate: (
+        current: SessionAcpMeta | undefined,
+        entry: { acp?: SessionAcpMeta } | undefined,
+      ) => SessionAcpMeta | null | undefined;
+    };
+    const next = params.mutate(state.currentMeta, { acp: state.currentMeta });
+    if (next) {
+      state.currentMeta = next;
+    }
+    return {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      acp: state.currentMeta,
+    };
+  });
+}

@@ -2654,6 +2654,7 @@ describe("grouped chat rendering", () => {
       HTMLAnchorElement,
     );
     expect(chip.textContent).toBe(chipText);
+    expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
     expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
     const attributionText =
       container

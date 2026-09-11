@@ -8,7 +8,7 @@ import {
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { isChatControlCommand, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
@@ -195,7 +195,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => void props.onSend(),
-    canRun: (inline) => state.slashCommandDispatchConnected && !(inline && !props.onSlashCommand),
+    canRun: (inline, command) =>
+      state.slashCommandDispatchConnected &&
+      !(inline && !props.onSlashCommand) &&
+      (!props.submitDisabledReason ||
+        isChatControlCommand(command ? `/${command.name}` : skillMenuHost.getDraft())),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),
@@ -303,6 +307,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
     canCompose &&
+    (!props.submitDisabledReason || (!goalComposer.active && isChatControlCommand(draft))) &&
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
     state.dictation?.locksComposer !== true &&
@@ -480,6 +485,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
   const startRealtimeTalk = () => {
+    if (props.submitDisabledReason) {
+      return;
+    }
     if (devicePicker.realtimeStatus !== "ready") {
       devicePicker.handleOpen();
       return;
@@ -586,6 +594,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       // A new dictation gesture retires an earlier Talk recovery offer before
       // either can acquire another microphone, including queued button clicks.
       if (state.dictation?.locksComposer) {
+        state.editRevision += 1;
         props.onDismissRealtimeTalkError?.();
       }
       requestUpdate();
@@ -627,6 +636,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
+    submitDisabledReason: props.submitDisabledReason,
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),

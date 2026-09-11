@@ -39,7 +39,7 @@ import {
 } from "./doctor-state-integrity.test-support.js";
 
 const WORKSPACE_BACKUP_TIP =
-  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 
 describe("workspace backup tip", () => {
   it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
@@ -274,7 +274,24 @@ describe("structured state integrity findings", () => {
         }
         return accessSync(target, mode);
       });
+      const readFileSync = fs.readFileSync;
+      const mountInfo = vi.spyOn(fs, "readFileSync");
       try {
+        // Source isolation is independent of the temporary directory's backing filesystem.
+        mountInfo.mockImplementation(
+          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+            if (typeof options === "string") {
+              if (target === "/proc/self/mountinfo" && options === "utf8") {
+                return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+              }
+              return readFileSync(target, options);
+            }
+            if (options == null) {
+              return readFileSync(target, options);
+            }
+            return readFileSync(target, options);
+          },
+        );
         const issues = detectStateIntegrityHealthIssues(
           withMainAgentRoster({ session: { store } }),
           { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
@@ -287,6 +304,7 @@ describe("structured state integrity findings", () => {
           }),
         ]);
       } finally {
+        mountInfo.mockRestore();
         accessSpy.mockRestore();
       }
     },
@@ -434,6 +452,20 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText({
       agents: {
         list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
+  it("ignores reserved system agent dirs that can never appear in agents.list", async () => {
+    createAgentDir("openclaw");
+    createAgentDir("crestodian");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
       },
     });
 

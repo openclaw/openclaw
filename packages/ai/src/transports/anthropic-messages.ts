@@ -16,6 +16,7 @@ import {
 } from "../internal/anthropic-inline-images.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
+  bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
@@ -136,9 +137,13 @@ export async function convertAnthropicMessages(
     replayThinkingEnabled?: boolean;
     allowEmptySignature?: boolean;
     profile: "provider" | "transport";
+    /** Emitted indexes of transient carriers that cannot anchor the cached prefix. */
+    cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
+  // Cache eligibility follows the same model contract as session context retention.
+  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -154,6 +159,9 @@ export async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+            options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
+          }
           const userParam: AnthropicWireMessage = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
@@ -194,6 +202,9 @@ export async function convertAnthropicMessages(
       );
       if (filteredBlocks.length === 0) {
         continue;
+      }
+      if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+        options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
         role: "user",

@@ -60,6 +60,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
   </Step>
   <Step title="Restart the Gateway">
     The HTTP route is registered at plugin startup, so reload after enabling.
+
+    ```bash
+    openclaw gateway restart
+    ```
+
   </Step>
   <Step title="Scrape the protected route">
     Send the same gateway auth your operator clients use:
@@ -299,7 +304,7 @@ histogram_quantile(
   sum by (le, method) (rate(openclaw_gateway_rpc_queue_wait_seconds_bucket[5m]))
 )
 
-# Tokens per minute, split by provider
+# Tokens per second, split by provider
 sum by (provider) (rate(openclaw_model_tokens_total[1m]))
 
 # Spend (USD) over the last hour, by model

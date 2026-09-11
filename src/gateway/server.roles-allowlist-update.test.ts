@@ -1,5 +1,6 @@
 // Role allowlist update tests cover operator-driven gateway updates, node lists,
 // device/node pairing state, restart sentinels, and runtime plugin visibility.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,14 @@ import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  isOpenClawStateDatabaseOpen,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -23,6 +31,57 @@ import {
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+
+const readonlyPreparation = vi.hoisted(() => ({
+  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
+  turns: [] as Promise<void>[],
+}));
+
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
+  const observe = (pathname: string) => {
+    let progressed = false;
+    readonlyPreparation.turns.push(
+      new Promise<void>((resolve) => {
+        setImmediate(() => {
+          progressed = true;
+          resolve();
+        });
+      }),
+    );
+    return (prepared?: { location: string }) =>
+      readonlyPreparation.prepared.push({
+        pathname,
+        location: prepared?.location,
+        progressed,
+      });
+  };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync(pathname: string) {
+      const finish = observe(pathname);
+      let prepared: ReturnType<typeof actual.prepareSqliteReadOnlyLocationSync> | undefined;
+      try {
+        prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+    async prepareSqliteReadOnlyLocation(
+      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
+    ) {
+      const finish = observe(args[0]);
+      let prepared: Awaited<ReturnType<typeof actual.prepareSqliteReadOnlyLocation>> | undefined;
+      try {
+        prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+  };
+});
 
 const reloadFixture = vi.hoisted<{
   reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
@@ -413,6 +472,88 @@ describe("gateway role enforcement", () => {
       nodeClient?.stop();
     }
   });
+});
+
+describe("gateway update history", () => {
+  test.each(["fresh", "expired", "retained"] as const)(
+    "keeps authenticated update history responsive (%s)",
+    async (shape) => {
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: "secret",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientVersion: "1.0.0",
+        scopes: ["operator.admin"],
+      });
+      try {
+        const clock = vi
+          .spyOn(Date, "now")
+          .mockReturnValue(Date.now() - (shape === "fresh" ? 0 : 25 * 60 * 60_000));
+        const run = createUpdateRun({ trigger: "api" });
+        if (shape === "retained") {
+          const from = {
+            root: process.env.OPENCLAW_STATE_DIR ?? "/fixture",
+            nodePath: process.execPath,
+            version: "2026.9.2",
+            buildId: null,
+          };
+          createRetainedUpdateRecovery({
+            runId: run.runId,
+            from,
+            to: { ...from, version: "2026.9.3" },
+          });
+        }
+        clock.mockRestore();
+        const databasePath = openOpenClawStateDatabase().path;
+        const methods =
+          shape === "fresh" ? ["update.runs.get", "update.runs.list"] : ["update.runs.get"];
+        for (const method of methods) {
+          // Exercise expiry cold first, before a warm read could reconcile the row.
+          for (const cache of ["closed", "warm"] as const) {
+            openOpenClawStateDatabase();
+            if (cache === "closed") {
+              expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+            }
+            expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
+            const before = readonlyPreparation.prepared.length;
+            const result = await client.request(
+              method,
+              method === "update.runs.get" ? { runId: run.runId } : { limit: 1 },
+            );
+            await Promise.all(readonlyPreparation.turns);
+            const expected =
+              shape === "expired"
+                ? expect.objectContaining({
+                    runId: run.runId,
+                    status: "failed",
+                    reason: "legacy-driver-expired",
+                  })
+                : run;
+            expect(result).toEqual(
+              method === "update.runs.get" ? { run: expected } : { runs: [expected] },
+            );
+            const prepared = readonlyPreparation.prepared
+              .slice(before)
+              .filter((entry) => entry.pathname === databasePath);
+            expect(
+              prepared.every((entry) => entry.progressed),
+              "the Gateway isolate must progress during every cold-history snapshot",
+            ).toBe(true);
+            if (cache === "warm") {
+              expect(prepared).toEqual([]);
+            } else {
+              expect(prepared).toHaveLength(1);
+              expect(prepared[0]?.location).toBeDefined();
+              expect(existsSync(prepared[0]!.location!)).toBe(false);
+            }
+          }
+        }
+      } finally {
+        await client.stopAndWait();
+      }
+    },
+  );
 });
 
 describe("gateway update.run", () => {

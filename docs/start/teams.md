@@ -47,7 +47,7 @@ Connect the channel your team lives in. Example: a Slack bot, allowed in one tea
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       groupPolicy: "allowlist",
       channels: {
-        C0123456789: { requireMention: true },
+        "<SLACK_CHANNEL_ID>": { requireMention: true },
       },
     },
   },

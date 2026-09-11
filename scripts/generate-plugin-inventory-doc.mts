@@ -542,7 +542,7 @@ ${renderSurface(record.surface)}${manualBlock ? `\n\n${manualBlock}` : ""}${rela
 function renderReferenceIndex(records: PluginRecord[]) {
   const referenceCount = records.filter(hasGeneratedReferencePage).length;
   return `---
-summary: "Generated index of OpenClaw plugin reference pages"
+summary: "Pointer to the generated OpenClaw plugin reference pages"
 read_when:
   - You need a reference page for a specific OpenClaw plugin
   - You are auditing plugin docs coverage
@@ -554,8 +554,10 @@ ${GENERATED_NOTICE}
 This section holds one reference page for each OpenClaw plugin. Each page states
 the package, the install route, and the surface the plugin adds.
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
-generated plugin reference pages by distribution, package, and description.
+This page is a pointer, not the index. The browsable list of all
+${referenceCount} generated plugin reference pages lives in
+[Plugin inventory](/plugins/plugin-inventory), sorted by distribution, package,
+and description.
 
 ## How this page is built
 
@@ -709,8 +711,7 @@ function readGeneratedDocs(records: PluginRecord[]) {
   ];
 }
 
-function renderDocument() {
-  const records = collectPluginRecords();
+function renderDocument(records: PluginRecord[]) {
   const groups = {
     core: records.filter((record) => record.status === "core"),
     external: records.filter((record) => record.status === "external"),
@@ -757,10 +758,10 @@ openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-During the launch cutover, ordinary bare package specs still install from npm.
-Use \`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\` when you need an
-explicit source. After install, follow the plugin's setup doc, such as
-[Discord](/channels/discord), to add credentials and channel config. See
+Ordinary bare package specs install from npm. Use \`clawhub:@openclaw/discord\`
+or \`npm:@openclaw/discord\` when you need an explicit source. After install,
+follow the plugin's setup doc, such as [Discord](/channels/discord), to add
+credentials and channel config. See
 [Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
 commands.
 
@@ -808,7 +809,7 @@ function main(argv = process.argv.slice(2)) {
   }
 
   const records = collectPluginRecords();
-  const next = renderDocument();
+  const next = renderDocument(records);
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");

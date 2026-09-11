@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { BoardStore, BoardSessionTarget } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 export function createTestBoardStore(options: { stateDir?: string } = {}): SqliteBoardStore {
@@ -47,4 +48,20 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
     },
     env,
   });
+}
+
+export async function readBoardHtml(store: BoardStore, target: BoardSessionTarget, name: string) {
+  return await store.useWidgetDocument(target, name, (document) =>
+    document && "html" in document ? document : undefined,
+  );
+}
+
+export async function readBoardRegistered(
+  store: BoardStore,
+  target: BoardSessionTarget,
+  name: string,
+) {
+  return await store.useWidgetDocument(target, name, (document) =>
+    document && "source" in document ? document : undefined,
+  );
 }

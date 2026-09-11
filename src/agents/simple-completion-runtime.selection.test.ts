@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
 
 function resolveSimpleCompletionSelectionForAgent(
@@ -22,6 +24,48 @@ function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSe
 }
 
 describe("resolveSimpleCompletionSelectionForAgent", () => {
+  it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: { primary: "fixture/entry" } },
+      },
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            models: ["middle", "final"].map((id): ModelDefinitionConfig => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 256,
+            })),
+          },
+        },
+      },
+    };
+    const selection = requireSelection(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        ...(explicit ? { modelRef: "fixture/entry" } : {}),
+        manifestPlugins: [
+          createPluginManifestRecordFixture({
+            id: "fixture",
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { entry: "middle", middle: "final" } } },
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(selection).toMatchObject({ provider: "fixture", modelId: "middle" });
+  });
+
   it("preserves multi-segment model ids (openrouter provider models)", () => {
     const cfg = {
       agents: {

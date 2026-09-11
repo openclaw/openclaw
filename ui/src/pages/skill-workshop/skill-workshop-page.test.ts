@@ -1,5 +1,7 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -73,6 +75,196 @@ afterEach(() => {
 });
 
 describe("SkillWorkshopPage lifecycle", () => {
+  it.each(["apply", "reject"] as const)(
+    "%s removes the pending actions and paints success while refresh is still waiting",
+    async (action) => {
+      const refresh = createDeferred<unknown>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.proposals.list") {
+          return refresh.promise;
+        }
+        const record = {
+          id: "proposal-receipt",
+          kind: "create",
+          status: action === "apply" ? "applied" : "rejected",
+          title: "Inbox review",
+          description: "Review unread threads",
+          createdAt: "2026-09-01T10:00:00.000Z",
+          updatedAt: "2026-09-01T10:01:00.000Z",
+          proposedVersion: "v3",
+          draftHash: "b".repeat(64),
+          target: { skillName: "Inbox review", skillKey: "inbox-review" },
+        };
+        return action === "apply"
+          ? { record, targetSkillFile: "skills/inbox-review/SKILL.md" }
+          : record;
+      });
+      const loaded = createSkillWorkshopState();
+      loaded.skillWorkshopAgentId = "research";
+      loaded.skillWorkshopLoaded = true;
+      loaded.skillWorkshopProposals = [
+        createProposal({
+          key: "proposal-receipt",
+          slug: "inbox-review",
+          name: "Inbox review",
+          body: "Review unread threads before archiving.",
+          version: 3,
+          revisionHash: "a".repeat(64),
+        }),
+      ];
+      loaded.skillWorkshopSelectedKey = "proposal-receipt";
+      const page = document.createElement(
+        "openclaw-skill-workshop-page",
+      ) as SkillWorkshopPageTestElement;
+      page.data = skillWorkshopRouteData(loaded);
+      page.context = createContext(request, {
+        methods: [
+          `skills.proposals.${action}`,
+          "skills.proposals.list",
+          "skills.proposals.inspect",
+        ],
+      });
+      document.body.append(page);
+      await settleLitElement(page);
+      const selector = action === "apply" ? ".sw-btn--primary" : ".sw-btn--danger";
+      const button = page.querySelector<HTMLButtonElement>(`.sw-action-bar ${selector}`);
+      expect(button).not.toBeNull();
+      expect(button?.disabled).toBe(false);
+      button?.click();
+      try {
+        await waitForSkillWorkshop(() =>
+          expect(callsFor(request, "skills.proposals.list")).toHaveLength(1),
+        );
+        await settleLitElement(page);
+        expect(page.querySelector(".sw-action-toast")?.textContent).toContain(
+          action === "apply" ? "Applied" : "Rejected",
+        );
+        expect(page.querySelector(".sw-action-bar")).toBeNull();
+        expect(page.state?.skillWorkshopLoading).toBe(true);
+        refresh.reject(new Error("refresh unavailable"));
+        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoading).toBe(false));
+        await settleLitElement(page);
+        expect(page.querySelector(".sw-action-toast")?.textContent).toContain(
+          action === "apply" ? "Applied" : "Rejected",
+        );
+        expect(page.querySelector(".sw-action-bar")).toBeNull();
+        expect(page.querySelector(".sw-error")?.textContent).toContain("refresh unavailable");
+      } finally {
+        refresh.resolve(emptyWorkshopManifest());
+        if (page.state?.skillWorkshopActionNoticeTimer) {
+          clearTimeout(page.state.skillWorkshopActionNoticeTimer);
+        }
+      }
+    },
+  );
+
+  it.each(
+    (["apply", "reject"] as const).flatMap((action) =>
+      (["success", "error", "revision"] as const).map((outcome) => ({ action, outcome })),
+    ),
+  )(
+    "ignores late $action $outcome after the selected agent changes A → B → A",
+    async ({ action, outcome }) => {
+      const mutation = createDeferred<unknown>();
+      const listeners = new Set<() => void>();
+      const request = vi.fn(async (method: string) =>
+        method === `skills.proposals.${action}` ? mutation.promise : emptyWorkshopManifest(),
+      );
+      const context = createContext(request, {
+        methods: [
+          `skills.proposals.${action}`,
+          "skills.proposals.list",
+          "skills.proposals.inspect",
+        ],
+        agentSelectionSubscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      });
+      let selectedId = "research";
+      const selection = context.agentSelection.state;
+      Object.defineProperty(context.agentSelection, "state", {
+        get: () => ({ ...selection, selectedId, scopeId: selectedId }),
+      });
+      const loaded = createSkillWorkshopState();
+      loaded.skillWorkshopAgentId = "research";
+      loaded.skillWorkshopLoaded = true;
+      loaded.skillWorkshopProposals = [
+        createProposal({
+          key: "proposal-scope",
+          name: "Scoped suggestion",
+          revisionHash: "a".repeat(64),
+        }),
+      ];
+      loaded.skillWorkshopSelectedKey = "proposal-scope";
+      const page = document.createElement(
+        "openclaw-skill-workshop-page",
+      ) as SkillWorkshopPageTestElement;
+      page.data = skillWorkshopRouteData(loaded);
+      page.context = context;
+      document.body.append(page);
+      await settleLitElement(page);
+      const selector = action === "apply" ? ".sw-btn--primary" : ".sw-btn--danger";
+      const button = page.querySelector<HTMLButtonElement>(`.sw-action-bar ${selector}`);
+      expect(button).not.toBeNull();
+      button?.click();
+      await waitForSkillWorkshop(() =>
+        expect(callsFor(request, `skills.proposals.${action}`)).toHaveLength(1),
+      );
+      for (const agentId of ["ops", "research"]) {
+        selectedId = agentId;
+        for (const listener of listeners) {
+          listener();
+        }
+        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopAgentId).toBe(agentId));
+        await waitForSkillWorkshop(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
+        await settleLitElement(page);
+      }
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
+      if (outcome === "success") {
+        const record = {
+          id: "proposal-scope",
+          kind: "create",
+          status: action === "apply" ? "applied" : "rejected",
+          title: "Scoped suggestion",
+          description: "Review the selected agent",
+          createdAt: "2026-09-01T10:00:00.000Z",
+          updatedAt: "2026-09-01T10:01:00.000Z",
+          proposedVersion: "v1",
+          draftHash: "b".repeat(64),
+          target: { skillName: "Scoped suggestion", skillKey: "scoped-suggestion" },
+        };
+        mutation.resolve(
+          action === "apply"
+            ? { record, targetSkillFile: "skills/scoped-suggestion/SKILL.md" }
+            : record,
+        );
+      } else if (outcome === "error") {
+        mutation.reject(new Error("late action failure"));
+      } else {
+        mutation.reject(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Skill proposal revision changed",
+            details: {
+              code: "SKILL_PROPOSAL_REVISION_CHANGED",
+              currentRevisionHash: "b".repeat(64),
+              expectedRevisionHash: "a".repeat(64),
+            },
+          }),
+        );
+      }
+      await mutation.promise.catch(() => undefined);
+      await settleLitElement(page);
+      expect(page.state?.skillWorkshopProposals).toEqual([]);
+      expect(page.state?.skillWorkshopActionNotice).toBeNull();
+      expect(page.state?.skillWorkshopError).toBeNull();
+      expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
+      expect(callsFor(request, "skills.proposals.inspect")).toHaveLength(0);
+      expect(page.querySelector(".sw-action-toast, .sw-error")).toBeNull();
+    },
+  );
+
   it("renders a completed skill read after a repeated same-agent notification", async () => {
     localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "skills");
     const skill = {

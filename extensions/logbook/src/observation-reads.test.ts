@@ -56,14 +56,14 @@ it.each([0, 199, 200, 201])(
     vi.setSystemTime(new Date("2026-07-03T12:00:00"));
     const dataDir = mkdtempSync(path.join(tmpdir(), "logbook-observation-reads-"));
     const day = "2026-07-03";
-    const store = new LogbookStore(dataDir);
+    const store = await LogbookStore.open(dataDir);
     const segments = Array.from({ length: count }, (_, index) => ({
       startMs: 1 + Math.floor(index / 3) * 1000,
       endMs: 1001 + Math.floor(index / 3) * 1000,
       text: `Observation ${index} 🦞`,
     }));
-    const seedBatch = (batchDay: string) => {
-      const frameId = store.insertFrame({
+    const seedBatch = async (batchDay: string) => {
+      const frameId = await store.insertFrame({
         capturedAtMs: Date.now(),
         day: batchDay,
         path: path.join(dataDir, "synthetic.jpg"),
@@ -72,15 +72,15 @@ it.each([0, 199, 200, 201])(
         contentHash: "synthetic",
         idle: false,
       });
-      return store.createBatch({
+      return await store.createBatch({
         day: batchDay,
         startMs: 1,
         endMs: Number.MAX_SAFE_INTEGER,
         frameIds: [frameId],
       });
     };
-    const batchId = seedBatch(day);
-    store.replaceObservations(batchId, day, [
+    const batchId = await seedBatch(day);
+    await store.replaceObservations(batchId, day, [
       ...segments,
       { startMs: -10, endMs: 0, text: "Excluded end boundary" },
       {
@@ -89,10 +89,10 @@ it.each([0, 199, 200, 201])(
         text: "Excluded start boundary",
       },
     ]);
-    store.replaceObservations(seedBatch("2026-07-04"), "2026-07-04", [
+    await store.replaceObservations(await seedBatch("2026-07-04"), "2026-07-04", [
       { startMs: 1, endMs: 2, text: "Excluded day" },
     ]);
-    store.close();
+    await store.close();
     const runtime = createPluginRuntimeMock();
     const complete = vi.fn<OpenClawPluginApi["runtime"]["llm"]["complete"]>(async () => ({
       text: "Synthetic answer",
@@ -110,7 +110,7 @@ it.each([0, 199, 200, 201])(
       fullConfig: {},
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
-    service.start();
+    await service.start();
     try {
       reads.rows = 0;
       expect(await service.ask(day, "What happened?")).toBe("Synthetic answer");

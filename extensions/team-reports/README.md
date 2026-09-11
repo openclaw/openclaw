@@ -16,8 +16,9 @@ openclaw team-reports list --json
 ```
 
 Reports use UTC windows, remain in the plugin-owned SQLite store, and are
-served behind Gateway authentication at `/reports/` by default. Model summary
-calls are optional; set `summaries.enabled: false` for deterministic text.
+served behind Gateway authentication at `/plugins/team-reports/` by default.
+The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
+Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
 
 See the [Team Reports guide](https://docs.openclaw.ai/plugins/team-reports)
 for setup, configuration, attribution rules, exports, and troubleshooting.

@@ -38,10 +38,8 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import {
-  prepareSimpleCompletionModel,
-  type PreparedSimpleCompletionModel,
-} from "../../agents/simple-completion-runtime.js";
+import { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
+import type { PreparedSimpleCompletionModel } from "../../agents/simple-completion.types.js";
 import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -485,6 +483,7 @@ async function resolveApprovedModel(params: {
         provider: resolved.ref.provider,
         modelId: resolved.ref.model,
         agentDir,
+        modelIdSource: "selected",
         ...(selectedProfileId ? { profileId: selectedProfileId } : {}),
         ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
         ...(selectedProfileId ? { bindAuthOwner: true } : {}),

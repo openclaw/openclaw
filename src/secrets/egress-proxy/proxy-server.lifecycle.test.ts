@@ -8,7 +8,8 @@ import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mintSecretSentinel } from "../sentinel.js";
@@ -17,6 +18,9 @@ import { startSecretEgressProxyServer, type SecretEgressProxyHandle } from "./pr
 const run = { instanceId: "instance-1", runId: "run-1" };
 const sibling = { instanceId: "instance-2", runId: "run-2" };
 const value = "synthetic-lifecycle-credential";
+const seedDirs = createTempDirTracker();
+let seedDir: string;
+let originLeaf: Awaited<ReturnType<typeof proxyCa.generateLocalProxyLeaf>>;
 let caDir: string;
 let proxy: SecretEgressProxyHandle;
 let origin: Server;
@@ -89,16 +93,28 @@ function register(targetRun = run): Record<string, string> {
   ]);
 }
 
+beforeAll(async () => {
+  seedDir = seedDirs.make("openclaw-egress-lifecycle-seed-");
+  const ca = await proxyCa.ensureSecretEgressProxyCa(seedDir);
+  originLeaf = await proxyCa.generateLocalProxyLeaf({
+    certDir: seedDir,
+    ca,
+    hostname: "localhost",
+  });
+});
+
+afterAll(() => seedDirs.cleanup());
+
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", undefined);
   observed = [];
   caDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-lifecycle-"));
+  // Reuse initial material only; request-time issuance and TLS state stay per case.
+  for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
+    fs.copyFileSync(path.join(seedDir, file), path.join(caDir, file));
+  }
   proxy = await startSecretEgressProxyServer({ caDir, onAudit: () => {} });
-  const leaf = await proxyCa.generateLocalProxyLeaf({
-    certDir: caDir,
-    ca: { certPath: proxy.caCertPath, keyPath: path.join(caDir, "root-ca-key.pem") },
-    hostname: "localhost",
-  });
+  const leaf = { cert: Buffer.from(originLeaf.cert), key: Buffer.from(originLeaf.key) };
   origin = createHttpsServer(leaf, (request, response) => {
     const record = { authorization: request.headers.authorization, body: "" };
     observed.push(record);

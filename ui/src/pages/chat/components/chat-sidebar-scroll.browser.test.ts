@@ -1,71 +1,153 @@
-import { html, LitElement } from "lit";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { LitElement } from "lit";
 import { describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import {
+  resetTaskDetail,
+  retryTaskTranscript,
+  type TaskDetailHost,
+} from "./chat-task-detail-state.ts";
+import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import "./chat-sidebar.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { threadProps } from "./chat-transcript.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
-class ReadOnlyTranscriptFixture extends LitElement {
-  private readonly transcript = new ChatTranscriptController(this);
-  private readonly messages = [
+class TaskActivityFixture extends LitElement {
+  readonly task: TaskSummary = {
+    id: "task-resize",
+    taskId: "task-resize",
+    agentId: "main",
+    runtime: "subagent",
+    status: "running",
+    title: "Inspect the renderer",
+    hasTranscript: true,
+    progressSummary: "Checking the layout.",
+  };
+  messages: unknown[] = [
     {
       role: "user",
+      messageId: "prompt",
       content:
         "Inspect the available tools and report their input schemas, including required parameters and optional fields, so the review can confirm that the next step uses the correct tool contract.",
     },
     {
       role: "assistant",
+      messageId: "command",
       content: [
         {
           type: "toolCall",
           id: "schema-call",
           name: "exec",
-          arguments: {
-            code: `const schemas=await tools.describe({names:["example.search"]});text(schemas);const marker="${"x".repeat(510)}";`,
-            description: "Get live tool schemas",
-          },
+          arguments: { command: `pnpm tsgo --project ${"x".repeat(510)}.json` },
         },
       ],
     },
     {
       role: "toolResult",
       toolCallId: "schema-call",
-      toolName: "exec",
       content: [{ type: "text", text: "Schemas ready." }],
     },
+    ...Array.from({ length: 24 }, (_, index) => ({
+      role: "assistant",
+      messageId: `activity-${index}`,
+      content: `Activity ${index}: inspected the rendering boundary and its task history contract.`,
+    })),
   ];
+  readonly host: TaskDetailHost = {
+    sessionKey: "agent:main:main",
+    connected: true,
+    hello: null,
+    requestUpdate: () => this.requestUpdate(),
+    client: createTestGatewayClient((_method, params) =>
+      asNullableRecord(params)?.cursor
+        ? {
+            messages: Array.from({ length: 12 }, (_, index) => ({
+              role: "assistant",
+              messageId: `earlier-${index}`,
+              content: `Earlier ${index}: planning the activity monitor.`,
+            })),
+          }
+        : { messages: this.messages, nextCursor: "earlier-page" },
+    ),
+  };
+  private readonly backgroundTasks: BackgroundTasksProps = {
+    sessionKey: "agent:main:main",
+    statusRowId: "task-status-resize",
+    collapsed: false,
+    narrowLayout: false,
+    connected: true,
+    canCancel: false,
+    loading: false,
+    error: null,
+    tasks: [this.task],
+    activeCount: 1,
+    subagentActivity: { rows: [], overflowWorking: 0, taskIds: new Set(), nextExpiryAt: null },
+    taskDetails: new Map([[this.task.id, { ...this.task, prompt: "Inspect the renderer." }]]),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
+    cancellingTaskIds: new Set(),
+    finishedCollapsed: false,
+    onToggleCollapsed: () => {},
+    onToggleFinished: () => {},
+    onRefresh: () => {},
+    onCancel: () => {},
+  };
+
+  appendActivity() {
+    this.messages = [
+      ...this.messages,
+      {
+        role: "assistant",
+        messageId: `appended-${this.messages.length}`,
+        content: `New activity ${this.messages.length}: verified the next rendering contract.`,
+      },
+    ];
+    retryTaskTranscript(this.host);
+  }
+
+  override disconnectedCallback() {
+    resetTaskDetail(this.host);
+    super.disconnectedCallback();
+  }
 
   protected override createRenderRoot() {
     return this;
   }
 
   protected override render() {
-    return html`<div class="sidebar-content chat-task-detail__content">
-      <div class="chat-task-detail__transcript">
-        ${renderReadOnlyTranscript({
-          chat: {
-            ...threadProps("sidebar-resize"),
-            showToolCalls: true,
-            autoExpandToolCalls: true,
-            onRequestUpdate: () => this.requestUpdate(),
-          },
-          paneId: "sidebar-resize",
-          sessionKey: "agent:main:sidebar-resize",
-          transcript: this.transcript,
-          messages: this.messages,
-        })}
-      </div>
-    </div>`;
+    return renderTaskDetailPanel({
+      backgroundTasks: this.backgroundTasks,
+      host: this.host,
+      task: this.task,
+    });
   }
 }
 
-customElements.define("test-sidebar-resize-transcript", ReadOnlyTranscriptFixture);
+customElements.define("test-sidebar-task-activity", TaskActivityFixture);
+
+function mountTaskActivity(dir = "ltr") {
+  const container = document.body.appendChild(document.createElement("div"));
+  container.className = "side-panel__panel";
+  container.dir = dir;
+  container.style.cssText = "width:300px;height:600px;";
+  const panel = new TaskActivityFixture();
+  panel.style.cssText = "display:flex;min-height:0;width:100%;";
+  container.append(panel);
+  return { container, panel };
+}
+
+async function renderedActivity(panel: TaskActivityFixture) {
+  await expect.poll(() => panel.querySelector(".chat-task-feed__entry")).not.toBeNull();
+  await panel.updateComplete;
+  await new Promise(requestAnimationFrame);
+  return panel.querySelector<HTMLElement>(".chat-task-detail__content")!;
+}
 
 type DetailPanel = HTMLElement & {
   content: SidebarContent;
@@ -94,50 +176,84 @@ function mountDetailPanel(content: SidebarContent): {
 
 describe.runIf(browserMode)("chat sidebar layout", () => {
   it.each(["ltr", "rtl"])(
-    "reflows task messages without clipping tool borders in %s",
+    "keeps the history boundary above full-width task activity in %s",
     async (dir) => {
-      const container = document.createElement("div");
-      container.className = "side-panel__panel";
-      container.dir = dir;
-      container.style.cssText = "width:300px;height:600px;";
-      const panel = new ReadOnlyTranscriptFixture();
-      panel.className = "sidebar-panel chat-task-detail";
-      container.append(panel);
-      document.body.append(container);
-
+      const { container, panel } = mountTaskActivity(dir);
       try {
-        await panel.updateComplete;
-        await expect.poll(() => panel.querySelector(".chat-tool-msg-body")).not.toBeNull();
-        const bubble = panel.querySelector<HTMLElement>(".user .chat-bubble")!;
-        const body = panel.querySelector<HTMLElement>(".chat-tool-msg-body")!;
-        const row = body.closest<HTMLElement>(".chat-virtual-row")!;
-        const narrow = bubble.getBoundingClientRect();
-        const narrowToolWidth = body.getBoundingClientRect().width;
+        const content = await renderedActivity(panel);
+        const feed = panel.querySelector<HTMLElement>(".chat-task-feed")!;
+        const history = panel.querySelector<HTMLElement>(".chat-history-boundary")!;
+        const tool = panel.querySelector<HTMLElement>(".chat-task-feed__tool-group")!;
         for (const width of [300, 400, 600, 700]) {
           container.style.width = `${width}px`;
           await new Promise(requestAnimationFrame);
-          const clip = row.getBoundingClientRect();
-          for (const selector of [
-            ".chat-tool-msg-body",
-            ".chat-tool-msg-summary",
-            ".chat-tool-card__block-content",
-            ".chat-tool-card__outcome",
-          ]) {
-            const bounds = panel.querySelector(selector)!.getBoundingClientRect();
-            expect(bounds.left).toBeGreaterThanOrEqual(clip.left);
-            expect(bounds.right).toBeLessThanOrEqual(clip.right);
-          }
-          expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
+          const historyRect = history.getBoundingClientRect();
+          const feedRect = feed.getBoundingClientRect();
+          expect(historyRect.bottom).toBeLessThanOrEqual(feedRect.top);
+          expect(Math.abs(historyRect.width - feedRect.width)).toBeLessThanOrEqual(1);
+          expect(feedRect.width).toBeGreaterThan(width - 70);
+          expect(tool.getBoundingClientRect().right).toBeLessThanOrEqual(
+            content.getBoundingClientRect().right,
+          );
+          expect(tool.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+            content.getBoundingClientRect().left,
+          );
+          expect(content.scrollWidth).toBeLessThanOrEqual(content.clientWidth);
         }
-        const wide = bubble.getBoundingClientRect();
-        expect(wide.width).toBeGreaterThan(narrow.width + 150);
-        expect(wide.height).toBeLessThan(narrow.height);
-        expect(body.getBoundingClientRect().width).toBeGreaterThan(narrowToolWidth + 290);
       } finally {
         container.remove();
       }
     },
   );
+
+  it("pins first render and near-bottom appends while preserving an upward reader and prepended history", async () => {
+    const { container, panel } = mountTaskActivity();
+    try {
+      const content = await renderedActivity(panel);
+      const bottomGap = () => content.scrollHeight - content.clientHeight - content.scrollTop;
+      await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+      expect(content.scrollHeight).toBeGreaterThan(content.clientHeight);
+
+      content.scrollTop -= 20;
+      content.dispatchEvent(new Event("scroll"));
+      const initialEntries = panel.querySelectorAll(".chat-task-feed__entry").length;
+      panel.appendActivity();
+      await expect
+        .poll(() => panel.querySelectorAll(".chat-task-feed__entry").length)
+        .toBe(initialEntries + 1);
+      await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+      content.scrollTop = 180;
+      content.dispatchEvent(new Event("scroll"));
+      const readingTop = content.scrollTop;
+      panel.appendActivity();
+      await expect
+        .poll(() => panel.querySelectorAll(".chat-task-feed__entry").length)
+        .toBe(initialEntries + 2);
+      await new Promise(requestAnimationFrame);
+      expect(content.scrollTop).toBe(readingTop);
+
+      const anchor = [...panel.querySelectorAll<HTMLElement>(".chat-task-feed__entry")].find(
+        (entry) => entry.textContent?.includes("Activity 0:"),
+      )!;
+      const beforeTop = anchor.getBoundingClientRect().top;
+      panel.querySelector<HTMLButtonElement>(".chat-history-boundary__action")!.click();
+      await expect.poll(() => panel.textContent?.includes("Earlier 0:")).toBe(true);
+      await panel.updateComplete;
+      // A second render before the frame must keep the pending offset correction.
+      panel.requestUpdate();
+      await panel.updateComplete;
+      await new Promise(requestAnimationFrame);
+      const retainedAnchor = [
+        ...panel.querySelectorAll<HTMLElement>(".chat-task-feed__entry"),
+      ].find((entry) => entry.textContent?.includes("Activity 0:"))!;
+      expect(Math.abs(retainedAnchor.getBoundingClientRect().top - beforeTop)).toBeLessThanOrEqual(
+        1,
+      );
+    } finally {
+      container.remove();
+    }
+  });
 
   it("keeps long markdown scrollable inside a bounded sidebar", async () => {
     const { panel, release } = mountDetailPanel({

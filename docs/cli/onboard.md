@@ -88,6 +88,8 @@ publisher-qualified recommendation ID and its JSON output reports
 proof of a local install. Otherwise keep that ID pending with `--retry` and do
 not overwrite the existing skill.
 
+## Flags
+
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
@@ -335,6 +337,18 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 `--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
 
+Non-interactive llama.cpp against an existing `llama-server`:
+
+```bash
+openclaw onboard --non-interactive --accept-risk \
+  --auth-choice llama-cpp-existing-server \
+  --custom-base-url "http://127.0.0.1:8080/v1" \
+  --custom-model-id "my-model" \
+  --llama-server-api-key "$LLAMA_SERVER_API_KEY"
+```
+
+`--auth-choice llama-cpp` selects the managed local server instead. `--llama-server-api-key` is optional; if omitted, onboarding checks `LLAMA_SERVER_API_KEY` in env. See [llama.cpp](/plugins/llama-cpp) for endpoint-replacement and auth-profile behavior.
+
 Store provider keys as refs instead of plaintext:
 
 ```bash
@@ -387,7 +401,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ### Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.2` (falling back to `glm-5.1` if unavailable); general API endpoints default to `zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.3`, falling back to `glm-5.1` and then `glm-4.7` when the key does not expose them; general API endpoints use the Z.AI provider default, `zai/glm-5.2`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
 </Note>
 
 ```bash
@@ -407,7 +421,22 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
-## Additional non-interactive flags
+Arcee AI. The `arcee` provider plugin supplies both choices and their flags, so
+install it before running onboarding non-interactively:
+
+```bash
+# Direct (chat.arcee.ai)
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice arceeai-api-key \
+  --arceeai-api-key "$ARCEEAI_API_KEY"
+
+# Via OpenRouter
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice arceeai-openrouter \
+  --openrouter-api-key "$OPENROUTER_API_KEY"
+```
+
+### Additional non-interactive flags
 
 Token-based model auth (used with `--auth-choice token`):
 
@@ -466,3 +495,8 @@ openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [`openclaw setup`](/cli/setup) — the system-agent entry point; bare `setup` is interactive, and falls through to guided onboarding on a fresh system

@@ -6,7 +6,9 @@ read_when:
   - You are running OpenClaw tests on Crabbox or Testbox
 ---
 
-## Agent default
+<a id="agent-default" />
+
+## Remote proof policy for agents
 
 Agent sessions run trusted development tests, changed gates, typecheck/lint,
 and builds locally by default, broadening only when the touched contract
@@ -45,19 +47,18 @@ execution-workspace binding stops the payload; stop that lease and warm a new on
 Use the OpenClaw wrapper for proof: direct native Blacksmith commands target the
 transport checkout, which deliberately has no hydrated runtime.
 
-Testbox requests with `--artifact-glob` or `--require-artifact` also require the
-`prepared-artifact-workspace` feature in the selected Crabbox binary's
-`providers describe blacksmith-testbox --json` response. The wrapper checks this
-before sync or lease work, rather than collecting missing or stale transport files.
-Update Crabbox if that capability is absent. Collection stays anchored in the
-prepared workspace across payload directory changes and normal failure exits;
-existing cancellation and signal-related artifact withholding remains unchanged.
-Ordinary runs without artifact requests do not require this additional capability.
+Testbox requests with `--artifact-glob` or `--require-artifact` collect from the
+prepared execution workspace. Collection stays anchored there across payload
+directory changes and normal failure exits; existing cancellation and
+signal-related artifact withholding remains unchanged.
+
+The wrapper uses the bundled Crabbox plugin to update missing or outdated CLI
+binaries before provider discovery, source sync, or lease work. Every command uses
+the current supported CLI contract; there are no separate version requirements
+for artifacts, providers, or `sync-plan --json`.
 
 Testbox runs and POSIX remote changed gates freeze source into a Git bundle
-against the pinned base. These runs require Crabbox 0.37.0 or later for
-`sync-plan --json`; upgrade Crabbox before retrying an older binary. This API floor
-does not apply to help, warmup, status, or runs that do not prepare a source bundle.
+against the pinned base.
 Selection uses Crabbox's sync policy and Git's repository, info, and effective global
 exclusions, including repo-local overrides, for untracked files. Tracked ignored
 files and staged ignored additions remain source; an explicit privacy exclusion
@@ -127,21 +128,27 @@ does not make a different provider equivalent.
 The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
 native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
 `--provider blacksmith-testbox` prevents automatic Azure routing but does not
-enable Windows support. Blacksmith CLI 0.4.57 targets `runner` and has no native
-username override, so supported CLI sync/run on this Windows image remains
-blocked. Native SSH inspection with the per-Testbox key is not CLI end-to-end
+enable Windows support. As checked on 2026-09-01, Blacksmith CLI 0.4.57 targets `runner`
+and has no native username override, so supported CLI sync/run on this Windows
+image remains blocked. Recheck against a newer CLI before relying on this. Native SSH inspection with the per-Testbox key is not CLI end-to-end
 proof.
 
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
-its source rather than trusting a directory name. If it needs repair or is
-missing, use a clean task-owned checkout of
-[Crabbox](https://github.com/openclaw/crabbox), build `./cmd/crabbox` into a
-task-owned binary directory, and leave other checkouts and the operator's
-installed binary untouched. The existing
+its source rather than trusting a directory name. The plugin installs a verified
+managed copy when the selected executable is missing or outdated. For an explicit
+[Crabbox](https://github.com/openclaw/crabbox) source repair, build `./cmd/crabbox`
+in a clean task-owned checkout and leave the operator's installation untouched. The existing
 `OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY=1` setting skips the first sibling
 candidate; a task binary on `PATH` then takes precedence over the common-checkout
 candidate. A dirty or occupied sibling is not a reason to stop and ask.
+
+Mantis uses the same plugin-owned discovery and managed installation. Relative
+executable overrides and `PATH` entries resolve from its requested `--repo-root`,
+and version probes run there with the same environment as lease commands. Its workflows
+prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
+the selected binary and verified version as JSON and, in GitHub Actions, adds its
+directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.
 
 For a selected trusted Testbox lane:
 

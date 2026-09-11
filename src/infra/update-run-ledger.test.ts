@@ -17,7 +17,9 @@ import {
   findActiveUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  getUpdateRunAsync,
   listUpdateRuns,
+  listUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunRepairAttempt,
   recordUpdateRunStep,
@@ -70,6 +72,25 @@ afterEach(() => {
 });
 
 describe("update run ledger", () => {
+  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
+    "keeps a terminal %s result unchanged for running-only boot observations",
+    (status) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
+      const actual = recordUpdateRunVerification(
+        run.runId,
+        { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
+        { ...options, onlyIfRunning: true },
+      );
+      expect(actual).toEqual(terminal);
+      expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+      const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
+      expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
+      expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+    },
+  );
+
   it("keeps reads non-creating and adds the table on first write without changing the older schema", () => {
     const options = isolatedOptions();
     const runId = randomUUID();
@@ -95,7 +116,9 @@ describe("update run ledger", () => {
       .join(";\n");
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(hasLedger()).toBeUndefined();
-    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow("Unknown update run");
+    expect(() => recordUpdateRunPhase(runId, "staging", {}, options)).toThrow(
+      "missing table update_runs",
+    );
     expect(hasLedger()).toBeUndefined();
 
     const created = createUpdateRun({ runId, trigger: "cli" }, options);
@@ -116,12 +139,12 @@ describe("update run ledger", () => {
   });
 
   it.each(
-    (["get", "list", "active"] as const).flatMap((reader) =>
+    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
       [false, true].map((retainedWal) => ({ reader, retainedWal })),
     ),
   )(
     "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
-    ({ reader, retainedWal }) => {
+    async ({ reader, retainedWal }) => {
       const sourceOptions = isolatedOptions();
       const created = createUpdateRun({ trigger: "cli" }, sourceOptions);
       const sourcePath = resolveOpenClawStateSqlitePath(sourceOptions.env);
@@ -159,8 +182,12 @@ describe("update run ledger", () => {
           ? getUpdateRun(created.runId, options)
           : reader === "list"
             ? listUpdateRuns({}, options)
-            : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" ? [expected] : expected);
+            : reader === "get-async"
+              ? await getUpdateRunAsync(created.runId, options)
+              : reader === "list-async"
+                ? await listUpdateRunsAsync({}, options)
+                : findActiveUpdateRun(options);
+      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
       expect(snapshotDatabaseFiles(filename)).toEqual(before);
     },
   );
@@ -178,7 +205,7 @@ describe("update run ledger", () => {
     expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
   });
 
-  it("leaves a cold store without the history table unchanged", () => {
+  it("leaves a cold store without the history table unchanged", async () => {
     const options = isolatedOptions();
     const { db } = openOpenClawStateDatabase(options);
     expect(
@@ -190,6 +217,8 @@ describe("update run ledger", () => {
     expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
     expect(listUpdateRuns({}, options)).toEqual([]);
     expect(findActiveUpdateRun(options)).toBeUndefined();
+    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
+    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
     expect(snapshotDatabaseFiles(filename)).toEqual(before);
   });
 
@@ -708,7 +737,21 @@ describe("update run ledger", () => {
           code === 0 ? resolve() : reject(new Error(`${role} exited ${code}: ${output}`)),
         );
       });
-      return { child, ready, exited };
+      const written = ready.then(() =>
+        Promise.race([
+          new Promise<void>((resolve, reject) => {
+            child.once("message", (message) =>
+              message === "written"
+                ? resolve()
+                : reject(new Error(`Unexpected ${role} write message`)),
+            );
+          }),
+          exited.then(() => {
+            throw new Error(`${role} exited before acknowledging writes: ${output}`);
+          }),
+        ]),
+      );
+      return { child, ready, written, exited };
     });
     const deadline = setTimeout(() => {
       for (const { child } of children) {
@@ -716,11 +759,17 @@ describe("update run ledger", () => {
       }
     }, 20_000);
     try {
-      await Promise.all(children.map(({ ready }) => ready));
+      const allWritten = Promise.all(children.map(({ written }) => written));
+      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
       for (const { child } of children) {
         child.send("start");
       }
-      await Promise.all(children.map(({ exited }) => exited));
+      await allWritten;
+      // Writes stay concurrent; handle retirement must not race another lifecycle writer.
+      for (const { child, exited } of children) {
+        child.send("close");
+        await exited;
+      }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
         Array.from({ length: 16 }, (_, index) => `${role}-${index}`),
@@ -752,7 +801,7 @@ describe("update run ledger", () => {
           child.kill();
         }
       }
-      await Promise.allSettled(children.map(({ exited }) => exited));
+      await Promise.allSettled(children.flatMap(({ written, exited }) => [written, exited]));
     }
   }, 30_000);
 });

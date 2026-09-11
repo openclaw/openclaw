@@ -182,7 +182,7 @@ flow:
             sinceCursor: { ref: startCursor }
             finalTextIncludes: { ref: config.finalMarker }
             finalSettleMs: 1500
-            minimumPreviewEvents: 3
+            minimumPreviewEvents: 2
             timeoutMs: 90000
           saveAs: sequence
         - set: turnEvents

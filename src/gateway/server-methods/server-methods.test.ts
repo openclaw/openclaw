@@ -6,6 +6,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   afterEach,
@@ -20,7 +21,6 @@ import {
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -2312,13 +2312,11 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
   it("uses the RPC maxChars override when present", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
+    expect(resolveEffectiveChatHistoryMaxChars(45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {
-    expect(resolveEffectiveChatHistoryMaxChars({}, undefined)).toBe(
-      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    );
+    expect(resolveEffectiveChatHistoryMaxChars()).toBe(DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
   });
 });
 

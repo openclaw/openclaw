@@ -1,18 +1,125 @@
 import { afterEach, expect, test } from "vitest";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import { resolveDirectStoredModelOverride } from "../sessions/stored-model-overrides.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { getSessionDefaults, projectSessionPatchResult } from "./session-utils-model.js";
+import {
+  buildSessionListRowMetadataContext,
+  resolveSessionSelectedModelRef,
+} from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
 afterEach(() => {
   resetConfigRuntimeState();
   resetPluginRuntimeStateForTest();
 });
+
+const identityConfig: OpenClawConfig = {
+  plugins: { enabled: false },
+  agents: { entries: { main: {} }, defaults: { model: "custom/default" } },
+};
+const identityMetadata = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "custom",
+      providers: ["custom"],
+      modelIdNormalization: {
+        providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
+      },
+    },
+  ],
+});
+
+function writtenModelOverride(model: string): SessionEntry {
+  const entry: SessionEntry = { sessionId: "written-model", updatedAt: 1 };
+  applyModelOverrideToSessionEntry({ entry, selection: { provider: "custom", model } });
+  return structuredClone(entry);
+}
+
+async function withIdentityScope(run: () => void): Promise<void> {
+  await withStateDirEnv("session-override-identity-", async () =>
+    withPluginRuntimeGenerationScope({ metadataSnapshot: identityMetadata }, run),
+  );
+}
+
+test.each(["custom/model", "middle"])(
+  "preserves writer-resolved model %s across readers",
+  async (model) => {
+    await withIdentityScope(() => {
+      const entry = writtenModelOverride(model);
+      const original = structuredClone(entry);
+      expect(entry.modelOverrideRouteResolution).toBe("resolved");
+      expect
+        .soft(
+          resolveDirectStoredModelOverride({
+            sessionEntry: entry,
+            defaultProvider: "custom",
+            allowPluginNormalization: false,
+          }),
+        )
+        .toMatchObject({ provider: "custom", model, routeResolution: "resolved" });
+      expect
+        .soft(
+          resolveSessionModelRef(identityConfig, entry, "main", {
+            allowPluginNormalization: false,
+          }),
+        )
+        .toEqual({ provider: "custom", model });
+      expect
+        .soft(
+          resolveSessionSelectedModelRef({
+            cfg: identityConfig,
+            agentId: "main",
+            source: { entry, loadSessionEntry: () => undefined },
+            allowPluginNormalization: false,
+          }),
+        )
+        .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+      expect(entry).toEqual(original);
+    });
+  },
+);
+
+test.each([false, true])(
+  "separates cached raw and resolved selections (resolved first=%s)",
+  async (resolvedFirst) => {
+    await withIdentityScope(() => {
+      const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
+      const raw = {
+        entry: {
+          sessionId: "raw-model",
+          updatedAt: 1,
+          providerOverride: "custom",
+          modelOverride: "latest",
+        },
+        model: "final",
+      };
+      const rowContext = buildSessionListRowMetadataContext({ now: 1 });
+      for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
+        expect
+          .soft(
+            resolveSessionSelectedModelRef({
+              cfg: identityConfig,
+              agentId: "main",
+              source: { entry, loadSessionEntry: () => undefined },
+              rowContext,
+              allowPluginNormalization: false,
+            }),
+          )
+          .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+      }
+    });
+  },
+);
 
 test.each([
   { provider: "demo-cli", model: "shared-model", expectedProvider: "demo-provider" },

@@ -104,23 +104,17 @@ validate_review_transition_state() {
   local current
   current=$(git rev-parse HEAD)
   if { [ "$current" != "$source" ] && [ "$current" != "$target" ]; } ||
-    [ -n "$(git ls-files -u)" ] || ! git diff --quiet ||
-    ! require_no_foreign_untracked "$pr"
+    [ -n "$(git ls-files -u)" ]
   then
     refuse_review_transition "$pr" "the journaled transition state is ambiguous."
     return 1
   fi
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
 
-  # A path changed from source is owned only when its index mode and blob match target.
-  local file
-  git diff --cached --name-only --no-renames -z "$source" |
-    while IFS= read -r -d '' file; do
-      if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
-        refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
-        return 1
-      fi
-    done
+  node "$(dirname "${BASH_SOURCE[0]}")/review-transition-state.mjs" "$source" "$target" || {
+    refuse_review_transition "$pr" "the index or working tree contains unowned transition state."
+    return 1
+  }
 }
 
 write_review_transition_journal() {
@@ -170,10 +164,11 @@ recover_review_transition() {
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
-  # Completed deletions are absent from both index and target, so replay only
-  # remaining entries rather than passing already-removed paths to restore.
-  if ! git diff --cached --quiet "$target"; then
-    git diff --cached --name-only --no-renames -z "$target" |
+  # Restore can write files before committing its index. Rebuild the validated
+  # source index so replay also owns source-only files left after index deletion.
+  git read-tree "$source" || return 1
+  if ! git diff --quiet "$source" "$target"; then
+    git diff --name-only --no-renames -z "$source" "$target" |
       git --literal-pathspecs restore --source="$target" --staged --worktree \
         --pathspec-from-file=- --pathspec-file-nul || return 1
   fi

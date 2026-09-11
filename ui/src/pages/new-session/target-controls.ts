@@ -124,6 +124,8 @@ export function renderNewSessionPlaceControls({
         })
       : renderWhereChip({
           state: whereState,
+          environmentQuery: browser.environmentQuery,
+          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
           gatewayName: gateway.gatewayName,
           cloudProfileId: place.cloudProfileId,
           machineClass,
@@ -140,7 +142,8 @@ export function renderNewSessionPlaceControls({
           isAdmin: place.isAdmin(),
           ...browser.popoverCallbacks("where"),
           onSelectDevice: (deviceId) => place.selectDevice(deviceId),
-          onSelectAutoDevice: () => place.selectDevice("", true),
+          onToggleAutoDevice: (enabled) =>
+            place.selectDevice("", enabled, { keepPickerOpen: true }),
           onSelectCloudProfile: (profileId) => place.selectCloudProfile(profileId),
           onSelectCloudOs: (osId) =>
             place.cloudMachines.selectOs(

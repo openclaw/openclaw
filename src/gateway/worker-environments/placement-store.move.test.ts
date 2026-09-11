@@ -14,6 +14,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-move",
@@ -65,6 +66,11 @@ describe("worker session placement moves", () => {
         remoteWorkspaceDir: "/workspace/move",
       },
     });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-move",
+      sessionId: SESSION.sessionId,
+      ownerEpoch: 7,
+    });
     const active = store.transition({
       sessionId: SESSION.sessionId,
       from: "starting",
@@ -84,24 +90,7 @@ describe("worker session placement moves", () => {
     ownerEpoch: number;
     profileId?: string;
   }): void {
-    database.db
-      .prepare(
-        `INSERT INTO worker_environments (
-          environment_id, provider_id, profile_id, profile_snapshot_json,
-          provision_operation_id, lease_id, state, owner_epoch,
-          attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-        ) VALUES (?, 'test', ?, '{}', ?, 'lease-test', 'attached', ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.environmentId,
-        input.profileId ?? "profile-source",
-        `provision:${input.environmentId}`,
-        input.ownerEpoch,
-        JSON.stringify([input.sessionId]),
-        nowMs,
-        nowMs,
-        nowMs,
-      );
+    seedAttachedPlacementEnvironment(database, input);
   }
 
   it("lazily begins one exact-source move in the drain transaction", () => {
@@ -370,6 +359,9 @@ describe("worker session placement moves", () => {
   it("keeps invalid move attempts from creating optional storage", () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
     const active = advanceToActive();
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run(active.environmentId);
 
     expect(() =>
       store.beginPlacementMove({

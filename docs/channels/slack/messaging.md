@@ -32,7 +32,7 @@ Notes:
 
 ### Scope (`messages.ackReactionScope`)
 
-The Slack provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Slack-account or Slack-channel-level override today; the value is global to the gateway.
+The Slack provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Slack-account or Slack-channel-level override; the value is global to the gateway.
 
 Values:
 
@@ -60,7 +60,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 `channels.slack.streaming` controls live preview behavior:
 
 - `off`: disable live preview streaming.
-- `partial`: replace preview text with the latest partial output. Set this to restore the previous default behavior.
+- `partial`: replace preview text with the latest partial output. Set this to restore the pre-2026.8.1 default, before `progress` became the default ([#122552](https://github.com/openclaw/openclaw/pull/122552)).
 - `block`: append chunked preview updates.
 - `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
 - `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).

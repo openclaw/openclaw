@@ -222,8 +222,14 @@ function isEligibleInteractiveSession(ctx: {
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
+  inputProvenance?: { kind?: string };
 }): boolean {
   if (ctx.trigger !== "user") {
+    return false;
+  }
+  // Inter-session deliveries retain the user trigger. Their typed origin keeps
+  // them out of human-message recall.
+  if (ctx.inputProvenance?.kind === "inter_session") {
     return false;
   }
   // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).

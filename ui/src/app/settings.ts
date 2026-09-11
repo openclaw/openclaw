@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
+import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -249,6 +250,10 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
   const pageUrl = `${proto}://${location.host}${basePath}`;
+  const devGateway = configuredUiDevGateway();
+  if (devGateway) {
+    return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
+  }
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
@@ -441,7 +446,9 @@ export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): Ui
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
 }
 
-export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
+export function loadUiPreferences(
+  targetGatewayUrl = configuredUiDevGateway()?.gatewayUrl,
+): UiPreferences {
   const cached = unpersistedSettings;
   if (
     cached &&

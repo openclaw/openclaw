@@ -189,9 +189,7 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher
-    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
-    : addIgnoreRules(dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -250,9 +248,7 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher
-    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
-    : addIgnoreRules(dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });

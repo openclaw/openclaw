@@ -284,8 +284,8 @@ suite.define(() => {
         .toBeGreaterThan(requests);
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
-        .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+        .poll(() => runner.locator(".session-menu__description").textContent())
+        .toBe("No worker slots are available. Wait for a slot or pick another device.");
       // A disabled row keeps a muted meter with no utilization claim.
       await expect
         .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))

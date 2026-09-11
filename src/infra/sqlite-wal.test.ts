@@ -656,14 +656,14 @@ describe("sqlite WAL maintenance", () => {
     expect(close).not.toHaveBeenCalled();
     expect(maintenance.checkpoint()).toBe(false);
     expect(write).toHaveBeenCalledWith(
-      process.stderr.fd,
+      2,
       expect.stringContaining(`"sidecarPath":"${sidecarPath}"`),
     );
   });
 
-  it.runIf(process.platform === "linux")(
-    "preserves the replacement WAL family across fatal containment and reopen",
-    async () => {
+  it.runIf(process.platform === "linux").each(["main", "worker"] as const)(
+    "preserves the replacement WAL family across fatal containment and reopen from a %s thread",
+    async (thread) => {
       const tempDir = tempDirs.make("openclaw-sqlite-wal-replacement-");
       const databasePath = path.join(tempDir, "state.sqlite");
       const staleCloseMarker = path.join(tempDir, "stale-close-marker");
@@ -681,13 +681,16 @@ describe("sqlite WAL maintenance", () => {
         childScript,
         `
           import fs from "node:fs";
+          import { Worker } from "node:worker_threads";
           import { DatabaseSync } from "node:sqlite";
           import { configureSqliteWalMaintenance } from ${JSON.stringify(sqliteWalModuleUrl)};
 
           const role = process.argv[2];
           const databasePath = process.argv[3];
           const staleCloseMarker = process.argv[4];
-          if (role === "stale") {
+          if (role === "worker") {
+            new Worker(new URL(import.meta.url), { argv: ["stale", databasePath, staleCloseMarker] });
+          } else if (role === "stale") {
             const stale = new DatabaseSync(databasePath);
             setTimeout(() => {
               fs.writeFileSync(staleCloseMarker, stale.isOpen ? "open" : "closed");
@@ -716,7 +719,14 @@ describe("sqlite WAL maintenance", () => {
         let stderr = "";
         const child = spawn(
           process.execPath,
-          ["--import", "tsx", childScript, role, databasePath, staleCloseMarker],
+          [
+            "--import",
+            "tsx",
+            childScript,
+            role === "stale" && thread === "worker" ? "worker" : role,
+            databasePath,
+            staleCloseMarker,
+          ],
           {
             env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" },
             stdio: ["ignore", "pipe", "pipe"],
@@ -754,13 +764,37 @@ describe("sqlite WAL maintenance", () => {
         current = spawnRole("current", "current-ready");
         await current.ready;
 
-        const timeout = setTimeout(() => stale.child.kill("SIGKILL"), 20_000);
+        let containmentWatchdogFired = false;
+        const timeout = setTimeout(() => {
+          containmentWatchdogFired = true;
+          stale.child.kill("SIGKILL");
+        }, 20_000);
         const childResult = await stale.closed;
         clearTimeout(timeout);
 
         expect(childResult, stale.stderr()).toEqual({ code: null, signal: "SIGKILL" });
-        expect(stale.stderr()).toContain("SQLite WAL sidecar identity mismatch");
+        expect(containmentWatchdogFired).toBe(false);
         expect(fs.existsSync(staleCloseMarker)).toBe(false);
+        const fatalEvents = stale
+          .stderr()
+          .split("\n")
+          .filter((line) => line.startsWith("{"))
+          .map((line) => JSON.parse(line))
+          .filter((event) => event.event === "sqlite_wal_sidecar_identity_mismatch");
+        expect(fatalEvents).toHaveLength(1);
+        expect(fatalEvents[0]).toMatchObject({
+          level: "fatal",
+          subsystem: "infra/sqlite-wal",
+          message: "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup",
+          databasePath,
+          databaseLabel: "replacement-family-test",
+          pid: stale.child.pid,
+          descriptorDevice: expect.stringMatching(/^\d+$/u),
+          descriptorInode: expect.stringMatching(/^\d+$/u),
+        });
+        expect([`${databasePath}-wal`, `${databasePath}-shm`]).toContain(
+          fatalEvents[0].sidecarPath,
+        );
 
         current.child.kill("SIGKILL");
         await current.closed;
@@ -768,8 +802,11 @@ describe("sqlite WAL maintenance", () => {
         if (stale.child.exitCode === null && stale.child.signalCode === null) {
           stale.child.kill("SIGKILL");
         }
+        await stale.closed;
         if (current && current.child.exitCode === null && current.child.signalCode === null) {
           current.child.kill("SIGKILL");
+        }
+        if (current) {
           await current.closed;
         }
       }

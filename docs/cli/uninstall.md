@@ -25,7 +25,8 @@ Remove any remaining CLI through the [installation-specific steps](/install/unin
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to the Gateway service only).
+to remove (defaults to the Gateway service only). Take an archive with
+[`openclaw backup`](/cli/backup) first if you may want the state back.
 
 ## Examples
 

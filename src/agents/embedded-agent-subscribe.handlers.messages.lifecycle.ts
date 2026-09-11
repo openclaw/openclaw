@@ -34,6 +34,7 @@ import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe
 import {
   createThinkingTagStreamState,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   extractEmbeddedAssistantText,
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
@@ -122,13 +123,21 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   }));
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
+  const messageToolText = extractStandaloneMessageToolText(rawVisibleText, {
+    allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
+    allowCurrentSourceReply:
+      ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.builtinToolNames?.has("message") === true,
+  });
+  // JSON decoding can introduce control syntax after snapshot sanitization.
+  // Retain the selected text phase without requiring another outer <final> envelope.
   const text =
-    extractStandaloneMessageToolText(rawVisibleText, {
-      allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
-      allowCurrentSourceReply:
-        ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
-        ctx.builtinToolNames?.has("message") === true,
-    }) ?? rawVisibleText;
+    messageToolText === undefined
+      ? rawVisibleText
+      : extractAssistantVisibleText(
+          scopeAssistantMessageToStreamBlock(assistantMessage, snapshot.parts[0]?.index, undefined),
+          () => messageToolText,
+        );
   // Exact NO_REPLY stays silent. The legacy rewrite (silentReplyRewrite) was
   // removed by contract; global messaging-tool send evidence is not a
   // user-route reply and must never be mirrored into the final payload.
@@ -177,7 +186,7 @@ export function handleMessageEnd(
   if (text !== rawVisibleText) {
     // A structured message-tool result is projected before it enters the reply buffer.
     ctx.state.blockState.textIsVisible = true;
-    replaceBlockReplyBuffer(ctx, text);
+    replaceBlockReplyBuffer(ctx, cleanedText);
   } else if (ctx.blockChunker.consumedLength === 0) {
     // Observing a native index does not mean its predecessors were delivered:
     // phase-pending and suppressed streams can leave the whole message unsent.
@@ -188,13 +197,15 @@ export function handleMessageEnd(
             ctx.state.lastAssistantTextItemId,
           )
         : -1;
-    const pendingText =
+    const pendingSnapshot =
       preparedIndex >= 0 && Array.isArray(sourceContent)
         ? extractAssistantStreamSnapshot(ctx, {
             ...sourceMessage,
             content: sourceContent.slice(preparedIndex + 1),
-          }).text
-        : sourceSnapshot.text;
+          })
+        : sourceSnapshot;
+    const pendingText =
+      pendingSnapshot === snapshot ? cleanedText : parseReplyDirectives(pendingSnapshot.text).text;
     ctx.state.blockState = {
       thinking: false,
       final: false,

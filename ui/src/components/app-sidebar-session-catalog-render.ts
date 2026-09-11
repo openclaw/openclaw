@@ -542,20 +542,8 @@ function renderCatalogSessionRow(
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
-  const menuOpen = params.isMenuOpen(catalogKey);
-  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
-  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-  if (adoptedRow) {
-    return params.renderLiveRow(adoptedRow, {
-      catalogIdentityKey: identityKey,
-      catalogMenuOpen: menuOpen,
-      ...(rowRef ? { rowRef } : {}),
-      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-    });
-  }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const color = normalizeSessionColorValue(session.color ?? "");
   const routeId = "chat";
   const target = sessionNavigationTarget({
     face: routeId,
@@ -565,26 +553,35 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
+  const catalogMenu: CatalogSessionMenuRequest = {
+    key: catalogKey,
+    agentId: params.newSessionAgentId,
+    routeId,
+    navigation,
+    canOpenTerminal: session.canOpenTerminal === true,
+    canDelete: session.canArchive && catalog.capabilities.archive,
+    name: session.name ?? session.threadId,
+    meta,
+  };
+  const menuOpen = params.isMenuOpen(catalogKey);
+  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+  if (adoptedRow) {
+    return params.renderLiveRow(adoptedRow, {
+      catalogIdentityKey: identityKey,
+      catalogMenuOpen: menuOpen,
+      catalogMenu,
+      ...(rowRef ? { rowRef } : {}),
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+    });
+  }
+  const color = normalizeSessionColorValue(session.color ?? "");
   const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(
-      {
-        key: catalogKey,
-        agentId: params.newSessionAgentId,
-        routeId,
-        navigation,
-        canOpenTerminal: session.canOpenTerminal === true,
-        canDelete: session.canArchive && catalog.capabilities.archive,
-        name: session.name ?? session.threadId,
-        meta,
-      },
-      x,
-      y,
-      trigger,
-    );
+    params.onOpenMenu(catalogMenu, x, y, trigger);
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,

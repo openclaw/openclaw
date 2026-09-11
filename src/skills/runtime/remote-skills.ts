@@ -1,5 +1,6 @@
 import type { NodeSkillDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
@@ -9,6 +10,7 @@ import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
   frontmatter: ParsedSkillFrontmatter;
+  contentHash: string;
 };
 
 type RemoteSkillNode = {
@@ -50,7 +52,7 @@ function prepareNodeSkills(
         log.warn(`dropped node skill with mismatched frontmatter: ${nodeId}/${skill.name}`);
         continue;
       }
-      prepared.push({ ...skill, frontmatter });
+      prepared.push({ ...skill, frontmatter, contentHash: sha256Hex(skill.content) });
     } catch (error) {
       const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
       log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
@@ -226,6 +228,7 @@ export function mergeRemoteNodeSkillEntries(
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
         readContent: skill.content,
+        contentHash: skill.contentHash,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
         source: "openclaw-node",

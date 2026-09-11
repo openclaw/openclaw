@@ -95,7 +95,7 @@ internal fun HealthLogsSettingsScreen(
     HealthStatusPanel(
       gateway = gatewayStatusForDisplay(gatewayConnectionDisplay.statusText),
       node = if (isNodeConnected) nativeString("Online") else nativeString("Waiting"),
-      chat = if (chatHealthOk) nativeString("Ready") else nativeString("Needs connection"),
+      chat = if (chatHealthOk) nativeString("Ready") else nativeString("Not ready"),
       models = nativeString("\${modelCount.size} available", modelCount.size),
       voice = nativeString(talkStatus),
       runs = if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"),

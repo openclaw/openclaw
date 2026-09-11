@@ -17,6 +17,7 @@ import {
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -390,6 +391,7 @@ function serializeDiff(lines: readonly { kind: string; text: string }[]): string
 }
 
 export type ToolRenderOptions = {
+  pluginToolIcons?: PluginToolIcons;
   messageKey: string;
   sessionKey?: string;
   agentId?: string;

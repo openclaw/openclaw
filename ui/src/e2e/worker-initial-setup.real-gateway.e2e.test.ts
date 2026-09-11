@@ -22,6 +22,7 @@ import { createWorkerSessionTurnPlacementProvider } from "../../../src/gateway/w
 import {
   attachedEnvironment,
   credential,
+  dispatchInitialWorkerPlacement,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   measureLaunchTurn,
@@ -31,6 +32,7 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "../../../src/gateway/worker-environments/workspace-operation-coordinator.js";
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
+import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -125,38 +127,25 @@ suite.define(() => {
         sidecarStartup: "start",
       });
       await gateway.startupSettled;
-      const placements = createWorkerSessionPlacementStore();
+      const database = openOpenClawStateDatabase();
+      const placements = createWorkerSessionPlacementStore({ database });
       const syncing = createDeferredCore();
       const dispatch = coordinateWorkerPlacementDispatch(
         createCoordinatorTestService({
-          dispatch: async (_request, report) => {
-            let placement = placements.startDispatch({ ...scope, executionMode: "worker-turn" });
-            for (const step of [
-              { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
-              { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-              {
-                to: "starting",
-                patch: { remoteWorkspaceDir: workspace, workspaceBaseManifestRef: MANIFEST_REF },
+          dispatch: async (_request, report) =>
+            await dispatchInitialWorkerPlacement({
+              database,
+              placements,
+              identity: { ...scope, executionMode: "worker-turn" },
+              workspace,
+              onTransition: async (placement) => {
+                report?.(placement);
+                if (placement.state === "syncing") {
+                  syncing.resolve();
+                  await release.promise;
+                }
               },
-              { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
-            ] as const) {
-              placement = placements.transition({
-                sessionId,
-                from: placement.state,
-                expectedGeneration: placement.generation,
-                ...step,
-              });
-              report?.(placement);
-              if (placement.state === "syncing") {
-                syncing.resolve();
-                await release.promise;
-              }
-            }
-            if (placement.state !== "active") {
-              throw new Error("setup fixture did not activate");
-            }
-            return placement;
-          },
+            }),
         }),
         (_request, run) => run(),
       );

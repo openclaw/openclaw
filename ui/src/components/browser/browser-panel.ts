@@ -176,6 +176,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.browserPanelController.resetBrowserState();
     }
     if (clientChanged || sessionChanged) {
+      this.browserPanelController.native.cancelPendingActivation();
+      this.browserPanelController.native.cancelCapture();
       this.consumedPreferredRevision = undefined;
     }
     return clientChanged || sessionChanged;
@@ -203,7 +205,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     this.consumedPreferredRevision = revision;
     const tab = readBrowserTabTarget(this.preferredTab.tab);
     if (tab) {
-      void this.browserPanelController.selectTab(tab.targetId, tab);
+      // Session results own the panel route and view, not the user's physical browser focus.
+      void this.browserPanelController.selectTab(tab.targetId, tab, { focusBrowserTab: false });
     }
     return true;
   }

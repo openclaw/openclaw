@@ -265,6 +265,34 @@ export async function applyNonInteractiveAuthChoice(params: {
           `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
         );
       }
+      if (customApiKeyInput !== undefined && resolvedCustomApiKey?.source !== "profile") {
+        const { isSetupCredentialReplacement, saveSetupCredential } =
+          await import("../../../system-agent/setup-inference-credentials.js");
+        if (
+          isSetupCredentialReplacement({
+            provider: result.providerId,
+            baseConfig,
+            agentDir: params.target.agentDir,
+          })
+        ) {
+          const { prepareCustomSetupCredentials } =
+            await import("../../../system-agent/setup-inference-custom.js");
+          const prepared = prepareCustomSetupCredentials(result);
+          await saveSetupCredential({
+            profile: prepared.profiles[0]!,
+            config: prepared.config,
+            baseConfig,
+            agentDir: params.target.agentDir,
+            modelRef: `${result.providerId}/${result.modelId}`,
+          });
+          rejectOnboardingOption(
+            opts,
+            runtime,
+            "Replacement credential saved but inactive. Your connection is unchanged. Open Model Setup to test and activate the saved sign-in.",
+          );
+          return null;
+        }
+      }
       return result.config;
     } catch (err) {
       const message =

@@ -16,8 +16,14 @@ const jobPageSchema = z.object({
   jobs: z.array(
     z.object({
       id: z.number().int().positive(),
+      run_id: z.number().int().positive(),
+      run_attempt: z.number().int().positive(),
+      head_sha: z.string().regex(/^[a-f0-9]{40}$/u),
       name: z.string(),
+      status: z.string(),
       conclusion: z.string().nullable(),
+      started_at: z.iso.datetime(),
+      completed_at: z.iso.datetime().nullable(),
       labels: z.array(z.string()),
     }),
   ),
@@ -62,133 +68,218 @@ async function main() {
     .string()
     .regex(/^[\w.-]+\/[\w.-]+$/u)
     .parse(values.repo);
-  const runPageSchema = z.array(
-    z.object({
-      id: z.number().int().positive(),
-      created_at: z.iso.datetime(),
-      status: z.literal("completed"),
-      conclusion: z.literal("success"),
-      // A dispatch from main can check out target_ref; only push runs prove the measured ref.
-      event: z.literal("push"),
-      head_branch: z.literal("main"),
-      head_sha: z.string().regex(/^[a-f0-9]{40}$/u),
-    }),
+  // Freeze both bounds once. Pagination and retries must not move the cohort.
+  const upper = new Date().toISOString();
+  const lower = new Date(Date.parse(upper) - 7 * 86_400_000).toISOString();
+  const inWindow = (timestamp: string) =>
+    Date.parse(timestamp) >= Date.parse(lower) && Date.parse(timestamp) <= Date.parse(upper);
+  const runSchema = z.object({
+    id: z.number().int().positive(),
+    run_attempt: z.number().int().positive(),
+    created_at: z.iso.datetime().refine(inWindow, "created_at is outside the frozen UTC window"),
+    status: z.literal("completed"),
+    conclusion: z.literal("success"),
+    event: z.string(),
+    head_branch: z.string().min(1),
+    head_sha: z.string().regex(/^[a-f0-9]{40}$/u),
+  });
+  console.log(`Frozen UTC window: ${lower} through ${upper} (7 days).\n`);
+  console.log("Release workflow SHAs identify tooling, not the measured target.\n");
+  console.log(
+    "| Source | Run | Attempt | Workflow SHA | Created (UTC) | Parsed profiles | Timing jobs |\n| --- | ---: | ---: | --- | --- | --- | ---: |",
   );
-  const listed: z.infer<typeof runPageSchema> = [];
-  const pageSize = Math.min(count, 100);
-  for (let page = 1; listed.length < count; page += 1) {
-    if (page > 25) {
-      throw new Error("Run pagination limit exceeded; reduce --runs");
-    }
-    const runs = runPageSchema.parse(
-      JSON.parse(
-        await readGh([
-          "api",
-          `repos/${repo}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=${pageSize}&page=${page}`,
-          "--jq",
-          "[.workflow_runs[] | {id, created_at, status, conclusion, event, head_branch, head_sha}]",
-        ]),
-      ),
-    );
-    listed.push(...runs);
-    if (runs.length < pageSize) {
-      break;
-    }
-  }
-  if (listed.length === 0) {
-    throw new Error("No successful main CI runs found");
-  }
-  const releaseRunPageSchema = z.array(
-    runPageSchema.element.extend({
-      event: z.literal("workflow_dispatch"),
-      head_branch: z.string().min(1),
-    }),
-  );
-  const releaseRuns: z.infer<typeof releaseRunPageSchema> = [];
-  // Full Release Validation freezes tooling on release-ci branches. These
-  // workflows validate the canonical target before any Gateway test executes;
-  // workflow head_sha is tooling identity, not the measured source identity.
-  for (const workflow of [
-    "openclaw-release-checks.yml",
-    "openclaw-live-and-e2e-checks-reusable.yml",
-  ]) {
-    let sampled = 0;
-    for (let page = 1; sampled < count; page += 1) {
-      if (page > 25) {
-        throw new Error("Release run pagination limit exceeded; reduce --runs");
-      }
-      const pageRuns = releaseRunPageSchema.parse(
-        JSON.parse(
-          await readGh([
-            "api",
-            `repos/${repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&status=success&per_page=${pageSize}&page=${page}`,
-            "--jq",
-            "[.workflow_runs[] | {id, created_at, status, conclusion, event, head_branch, head_sha}]",
-          ]),
-        ),
-      );
-      releaseRuns.push(...pageRuns.slice(0, count - sampled));
-      sampled += pageRuns.length;
-      if (pageRuns.length < pageSize) {
-        break;
-      }
-    }
-  }
   // New gh versions reject reporter ANSI unless opted in; logs are parsed, never printed.
   const logFlags = (await readGh(["api", "--help"])).includes("--allow-escape-sequences")
     ? ["--allow-escape-sequences"]
     : [];
   const runs: CiTimingRun[] = [];
-  const sampledRuns = [
-    ...listed.slice(0, count).map((run) => ({ run, source: "ci" as const })),
-    ...releaseRuns.map((run) => ({ run, source: "release" as const })),
-  ];
-  for (const { run, source } of sampledRuns) {
+  const seenRuns = new Map<number, string>();
+  const seenJobs = new Map<number, string>();
+  async function readRun(run: z.infer<typeof runSchema>, source: "main" | "release") {
     const logs: CiTimingRun["logs"] = [];
-    let seenJobs = 0;
-    for (let page = 1; page <= 25; page += 1) {
-      const payload = jobPageSchema.parse(
+    let pages = 0;
+    // A partial retry omits successful original jobs. Read every captured attempt,
+    // then give the refit one run so retries cannot become independent samples.
+    for (let attempt = 1; attempt <= run.run_attempt; attempt += 1) {
+      const attemptLogs: CiTimingRun["logs"] = [];
+      const jobIds = new Set<number>();
+      let total: number | undefined;
+      for (let page = 1; page <= 25; page += 1) {
+        if (++pages > 25) {
+          throw new Error(`Job pagination limit reached for run ${run.id}`);
+        }
+        const payload = jobPageSchema.parse(
+          JSON.parse(
+            await readGh([
+              "api",
+              `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+            ]),
+          ),
+        );
+        if (total !== undefined && total !== payload.total_count) {
+          throw new Error(`Job pagination changed for run ${run.id} attempt ${attempt}`);
+        }
+        total = payload.total_count;
+        for (const job of payload.jobs) {
+          if (
+            job.run_id !== run.id ||
+            job.run_attempt !== attempt ||
+            job.head_sha !== run.head_sha
+          ) {
+            throw new Error(`Job ${job.id} run_id/run_attempt/head_sha does not match its cohort`);
+          }
+          const identity = JSON.stringify(job);
+          if (seenJobs.has(job.id) && seenJobs.get(job.id) !== identity) {
+            throw new Error(`Job ${job.id} changed during pagination`);
+          }
+          jobIds.add(job.id);
+          if (seenJobs.has(job.id)) {
+            continue;
+          }
+          seenJobs.set(job.id, identity);
+          if (job.conclusion !== "success") {
+            continue;
+          }
+          if (
+            job.status !== "completed" ||
+            !job.completed_at ||
+            !inWindow(job.started_at) ||
+            !inWindow(job.completed_at) ||
+            Date.parse(job.completed_at) < Date.parse(job.started_at)
+          ) {
+            throw new Error(
+              `Successful job ${job.id} is not completed inside the frozen UTC window`,
+            );
+          }
+          const kind =
+            source === "release"
+              ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
+                ? "repoE2e"
+                : undefined
+              : job.name.startsWith("checks-ui-e2e (")
+                ? "uiE2e"
+                : job.name.startsWith("checks-node-compact-")
+                  ? "compact"
+                  : undefined;
+          if (kind) {
+            console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+            attemptLogs.push({
+              kind,
+              labels: job.labels,
+              text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+            });
+          }
+        }
+        if (jobIds.size === total) {
+          break;
+        }
+        if (jobIds.size > total || payload.jobs.length === 0 || page === 25) {
+          throw new Error(`Job pagination incomplete for run ${run.id} attempt ${attempt}`);
+        }
+      }
+      const { contributingRunIds } = refitTestTimings([
+        { id: run.id, createdAt: run.created_at, logs: attemptLogs },
+      ]);
+      const profiles = Object.entries(contributingRunIds)
+        .filter(([, ids]) => ids.length > 0)
+        .map(([profile]) => profile);
+      console.log(
+        `| ${source} | ${run.id} | ${attempt} | ${run.head_sha} | ${run.created_at} | ${profiles.join(", ") || "none"} | ${attemptLogs.length} |`,
+      );
+      logs.push(...attemptLogs);
+    }
+    return { id: run.id, createdAt: run.created_at, logs };
+  }
+  async function sampleWorkflow(workflow: string, source: "main" | "release") {
+    const pageSchema = z.object({
+      total_count: z.number().int().nonnegative(),
+      workflow_runs: z.array(
+        runSchema.extend({
+          // A dispatch from main can check out target_ref; only push runs prove the measured ref.
+          event: z.literal(source === "main" ? "push" : "workflow_dispatch"),
+          head_branch: source === "main" ? z.literal("main") : z.string().min(1),
+        }),
+      ),
+    });
+    const pageSize = Math.min(count, 100);
+    const query = new URLSearchParams({
+      ...(source === "main" ? { branch: "main" } : {}),
+      event: source === "main" ? "push" : "workflow_dispatch",
+      status: "success",
+      created: `${lower}..${upper}`,
+      per_page: String(pageSize),
+    });
+    const listed = new Set<number>();
+    let listedRows = 0;
+    let sampled = 0;
+    // GitHub caps filtered searches at 1,000 results, even when total_count is larger.
+    const maxPages = Math.min(25, Math.ceil(1000 / pageSize));
+    for (let page = 1; page <= maxPages; page += 1) {
+      const payload = pageSchema.parse(
         JSON.parse(
           await readGh([
             "api",
-            `repos/${repo}/actions/runs/${run.id}/jobs?filter=all&per_page=100&page=${page}`,
-            "--jq",
-            "{total_count, jobs: [.jobs[] | {id, name, conclusion, labels}]}",
+            `repos/${repo}/actions/workflows/${workflow}/runs?${query}&page=${page}`,
           ]),
         ),
       );
-      for (const job of payload.jobs) {
-        if (job.conclusion !== "success") {
+      listedRows += payload.workflow_runs.length;
+      if (listedRows > 1000) {
+        throw new Error(`Run pagination limit reached for ${workflow}; reduce --runs`);
+      }
+      for (const run of payload.workflow_runs) {
+        listed.add(run.id);
+        const identity = JSON.stringify(run);
+        if (seenRuns.has(run.id) && seenRuns.get(run.id) !== identity) {
+          throw new Error(`Run ${run.id} changed during pagination`);
+        }
+        if (seenRuns.has(run.id)) {
           continue;
         }
-        const kind =
-          source === "release"
-            ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
-              ? "repoE2e"
-              : undefined
-            : job.name.startsWith("checks-ui-e2e (")
-              ? "uiE2e"
-              : job.name.startsWith("checks-node-compact-")
-                ? "compact"
-                : undefined;
-        if (kind) {
-          console.error(`[ci-timings] ${run.id}: ${job.name}`);
-          logs.push({
-            kind,
-            labels: job.labels,
-            text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
-          });
+        seenRuns.set(run.id, identity);
+        const timingRun = await readRun(run, source);
+        const { contributingRunIds } = refitTestTimings([timingRun]);
+        const compact = contributingRunIds.blacksmith.length + contributingRunIds.github.length > 0;
+        if (source === "main" ? compact : contributingRunIds.repoE2e.length > 0) {
+          runs.push(timingRun);
+        }
+        if (source === "release" || compact) {
+          sampled += 1;
+        }
+        if (sampled === count) {
+          return;
         }
       }
-      seenJobs += payload.jobs.length;
-      if (seenJobs >= payload.total_count) {
-        break;
+      if (listed.size === payload.total_count) {
+        return;
       }
-      if (payload.jobs.length === 0 || page === 25) {
-        throw new Error(`Job pagination incomplete for CI run ${run.id}`);
+      if (listed.size > payload.total_count || payload.workflow_runs.length === 0) {
+        throw new Error(`Run pagination incomplete for ${workflow}`);
       }
     }
-    runs.push({ id: run.id, createdAt: run.created_at, logs });
+    throw new Error(`Run pagination limit reached for ${workflow}; reduce --runs`);
+  }
+  await sampleWorkflow("ci.yml", "main");
+  const fresh = refitTestTimings(runs);
+  const { blacksmith, github } = fresh.contributingRunIds;
+  const mainContributors = new Set([...blacksmith, ...github]);
+  if (
+    mainContributors.size < 2 ||
+    Object.values(fresh.timings.compactGroupSeconds).every(
+      (profile) => Object.keys(profile).length === 0,
+    )
+  ) {
+    throw new Error(
+      `Found ${mainContributors.size} independent main compact contributors. Need at least two and a newly eligible compact measurement in the frozen UTC window; retry after successful main CI. No timing file written.`,
+    );
+  }
+  // Release workflows validate their target before Gateway tests. Their head SHA
+  // binds jobs to tooling, never substitutes for the measured source identity.
+  for (const workflow of [
+    "openclaw-release-checks.yml",
+    "openclaw-live-and-e2e-checks-reusable.yml",
+  ]) {
+    await sampleWorkflow(workflow, "release");
   }
   let previous;
   try {
@@ -196,16 +287,10 @@ async function main() {
   } catch {
     // A missing or invalid baseline has no measurements worth preserving.
   }
-  const { timings, changes, runIds } = refitTestTimings(runs, previous);
-  if (
-    Object.keys(timings.uiE2e.fileSeconds).length +
-      Object.keys(timings.repoE2eFileSeconds).length +
-      Object.keys(timings.compactGroupSeconds.blacksmith).length +
-      Object.keys(timings.compactGroupSeconds.github).length ===
-    0
-  ) {
-    throw new Error("No test timings have at least two successful run samples");
-  }
+  const { timings, changes, runIds, contributingRunIds } = refitTestTimings(runs, previous);
+  console.log(
+    `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${blacksmith.length}; GitHub: ${github.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
+  );
   ciTestTimingsSchema.parse(timings);
   console.log(`Sampled successful CI and release-check runs: ${runIds.join(", ")}\n`);
   console.log("| Key | Old seconds | New seconds | Delta |\n| --- | ---: | ---: | ---: |");

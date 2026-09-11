@@ -39,11 +39,7 @@ export {
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
-export type {
-  GatewayPortHealthSnapshot,
-  GatewayRestartSnapshot,
-  GatewayRestartWaitOutcome,
-} from "./restart-health.types.js";
+export type { GatewayRestartSnapshot } from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
@@ -163,6 +159,7 @@ export async function inspectGatewayRestart(params: {
           healthy: true,
           staleGatewayPids: [],
           gatewayVersion: reachable.gatewayVersion,
+          ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
           gatewayBuildId: reachable.gatewayBuildId,
           ...(reachable.activatedPluginErrors.length > 0
             ? { activatedPluginErrors: reachable.activatedPluginErrors }
@@ -203,17 +200,20 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
+  let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
   if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
   }
   if (!healthy && running && portUsage.status === "busy" && !requiresGatewayProbe) {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
   }
@@ -243,6 +243,7 @@ export async function inspectGatewayRestart(params: {
       portUsage,
       healthy,
       staleGatewayPids,
+      ...(gatewayBootId ? { gatewayBootId } : {}),
       ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(probeError ? { probeError } : {}),
@@ -278,6 +279,17 @@ function withWaitContext(
   elapsedMs: number,
 ): GatewayRestartSnapshot {
   return { ...snapshot, waitOutcome, elapsedMs };
+}
+
+export function isSameGatewayRestartGeneration(
+  previous: GatewayRestartSnapshot,
+  current: GatewayRestartSnapshot,
+): boolean {
+  return (
+    previous.runtime.status === current.runtime.status &&
+    previous.runtime.pid === current.runtime.pid &&
+    previous.gatewayBootId === current.gatewayBootId
+  );
 }
 
 export async function waitForGatewayHealthyRestart(params: {
@@ -338,7 +350,7 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let healthyStreak: { pid: number | undefined; probes: number } | undefined;
+  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
@@ -353,10 +365,10 @@ export async function waitForGatewayHealthyRestart(params: {
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
-      if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
+      if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
       } else {
-        healthyStreak = { pid: snapshot.runtime.pid, probes: 1 };
+        healthyStreak = { snapshot, probes: 1 };
       }
       if (healthyStreak.probes >= settleProbes) {
         return withWaitContext(snapshot, "healthy", elapsedMs);

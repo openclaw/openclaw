@@ -1,5 +1,6 @@
 {
   "id": "zai",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

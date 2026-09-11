@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -12,8 +13,14 @@ import {
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
-import { createPluginCache, getPluginCacheRoot, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCacheRoot,
+  getPluginCacheSource,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { preparePluginModule } from "./plugin-module-loader-cache.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -163,6 +170,42 @@ describe("plugin package facts", () => {
     ).toBe(first);
     expect(getPluginCacheRoot(root).artifacts.has("missing-surface")).toBe(true);
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("keeps checked source aliases authoritative within their explicit cache generation", () => {
+    const parent = fs.realpathSync(tempDirs.make("plugin-source-alias-"));
+    const root = path.join(parent, "package with spaces");
+    const alias = path.join(parent, "alias with spaces");
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, "api.cjs"), "module.exports = {};\n");
+    fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+    const aliasPath = path.join(alias, "api.cjs");
+    const owner = createPluginCache();
+    const lexicalSource = getPluginCacheSource(aliasPath, owner);
+    const prepared = withPluginCache(owner, () =>
+      preparePluginModule({
+        modulePath: aliasPath,
+        boundaryRoot: alias,
+        boundaryLabel: "plugin root",
+        rejectHardlinks: true,
+        surfaceLabel: "fixture public surface",
+      }),
+    );
+    expect(prepared.source).not.toBe(lexicalSource);
+
+    const foreign = createPluginCache();
+    const foreignSource = getPluginCacheSource(aliasPath, foreign);
+    withPluginCache(foreign, () => {
+      expect(getPluginCacheSource(aliasPath)).toBe(foreignSource);
+      for (const modulePath of [
+        aliasPath,
+        prepared.modulePath,
+        path.relative(process.cwd(), aliasPath),
+        pathToFileURL(aliasPath).href,
+      ]) {
+        expect(getPluginCacheSource(modulePath, owner)).toBe(prepared.source);
+      }
+    });
   });
 
   it("does not use a permissive hardlink read to satisfy a strict root policy", () => {

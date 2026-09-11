@@ -104,12 +104,13 @@ bare-id links and links with an older title still resolve, and the browser repla
 the name with the current title without adding history. Titles that produce no slug
 use the bare id. A configured Control UI base path prefixes the route, for example
 `/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
-32-character Beam id also work. Update the Beam skill before updating the receiver
-so its response validator accepts named links.
+32-character Beam id also work. Named links shipped in the 2026.8.2 receiver;
+update the Beam skill before updating the receiver so its response validator
+accepts them.
 
 Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 
-`sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
+`sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
 ## Continue on the Team Gateway
 
@@ -189,29 +190,17 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 ## Troubleshooting
 
-`404 Not Found`
+**`404 Not Found`** The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
 
-: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+**`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
 
-`401 Unauthorized`
+**`405 Method Not Allowed`** The receiver accepts only `POST`.
 
-: The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
+**`413 Payload Too Large`** The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
 
-`405 Method Not Allowed`
+**`429 Too Many Requests`** The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
 
-: The receiver accepts only `POST`.
-
-`413 Payload Too Large`
-
-: The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
-
-`429 Too Many Requests`
-
-: The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
-
-`beam mirror upload blocked ... receiver returned redirect`
-
-: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
 
 ## Related
 

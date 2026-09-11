@@ -140,7 +140,10 @@ describe("keyboard shortcut catalog presentation", () => {
       "↑",
     ]);
     expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, true)).toBe(
-      "⌘Click",
+      "⌥Click",
+    );
+    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, false)).toBe(
+      "Alt+Click",
     );
     expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect, false)).toBe(
       "Shift+Click",

@@ -1,0 +1,208 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/io.js";
+import { replaceConfigFile } from "../../config/mutate.js";
+import { GUARDED_CONFIG_INCLUDE_WRITE_ERROR } from "../../config/mutation-conflict.js";
+import { withConfigWriteLock } from "../../config/write-lock.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
+
+it.each([
+  { revoked: false, included: false, late: false },
+  { revoked: true, included: false, late: false },
+  { revoked: false, included: true, late: false },
+  { revoked: true, included: true, late: false },
+  { revoked: true, included: true, late: true },
+])(
+  "guards config publication with its live source executor (revoked=$revoked, included=$included, late=$late)",
+  async ({ revoked, included, late }) => {
+    const home = await fs.realpath(dirs.make("update-config-commit-fence-"));
+    const stateDir = path.join(home, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const control = path.join(home, "control");
+    await fs.mkdir(control);
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const options = { env };
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const includePath = path.join(stateDir, "includes", "gateway.json");
+    const includedRaw = '{"mode":"local","port":18789}\n';
+    const original = included
+      ? '{"gateway":{"$include":"./includes/gateway.json"}}\n'
+      : '{"gateway":{"mode":"local","port":18789}}\n';
+    await fs.writeFile(configPath, original);
+    if (included) {
+      await fs.mkdir(path.dirname(includePath));
+      if (process.platform !== "win32") {
+        await fs.chmod(path.dirname(includePath), 0o3700);
+      }
+      await fs.writeFile(includePath, includedRaw);
+    }
+    const preservedPaths = included ? [configPath, includePath] : [];
+    if (included) {
+      for (const target of [configPath, includePath]) {
+        for (const suffix of [".bak", ".bak.1"]) {
+          const backupPath = `${target}${suffix}`;
+          await fs.writeFile(backupPath, `retained ${path.basename(backupPath)}\n`);
+          preservedPaths.push(backupPath);
+        }
+      }
+    }
+    const captureFiles = () =>
+      Promise.all(
+        preservedPaths.map(async (target) => {
+          const stat = await fs.lstat(target, { bigint: true });
+          return {
+            bytes: await fs.readFile(target),
+            dev: stat.dev,
+            ino: stat.ino,
+            mode: stat.mode,
+            mtimeNs: stat.mtimeNs,
+            ctimeNs: stat.ctimeNs,
+          };
+        }),
+      );
+    const beforeFiles = await captureFiles();
+    const beforeEntries = included
+      ? [await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]
+      : [];
+    let reachedCommit = false;
+    const owned = withUpdateCommandExecutor(run.runId, async (executor) => {
+      const fence = await executor.enter(home);
+      const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
+      const revoke = () => {
+        const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
+        try {
+          db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+            "replacement",
+            home,
+          );
+        } finally {
+          db.close();
+        }
+      };
+      const beforeCommit = async () => {
+        reachedCommit = true;
+        if (revoked && !late) {
+          revoke();
+        }
+        if (late) {
+          const fsync = syncFs.fsyncSync;
+          vi.spyOn(syncFs, "fsyncSync").mockImplementationOnce((fd) => {
+            fsync(fd);
+            revoke();
+          });
+        }
+      };
+      return await withConfigWriteLock(
+        configPath,
+        async () =>
+          withConfigWriteLock(
+            includePath,
+            async () => {
+              const nextConfig = { gateway: { mode: "local" as const, port: 18791 } };
+              if (!included) {
+                return io.writeConfigFile(nextConfig, { beforeCommit });
+              }
+              const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+              return replaceConfigFile({
+                snapshot,
+                baseHash: snapshot.hash,
+                nextConfig: {
+                  ...snapshot.sourceConfig,
+                  gateway: { ...snapshot.sourceConfig.gateway, port: 18791 },
+                },
+                writeOptions: { ...writeOptions, beforeCommit, skipPluginValidation: true },
+                io: { ...io, env },
+              });
+            },
+            env,
+            () => fence.assertCurrent(),
+          ),
+        env,
+        () => fence.assertCurrent(),
+      );
+    });
+    if (included) {
+      // These revocations were scheduled at commit/fsync. Guarded includes now
+      // refuse before either boundary; they must not reach those callbacks.
+      await expect(owned).rejects.toThrow(new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR));
+      expect(reachedCommit).toBe(false);
+      expect(await captureFiles()).toEqual(beforeFiles);
+      expect([await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]).toEqual(
+        beforeEntries,
+      );
+    } else {
+      if (revoked) {
+        await expect(owned).rejects.toThrow(/executor|ownership/i);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      } else {
+        await owned;
+        expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(18791);
+      }
+      expect(reachedCommit).toBe(true);
+    }
+    if (included && process.platform !== "win32") {
+      expect((await fs.stat(path.dirname(includePath))).mode & 0o7777).toBe(0o3700);
+    }
+  },
+);
+
+it("preserves ordinary unguarded include publication", async () => {
+  const home = await fs.realpath(dirs.make("update-config-unguarded-include-"));
+  const configPath = path.join(home, "openclaw.json");
+  const includePath = path.join(home, "gateway.json");
+  const original = '{"gateway":{"$include":"./gateway.json"}}\n';
+  const includedRaw = '{"mode":"local","port":18789}\n';
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_STATE_DIR: home,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_PROFILE: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  };
+  await fs.writeFile(configPath, original);
+  await fs.writeFile(includePath, includedRaw);
+  const io = createConfigIO({ configPath, env, observe: false, pluginValidation: "skip" });
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+  await replaceConfigFile({
+    snapshot,
+    baseHash: snapshot.hash,
+    nextConfig: {
+      ...snapshot.sourceConfig,
+      gateway: { ...snapshot.sourceConfig.gateway, port: 18791 },
+    },
+    writeOptions: { ...writeOptions, skipPluginValidation: true },
+    io: { ...io, env },
+  });
+  expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+    mode: "local",
+    port: 18791,
+  });
+  expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includedRaw);
+});

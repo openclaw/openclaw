@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRpcMethod
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
@@ -40,6 +41,7 @@ import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 private const val WEAR_GATEWAY_READY_TIMEOUT_MS = 15_000L
 private const val WEAR_SESSIONS_SEARCH = "wear-runtime-proof"
@@ -80,6 +82,40 @@ class NodeRuntimeWearProxyTest {
         runtime.connect(gateway.endpoint)
         awaitOperatorReady(runtime, gateway.endpoint)
         assertTrue(runtime.handleWearProxyRequest("watch-1", sessionsRequest()).ok)
+        val status = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.ProxyStatus))
+        assertTrue(
+          checkNotNull(status.result).jsonObject.getValue("capabilities").jsonArray.any {
+            it.jsonPrimitive.content == WearProxyCapability.SessionScopedModelCatalog.wireValue
+          },
+        )
+        val catalog =
+          runtime.handleWearProxyRequest(
+            "watch-1",
+            WearMessage.Request(
+              requestId = UUID.randomUUID().toString(),
+              method = WearRpcMethod.ModelsList,
+              params = buildJsonObject { put("sessionKey", "agent:main:watch-catalog") },
+            ),
+          )
+        assertTrue(catalog.ok)
+        val catalogResult = checkNotNull(catalog.result).jsonObject
+        assertEquals(
+          listOf("fixture/watch", "fixture/native"),
+          catalogResult.getValue("models").jsonArray.map {
+            it.jsonObject
+              .getValue("ref")
+              .jsonPrimitive.content
+          },
+        )
+        assertEquals("true", catalogResult.getValue("refreshFailed").jsonPrimitive.content)
+        assertEquals(
+          buildJsonObject {
+            put("sessionKey", "agent:main:watch-catalog")
+            put("view", "configured")
+            put("includeDetails", true)
+          },
+          gateway.wearModelRequest.get(),
+        )
         gateway.releaseNodeHellos()
         awaitPhoneSessionsReady(runtime, gateway.endpoint)
 
@@ -197,6 +233,7 @@ private class NodeRuntimeWearGateway : AutoCloseable {
   private val operatorHelloGate = GatewayHelloGate()
   private val nodeHelloGate = GatewayHelloGate()
   val wearSessionsRequests = AtomicInteger()
+  val wearModelRequest = AtomicReference<JsonObject?>()
   val endpoint: GatewayEndpoint
 
   init {
@@ -266,6 +303,9 @@ private class NodeRuntimeWearGateway : AutoCloseable {
               wearSessionsRequests.incrementAndGet()
             }
             """{"sessions":[]}"""
+          } else if (method == "models.list" && params["sessionKey"]?.jsonPrimitive?.content == "agent:main:watch-catalog") {
+            wearModelRequest.set(params)
+            """{"models":[{"id":"watch","provider":"fixture","name":"Watch","available":true},{"id":"native","provider":"fixture","name":"Native"},{"id":"refused","provider":"fixture","name":"Refused","available":false}],"refreshFailed":true}"""
           } else {
             "{}"
           }
@@ -278,9 +318,9 @@ private class NodeRuntimeWearGateway : AutoCloseable {
     id: String,
     role: String,
   ) {
-    val scopes = if (role == "operator") """["operator.read","operator.write"]""" else "[]"
+    val scopes = if (role == "operator") """["operator.read","operator.write","operator.admin"]""" else "[]"
     webSocket.send(
-      """{"type":"res","id":"$id","ok":true,"payload":{"type":"hello-ok","protocol":3,"server":{"host":"wear-runtime","version":"proof"},"features":{"methods":["sessions.list"],"events":[]},"auth":{"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}}""",
+      """{"type":"res","id":"$id","ok":true,"payload":{"type":"hello-ok","protocol":3,"server":{"host":"wear-runtime","version":"proof"},"features":{"methods":["sessions.list","models.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}}""",
     )
   }
 

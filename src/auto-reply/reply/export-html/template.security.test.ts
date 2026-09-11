@@ -197,6 +197,16 @@ describe("export html sidebar trigger affordance", () => {
 
 describe("export html security hardening", () => {
   it.each(["consult", "answer"])("honors hidden input with %s selected while preserving raw export", async (leafId) => {
+    function message(id: string, parentId: string | null, content: string, role = "assistant") {
+      return {
+        id,
+        parentId,
+        timestamp: now(),
+        type: "message",
+        message: { role, content },
+      };
+    }
+
     const session: SessionData = {
       header: { id: "session-hidden-input", timestamp: now() },
       entries: [
@@ -209,13 +219,7 @@ describe("export html security hardening", () => {
           content: "Hidden root context",
           display: false,
         },
-        {
-          id: "speech",
-          parentId: "hidden-root",
-          timestamp: now(),
-          type: "message",
-          message: { role: "user", content: "Explain the change. Context: Spoken style:" },
-        },
+        message("speech", "hidden-root", "Explain the change. Context: Spoken style:", "user"),
         {
           id: "consult",
           parentId: "speech",
@@ -228,13 +232,9 @@ describe("export html security hardening", () => {
             provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
           },
         },
-        {
-          id: "answer",
-          parentId: "consult",
-          timestamp: now(),
-          type: "message",
-          message: { role: "assistant", content: "The change is ready." },
-        },
+        message("answer", "consult", "The change is ready."),
+        message("alternative", "speech", "An alternative reply."),
+        message("other-root", null, "Another conversation."),
       ],
       leafId,
       systemPrompt: "",
@@ -249,12 +249,23 @@ describe("export html security hardening", () => {
     expect(document.getElementById("entry-consult")).toBeNull();
     expect(document.getElementById("entry-hidden-root")).toBeNull();
     const treeIds = () => Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
-    expect(treeIds()).toEqual(["speech", "answer"]);
+    const treePrefixes = () =>
+      Array.from(document.querySelectorAll(".tree-prefix"), (node) => node.textContent);
+    expect(treeIds()).toEqual(["speech", "answer", "alternative", "other-root"]);
+    expect(treePrefixes()).toEqual(["", "├─ ", "└─ ", ""]);
     const selectFilter = (filter: string) => requireElement(
       document.querySelector<HTMLButtonElement>(`[data-filter="${filter}"]`), "filter missing",
     ).click();
     selectFilter("all");
-    expect(treeIds()).toEqual(["hidden-root", "speech", "consult", "answer"]);
+    expect(treeIds()).toEqual([
+      "hidden-root",
+      "speech",
+      "consult",
+      "answer",
+      "alternative",
+      "other-root",
+    ]);
+    expect(treePrefixes()).toEqual(["", "   ", "   ├─ ", "   │     ", "   └─ ", ""]);
     expect(document.querySelector('[data-id="consult"]')?.textContent).toContain("[hidden] user:");
     requireElement(document.querySelector<HTMLElement>('[data-id="consult"]'), "hidden tree entry missing").click();
     expect(document.getElementById("entry-answer")?.textContent).toContain("The change is ready.");
@@ -262,8 +273,9 @@ describe("export html security hardening", () => {
     selectFilter("user-only");
     expect(treeIds()).not.toContain("consult");
     selectFilter("default");
-    expect(treeIds()).toEqual(["speech", "answer"]);
-    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 1 assistant, 1 custom");
+    expect(treeIds()).toEqual(["speech", "answer", "alternative", "other-root"]);
+    expect(treePrefixes()).toEqual(["", "├─ ", "└─ ", ""]);
+    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 3 assistant, 1 custom");
     const encoded = requireElement(document.getElementById("session-data"), "session data missing");
     expect(JSON.parse(Buffer.from(encoded.textContent ?? "", "base64").toString("utf8"))).toEqual(
       session,

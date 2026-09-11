@@ -1935,7 +1935,10 @@ describe("agents.delete", () => {
       trashedPaths.indexOf("/journal/agent"),
     );
     expect(trashedPaths.indexOf("/journal/agent")).toBeLessThan(trashedPaths.indexOf("/journal"));
-    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir: "/journal" });
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith(
+      { workspaceDir: "/journal" },
+      { assertCurrent: mocks.assertAgentDeletionCurrent },
+    );
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
@@ -2939,9 +2942,28 @@ describe("agents.delete", () => {
 
     expectRespondOk(respond, { ok: true });
     expectTrashedWithinParent("/workspace/test-agent");
-    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({
-      workspaceDir: "/workspace/test-agent",
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith(
+      {
+        workspaceDir: "/workspace/test-agent",
+      },
+      { assertCurrent: mocks.assertAgentDeletionCurrent },
+    );
+  });
+
+  it("keeps directory ownership when deletion retires during workspace cleanup", async () => {
+    const retired = new Error("deletion owner retired");
+    mocks.deleteWorkspaceState.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      mocks.assertAgentDeletionCurrent.mockImplementation(() => {
+        throw retired;
+      });
     });
+
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await expect(promise).rejects.toBe(retired);
+    expect(respond).not.toHaveBeenCalled();
+    expect(mocks.unregisterResolvedAgentDir).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
   it("trashes a dangling workspace symlink before deleting its state", async () => {

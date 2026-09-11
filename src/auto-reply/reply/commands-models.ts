@@ -12,13 +12,13 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
 import {
   dedupeModelCatalogEntries,
@@ -60,7 +60,16 @@ const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
 type ModelsCommandSessionEntry = Partial<
-  Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
+  Pick<
+    SessionEntry,
+    | "authProfileOverride"
+    | "authProfileOverrideSource"
+    | "modelProvider"
+    | "providerOverride"
+    | "model"
+    | "modelSelectionLocked"
+    | "agentRuntimeOverride"
+  >
 >;
 
 export type ModelsProviderData = {
@@ -69,6 +78,8 @@ export type ModelsProviderData = {
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
+  runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
+  isCurrent?: () => boolean;
 };
 
 type PreparedModelsProviderData = ModelsProviderData & {
@@ -78,6 +89,7 @@ type PreparedModelsProviderData = ModelsProviderData & {
 type ModelsBrowseOptions = {
   view?: "default" | "all";
   workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
 };
 
 export type ModelsRuntimeChoice = {
@@ -133,33 +145,18 @@ function buildRuntimeChoice(params: {
   };
 }
 
-function buildDefaultRuntimeChoice(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  provider: string;
-  modelId?: string;
-}): ModelsRuntimeChoice {
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    config: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
-  return buildRuntimeChoice({
-    cfg: params.cfg,
-    provider: params.provider,
-    runtime: harnessPolicy.runtime,
-  });
-}
-
-function addRuntimeChoice(
-  choices: ModelsRuntimeChoice[],
-  choice: ModelsRuntimeChoice,
-): ModelsRuntimeChoice[] {
-  if (!choices.some((existing) => existing.id === choice.id)) {
-    choices.push(choice);
+/** Undefined is unknown; an empty list is an authoritative refusal. */
+export function getModelsRuntimeChoices(
+  data: ModelsProviderData,
+  provider: string,
+  model?: string,
+): ModelsRuntimeChoice[] | undefined {
+  if (data.isCurrent?.() === false) {
+    return undefined;
   }
-  return choices;
+  return model
+    ? data.runtimeChoicesByModel?.get(`${normalizeProviderId(provider)}/${model}`)
+    : data.runtimeChoicesByProvider?.get(normalizeProviderId(provider));
 }
 
 export function buildPreparedModelsProviderData(
@@ -223,24 +220,45 @@ async function projectPreparedModelsProviderData(
     agentId,
     ...runtimeNormalization,
   });
-  const authChecker = createProviderAuthChecker({
+  if (!authStore) {
+    throw new Error("Model catalog owner omitted its auth store");
+  }
+  const decisions = createModelCatalogDecisions({
     cfg,
+    agentId: owner.agentId ?? agentId ?? "main",
+    agentDir: owner.agentDir,
     workspaceDir,
-    agentId,
-    allowPluginSyntheticAuth: false,
-    discoverExternalCliAuth: false,
-    allowPreparedRuntimeAuth: true,
-    ...(authStore
-      ? {
-          preparedAuth: { authStore, authModes: owner.authModes },
-          metadataSnapshot: owner.metadataSnapshot,
-        }
-      : {}),
+    snapshot,
+    metadataSnapshot: owner.metadataSnapshot,
+    preparedAuthStore: authStore,
+    preparedRuntimeAuthModes: owner.authModes,
+    pluginRegistry: owner.pluginRegistry,
+    observationConfig: owner.observationConfig,
+    isCurrent: owner.isCurrent,
+    preferredProfileId: options.sessionEntry?.authProfileOverride,
+    pinnedProfileId:
+      options.sessionEntry?.authProfileOverrideSource === "user"
+        ? options.sessionEntry.authProfileOverride
+        : undefined,
+    profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
+    runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   });
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
-  const hasAuth: ModelCatalogAuthChecker = options.view === "all" ? async () => true : authChecker;
+  const hasAuth: ModelCatalogAuthChecker =
+    options.view === "all"
+      ? async () => true
+      : async (provider, ref) => {
+          const entry = catalog.find((row) => row.provider === provider && row.id === ref?.modelId);
+          if (!entry) {
+            return false;
+          }
+          return (
+            decisions.evaluateNative(entry, await decisions.evaluateEntry(entry)).availability ===
+            true
+          );
+        };
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
     catalog,
@@ -253,14 +271,10 @@ async function projectPreparedModelsProviderData(
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
-      const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-      const evaluation = await authChecker.evaluateModelAuth(entry.provider, {
-        modelId: identity?.id ?? entry.id,
-        observedRoutes: routeVariants.map((variant) => ({
-          api: variant.api,
-          baseUrl: variant.baseUrl,
-        })),
-      });
+      const evaluation = decisions.evaluateNative(
+        entry,
+        await decisions.evaluateEntry(entry, routeVariants),
+      );
       if (evaluation.routeResolution?.kind === "incompatible") {
         incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
       }
@@ -409,39 +423,32 @@ async function projectPreparedModelsProviderData(
   }
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
-  const runtimeBindings = [
-    { provider: "openai", runtime: "codex", cli: false },
-    ...listCliRuntimeModelBackendBindings().map((binding) => ({
-      provider: binding.provider,
-      runtime: binding.runtime,
-      cli: true,
-    })),
-  ];
-  for (const binding of runtimeBindings) {
-    const provider = normalizeProviderId(binding.provider);
-    const defaultModelId =
-      provider === normalizeProviderId(resolvedDefault.provider)
-        ? resolvedDefault.model
-        : undefined;
-    const choices = runtimeChoicesByProvider.get(provider) ?? [
-      buildDefaultRuntimeChoice({
-        cfg,
-        agentId,
-        provider,
-        modelId: defaultModelId,
-      }),
-    ];
-    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "openclaw" }));
-    addRuntimeChoice(
-      choices,
-      buildRuntimeChoice({
-        cfg,
-        provider,
-        runtime: binding.runtime,
-        cli: binding.cli,
-      }),
-    );
-    runtimeChoicesByProvider.set(provider, choices);
+  const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
+  for (const [provider, models] of byProvider) {
+    const providerChoices = new Map<string, ModelsRuntimeChoice>();
+    for (const model of models) {
+      const entry = [...visibleCatalog, ...catalog].find(
+        (row) => normalizeProviderId(row.provider) === provider && row.id === model,
+      );
+      if (!entry) {
+        continue;
+      }
+      const variants = snapshot.routeVariants.filter(
+        (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(entry),
+      );
+      const runtimes = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
+      if (!runtimes) {
+        continue;
+      }
+      const choices = runtimes.map((runtime) =>
+        buildRuntimeChoice({ cfg, provider, runtime, cli: cliRuntimeProviders.has(runtime) }),
+      );
+      runtimeChoicesByModel.set(`${provider}/${model}`, choices);
+      for (const choice of choices) {
+        providerChoices.set(choice.id, choice);
+      }
+    }
+    runtimeChoicesByProvider.set(provider, [...providerChoices.values()]);
   }
 
   // Auth and visibility cross awaits. Retired owners must restart the whole projection.
@@ -458,6 +465,8 @@ async function projectPreparedModelsProviderData(
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
     runtimeChoicesByProvider,
+    runtimeChoicesByModel,
+    isCurrent: decisions.isCurrent,
   };
 }
 
@@ -640,6 +649,7 @@ export async function resolveModelsCommandReply(params: {
       {
         ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
         workspaceDir: params.workspaceDir,
+        sessionEntry: params.sessionEntry,
       },
       params.agentDir,
     );

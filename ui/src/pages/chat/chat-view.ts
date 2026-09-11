@@ -24,7 +24,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import "../../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -240,9 +239,9 @@ export function renderChat(props: ChatProps) {
       sessionKey: props.sessionKey,
       agentId: props.currentAgentId,
       draft: props.draft,
-      canSend: props.canSend,
+      canSend: props.canSend && !props.submitDisabledReason,
       sending: props.sending,
-      disabledReason: props.disabledReason,
+      disabledReason: props.submitDisabledReason ?? props.disabledReason,
       setDraft: props.onDraftChange,
       send: async () => props.onSend(),
       abort: props.onAbort,
@@ -298,7 +297,12 @@ export function renderChat(props: ChatProps) {
       <button
         class="btn btn--sm"
         type="button"
-        @click=${() => historyState && retryChatHistoryLoad(historyState)}
+        @click=${() => {
+          if (historyState && getChatHistoryLoadState(historyState).phase === "failed") {
+            props.onRefresh();
+            historyState.requestUpdate?.();
+          }
+        }}
       >
         ${t("common.retry")}
       </button>

@@ -109,6 +109,7 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    autoLabel: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),

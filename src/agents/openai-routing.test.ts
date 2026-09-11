@@ -392,24 +392,6 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
-  it("checks legacy Codex auth before canonical OpenAI for pre-doctor state", () => {
-    const config = {
-      auth: {
-        order: {
-          openai: ["openai:work", "openai:backup"],
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: "openai",
-        harnessRuntime: "openclaw",
-        config,
-      }),
-    ).toEqual(["openai"]);
-  });
-
   it("keeps explicit OpenAI OpenClaw API-key auth order ahead of Codex backups", () => {
     const config = {
       auth: {

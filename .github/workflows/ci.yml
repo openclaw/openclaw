@@ -1552,6 +1552,7 @@ jobs:
               }
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              runnerBackend: runnerProfile,
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
             });
@@ -1567,6 +1568,7 @@ jobs:
           // applies when test targeting fell back to the full compact suite.
           const changedScopeHasBuildImpact =
             changedNodeTestShards === null ||
+            changedNodeTestShards.some((shard) => shard.requiresDist) ||
             typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
             changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
           const changedScopeHasQaImpact =
@@ -1684,6 +1686,7 @@ jobs:
                   if (patterns) {
                     return patterns.some((pattern) => [
                       "src/agents/sessions/tools/index.test.ts",
+                      "src/agents/sessions/tools/grep.byte-path.test.ts",
                       "src/agents/filesystem-tools-output-contract.test.ts",
                     ].some((test) => matchesGlob(test, pattern)));
                   }
@@ -2841,13 +2844,17 @@ jobs:
             ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
             ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
+            ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
+            ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
             ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
@@ -3059,6 +3066,7 @@ jobs:
               pnpm check:assertion-safety --base "$base_ref"
               pnpm config:docs:check
               pnpm plugins:inventory:check
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
@@ -5413,9 +5421,9 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    # Hosted build-play owns three memory-bounded Gradle invocations. Reevaluate
-    # its budget on retries, which can reuse the first attempt's preflight matrix.
-    timeout-minutes: ${{ matrix.task == 'build-play' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
+    # Combined third-party unit tests and lint need setup/cleanup headroom on both
+    # runner routes. Hosted build-play keeps its three-invocation budget on retries.
+    timeout-minutes: ${{ matrix.task == 'test-third-party' && matrix.lint && 35 || matrix.task == 'build-play' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -5550,13 +5558,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          android_build_metadata=()
+          if [ "$RUN_LINT" = "true" ] && { [ "$TASK" = "test-play" ] || [ "$TASK" = "test-third-party" ]; }; then
+            # Separate unit/lint processes must not invalidate BuildConfig with a new timestamp.
+            android_build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            android_build_metadata=("-PopenclawBuildTimestamp=$android_build_timestamp")
+          fi
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
               if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
               fi
               ;;
             test-play-compat)
@@ -5566,10 +5580,10 @@ jobs:
                 :app:testPlayDebugUnitTest
               ;;
             test-third-party)
-              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
               if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :app:lintThirdPartyDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
               fi
               ;;
             test-wear)

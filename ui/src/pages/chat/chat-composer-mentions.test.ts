@@ -30,6 +30,7 @@ function composerFixture(
   kind: "chat" | "new-session",
   initial = "",
   initialMentions: readonly HumanMention[] = [],
+  submitDisabledReason?: string,
 ) {
   vi.useFakeTimers();
   const container = document.createElement("div");
@@ -65,6 +66,7 @@ function composerFixture(
       kind === "chat"
         ? renderChatComposer({
             ...props,
+            submitDisabledReason,
             draft,
             mentions,
             getDraft: () => draft,
@@ -156,6 +158,21 @@ function composerFixture(
 }
 
 describe("chat inline commands with human mentions", () => {
+  it("keeps an inline command and its recipient in the draft until chat is ready", () => {
+    const mention = { profileId: "profile-alex-online", start: 7, end: 12 };
+    const view = composerFixture("chat", "Review @Alex", [mention], "Loading chat");
+
+    view.edit("Review @Alex /dashboard release health");
+    view.key("Enter");
+
+    expect(view.slashCommand).not.toHaveBeenCalled();
+    expect(view.send).not.toHaveBeenCalled();
+    expect(view.value()).toEqual({
+      draft: "Review @Alex /dashboard release health",
+      mentions: [mention],
+    });
+  });
+
   it("runs an appended multi-word dashboard request and keeps the draft recipient", () => {
     const mention = { profileId: "profile-alex-online", start: 7, end: 12 };
     const view = composerFixture("chat", "Review @Alex", [mention]);

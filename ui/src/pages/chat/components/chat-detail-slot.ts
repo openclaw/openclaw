@@ -8,9 +8,7 @@ import "./chat-sidebar.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
-import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
 // Region close collapses the detail slot but leaves sidebarContent set, so
 // "task content exists" is not "panel visible"; consumers (panel render, rail
@@ -32,24 +30,18 @@ export function renderChatDetailSlot(params: {
   content: SidebarContent;
   host: ChatPageHost;
   layout: SidebarLayout;
-  transcript: ChatTranscriptController;
 }): TemplateResult {
   const { content, host } = params;
-  const taskDetailHost: TaskDetailHost = host;
   const taskId = openTaskDetailId(content, params.layout);
-  if (taskId === undefined && taskDetailHost.taskDetailState !== undefined) {
-    resetTaskDetail(taskDetailHost);
-  }
   const documents: Partial<Record<SidebarContent["kind"], TemplateResult>> = {
     task:
       taskId === undefined
         ? html``
         : renderTaskDetailPanel({
             backgroundTasks: params.backgroundTasks,
-            chat: params.chat,
             host,
+            loadFullAssistantMessage: params.chat.loadFullAssistantMessage,
             task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
-            transcript: params.transcript,
           }),
   };
   return (

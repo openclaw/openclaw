@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่ยอมรับการดำเนินการ"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เกิดข้อผิดพลาดบางอย่าง"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รีเฟรชรายการแล้วลองอีกครั้ง"</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ไม่สามารถรีเฟรชโมเดลบางรายการได้ โมเดลที่แสดงในรายการยังคงใช้งานได้"</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"อัปเดต OpenClaw บนโทรศัพท์ของคุณและ Gateway เพื่อเลือกโมเดลสำหรับแชทนี้"</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ลองอีกครั้งจากนาฬิกา"</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"จำเป็นต้องอัปเดต"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อัปเดต OpenClaw ทั้งบนโทรศัพท์และนาฬิกา"</string>

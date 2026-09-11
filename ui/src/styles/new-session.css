@@ -751,6 +751,175 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
+/* Destination search and mode controls stay visible while the flat inventory scrolls. */
+wa-popover.new-session-page__where-popover {
+  --max-width: min(420px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__where-popover::part(body) {
+  width: min(420px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__environment-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  overflow: hidden;
+}
+
+.new-session-page__environment-search {
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  color: var(--muted);
+  border-radius: var(--menu-item-radius);
+}
+
+.new-session-page__environment-search:focus-within {
+  background: var(--bg-hover);
+}
+
+.new-session-page__environment-search svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.new-session-page__environment-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-md);
+  outline: none;
+}
+
+.new-session-page__environment-search input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__environment-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.new-session-page__environment-option,
+.new-session-page__auto-device,
+.new-session-page__connect-machine {
+  min-height: 60px;
+  gap: 12px;
+  padding: 12px;
+}
+
+.new-session-page__environment-option,
+.new-session-page__connect-machine {
+  min-height: 56px;
+  padding-block: 8px;
+}
+
+/* Reserve the selection column even when empty so labels and meters never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.new-session-page__environment-option[aria-pressed="true"] {
+  background: var(--bg-hover);
+}
+
+.new-session-page__environment-list--automatic .new-session-page__environment-option {
+  opacity: 0.5;
+}
+
+.new-session-page__device-icon {
+  display: inline-flex;
+}
+
+.new-session-page__environment-option .session-menu__icon,
+.new-session-page__auto-device .session-menu__icon,
+.new-session-page__connect-machine .session-menu__icon,
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__auto-device .session-menu__icon svg,
+.new-session-page__connect-machine .session-menu__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.new-session-page__environment-option > .session-context-meter {
+  flex: 0 0 84px;
+}
+
+.new-session-page__environment-empty {
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__environment-auto {
+  flex: 0 0 auto;
+  margin: var(--space-2) 12px 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.new-session-page__auto-device {
+  padding-inline: 0;
+}
+
+.new-session-page__auto-device .session-menu__icon {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.new-session-page__auto-device .session-menu__text {
+  white-space: normal;
+}
+
+.new-session-page__auto-switch {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 20px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.new-session-page__auto-switch::after {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--text);
+  content: "";
+}
+
+.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch {
+  background: var(--accent);
+}
+
+.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch::after {
+  transform: translateX(12px);
+}
+
+.new-session-page__environment-picker > .session-menu__separator,
+.new-session-page__environment-picker > .new-session-page__connect-machine {
+  flex-shrink: 0;
+}
+
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;

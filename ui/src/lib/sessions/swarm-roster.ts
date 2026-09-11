@@ -53,7 +53,7 @@ export function mergeSwarmSessionRows(
 }
 
 export async function hydrateSwarmSessionRows(params: {
-  sessions: SessionCapability;
+  sessions: Pick<SessionCapability, "list" | "inheritRow">;
   parentKey: string;
   currentRows: readonly GatewaySessionRow[];
   isCurrent: () => boolean;
@@ -68,7 +68,7 @@ export async function hydrateSwarmSessionRows(params: {
 }
 
 type SwarmHydrationParams = {
-  sessions: SessionCapability;
+  sessions: Pick<SessionCapability, "list" | "inheritRow" | "canonicalListRevision">;
   agentId?: string;
   readParent: () => Promise<GatewaySessionRow | null>;
   parentKey: string;

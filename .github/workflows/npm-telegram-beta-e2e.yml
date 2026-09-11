@@ -345,6 +345,7 @@ jobs:
             extensions/telegram/src/draft-stream.ts
             qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
             qa/scenarios/channels/telegram-progress-tool-visibility.yaml
+            qa/scenarios/channels/telegram-queue-invalid-mode.yaml
             src/agents/embedded-agent-subscribe.ts
 
       - name: Resolve frozen package Telegram scenarios

@@ -172,6 +172,21 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             >
               ${t("attention.dismissShown")}
             </button>
+            <openclaw-tooltip .content=${t("attention.mentions.notifications")}>
+              <a
+                class="sidebar-brand__icon"
+                aria-label=${t("attention.mentions.notifications")}
+                href=${pathForRoute("notifications", params.context.basePath)}
+                @click=${(event: MouseEvent) => {
+                  if (!shouldHandleNavigationClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  params.onNavigate("notifications");
+                }}
+                >${icons.settings}</a
+              >
+            </openclaw-tooltip>
             <button
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
@@ -271,17 +286,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           mentionsTab
             ? html`<footer class="sidebar-issues-panel__mentions-note">
                 <span>${t("attention.mentions.retention")}</span>
-                <a
-                  href=${pathForRoute("notifications", params.context.basePath)}
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    params.onNavigate("notifications");
-                  }}
-                  >${t("attention.mentions.notifications")}</a
-                >
               </footer>`
             : nothing
         }

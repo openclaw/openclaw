@@ -38,7 +38,11 @@ describe("readDraftCloudProfiles", () => {
         providerId: "crabbox",
         operatingSystems: [
           { id: "linux", label: "Linux", default: true },
-          { id: "windows/wsl2", label: "Windows (WSL2)" },
+          {
+            id: "windows/wsl2",
+            label: "Windows (WSL2)",
+            disabledReason: "Upgrade the worker provider.",
+          },
           { id: "linux", label: "Duplicate" },
         ],
         machines: [
@@ -54,7 +58,11 @@ describe("readDraftCloudProfiles", () => {
     ]);
     expect(profile?.operatingSystems).toEqual([
       { id: "linux", label: "Linux", default: true },
-      { id: "windows/wsl2", label: "Windows (WSL2)" },
+      {
+        id: "windows/wsl2",
+        label: "Windows (WSL2)",
+        disabledReason: "Upgrade the worker provider.",
+      },
     ]);
     expect(profile?.machines?.slice(0, 2)).toEqual([
       { id: "tiny", label: "Tiny Linux", os: "linux" },

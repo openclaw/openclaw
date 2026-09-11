@@ -76,70 +76,6 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
-  it("imports setup and attestation state, records receipts, and removes files", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const seededAt = "2026-07-15T10:00:00.000Z";
-    const completedAt = "2026-07-15T10:01:00.000Z";
-    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: seededAt, setupCompletedAt: completedAt }),
-      "utf8",
-    );
-    const attestationPath = path.join(
-      context.stateDir,
-      "workspace-attestations",
-      `${identity.workspaceKey}.attested`,
-    );
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
-    await fsp.writeFile(
-      attestationPath,
-      `openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\ngenerated:AGENTS.md:${HASH}\n`,
-      "utf8",
-    );
-    const mtime = new Date("2026-07-15T11:02:03.456Z");
-    await fsp.utimes(attestationPath, mtime, mtime);
-
-    const result = await migrate(context);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(2);
-    expect(fs.existsSync(setupPath)).toBe(false);
-    expect(fs.existsSync(attestationPath)).toBe(false);
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(
-      db
-        .prepare(
-          "SELECT workspace_path, bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({
-      workspace_path: identity.workspacePath,
-      bootstrap_seeded_at: seededAt,
-      setup_completed_at: completedAt,
-    });
-    expect(
-      db
-        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
-        .get(identity.workspaceKey),
-    ).toEqual({ attested_at_ms: mtime.getTime() });
-    expect(
-      db
-        .prepare(
-          "SELECT filename, sha256 FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({ filename: "AGENTS.md", sha256: HASH });
-    expect(
-      db
-        .prepare(
-          "SELECT COUNT(*) AS count, SUM(removed_source) AS removed FROM migration_sources WHERE migration_kind = ?",
-        )
-        .get("legacy-workspace-setup-files"),
-    ).toEqual({ count: 2, removed: 2 });
-  });
-
   it("imports the legacy onboarding completion alias", async () => {
     const context = setup();
     const completedAt = "2026-07-15T10:01:00.000Z";
@@ -189,7 +125,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(canonicalSiblingPath)).toBe(false);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       setup: { setupCompletedAt: completedAt },
     });
@@ -232,7 +168,7 @@ describe("legacy workspace Doctor migration", () => {
     expect((await migrate(aliasContext)).warnings).toEqual([]);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       attestation: { attestedAtMs: attestedAt.getTime() },
     });
@@ -266,7 +202,7 @@ describe("legacy workspace Doctor migration", () => {
 
     fs.unlinkSync(workspaceAlias);
     fs.symlinkSync(targetB, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
+    await deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
     const identityB = resolveWorkspaceStateIdentity(targetB);
     await fsp.writeFile(
       sourcePath,
@@ -851,7 +787,7 @@ describe("legacy workspace Doctor migration", () => {
       expect(result.warnings).toEqual([]);
       expect(fs.existsSync(setupPath)).toBe(false);
       expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
-      expect(readWorkspaceStateSnapshot(context.workspaceDir).setup).toEqual({
+      expect((await readWorkspaceStateSnapshot(context.workspaceDir)).setup).toEqual({
         version: 1,
         bootstrapSeededAt: seededAt,
         ...(completedAt ? { setupCompletedAt: completedAt } : {}),

@@ -249,6 +249,9 @@ describe("openrouter music generation provider", () => {
   it.each(["completed", "provider error", "timeout"] as const)(
     "releases a capture tee after %s without waiting for its sibling",
     async (outcome) => {
+      // Hold wall time so the deadline reaches the acquired stream's tee cleanup.
+      // Real timers still drive the 1ms stalled-stream timeout.
+      vi.setSystemTime(1_000);
       const cancel = vi.fn();
       const lines =
         outcome === "completed"
@@ -419,6 +422,8 @@ describe("openrouter music generation provider", () => {
   });
 
   it("times out stalled OpenRouter audio streams after headers", async () => {
+    // Freeze wall time so the timeout comes from reading the acquired response body.
+    vi.setSystemTime(1_000);
     postJsonRequestMock.mockResolvedValue({
       response: stalledSseResponse(
         `data: ${JSON.stringify({ choices: [{ delta: { audio: { transcript: "start" } } }] })}\n`,

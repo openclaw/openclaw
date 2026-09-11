@@ -15,12 +15,18 @@ import {
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
 import {
+  createInitialDevicesState,
+  revokeDeviceToken,
+  rotateDeviceToken,
+} from "../lib/nodes/page-operations.ts";
+import {
   migrateSessionPlacementRecoveryScope,
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
+const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
@@ -113,7 +119,7 @@ function deferDeviceIdentityDigest() {
 }
 
 function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
-  const state = nodes.createInitialDevicesState({
+  const state = createInitialDevicesState({
     client: {
       request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
     },
@@ -1925,6 +1931,7 @@ describe("GatewayBrowserClient", () => {
       privateKey: "private-key", // pragma: allowlist secret
       publicKey: "public-key", // pragma: allowlist secret
     });
+    loadOrCreateDeviceIdentityMock.mockImplementationOnce(realLoadOrCreateDeviceIdentity);
     const { digest, digestMock } = deferDeviceIdentityDigest();
     const state = createDeviceTokenState(async () => ({
       deviceId: "00",
@@ -1935,7 +1942,7 @@ describe("GatewayBrowserClient", () => {
       tokenDelivery: "in-band",
     }));
 
-    const operation = nodes.rotateDeviceToken(state, {
+    const operation = rotateDeviceToken(state, {
       deviceId: "00",
       gatewayUrl: DEFAULT_GATEWAY_URL,
       role: "operator",
@@ -1971,10 +1978,11 @@ describe("GatewayBrowserClient", () => {
       privateKey: "private-key", // pragma: allowlist secret
       publicKey: "public-key", // pragma: allowlist secret
     });
+    loadOrCreateDeviceIdentityMock.mockImplementationOnce(realLoadOrCreateDeviceIdentity);
     const { digest, digestMock } = deferDeviceIdentityDigest();
     const state = createDeviceTokenState(async () => ({}));
 
-    const operation = nodes.revokeDeviceToken(state, {
+    const operation = revokeDeviceToken(state, {
       deviceId: "00",
       gatewayUrl: DEFAULT_GATEWAY_URL,
       role: "operator",

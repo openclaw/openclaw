@@ -19,6 +19,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
@@ -577,15 +578,18 @@ describe("managed service update handoff state ownership and sentinel persistenc
     });
 
     expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelPayload(env)).toMatchObject({
-      version: 1,
-      payload: {
-        kind: "update",
-        status: "error",
-        sessionKey: "agent:test:webchat:dm:user-123",
-        stats: {
-          handoffId: "handoff-123",
-          reason: "managed-service-handoff-failed",
+    expect(readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db)).toMatchObject({
+      kind: "valid",
+      sentinel: {
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "error",
+          sessionKey: "agent:test:webchat:dm:user-123",
+          stats: {
+            handoffId: "handoff-123",
+            reason: "managed-service-handoff-failed",
+          },
         },
       },
     });

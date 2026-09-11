@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
@@ -112,26 +113,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,
@@ -166,26 +148,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,

@@ -255,7 +255,7 @@ by `before_tool_call`. Omit the matcher to retain match-all behavior.
 harness-native shell. It receives:
 
 - `event.sessionKey`
-- `event.toolName`, currently always `"exec"`
+- `event.toolName`, always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.messageProvider`, and `ctx.channelId`

@@ -19,6 +19,7 @@ import {
   getUpdateRun,
   reconcileAbandonedUpdateRuns,
 } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -50,8 +51,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
@@ -80,6 +82,9 @@ export async function updateFinalizeCommand(
       const root = await withUpdateInProgressEnv(invocationCwd, () =>
         lifecycle.run("preflight", async () => {
           // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          // A missing canonical path can be an interrupted publication, not a
+          // fresh installation. Only the recovery executor may reconcile it.
+          await assertUpdateRecoveryAdmission({ env: process.env });
           assertConfigWriteAllowedInCurrentMode();
           await assertOpenClawStateWriteAllowedAtPath({
             databasePath: resolveOpenClawStateSqlitePath(process.env),
@@ -194,6 +199,7 @@ async function updateFinalizeCommandInternal(
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
       ...new Set([...doctorWarnings, ...warnings]),
     ]);
+    lifecycle.recordWarnings(doctorWarnings);
   };
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {

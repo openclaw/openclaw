@@ -48,6 +48,7 @@ describe("worker placement startup health lifetime", () => {
       reconcileActive,
     });
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -132,6 +133,7 @@ describe("worker placement startup health lifetime", () => {
         turnClaim: null,
       };
       const environments = {
+        subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
@@ -223,6 +225,7 @@ describe("worker placement startup health lifetime", () => {
       stateChangedAtMs: 1,
     } as const;
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -295,6 +298,7 @@ describe("worker placement startup health lifetime", () => {
       reconcileActive: vi.fn().mockResolvedValue(undefined),
     });
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
@@ -373,6 +377,7 @@ describe("worker placement startup health lifetime", () => {
     });
     const environments = {
       get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
         return vi.fn();
@@ -493,6 +498,7 @@ describe("worker placement startup health lifetime", () => {
     });
     const environments = {
       get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
         return async () => {

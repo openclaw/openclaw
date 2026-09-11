@@ -21,6 +21,7 @@ import {
 import { resolveThinkingProfileForSession } from "../../lib/chat/thinking.ts";
 import {
   loadModelCatalog,
+  resolveModelCatalogState,
   subscribeModelCatalogChanges,
   type ModelCatalogReadScope,
 } from "../../lib/model-catalog-store.ts";
@@ -170,9 +171,7 @@ export class NewSessionModelControl {
     this.metadataState = {
       catalog: result.models,
       accountSelection: result.accountSelection,
-      hasSnapshot: true,
-      status: "ready",
-      refreshFailed: result.refreshFailed,
+      ...resolveModelCatalogState(result),
     };
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
       this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
@@ -570,8 +569,8 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const thinkingDefaults = {
-      modelProvider: defaultTarget?.provider ?? sourceResult?.defaults.modelProvider ?? null,
-      model: defaultTarget?.model ?? agentDefaultModel ?? sourceResult?.defaults.model ?? null,
+      modelProvider: defaultTarget?.provider ?? null,
+      model: defaultTarget?.model ?? null,
       contextTokens: sourceResult?.defaults.contextTokens ?? null,
       agentRuntime: defaultThinkingProfile?.agentRuntime,
       thinkingLevels: defaultThinkingProfile?.thinkingLevels,

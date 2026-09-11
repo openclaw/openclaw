@@ -13,6 +13,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -57,20 +58,27 @@ describe("canonical session message recovery", () => {
       thinkingLevel: null,
     });
     const requestUpdate = overrides.requestUpdate ?? vi.fn();
-    const state = {
-      ...makeChatHost(),
-      client: { request } as unknown as GatewayBrowserClient,
+    const host = makeChatHost({
+      client: createTestGatewayClient(request),
       connectionEpoch: 1,
       sessionKey: "agent:main:main",
+      ...overrides,
+    });
+    if (!overrides.sessions) {
+      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
+        applied: false,
+        result: host.sessions.state.result,
+      }));
+      vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
+      vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
+    }
+    const state = {
+      ...host,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
       chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatStreamStartedAt: null,
-      sessions: {
-        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      },
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
       ...overrides,
@@ -100,6 +108,99 @@ describe("canonical session message recovery", () => {
       return item.kind === "stream" ? [{ role: "assistant", text: item.text }] : [];
     });
   }
+
+  it.each(["before tool", "after tool", "after final delta"])(
+    "keeps overtaken commentary single with persistence %s",
+    (persistence) => {
+      const runId = "active-run";
+      const text = "I am checking the files and will report the result.";
+      const partial = text.slice(0, text.indexOf(" will report"));
+      const { state } = createSessionEventState({ chatRunId: runId });
+      const delta = (value: string) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            state: "delta",
+            message: { role: "assistant", content: [{ type: "text", text: value }] },
+          },
+        });
+      const item = (seq: number) =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "agent",
+          payload: {
+            sessionKey: state.sessionKey,
+            runId,
+            seq,
+            ts: seq,
+            stream: "item",
+            data: { kind: "preamble", phase: "end", itemId: "item-a", progressText: text },
+          },
+        });
+      const persist = () =>
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: state.sessionKey,
+            sessionId: state.currentSessionId,
+            runId,
+            runActive: true,
+            messageId: "saved-commentary",
+            messageSeq: 1,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              openclawStreamFallback: { source: "segment", itemId: "item-a" },
+              __openclaw: { id: "saved-commentary", seq: 1, runId },
+            },
+          },
+        });
+      const visible = () => renderedTranscript(state).filter((entry) => entry.text);
+      const single = [{ role: "assistant", text }];
+      delta(partial);
+      expect(visible()).toEqual([{ role: "assistant", text: partial }]);
+      item(1);
+      expect(visible()).toEqual(single);
+      if (persistence === "before tool") {
+        persist();
+        expect(visible()).toEqual(single);
+      }
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 2,
+          ts: 2,
+          stream: "tool",
+          data: { phase: "result", toolCallId: "call-a", name: "list_files", result: {} },
+        },
+      });
+      expect(visible()).toEqual(single);
+      if (persistence === "after tool") {
+        persist();
+        expect(visible()).toEqual(single);
+      }
+      delta(`${partial} will report`);
+      expect(visible()).toEqual(single);
+      // The final chunk also brings a distinct, identically worded occurrence.
+      delta(`${text}\n\n${text}`);
+      expect(visible()).toEqual([...single, ...single]);
+      if (persistence === "after final delta") {
+        persist();
+        expect(visible()).toEqual([...single, ...single]);
+      }
+      item(3);
+      expect(visible()).toEqual([...single, ...single]);
+      expect(state.chatMessages).toHaveLength(1);
+      expect(extractText(state.chatMessages[0])).toBe(text);
+    },
+  );
 
   it("reconciles live approval events for the selected session", () => {
     const { state } = createSessionEventState();
@@ -1214,7 +1315,7 @@ describe("canonical session message recovery", () => {
       chatStream: null,
       chatStreamSegments: [],
       chatToolMessages: [],
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
     });
 
     handlePageGatewayEvent(state, {
@@ -4386,15 +4487,15 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
-    expect(state.chatModelCatalogError).toBe(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBe(true);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
     expect(state.chatModelCatalogError).toBe("catalog transport failed");
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBeUndefined();
   });
 
   it("keeps fallback slash commands when chat metadata omits commands", async () => {
