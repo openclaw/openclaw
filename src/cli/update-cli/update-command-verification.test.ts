@@ -68,6 +68,62 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each([
+    { startupAtMs: 0, verified: true },
+    { startupAtMs: 1_500, verified: false },
+  ])(
+    "includes settling once without extending the startup allowance (startup=$startupAtMs)",
+    async ({ startupAtMs, verified }) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < startupAtMs ? "free" : "busy",
+        listeners: monotonicClock.nowMs < startupAtMs ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(async (opts) => {
+        const responseMs = 5;
+        const remainingMs = opts.timeoutMs ?? responseMs;
+        monotonicClock.nowMs += Math.min(responseMs, remainingMs);
+        if (remainingMs < responseMs) {
+          throw new Error("Gateway health response exceeded its remaining allowance");
+        }
+        return gatewayHealthResponse({
+          server: { version: "2026.9.4", buildId: "candidate-build", bootId: "settling-boot" },
+        })(opts);
+      });
+      let httpRequests = 0;
+      server = createServer((_req, res) => {
+        httpRequests++;
+        res.writeHead(200).end();
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const verification = verifyUpdatedGateway({
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        opts: { json: true },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: address.port,
+        expectedVersion: "2026.9.4",
+        expectedBuildId: "candidate-build",
+        requireRunningService: true,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      pendingVerification = verification;
+      expect((await verification).ok).toBe(verified);
+      expect(httpRequests).toBe(verified ? 2 : 0);
+      expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(verified ? 5_500 : 6_500);
+      expect(monotonicClock.nowMs).toBeLessThan(verified ? 6_500 : 7_000);
+    },
+  );
+
   it.each(["restart script", "service refresh", "child readiness timeout", "legacy update marker"])(
     "lets a 90-second startup finish within the update budget (%s)",
     async (activation) => {

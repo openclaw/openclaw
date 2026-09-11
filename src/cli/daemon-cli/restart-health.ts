@@ -345,7 +345,7 @@ export async function waitForGatewayHealthyRestart(params: {
   const probeTimeoutMs = () =>
     params.timeoutMs === undefined
       ? undefined
-      : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
+      : Math.max(1, params.timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({

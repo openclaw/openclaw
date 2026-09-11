@@ -15,6 +15,7 @@ import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runne
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
+import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -179,8 +180,11 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const timeoutMs =
     params.timeoutMs ??
     Math.max(STARTUP_MIGRATION_LEASE_TTL_MS, (params.observedStartupMs ?? 0) * 10);
+  const settle = params.settle ?? { probes: 12 };
+  const settleDurationMs = (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS;
   const startedAtMs = performance.now();
-  const remainingMs = () => Math.max(0, timeoutMs - (performance.now() - startedAtMs));
+  const remainingMs = () =>
+    Math.max(0, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -205,9 +209,10 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     assertCurrent();
     const health = await waitForGatewayHealthyRestart({
       ...probeParams,
-      timeoutMs: Math.max(1, remainingMs()),
+      // The restart owner adds settling itself; reserve it once in the shared deadline.
+      timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
       requireRunningService: params.requireRunningService,
-      settle: params.settle ?? { probes: 12 },
+      settle,
       supervisorKeepsAlive,
     });
     assertCurrent();
@@ -235,10 +240,10 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const http = await waitForGatewayHttpReadiness({
     config: context.config,
     port: params.gatewayPort,
-    attempts: Math.ceil(remainingMs() / 500),
+    attempts: Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS),
     deadlineAt: Date.now() + remainingMs(),
     probeTimeoutMs: remainingMs(),
-    delayMs: 500,
+    delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
   assertCurrent();
