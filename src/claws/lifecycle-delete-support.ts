@@ -53,7 +53,11 @@ import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
-import { deleteAdoptedWorkspaceRow } from "./workspace-origin.js";
+import {
+  clawBootstrapSeedOwned,
+  deleteAdoptedWorkspaceRow,
+  type ClawWorkspaceAdoption,
+} from "./workspace-origin.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 type ClawRemovalDatabase = Pick<
@@ -426,7 +430,7 @@ type ClawRemovableWorkspaceFile = DigestOwnedWorkspaceFile & DigestOwnedWorkspac
 
 export type RemovedWorkspaceFile = {
   path: string;
-  action: "deleted" | "missing" | "retainedModified" | "error";
+  action: "deleted" | "missing" | "retainedModified" | "retainedUnowned" | "error";
   message?: string;
 };
 
@@ -436,7 +440,7 @@ export type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
 };
 
 export type ClawBootstrapStatus = {
-  state: "pending" | "complete" | "modified" | "missing" | "unsafe" | "unknown";
+  state: "pending" | "complete" | "modified" | "missing" | "unsafe" | "unknown" | "unowned";
   workspace: string;
   path: string;
   sourcePath?: string;
@@ -481,6 +485,7 @@ export async function inspectClawWorkspaceFile(
 
 export async function inspectClawBootstrap(
   install: PersistedClawInstall,
+  workspaceOrigin: ClawWorkspaceAdoption,
   options: OpenClawStateDatabaseOptions,
 ): Promise<ClawBootstrapStatus> {
   const nativeState = await resolveWorkspaceBootstrapStatus(install.workspace, options);
@@ -520,6 +525,15 @@ export async function inspectClawBootstrap(
     },
     MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   );
+  // The recorded seed receipt, not the digest, decides whether an adopted workspace's
+  // BOOTSTRAP.md is this install's: a file it never seeded is never a deletion candidate.
+  if (inspected.state !== "missing" && !clawBootstrapSeedOwned(workspaceOrigin)) {
+    return {
+      ...base,
+      state: "unowned",
+      message: "BOOTSTRAP.md exists but this install never seeded it.",
+    };
+  }
   if (inspected.state === "unchanged") {
     return { ...base, state: "pending" };
   }

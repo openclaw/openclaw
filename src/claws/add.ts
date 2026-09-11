@@ -46,7 +46,12 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
-import { planAdoptsWorkspace, recordClawBootstrapSeeded } from "./workspace-origin.js";
+import {
+  clawBootstrapSeedOwned,
+  planAdoptsWorkspace,
+  readClawWorkspaceAdoption,
+  recordClawBootstrapSeeded,
+} from "./workspace-origin.js";
 import {
   ClawWorkspaceWriteError,
   createClawWorkspaceFiles,
@@ -150,6 +155,9 @@ export async function applyClawAddPlan(
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
   let workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
   const workspaceAdoption = planAdoptsWorkspace(plan);
+  // One read of what this install has already done to the workspace (adoption marker + seed
+  // receipt); the seed step claims an existing BOOTSTRAP.md on that recorded fact alone.
+  const workspaceOrigin = readClawWorkspaceAdoption(plan.agent.finalId, workspace, options);
   let workspaceState: Stats | undefined;
   try {
     assertWorkspacePathUnchanged(workspace);
@@ -173,29 +181,6 @@ export async function applyClawAddPlan(
       "workspace_parent_failed",
       `Could not inspect workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
     );
-  }
-
-  // Revalidate admission against live config before any workspace effect (adoption's
-  // workspace_ready mark, mkdir for a created workspace, seeding, or file ownership rows): the
-  // plan-time overlap check can race a concurrent add that configures an overlapping workspace
-  // for a different agent after this plan was built but before it was applied.
-  const currentConfig = await resolveClawConfigReader(options.readConfig)();
-  if (findOverlappingWorkspaceAgentIds(currentConfig, plan.agent.finalId, workspace).length > 0) {
-    const message = `Workspace ${JSON.stringify(workspace)} is already assigned to another agent.`;
-    if (workspacePhaseRecorded) {
-      markInstallStatus(plan.agent.finalId, "partial", [installRecord.status], options);
-      return partialResult({
-        plan,
-        installRecord,
-        workspaceCreated: false,
-        configCommitted: false,
-        packages: [],
-        error: { code: "workspace_collision", message },
-        nowMs: options.nowMs,
-      });
-    }
-    clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-    throw new ClawAddMutationError("workspace_collision", message);
   }
 
   if (!workspacePhaseRecorded && workspaceState && !workspaceAdoption) {
@@ -294,6 +279,30 @@ export async function applyClawAddPlan(
     }
   }
 
+  // Admission is settled against the live config at the file-effect boundary: the package
+  // install above is the long await between planning and the first write into the workspace
+  // (parent directory, bootstrap seed, file ownership rows), and a concurrent add can assign an
+  // overlapping workspace to another agent while it runs. The config commit rechecks it later.
+  const currentConfig = await resolveClawConfigReader(options.readConfig)();
+  if (findOverlappingWorkspaceAgentIds(currentConfig, plan.agent.finalId, workspace).length > 0) {
+    const message = `Workspace ${JSON.stringify(workspace)} is already assigned to another agent.`;
+    if (packages.length > 0 || workspacePhaseRecorded) {
+      const installStatus = preserveRecordedPhaseOrMarkPartial();
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated,
+        configCommitted,
+        packages,
+        installStatus,
+        error: { code: "workspace_collision", message },
+        nowMs: options.nowMs,
+      });
+    }
+    clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+    throw new ClawAddMutationError("workspace_collision", message);
+  }
+
   try {
     assertWorkspacePathUnchanged(workspace);
     await mkdir(dirname(workspace), { recursive: true });
@@ -375,12 +384,15 @@ export async function applyClawAddPlan(
   // Seed and attest the consented package bootstrap while the workspace is still
   // private. Committing the agent config first makes the agent routable, so a
   // concurrent `sessions.create` can stock-seed BOOTSTRAP.md and strand the add at
-  // `config_committed` with a seed conflict that no retry can clear.
+  // `config_committed` with a seed conflict that no retry can clear. An existing file is
+  // claimed as this install's seed only when the recorded receipt says so; an identical file
+  // that appeared in an adopted workspace is a conflict, never a seed to attest.
   let bootstrapSeedResult: Awaited<ReturnType<typeof seedClawPackageBootstrap>>;
   try {
     bootstrapSeedResult = await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
       ...options,
       ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      existingFile: clawBootstrapSeedOwned(workspaceOrigin) ? "claim" : "conflict",
     });
   } catch (error) {
     const installStatus: ClawInstallStatus = configCommitted

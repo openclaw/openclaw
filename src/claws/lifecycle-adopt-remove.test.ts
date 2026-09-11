@@ -1,5 +1,6 @@
 // Removal coverage for Claw installs that adopted an existing operator-owned workspace.
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import { inspectClawWorkspaceFile } from "./lifecycle-delete-support.js";
 import {
@@ -15,14 +17,27 @@ import {
   quiescentClawMonitorGateway,
 } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
+import { readClawStatus } from "./lifecycle-status.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { ClawPackageInstallError } from "./packages.js";
 import { persistClawInstallRecord } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
-import { CLAW_ADOPTED_WORKSPACE_MARKER_PATH, clawWorkspaceWasAdopted } from "./workspace-origin.js";
+import {
+  CLAW_ADOPTED_WORKSPACE_MARKER_PATH,
+  readClawWorkspaceAdoption,
+} from "./workspace-origin.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  envSnapshot.restore();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function workspaceWasAdopted(workspace: string, env: { OPENCLAW_STATE_DIR: string }): boolean {
+  return readClawWorkspaceAdoption("worker", workspace, { env }).adopted;
+}
 
 const { fixture, addFixture } = clawRemoveFixtures(tempDirs);
 
@@ -203,9 +218,7 @@ describe("Claw remove with an adopted workspace", () => {
 
     persistClawInstallRecord(current.plan, { env: current.env, nowMs: 5 });
 
-    expect(
-      clawWorkspaceWasAdopted("worker", current.plan.agent.workspace, { env: current.env }),
-    ).toBe(false);
+    expect(workspaceWasAdopted(current.plan.agent.workspace, current.env)).toBe(false);
   });
 
   it("makes an older reader fail closed on the adopted-workspace marker", async () => {
@@ -228,7 +241,7 @@ describe("Claw remove with an adopted workspace", () => {
 
   it("drops the adopted-workspace origin once the install is removed", async () => {
     const current = await adoptedFixture();
-    expect(clawWorkspaceWasAdopted("worker", current.workspace, { env: current.env })).toBe(true);
+    expect(workspaceWasAdopted(current.workspace, current.env)).toBe(true);
 
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -243,6 +256,114 @@ describe("Claw remove with an adopted workspace", () => {
       trashPath: async () => true,
     });
 
-    expect(clawWorkspaceWasAdopted("worker", current.workspace, { env: current.env })).toBe(false);
+    expect(workspaceWasAdopted(current.workspace, current.env)).toBe(false);
+  });
+
+  it("retains a BOOTSTRAP.md this install never seeded and reports it unowned", async () => {
+    const root = tempDirs.make("openclaw-claw-adopt-unowned-bootstrap-");
+    await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
+    const bootstrapContent = "# First run\n";
+    await writeFile(join(root, "BOOTSTRAP.md"), bootstrapContent, "utf8");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker", name: "Worker" },
+      workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+      packages: [{ kind: "plugin", source: "clawhub", ref: "@acme/audit", version: "1.0.0" }],
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:manifest",
+      byteLength: 100,
+    };
+    const workspace = join(root, "existing-workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "SOUL.md"), "managed\n", "utf8");
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      packageBootstrap: {
+        sourcePath: "BOOTSTRAP.md",
+        realPath: join(root, "BOOTSTRAP.md"),
+        byteLength: Buffer.byteLength(bootstrapContent),
+        digest: `sha256:${createHash("sha256").update(bootstrapContent).digest("hex")}`,
+      },
+      context: {
+        workspace,
+        adoptExistingWorkspace: true,
+        packagePreflight: async () => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          installId: "audit",
+        }),
+      },
+    });
+    expect(plan.blockers).toEqual([]);
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const configPath = join(root, "openclaw.json");
+    await writeFile(configPath, "{}\n", "utf8");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+
+    // The shared package install fails before the seed step, so this install never writes
+    // BOOTSTRAP.md and its recorded receipt stays false.
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      installPackages: async () => {
+        throw new ClawPackageInstallError("package_install_failed", "install failed", []);
+      },
+    });
+    expect(first).toMatchObject({
+      status: "partial",
+      installRecord: { status: "workspace_ready" },
+    });
+    // An operator writes a byte-identical BOOTSTRAP.md while the install sits partial.
+    const bootstrapPath = join(plan.agent.workspace, "BOOTSTRAP.md");
+    await writeFile(bootstrapPath, bootstrapContent, "utf8");
+    const written = await stat(bootstrapPath);
+    const config: OpenClawConfig = {};
+
+    const status = await readClawStatus("worker", { env, config });
+    expect(status.records[0]).toMatchObject({
+      bootstrapState: "unowned",
+      workspaceOrigin: { adopted: true, bootstrapSeeded: false },
+    });
+    expect(status.summary.pendingBootstrap).toBe(0);
+
+    const removePlan = await buildClawRemovePlan("worker", { env, config });
+    expect(removePlan.blockers).toEqual([]);
+    expect(removePlan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "bootstrap",
+        action: "retain",
+        blocked: false,
+        reason: "This install never seeded BOOTSTRAP.md; preserve the file.",
+      }),
+    );
+    const removed = await applyClawRemovePlan(removePlan, {
+      monitorGateway: quiescentClawMonitorGateway,
+      env,
+      config,
+      consentPlanIntegrity: removePlan.planIntegrity,
+      purgeSessions: async () => undefined,
+      trashPath: async (target) => {
+        await rm(target, { recursive: true, force: true });
+        return true;
+      },
+    });
+
+    expect(removed).toMatchObject({ status: "complete", bootstrap: { action: "retainedUnowned" } });
+    await expect(readFile(bootstrapPath, "utf8")).resolves.toBe(bootstrapContent);
+    expect((await stat(bootstrapPath)).mtimeMs).toBe(written.mtimeMs);
+    expect(workspaceWasAdopted(plan.agent.workspace, env)).toBe(false);
   });
 });

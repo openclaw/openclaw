@@ -360,9 +360,14 @@ being rewritten, missing files are written normally, and differing content is a
 `workspace_file_conflict` blocker — adoption never overwrites existing files.
 If the package defines first-run instructions, any existing package bootstrap
 file is also a conflict, even when its content matches; Claws cannot safely
-claim or later remove a bootstrap file it did not create.
+claim or later remove a bootstrap file it did not create. That holds after
+consent too: an identical bootstrap file that appears before apply fails the
+apply with `bootstrap_conflict`, `claws status` reports a bootstrap this install
+never seeded as `unowned`, and removal always retains it.
 Apply re-verifies content digests and fails closed when an adoptable file
-changed after planning. The agent is added to configuration only after every
+changed after planning, and it rechecks the target workspace against the current
+configuration after package installation and before writing anything into the
+workspace. The agent is added to configuration only after every
 workspace file has been safely revalidated and recorded, so a failed adoption
 cannot leave a partially owned workspace routable. Retrying an interrupted
 adoption rebuilds the consented plan from the recorded adopted set and the files
