@@ -78,9 +78,6 @@ const expectations: Record<
   "peanutto.json": {
     providers: ["openai", "xai", "ollama"],
     model: "minimax-m2.7",
-    sourceConfig: {
-      models: { providers: { openai: { apiKey: "FAKE_CONFIG_CORPUS_CREDENTIAL" } } },
-    },
   },
 };
 
@@ -180,6 +177,11 @@ describe("operator config startup corpus", () => {
         );
       }
       const expected = expectations[name]!;
+      if (name === "peanutto.json") {
+        expect(startup.snapshot.sourceConfig.models?.providers?.openai?.apiKey).toBe(
+          "FAKE_CONFIG_CORPUS_CREDENTIAL",
+        );
+      }
       if (expected.sourceConfig) {
         expect(startup.snapshot.sourceConfig).toMatchObject(expected.sourceConfig);
       }
