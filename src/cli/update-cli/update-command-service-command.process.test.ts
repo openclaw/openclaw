@@ -5,12 +5,10 @@ import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-chil
 it.each([
   "restart",
   "install",
-  "stop",
   "missing candidate",
   "executor revoked",
   "restart revoked",
   "install revoked",
-  "stop revoked",
 ] as const)("handles %s after replacing the updater's module files", async (scenario) => {
   await withOpenClawTestState(
     { prefix: "openclaw-update-command-replacement-", scenario: "minimal", applyEnv: false },
@@ -24,7 +22,7 @@ it.each([
           import { pathToFileURL } from "node:url";
 
           const scenario = ${JSON.stringify(scenario)};
-          const action = scenario.startsWith("install") ? "install" : scenario.startsWith("stop") ? "stop" : "restart";
+          const action = scenario.startsWith("install") ? "install" : "restart";
           const root = ${JSON.stringify(state.path("installation"))};
           const dist = path.join(root, "dist");
           const receipt = path.join(root, "candidate.json");

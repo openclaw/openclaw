@@ -41,6 +41,84 @@ function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
   );
 }
 
+type DatabaseVerifyWorkerExit = { code: number | null; signal: NodeJS.Signals | null };
+type DatabaseVerifyWorkerLifecycle = {
+  settled: Promise<DatabaseVerifyWorkerExit>;
+  requestTermination: () => void;
+};
+const workerLifecycles = new WeakMap<ChildProcess, DatabaseVerifyWorkerLifecycle>();
+
+function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLifecycle {
+  let terminationRequested = false;
+  const settled = new Promise<DatabaseVerifyWorkerExit>((resolve) => {
+    let exit: DatabaseVerifyWorkerExit | undefined;
+    let disconnected = !worker.connected;
+    const finish = () => {
+      if (!exit || !disconnected) {
+        return;
+      }
+      worker.off("exit", onExit);
+      worker.off("disconnect", onDisconnect);
+      worker.off("close", onClose);
+      resolve(exit);
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      exit = { code, signal };
+      finish();
+    };
+    const onDisconnect = () => {
+      disconnected = true;
+      finish();
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      // Failed launches emit error then close without exit. Spawned children
+      // need exit+disconnect because parent disconnect can suppress close.
+      if (worker.pid === undefined) {
+        exit = { code, signal };
+        disconnected = true;
+        finish();
+      }
+    };
+    worker.once("exit", onExit);
+    worker.once("disconnect", onDisconnect);
+    worker.once("close", onClose);
+  });
+  const lifecycle = {
+    settled,
+    requestTermination: () => {
+      if (
+        terminationRequested ||
+        worker.pid === undefined ||
+        worker.exitCode !== null ||
+        worker.signalCode !== null
+      ) {
+        return;
+      }
+      terminationRequested = true;
+      let signalError: Error | undefined;
+      const onSignalError = (error: Error) => {
+        signalError = error;
+      };
+      worker.on("error", onSignalError);
+      try {
+        if (worker.kill()) {
+          return;
+        }
+      } catch (error) {
+        signalError = toStructuredErrorObject(error);
+      } finally {
+        worker.off("error", onSignalError);
+      }
+      log.error("database verification worker termination failed; waiting for native exit", {
+        pid: worker.pid,
+        error: signalError?.message ?? "signal was not delivered",
+      });
+    },
+  };
+  workerLifecycles.set(worker, lifecycle);
+  return lifecycle;
+}
+
 export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
   options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
@@ -59,86 +137,68 @@ export function runDatabaseVerifyWorker(
   } catch (error) {
     return Promise.reject(toStructuredErrorObject(error));
   }
+  // Capture the lifetime before publishing the child so stop joins this same boundary.
+  const lifecycle = ownDatabaseVerifyWorker(worker);
+  let result: OpenClawDatabaseVerifyResult[] | undefined;
+  let failure: Error | undefined;
+  let settled = false;
+  const fail = (error: unknown) => {
+    if (settled) {
+      return;
+    }
+    // kill() can emit another error synchronously. Preserve the triggering failure.
+    failure ??= toStructuredErrorObject(error);
+    lifecycle.requestTermination();
+  };
+  const onMessage = (message: unknown) => {
+    if (!Array.isArray(message) || !message.every(isVerifyResult)) {
+      fail(new Error("database verification worker returned invalid results"));
+      return;
+    }
+    result = message;
+  };
+  worker.once("message", onMessage);
+  worker.on("error", fail);
+  const completion = lifecycle.settled.then((exit) => {
+    settled = true;
+    worker.off("message", onMessage);
+    worker.off("error", fail);
+    options.onWorker?.(undefined);
+    if (failure) {
+      throw failure;
+    }
+    if (exit.code !== 0) {
+      throw new Error(
+        `database verification worker exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}`,
+      );
+    }
+    if (!result) {
+      throw new Error("database verification worker exited without results");
+    }
+    return result;
+  });
   options.onWorker?.(worker);
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let result: OpenClawDatabaseVerifyResult[] | undefined;
-    let protocolError: Error | undefined;
-    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-    let disconnected = !worker.connected;
-    const settle = (finish: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      worker.removeAllListeners();
-      options.onWorker?.(undefined);
-      finish();
-    };
-    const settleAfterExitAndDisconnect = () => {
-      const completedExit = exit;
-      if (!completedExit || !disconnected) {
-        return;
-      }
-      settle(() => {
-        if (protocolError) {
-          reject(toStructuredErrorObject(protocolError));
-        } else if (completedExit.code !== 0) {
-          reject(
-            new Error(
-              `database verification worker exited with ${
-                completedExit.signal
-                  ? `signal ${completedExit.signal}`
-                  : `code ${completedExit.code}`
-              }`,
-            ),
-          );
-        } else if (!result) {
-          reject(new Error("database verification worker exited without results"));
-        } else {
-          resolve(result);
+  if (worker.pid !== undefined) {
+    try {
+      worker.send(targets, (error) => {
+        if (error) {
+          fail(error);
         }
       });
-    };
-    worker.once("message", (message: unknown) => {
-      if (!Array.isArray(message) || !message.every(isVerifyResult)) {
-        protocolError = new Error("database verification worker returned invalid results");
-        worker.kill();
-        return;
-      }
-      result = message;
-    });
-    worker.once("error", (error) => settle(() => reject(toStructuredErrorObject(error))));
-    worker.once("disconnect", () => {
-      disconnected = true;
-      settleAfterExitAndDisconnect();
-    });
-    worker.once("exit", (code, signal) => {
-      exit = { code, signal };
-      disconnected ||= !worker.connected;
-      settleAfterExitAndDisconnect();
-    });
-    worker.send(targets, (error) => {
-      if (!error) {
-        return;
-      }
-      worker.kill();
-      settle(() => reject(toStructuredErrorObject(error)));
-    });
-  });
+    } catch (error) {
+      fail(error);
+    }
+  }
+  return completion;
 }
 
 export async function terminateDatabaseVerifyWorker(worker: ChildProcess): Promise<void> {
-  if (worker.exitCode !== null || worker.signalCode !== null) {
-    return;
+  const lifecycle = workerLifecycles.get(worker);
+  if (!lifecycle) {
+    throw new Error("database verification worker is not owned by this verifier");
   }
-  await new Promise<void>((resolve) => {
-    worker.once("exit", () => resolve());
-    if (!worker.kill()) {
-      resolve();
-    }
-  });
+  lifecycle.requestTermination();
+  await lifecycle.settled;
 }
 
 /** Resolve the state database and current registered agent database paths. */

@@ -96,7 +96,7 @@ The page reports the exact sign-in operation as pending, connected, cancelled, e
 
 Open the model menu in **New session** or an existing chat. Use **Account for this chat** to choose one of your saved accounts for the selected provider. The account picker remains available when **Automatic** has no eligible models. In New session, choosing an account previews eligible models before your first message. The selection applies to the session you create and can also be used for [draft-title preparation](/web/control-ui/sessions-and-sidebar#new-session-names) before you press Start. It does not change your new-chat default or saved model preference. Changing accounts discards the old title suggestion. In an existing chat, it changes that chat's selection.
 
-The account control shows a person a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
+The account control shows a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
 
 Chat status and model listings identify a selected personal credential as **personal account**, without exposing its private label, email, or account id.
 

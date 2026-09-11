@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -93,6 +93,31 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("keeps the picker open while toggling Auto and closes after a manual destination choice", () => {
+    const { state, browser } = createRepositoryFixture();
+    onTestFinished(() => browser.disconnect());
+    const close = vi.spyOn(browser, "close");
+    browser.onPopoverShow("where");
+    browser.changeEnvironmentQuery("runner");
+
+    state.selectDevice("", true, { keepPickerOpen: true });
+    expect(state.autoDevice).toBe(true);
+    expect(browser.popoverOpen("where")).toBe(true);
+    expect(browser.environmentQuery).toBe("runner");
+    expect(close).not.toHaveBeenCalled();
+
+    state.selectDevice("", false, { keepPickerOpen: true });
+    expect(state.autoDevice).toBe(false);
+    expect(state.deviceId).toBe("");
+    expect(browser.popoverOpen("where")).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+
+    state.selectDevice("desktop");
+    expect(state.deviceId).toBe("desktop");
+    expect(browser.popoverOpen("where")).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it.each(["git", "unavailable", "rejected"] as const)(
     "preserves an edited base branch through reconnect discovery (%s)",
     async (result) => {

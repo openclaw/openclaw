@@ -60,14 +60,11 @@ export function createPreparedWorkerPool(options: PoolOptions) {
   const policy = (record: Pick<WorkerEnvironmentRecord, "profileId" | "providerId">) => {
     const config = options.getConfig().cloudWorkers;
     const profile = config?.profiles?.[record.profileId];
+    const configured =
+      profile && normalizeCapabilityProviderId(profile.provider) === record.providerId;
     return {
-      configured: Boolean(
-        profile && normalizeCapabilityProviderId(profile.provider) === record.providerId,
-      ),
-      target:
-        profile && normalizeCapabilityProviderId(profile.provider) === record.providerId
-          ? (profile.readyWorkers ?? DEFAULT_READY_WORKERS)
-          : 0,
+      configured: Boolean(configured),
+      target: configured ? (profile.readyWorkers ?? DEFAULT_READY_WORKERS) : 0,
       maxTotal: config?.preparedPool?.maxTotal ?? DEFAULT_MAX_TOTAL,
     };
   };
@@ -106,15 +103,13 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     for (const record of inventory) {
       const demandAtMs = demandAt(record);
       const key = groupKey(record);
-      if (
-        key &&
+      const build =
         record.preparation?.purpose === "build" &&
         record.preparation.consumedAtMs === null &&
         record.destroyRequestedAtMs === null &&
-        record.state !== "ready" &&
         record.state !== "failed" &&
-        record.state !== "destroyed"
-      ) {
+        record.state !== "destroyed";
+      if (key && build && record.state !== "ready") {
         buildingKeys.add(key);
       }
       if (
@@ -126,12 +121,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         if (
           !previous ||
           demandAtMs > previous.demandAtMs ||
-          (demandAtMs === previous.demandAtMs &&
-            record.preparation?.purpose === "build" &&
-            record.preparation.consumedAtMs === null &&
-            record.destroyRequestedAtMs === null &&
-            record.state !== "failed" &&
-            record.state !== "destroyed")
+          (demandAtMs === previous.demandAtMs && build)
         ) {
           sources.set(key, { record, demandAtMs });
         }

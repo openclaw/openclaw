@@ -156,10 +156,7 @@ export function buildConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
-  const configuredFallbackMaxTokens =
-    configuredModel?.maxTokens ??
-    providerConfig?.maxTokens ??
-    providerConfig?.models?.[0]?.maxTokens;
+  const configuredFallbackMaxTokens = configuredModel?.maxTokens ?? providerConfig?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
   const resolvedFallbackContextWindow =
     configuredModel?.contextWindow ?? staticCatalogModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
@@ -196,6 +193,7 @@ export function buildConfiguredFallbackModel(params: {
               cfg,
               configuredModel,
               catalogCost: staticCatalogModel?.cost,
+              providerMetadataOwners: params.providerMetadataOwners,
             }),
             contextWindow: resolvedFallbackContextWindow,
             contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,

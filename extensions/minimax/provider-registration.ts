@@ -224,6 +224,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,
         note: (message, title) => ctx.prompter.note(message, title),
+        deviceCode: ctx.prompter.deviceCode,
         progress,
         region,
         ...(ctx.signal ? { signal: ctx.signal } : {}),

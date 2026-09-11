@@ -15,6 +15,7 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
+  type ConfigFileSnapshot,
   readConfigFileSnapshot,
   transformConfigFile,
 } from "../../config/config.js";
@@ -54,13 +55,13 @@ export const formatMs = (value?: number | null) => {
 };
 
 /** Loads config from disk and throws a formatted error when validation fails. */
-export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
+export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapshot> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot.runtimeConfig ?? snapshot.config;
+  return snapshot;
 }
 
 /** Runtime config snapshot supplied to model config mutators. */
@@ -88,11 +89,12 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => readonly (ModelRef | undefined)[],
+  beforeCommit?: () => void,
 ): Promise<OpenClawConfig> {
   const explicitSetPaths: string[][] = [];
   const result = await transformConfigFile({
     base: "source",
-    writeOptions: { explicitSetPaths },
+    writeOptions: { explicitSetPaths, beforeCommit },
     transform: async (currentConfig, { snapshot }, { envSnapshotForRestore }) => {
       if (!snapshot.valid) {
         const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");

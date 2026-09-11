@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "./runtime-process-core-build-entries.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -65,7 +69,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
-    entry,
+    entry: sharedRuntimeProcessBuildEntries(entry),
     outDir,
     format: "esm",
     platform: "node",
@@ -142,6 +146,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ],
   };
   await build(config);
+  await build({
+    ...config,
+    entry: standaloneRuntimeProcessBuildEntries,
+    outputOptions: { codeSplitting: false },
+  });
   await build({
     ...createManagedHandoffBuildConfig(),
     config: false,

@@ -15,6 +15,14 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+    kind: "ready",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));

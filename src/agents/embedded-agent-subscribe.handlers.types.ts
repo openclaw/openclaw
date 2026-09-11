@@ -208,10 +208,7 @@ export type EmbeddedAgentSubscribeState = {
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
-  pendingMessagingTexts: Map<string, string>;
-  pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
-  pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
@@ -364,9 +361,6 @@ type ToolHandlerState = Pick<
   | "lastToolError"
   | "latestMcpAppChannelView"
   | "latestMcpConnectAction"
-  | "pendingMessagingTargets"
-  | "pendingMessagingTexts"
-  | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
   | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"

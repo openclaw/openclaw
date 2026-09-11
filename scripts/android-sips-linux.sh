@@ -55,7 +55,7 @@ if ! "$convert_bin" "$input_path" \
 fi
 
 if ! output_description="$(
-  "$identify_bin" -ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q' \
+  "$identify_bin" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q' \
     "$temporary_output" 2>/dev/null
 )"; then
   fail "converted output is not a readable image"

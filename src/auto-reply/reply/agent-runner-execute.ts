@@ -32,6 +32,7 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -541,8 +542,15 @@ export function createReplyAgentRestartRecoveryController(
       : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
+  const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
+    const result = await admitUserTurn(...args);
+    if (result === "admitted" && restartRecoverySourceTurnId) {
+      replyRunRegistry.bindSourceTurnId(replyOperation, restartRecoverySourceTurnId);
+    }
+    return result;
+  };
   return {
-    admitUserTurn,
+    admitUserTurn: admitUserTurnWithSourceBinding,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,

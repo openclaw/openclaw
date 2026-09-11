@@ -81,9 +81,11 @@ import {
   log,
   resolveOpenAIClientBaseUrl,
 } from "./openai-transport-shared.js";
-import { resolveProviderTransportTurnState } from "./provider-transport-turn-state.js";
+import {
+  filterProviderTurnHeadersForExplicitOpencodeSession,
+  resolveProviderTransportTurnState,
+} from "./provider-transport-turn-state.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
-import { hasOpencodeSessionHeader } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -196,13 +198,22 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           transport: websocketMode ? "websocket" : "stream",
         });
         const websocketSessionPolicy = websocketMode ? turnState?.websocket : undefined;
-        const hasExplicitOpencodeSession = hasOpencodeSessionHeader(model, options);
+        const httpTurnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          turnState?.headers,
+        );
+        const websocketTurnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          websocketSessionPolicy?.headers,
+        );
         const websocketHeaders = websocketMode
           ? buildOpenAIClientHeaders(
               model,
               context,
               options?.headers,
-              hasExplicitOpencodeSession ? undefined : websocketSessionPolicy?.headers,
+              websocketTurnHeaders,
               options?.sessionId,
               options?.cacheRetention,
             )
@@ -211,7 +222,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           model,
           context,
           options?.headers,
-          hasExplicitOpencodeSession ? undefined : turnState?.headers,
+          httpTurnHeaders,
           options?.sessionId,
           options?.cacheRetention,
         );

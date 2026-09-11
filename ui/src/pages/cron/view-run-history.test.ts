@@ -1,19 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { createCronViewJob, renderCronView as renderView } from "./view.test-support.ts";
-
-function getElement<T extends Element>(
-  container: Element,
-  selector: string,
-  constructor: new () => T,
-): T {
-  const element = container.querySelector<T>(selector);
-  expect(element).toBeInstanceOf(constructor);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Expected ${selector} to match ${constructor.name}`);
-  }
-  return element;
-}
+import {
+  createCronViewJob,
+  getElement,
+  renderCronView as renderView,
+} from "./view.test-support.ts";
 
 describe("cron view run history", () => {
   it("renders runs sorted newest first and wires run filters", () => {

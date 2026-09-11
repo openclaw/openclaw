@@ -32,10 +32,6 @@ beforeEach(() => {
   probePortUsage.mockRejectedValue(new Error("unexpected port probe"));
 });
 
-function setPlatform(value: NodeJS.Platform) {
-  mockProcessPlatform(value);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -89,14 +85,14 @@ describe("resolveGatewayService", () => {
     { platform: "linux" as const, label: "systemd user", loadedText: "enabled" },
     { platform: "win32" as const, label: "Scheduled Task", loadedText: "registered" },
   ])("returns the registered adapter for $platform", ({ platform, label, loadedText }) => {
-    setPlatform(platform);
+    mockProcessPlatform(platform);
     const service = resolveGatewayService();
     expect(service.label).toBe(label);
     expect(service.loadedText).toBe(loadedText);
   });
 
   it("returns a read-only unsupported-platform adapter", async () => {
-    setPlatform("aix");
+    mockProcessPlatform("aix");
     const service = resolveGatewayService();
 
     await expect(service.readCommand(process.env)).resolves.toBeNull();
@@ -154,7 +150,7 @@ describe("resolveGatewayService", () => {
   });
 
   it("guards every native service mutation when an external supervisor owns lifecycle", async () => {
-    setPlatform("darwin");
+    mockProcessPlatform("darwin");
     const service = resolveGatewayService();
     const env = { OPENCLAW_SUPERVISOR_MODE: "external" };
     const installArgs = {
@@ -248,7 +244,7 @@ describe("readGatewayServiceState", () => {
       ];
       const snapshot = captureEnv(keys);
       try {
-        setPlatform("linux");
+        mockProcessPlatform("linux");
         for (const key of keys) {
           delete process.env[key];
         }

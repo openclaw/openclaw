@@ -55,7 +55,12 @@ const components = new Map([
 ]);
 const inlineComponents = new Set(["Badge", "Tooltip"]);
 const gridComponents = new Set(["CardGroup", "Columns"]);
-const componentTag = /<(\/)?([A-Z][A-Za-z0-9_.-]*)\b([^>]*)>/g;
+// Quoted values can contain placeholders such as <section>; only unquoted > closes a tag.
+const componentAttrsPattern = String.raw`(?:"[^"]*"|'[^']*'|[^'">])*`;
+const componentTag = new RegExp(
+  String.raw`<(\/)?([A-Z][A-Za-z0-9_.-]*)\b(${componentAttrsPattern})>`,
+  "g",
+);
 
 // Track source lines through the existing rewrites; inserted snippet content has
 // no location in the including file. This metadata never enters rendered tokens.
@@ -119,24 +124,26 @@ class DocsSource {
   }
 }
 
-function preprocess(input) {
+function preprocess(input, restore) {
   let out = input.replace(/\r\n/g, "\n").replace(/^import\s+.+?;?\s*$/gm, "");
   out = out.replace(
-    /<Mermaid\b[^>]*>([\s\S]*?)<\/Mermaid>/g,
-    (_, body) => `\n${marker("mermaidBlock", body)}\n`,
+    new RegExp(String.raw`<Mermaid\b${componentAttrsPattern}>([\s\S]*?)<\/Mermaid>`, "g"),
+    (_, body) => `\n${marker("mermaidBlock", restore(body))}\n`,
   );
   out = out.replace(
-    /<Chart\b([^>]*)\/>/g,
-    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs, body: "" }))}\n`,
+    new RegExp(String.raw`<Chart\b(${componentAttrsPattern})\/>`, "g"),
+    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: "" }))}\n`,
   );
   out = out.replace(
-    /<Chart\b([^>]*)>([\s\S]*?)<\/Chart>/g,
-    (_, attrs, body) => `\n${marker("chart", JSON.stringify({ attrs, body }))}\n`,
+    new RegExp(String.raw`<Chart\b(${componentAttrsPattern})>([\s\S]*?)<\/Chart>`, "g"),
+    (_, attrs, body) =>
+      `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: restore(body) }))}\n`,
   );
   out = out.replace(/<br\s*\/?>/gi, "\n");
   return out.replace(componentTag, (tag, closing, name, attrs) => {
     let kind;
-    let value = closing ? "" : attrs;
+    // Restore literal attributes before encoding hides their placeholders.
+    let value = closing ? "" : restore(attrs);
     if (gridComponents.has(name) || knownBlocks.has(name)) {
       kind = closing ? "blockClose" : "blockOpen";
       value = gridComponents.has(name) ? cardGridClass(attrs) : knownBlocks.get(name)[0];
@@ -241,8 +248,13 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   };
   const jsxComments = new Set();
   let text = new DocsSource(input, firstLine).replace(
-    /<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\1\s*>/g,
+    /(`+)(?:(?!\n(?:[ \t]*\r?\n|[ \t]*<(?:pre|script|style|textarea)\b))[^])*?\1|<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\2\s*>/g,
     (value) => {
+      // Code spans cannot cross a blank line or a raw HTML block boundary.
+      // Skip them before raw HTML matching can consume later examples.
+      if (value.startsWith("`")) {
+        return value;
+      }
       if (value.startsWith("{/*")) {
         jsxComments.add(saved.length);
       }
@@ -311,7 +323,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   );
   if (sourceFile) {
     text = text.replace(
-      /<Snippet\b([^>]*)\/>/g,
+      new RegExp(String.raw`<Snippet\b(${componentAttrsPattern})\/>`, "g"),
       (_, rawAttrs) => {
         const attrs = parseAttrs(rawAttrs);
         const ref = attrs.file ?? attrs.src;
@@ -334,7 +346,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
       false,
     );
   }
-  text = preprocess(text);
+  text = preprocess(text, restore);
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 

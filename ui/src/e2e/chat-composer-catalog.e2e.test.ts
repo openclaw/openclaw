@@ -687,6 +687,12 @@ suite.define(() => {
   it("reads a newer account catalog on reopen without a cooldown or provider discovery", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const existing = { id: "existing", name: "Existing", provider: "example", available: true };
+      const firstOpen = {
+        id: "first-open",
+        name: "First open",
+        provider: "example",
+        available: true,
+      };
       const published = {
         id: "published",
         name: "Published",
@@ -702,17 +708,71 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/existing"]').count())
         .toBe(1);
+      const picker = composer.locator("details.chat-controls__model-picker");
       const trigger = composer.locator('[data-chat-model-select="true"]');
+      await gateway.setMethodResponse("models.list", { models: [existing, firstOpen] });
       await trigger.click();
-      await gateway.waitForRequest("models.list", { after: 1 });
-      await trigger.click();
-      await gateway.setMethodResponse("models.list", { models: [existing, published] });
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="example/first-open"]').isVisible())
+        .toBe(true);
+      await gateway.setMethodResponse("models.list", { models: [existing, firstOpen, published] });
       const previousRequestCount = (await gateway.getRequests("models.list")).length;
-      await trigger.click();
+
+      const reopened = await picker.evaluate(async (details: HTMLDetailsElement) => {
+        const pane = details.closest<
+          HTMLElement & { requestUpdate(): void; updateComplete: Promise<boolean> }
+        >("openclaw-chat-pane");
+        const summary = details.querySelector<HTMLElement>(":scope > summary");
+        if (!pane || !summary) {
+          throw new Error("Expected the native picker and its chat pane");
+        }
+        if (document.visibilityState !== "visible") {
+          throw new Error("Expected a visible document before native picker activation");
+        }
+        await pane.updateComplete;
+        if (!details.open || !details.isConnected) {
+          throw new Error("Expected the first-open catalog to remain rendered");
+        }
+        const listeners = new Set<() => void>();
+        const nextToggle = () =>
+          new Promise<void>((resolve) => {
+            const listener = () => {
+              listeners.delete(listener);
+              resolve();
+            };
+            listeners.add(listener);
+            details.addEventListener("toggle", listener, { once: true });
+          });
+        try {
+          const closed = nextToggle();
+          summary.click();
+          if (details.open) {
+            throw new Error("Expected native close activation to close the picker");
+          }
+          await closed;
+          const opened = nextToggle();
+          summary.click();
+          if (!details.open) {
+            throw new Error("Expected native reopen activation to open the picker");
+          }
+          // A normal render must not overwrite a newer native open before its queued toggle.
+          pane.requestUpdate();
+          await pane.updateComplete;
+          await opened;
+          return { open: details.open, connected: details.isConnected };
+        } finally {
+          for (const listener of listeners) {
+            details.removeEventListener("toggle", listener);
+          }
+        }
+      });
+
+      expect(reopened).toEqual({ open: true, connected: true });
       await gateway.waitForRequest("models.list", { after: previousRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/published"]').isVisible())
         .toBe(true);
+      expect(await gateway.getRequests("models.list")).toHaveLength(previousRequestCount + 1);
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).toMatchObject({
           view: "configured",

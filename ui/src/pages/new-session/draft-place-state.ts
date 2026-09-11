@@ -21,8 +21,7 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
-import type { NewSessionRouteData } from "./location.ts";
-import { newSessionSearch } from "./location.ts";
+import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { resolveNewSessionWhere, type NewSessionWhere } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
@@ -587,7 +586,7 @@ export class DraftPlaceState {
     this.browser.close();
   }
 
-  selectDevice(deviceId: string, autoDevice = false) {
+  selectDevice(deviceId: string, autoDevice = false, options: { keepPickerOpen?: boolean } = {}) {
     const snapshot = this.read();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
@@ -627,7 +626,9 @@ export class DraftPlaceState {
       folder: this.folderValue,
       worktree: Boolean(deviceId || autoDevice) || this.worktree,
     });
-    this.browser.close();
+    if (!options.keepPickerOpen) {
+      this.browser.close();
+    }
     this.repositoryState.synchronize();
     this.callbacks.requestUpdate();
   }
@@ -739,11 +740,10 @@ export class DraftPlaceState {
       }
     }
 
-    if (!changed) {
-      return;
+    if (changed) {
+      this.repositoryState.synchronize();
+      this.callbacks.requestUpdate();
     }
-    this.repositoryState.synchronize();
-    this.callbacks.requestUpdate();
   }
 
   browseAvailable(): boolean {

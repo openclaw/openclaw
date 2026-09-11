@@ -328,7 +328,7 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
-}): Promise<void> {
+}): Promise<ReplyPayload[]> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -346,12 +346,12 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return;
+    return [];
   }
   const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
   if (sourceDisposition?.kind === "drop") {
     logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
-    return;
+    return [];
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
@@ -360,7 +360,7 @@ async function sendFollowupPayloads(params: {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return;
+    return [];
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -476,17 +476,23 @@ async function sendFollowupPayloads(params: {
       isError: true,
     });
   }
-  if (queuedPayloads.length > 0) {
+  if (params.kind !== "final" && queuedPayloads.length > 0) {
     await deliverQueuedBatch?.({
       kind: "queued-followup",
       runId: params.runId,
       originatingChannel,
       payloads: queuedPayloads,
+      completion: { kind: "progress" },
     });
   }
+  return queuedPayloads;
 }
 
 /** Performs the already-resolved follow-up delivery action. */
+export type FollowupDeliveryResult =
+  | { kind: "completed"; payloads: ReplyPayload[] }
+  | { kind: "source-retry" };
+
 export async function deliverFollowupDecision(params: {
   decision: FollowupDeliveryDecision;
   turn: AdmittedFollowupTurn;
@@ -494,11 +500,11 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
-}): Promise<void> {
+}): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
-    return;
+    return { kind: "completed", payloads: [] };
   }
   if (decision.kind === "retry-source-delivery") {
     warnPrivateMessageToolFinal({
@@ -510,11 +516,22 @@ export async function deliverFollowupDecision(params: {
       finalTextLength: decision.finalTextLength,
     });
     const key = turn.session.kind === "session" ? turn.session.key : turn.queued.run.sessionKey;
+    const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
+    const retryDelivery =
+      sourceDisposition?.kind === "deliver"
+        ? sourceDisposition.deliver.createSourceRetry?.()
+        : undefined;
+    const retryRun = retryDelivery
+      ? {
+          ...decision.run,
+          queuedFollowupReplyDisposition: { kind: "deliver" as const, deliver: retryDelivery },
+        }
+      : decision.run;
     const enqueued =
       key &&
       enqueueFollowupRun(
         key,
-        decision.run,
+        retryRun,
         resolveQueueSettings({
           cfg: turn.config,
           channel: turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
@@ -526,7 +543,7 @@ export async function deliverFollowupDecision(params: {
         { position: "front" },
       );
     if (enqueued) {
-      return;
+      return { kind: "source-retry" };
     }
     const diagnosticPayloads = resolveFollowupDeliveryPayloads({
       cfg: turn.config,
@@ -539,7 +556,7 @@ export async function deliverFollowupDecision(params: {
       originatingTo: turn.queued.originatingTo,
       originatingThreadId: turn.queued.originatingThreadId,
     });
-    await sendFollowupPayloads({
+    const payloads = await sendFollowupPayloads({
       payloads: diagnosticPayloads,
       turn,
       defaults,
@@ -547,9 +564,9 @@ export async function deliverFollowupDecision(params: {
       kind: params.kind ?? "final",
       resolved: decision.resolved,
     });
-    return;
+    return { kind: "completed", payloads };
   }
-  await sendFollowupPayloads({
+  const payloads = await sendFollowupPayloads({
     payloads: decision.kind === "deliver" ? decision.payloads : [decision.payload],
     turn,
     defaults,
@@ -558,4 +575,5 @@ export async function deliverFollowupDecision(params: {
     mirror: params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
   });
+  return { kind: "completed", payloads };
 }

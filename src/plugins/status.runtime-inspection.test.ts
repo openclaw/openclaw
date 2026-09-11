@@ -549,9 +549,7 @@ module.exports = {
           const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
           expect(persisted.plugins?.slots).toEqual(expectedSlots);
           expect(persisted.plugins?.load?.paths).toBeUndefined();
-          expect(
-            (await readPersistedInstalledPluginIndexInstallRecords())?.[pluginId],
-          ).toMatchObject({
+          expect(readPersistedInstalledPluginIndexInstallRecords()?.[pluginId]).toMatchObject({
             source: testCase.source,
             installPath: pluginDir,
           });
@@ -737,9 +735,7 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
             );
             expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
             expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
-            expect(
-              (await readPersistedInstalledPluginIndexInstallRecords())?.[pluginId],
-            ).toBeUndefined();
+            expect(readPersistedInstalledPluginIndexInstallRecords()?.[pluginId]).toBeUndefined();
           });
         },
       );

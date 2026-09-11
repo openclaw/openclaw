@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import type {
   executeProviderOperationWithRetry,
   fetchProviderDownloadResponse,
@@ -6,7 +5,7 @@ import type {
   fetchWithTimeoutGuarded,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { afterEach, vi, type Mock } from "vitest";
+import { afterEach, expect, vi, type Mock } from "vitest";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
@@ -210,6 +209,42 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     waitProviderOperationPollInterval: async () => {},
   };
 });
+
+export function mockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index = 0,
+): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[0] as Record<string, unknown>;
+}
+
+export function expectMinimaxGuardedFetchCall(index: number, url: string) {
+  const call = minimaxProviderHttpMocks.fetchWithTimeoutGuardedMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
+  }
+  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
+  expect(actualUrl).toBe(url);
+  expect((init as RequestInit | undefined)?.method).toBe("GET");
+  expect(Number.isInteger(timeoutMs)).toBe(true);
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(fetchFn).toBe(fetch);
+  return {
+    init: init as RequestInit,
+    options: options as Record<string, unknown> | undefined,
+  };
+}
+
+export function expectAllowPrivateNetworkPolicy(
+  options: Record<string, unknown> | undefined,
+): void {
+  expect(options).toEqual({
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
+}
 
 export function getMinimaxProviderHttpMocks(): MinimaxProviderHttpMocks {
   return minimaxProviderHttpMocks;

@@ -65,7 +65,7 @@ They are generated separately from the agent's work, so a title is not a complet
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 
-Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details to read the full formatted transcript.
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
 
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
@@ -302,6 +302,15 @@ The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or 
 
 ## Chat transcript layout
 
+In completed dashboard turns, commentary, reasoning-only messages, and tool activity
+share one **Worked for…** disclosure above the answers. Expanding it shows the
+activity in its original order; explicit answer segments and visual results stay
+visible below it. Failed tool results after the last answer stay visible outside
+the disclosure until a later answer follows them. This is display grouping, not a
+change to stored history. Live turns, search results, and turns without an answer
+stay expanded. User messages,
+forwarded inputs, and structural markers remain boundaries for grouping.
+
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.
@@ -314,6 +323,11 @@ Subagents use the same task transcript view, including subagents run by the
 Codex harness. Select a task to read its messages, thinking, and tool calls;
 select **Show earlier** to load older history. Task activity refreshes the view
 while the subagent runs. The generic fallback label is **Subagent**.
+
+For tasks with a child session, capped assistant replies load their complete text
+automatically. The preview stays visible while loading. If recovery fails three
+times, the panel keeps the preview and offers **Retry**. Task transcripts without
+a session address keep the text supplied by their runtime.
 
 The viewer reads history from the runtime that owns it. New native subagent
 tasks retain their original history source when later turns replace the parent's

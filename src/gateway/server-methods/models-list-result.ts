@@ -15,6 +15,11 @@ import {
   buildProviderConfigModelCatalogForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
+import {
+  createModelCatalogDecisions,
+  resolveCatalogDecisionRuntime,
+  type ModelCatalogDecisionParams,
+} from "../../agents/model-catalog-decisions.js";
 import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
 import { createModelCatalogView } from "../../agents/model-catalog-view.js";
 import {
@@ -50,14 +55,11 @@ import { resolveProviderModelCatalogId } from "../../plugins/provider-model-rout
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
+import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { resolveChatAccountSelection } from "./chat-account-selection.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import {
-  createModelsListAuthProjection,
-  type ModelsListAuthProjectionParams,
-} from "./models-list-auth-resolver.js";
 import {
   listConfiguredRuntimeDiscoveryProviderIds,
   resolveProviderConfigInventoryEntries,
@@ -66,7 +68,6 @@ import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.j
 import {
   buildPublicModelProjection,
   projectProviderCatalogOutcomes,
-  resolveModelChoiceAgentRuntime,
 } from "./models-list-public-projection.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -86,8 +87,8 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
 }
 
 /** Builds one per-agent, snapshot-scoped route projection for Gateway thinking metadata. */
-export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthProjectionParams) {
-  const authProjection = createModelsListAuthProjection(params);
+export function createGatewayAgentModelCatalogProjector(params: ModelCatalogDecisionParams) {
+  const authProjection = createModelCatalogDecisions(params);
   const { evaluateEntry, evaluateNative, snapshot } = authProjection;
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
@@ -114,6 +115,7 @@ export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthPr
 }
 
 function createPublicModelsListProjector(params: {
+  pluginRegistry?: ModelCatalogDecisionParams["pluginRegistry"];
   thinkingCatalog: ModelCatalogEntry[];
   fastMode: ReturnType<typeof createModelFastModeResolver>;
   cfg: OpenClawConfig;
@@ -140,11 +142,16 @@ function createPublicModelsListProjector(params: {
           ? Object.assign({}, entry, { alias })
           : entry;
       const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
-      const agentRuntime = resolveModelChoiceAgentRuntime({
+      const selectedRuntime = resolveCatalogDecisionRuntime({
         cfg: params.cfg,
         agentId: params.agentId,
         entry,
+        evaluation,
+        pluginRegistry: params.pluginRegistry,
       });
+      const agentRuntime = selectedRuntime
+        ? projectWorkerPlacementAgentRuntime(selectedRuntime)
+        : undefined;
       const thinkingProfile =
         typeof publicEntry.reasoning !== "boolean"
           ? undefined
@@ -153,6 +160,7 @@ function createPublicModelsListProjector(params: {
               agentId: params.agentId,
               provider: entry.provider,
               model: entry.id,
+              agentRuntime: selectedRuntime?.id ?? "openclaw",
               modelCatalog: params.thinkingCatalog,
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
@@ -219,7 +227,15 @@ function apiKeyProviderCapabilities(params: {
 }
 
 type ModelsListCatalogSource =
-  | { kind: "gateway"; context: GatewayRequestContext }
+  | {
+      kind: "gateway";
+      context: Pick<
+        GatewayRequestContext,
+        "getRuntimeConfig" | "loadGatewayModelCatalogSnapshot"
+      > & {
+        logGateway: Pick<GatewayRequestContext["logGateway"], "debug">;
+      };
+    }
   | {
       kind: "published";
       owner: ResolvedPublishedModelCatalogOwner & {
@@ -266,7 +282,6 @@ export async function prepareModelsListResult(
   const sessionEntry: ChatMetadataSessionEntry | undefined = draft
     ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
     : scope?.sessionEntry;
-  const profiles = resolveSessionCatalogProfiles(sessionEntry);
   const useRequesterDefaults = !scope?.sessionKey && !scope?.sessionEntry;
   draft?.assertCurrent();
   const currentConfig =
@@ -275,6 +290,7 @@ export async function prepareModelsListResult(
   const requestConfig = currentConfig();
   const initialConfig = publishedOwner?.config ?? requestConfig;
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
+  const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
   const view = resolveModelsListView(params.params);
   const refresh = params.params.refresh === true;
   const preloadedCatalog =
@@ -487,6 +503,7 @@ export async function prepareModelsListResult(
       })),
     );
     const projectPublic = createPublicModelsListProjector({
+      pluginRegistry: preparedPluginRegistry,
       thinkingCatalog: catalog,
       fastMode: createModelFastModeResolver({
         cfg,
@@ -555,6 +572,7 @@ export async function prepareModelsListResult(
     },
   });
   const projectPublic = createPublicModelsListProjector({
+    pluginRegistry: preparedPluginRegistry,
     thinkingCatalog: catalog,
     fastMode: createModelFastModeResolver({
       cfg,

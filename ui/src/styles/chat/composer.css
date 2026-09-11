@@ -3029,6 +3029,8 @@
   color: var(--muted);
 }
 
+.chat-controls__permission-icon svg,
+.chat-controls__permission-lock svg,
 .chat-controls__permission-option-icon svg {
   width: 100%;
   height: 100%;

@@ -4,6 +4,12 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    environmentSearchPlaceholder: "Search environments",
+    environmentSearchEmpty: "No matching environments",
+    gatewayHost: "Gateway host",
+    device: "Device",
+    autoDeviceChoose: "Choose a device automatically",
+    autoDeviceScope: "Connected devices only",
     cloudRequiresWorktree: "Cloud needs a Git checkout",
     restoringPreferences: "Restoring your last session setup…",
     checkingPlace: "Checking the selected place…",

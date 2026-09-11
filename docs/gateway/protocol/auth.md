@@ -13,6 +13,8 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Auth
 
+Owner page: [Gateway authentication](/gateway/authentication) — auth modes, token/password setup, and the operator-facing policy this wire contract enforces.
+
 - Shared-secret gateway auth accepts the configured secret in either
   `connect.params.auth.token` or `connect.params.auth.password`.
   `gateway.auth.mode: "token"` selects `gateway.auth.token`; `"password"`
@@ -105,6 +107,8 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Device identity and pairing
 
+Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device records, and CLI surfaces behind these fields.
+
 - Nodes should include a stable device identity (`device.id`) derived from a
   keypair fingerprint.
 - Gateways issue tokens per device + role.
@@ -161,6 +165,8 @@ Migration target:
   metadata pinning still controls command policy on reconnect.
 
 ## TLS and pinning
+
+Owner page: [Remote access](/gateway/remote) — configuring `gateway.tls` and obtaining the fingerprint clients pin.
 
 - TLS is supported for WS connections (`gateway.tls` config).
 - Clients may optionally pin the gateway cert fingerprint via

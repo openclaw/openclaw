@@ -327,10 +327,17 @@ export const ModelsAuthStatusParamsSchema = closedObject({
   agentId: Type.Optional(Type.String()),
 });
 
+/** Rebuilds Gateway auth state after a credential or selection mutation. */
+export const ModelsAuthRefreshParamsSchema = closedObject({
+  operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
+  agentId: Type.Optional(Type.String()),
+});
+
 /** Removes saved model-provider credentials from one configured agent. */
 export const ModelsAuthLogoutParamsSchema = closedObject({
   provider: NonEmptyString,
   profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+  credentialType: Type.Optional(Type.Literal("api_key")),
   agentId: Type.Optional(Type.String()),
 });
 
@@ -1475,6 +1482,7 @@ export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
 export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
+export type ModelsAuthRefreshParams = Static<typeof ModelsAuthRefreshParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

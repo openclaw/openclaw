@@ -276,6 +276,7 @@ describe("frozen committed source errors", () => {
     expect(reader.readText("scripts/absent.ts")).toBeNull();
 
     removeObject(source, `${source.sha}:${metadata}`);
+    expect(() => reader.readText(metadata)).toThrow();
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });

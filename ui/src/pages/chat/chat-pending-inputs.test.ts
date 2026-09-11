@@ -123,6 +123,32 @@ describe("server-owned pending input display", () => {
     );
   });
 
+  it.each([
+    { state: "queued", runId: undefined, notice: undefined },
+    {
+      state: "interrupted",
+      runId: "run-queued",
+      notice:
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+    },
+    {
+      state: "cancelled",
+      runId: "run-queued",
+      notice:
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+    },
+  ] as const)(
+    "keeps $state custody out of the worker-setup notice without eligible execution",
+    ({ state, runId, notice }) => {
+      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+        notice ? [notice] : [],
+      );
+      expect(items.some((item) => item.kind === "message")).toBe(true);
+    },
+  );
+
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     const runId = "cached-delivery";

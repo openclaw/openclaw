@@ -910,6 +910,7 @@ describe("tasks gateway handlers", () => {
     const task = createSnapshotTask({
       taskId: "task-acp-primary",
       runtime: "acp",
+      notifyPolicy: "silent",
       childSessionKey: "agent:codex:acp:child",
       agentId: "codex",
       runId: "run-cancel-acp-gateway",
@@ -918,6 +919,7 @@ describe("tasks gateway handlers", () => {
     const siblingTask = createSnapshotTask({
       taskId: "task-acp-sibling",
       runtime: "acp",
+      notifyPolicy: "silent",
       childSessionKey: "agent:codex:acp:child",
       agentId: "codex",
       runId: "run-cancel-acp-gateway",

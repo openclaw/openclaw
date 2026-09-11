@@ -51,6 +51,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 
@@ -743,6 +744,7 @@ describe("update-cli", () => {
       profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
     );
   let fixtureCount = 0;
+  let tempHome: TempHomeEnv | undefined;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
 
@@ -1930,6 +1932,9 @@ describe("update-cli", () => {
   };
 
   beforeEach(async () => {
+    // Clear the helper's state selector below so HOME and profile overrides keep their semantics.
+    const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
+    tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
     const executorTmp = tempDirs.make("update-cli-owner-");
     absentServicePort = await getFreePort();
     const gatewayEntrypoint = await import("../daemon/gateway-entrypoint.js");
@@ -2184,6 +2189,8 @@ describe("update-cli", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    await tempHome?.restore();
+    tempHome = undefined;
     if (tempDirsToCleanup.size === 0) {
       return;
     }
@@ -8120,49 +8127,6 @@ describe("update-cli", () => {
     );
   });
 
-  it("runs package post-update doctor from the verified package root after a staged swap", async () => {
-    const tempDir = tempDirs.make("openclaw-update-staged-doctor-");
-    const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
-      path.join(tempDir, "lib", "node_modules"),
-    );
-    primeNpmChannelTag("latest", "2026.5.14");
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-        const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-        const stagePackageRoot = path.join(
-          requireValue(stagePrefix, "stage prefix"),
-          "lib",
-          "node_modules",
-          "openclaw",
-        );
-        await writeOpenClawPackageFixture(stagePackageRoot, "2026.5.14", {
-          entrySource: "export {};\n",
-          inventory: true,
-        });
-      }
-    });
-    readPackageVersion.mockImplementation(async (packageRoot: string) => {
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(packageRoot, "package.json"), "utf-8"),
-      ) as { version?: string };
-      return manifest.version ?? "0.0.0";
-    });
-
-    await updateCommand({ yes: true });
-
-    const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
-    expect(doctorCall?.[1].cwd).toBe(pkgRoot);
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_SERVICE_REPAIR_POLICY,
-    ).toBe("external");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_COMPATIBILITY_HOST_VERSION,
-    ).toBe("2026.5.14");
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
-
   it.each([
     { json: true, handoff: "1", expectedExitCode: 79 },
     { json: false, handoff: undefined, expectedExitCode: 1 },
@@ -8491,7 +8455,7 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["owned-running", "no-restart", "stopped", "legacy-target"] as const)(
+  it.each(["owned-running", "no-restart", "stopped"] as const)(
     "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
@@ -8505,14 +8469,6 @@ describe("update-cli", () => {
       if (mode === "stopped") {
         serviceReadRuntime.mockResolvedValue({ status: "stopped" });
       }
-      const validate = requireValue(
-        candidateValidation.getMockImplementation(),
-        "candidate validation",
-      );
-      candidateValidation.mockImplementation(async (options) => ({
-        ...(await validate(options)),
-        checkpointContinuation: mode !== "legacy-target",
-      }));
       await invokeUpdateCli({
         yes: true,
         json: true,

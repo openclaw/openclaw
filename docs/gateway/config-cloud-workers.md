@@ -21,7 +21,7 @@ Node-backed providers return an authenticated node device id for either `worker-
 
 ### Crabbox profile
 
-In **Settings → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. These changes require a Gateway restart. After saving a profile, the restart notice points to **Snapshots → Build snapshot**. Saving does not start a build.
+In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. These changes require a Gateway restart. After saving a profile, the restart notice points to **Snapshots → Build snapshot**. Saving does not start a build.
 
 Snapshot retention is plugin-wide, separate from profile settings. Configure
 `plugins.entries.crabbox.config.warmImages.refreshAfter` (default `24h`, minimum

@@ -1036,6 +1036,45 @@ describe("github-copilot plugin", () => {
     });
   });
 
+  it("returns a supplied setup token without replacing stored credentials or starting login", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = requireAuthMethod(provider.auth, 0);
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+    const before = structuredClone(ensureAuthProfileStore(agentDir));
+    const prompter = { confirm: vi.fn(), note: vi.fn(), text: vi.fn() };
+    const openUrl = vi.fn();
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      agentDir,
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      opts: { tokenProvider: "github-copilot", token: "supplied-setup-token" },
+      isRemote: true,
+      openUrl,
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    });
+
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: { type: "token", provider: "github-copilot", token: "supplied-setup-token" },
+          secretStorage: { kind: "store", namePrefix: "GITHUB_COPILOT_TOKEN" },
+        },
+      ],
+    });
+    expect(result?.defaultModel).toBeTruthy();
+    expect(ensureAuthProfileStore(agentDir)).toEqual(before);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotStarterModel).not.toHaveBeenCalled();
+  });
+
   it("keeps valid interactive auth when live starter-model discovery is unavailable", async () => {
     mocks.resolveCopilotStarterModel.mockRejectedValueOnce(new Error("catalog unavailable"));
     const provider = registerProviderWithPluginConfig({});

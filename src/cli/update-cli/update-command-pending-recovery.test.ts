@@ -11,12 +11,12 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 

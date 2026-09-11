@@ -3646,6 +3646,78 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send exposes inline image uploads as managed media without duplicating vision input", async () => {
+    openDirectChatSession();
+    try {
+      testState.agentConfig = { model: { primary: "test-provider/vision-model" } };
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+
+      const context = createDirectChatContext({
+        getRuntimeConfig,
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
+      });
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: Record<string, unknown>;
+            replyOptions?: GetReplyOptions;
+          },
+        ];
+        if (params.replyOptions?.runId === "idem-inline-image-managed-media") {
+          captured = {
+            ctx: params.ctx,
+            replyOptions: params.replyOptions,
+          };
+        }
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "inline-image-managed-media",
+        params: makeChatSendParams({
+          message: "inspect the uploaded file",
+          idempotencyKey: "idem-inline-image-managed-media",
+          attachments: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              fileName: "dot.png",
+              content: pngB64,
+            },
+          ],
+        }),
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
+      expect(captured?.replyOptions?.images).toEqual([
+        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0 },
+      ]);
+      expect(captured?.ctx?.media).toEqual([
+        expect.objectContaining({
+          path: expect.any(String),
+          contentType: "image/png",
+          hydrationSuppressed: true,
+        }),
+      ]);
+      await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {
@@ -5278,6 +5350,7 @@ describe("gateway server chat", () => {
       expect(onQueuedFollowupReplyBatch).toBeTypeOf("function");
       await onQueuedFollowupReplyBatch?.({
         kind: "queued-followup",
+        completion: { kind: "completed" },
         runId: "queued-followup-agent-run",
         originatingChannel: "webchat",
         payloads: [{ text: "queued follow-up answer" }],
@@ -5348,10 +5421,19 @@ describe("gateway server chat", () => {
       turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
-        FAST_WAIT_OPTS,
-      );
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "idem-queued-followup",
+          "idem-queued-followup",
+          "agent:main:main",
+        );
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "queued-followup-agent-run",
+          "queued-followup-agent-run",
+          "agent:main:main",
+        );
+      }, FAST_WAIT_OPTS);
 
       let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
@@ -5372,10 +5454,14 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await waitForFast(
-        () => expect(context.removeChatRun).toHaveBeenCalledTimes(2),
-        FAST_WAIT_OPTS,
-      );
+      await waitForFast(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(3);
+        expect(context.removeChatRun).toHaveBeenCalledWith(
+          "idem-queued-followup-post-error",
+          "idem-queued-followup-post-error",
+          "agent:main:main",
+        );
+      }, FAST_WAIT_OPTS);
       const acceptedErrorEvents = broadcast.mock.calls.filter(
         ([event, payload]) =>
           event === "chat" &&

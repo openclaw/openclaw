@@ -611,6 +611,7 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 
 - [ACP agents](/tools/acp-agents) — running external coding harnesses
 - [Channel routing](/channels/channel-routing) — how messages route to agents
+- [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — splitting one job across role-scoped agents
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs

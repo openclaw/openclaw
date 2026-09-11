@@ -553,7 +553,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (!policy.allowsKey(key)) {
+  if (!policy.allows(resolved.ref)) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =

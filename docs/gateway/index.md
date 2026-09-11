@@ -396,7 +396,7 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 
 - [Configuration](/gateway/configuration)
 - [Gateway troubleshooting](/gateway/troubleshooting)
-- [Background process](/gateway/background-process)
+- [Background exec and process tool](/gateway/background-process) — the agent-facing exec and process tool, not a Gateway service control
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)

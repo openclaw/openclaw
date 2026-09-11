@@ -718,5 +718,6 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 - [Groups](/channels/groups)
 - [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
+- [Reactions](/tools/reactions)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

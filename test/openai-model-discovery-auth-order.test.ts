@@ -40,15 +40,61 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
-function withCatalogProviders<T>(run: () => T): T {
+vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
+  const { createProviderHookRuntime } =
+    await import("../src/plugins/provider-hook-runtime-core.js");
+  const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
+  const selectProviders = (params: {
+    onlyPluginIds?: string[];
+    providerRefs?: readonly string[];
+  }) =>
+    discovery.providers.filter(
+      (provider) =>
+        (!params.onlyPluginIds || params.onlyPluginIds.includes(provider.id)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
+    );
+  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
+  return createProviderHookRuntime({
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviderRegistryCore: (params) => {
+      const providers = selectProviders(params);
+      if (providers.length === 0) {
+        return undefined;
+      }
+      return {
+        registry: createCatalogProviderRegistry(providers),
+        workspaceDir: params.workspaceDir,
+        onlyPluginIds: params.onlyPluginIds,
+        isProviderOwnerEligible: (pluginId, providerRef) =>
+          providers.some(
+            (provider) =>
+              provider.id === pluginId && matchesProviderPluginRef(provider, providerRef),
+          ),
+      };
+    },
+    resolvePluginProvidersCore: (params, onSelectedRegistry) => {
+      const providers = selectProviders(params);
+      if (providers.length) {
+        onSelectedRegistry?.(createCatalogProviderRegistry(providers));
+      }
+      return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
+    },
+  });
+});
+
+function createCatalogProviderRegistry(providers = discovery.providers) {
   const registry = createEmptyPluginRegistry();
-  registry.providers = discovery.providers.map((provider) => ({
+  registry.providers = providers.map((provider) => ({
     pluginId: provider.id,
     provider,
     source: "test",
   }));
-  // Exhausted auth must consult the same providers as discovery, without loading a second runtime.
-  return withPluginRuntimeRegistryScope(registry, run);
+  return registry;
+}
+
+function withCatalogProviders<T>(run: () => T): T {
+  return withPluginRuntimeRegistryScope(createCatalogProviderRegistry(), run);
 }
 
 describe("Provider model discovery auth preparation", () => {

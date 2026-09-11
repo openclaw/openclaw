@@ -50,7 +50,6 @@ import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   reportPreMutationUpdateFailure,
   UpdateCommandFailure,
@@ -65,7 +64,11 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
-import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withUpdateInProgressEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveManagedServicePackageUpdatePlan,

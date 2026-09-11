@@ -39,12 +39,16 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let heartbeatToolResponse: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
       attempt: Pick<
         EmbeddedRunAttemptResult,
-        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
+        | "latestMcpAppChannelView"
+        | "latestMcpConnectAction"
+        | "heartbeatToolResponse"
+        | "modelAttempt"
       >,
     ): void {
       modelAttempt = attempt.modelAttempt;
@@ -52,6 +56,8 @@ export function createAttemptCarryover() {
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+      heartbeatToolResponse = attempt.heartbeatToolResponse ?? heartbeatToolResponse;
+      attempt.heartbeatToolResponse = heartbeatToolResponse;
     },
     get modelAttempt() {
       return modelAttempt;

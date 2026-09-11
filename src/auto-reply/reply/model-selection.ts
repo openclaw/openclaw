@@ -50,7 +50,7 @@ import {
 } from "./model-runtime-normalization.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
-  normalizeStoredRuntimeModelRef,
+  resolveStoredRuntimeModelRef,
 } from "./stored-model-override.js";
 export {
   resolveModelDirectiveSelection,
@@ -174,6 +174,7 @@ export async function createModelSelectionState(params: {
   let provider = params.provider;
   let model = params.model;
   let requestedRouteResolution: ModelFallbackRouteResolution = "resolved";
+  let resolvedStoredOverrideSelected = false;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
   const hasOneTurnModelOverride = params.hasOneTurnModelOverride === true;
@@ -320,15 +321,17 @@ export async function createModelSelectionState(params: {
     directStoredModelOverride &&
     !hasOneTurnModelOverride
   ) {
-    const normalizedOverride = normalizeStoredRuntimeModelRef(
-      directStoredModelOverride.provider ?? defaultProvider,
-      directStoredModelOverride.model,
+    const normalizedOverride = resolveStoredRuntimeModelRef(
+      {
+        ...directStoredModelOverride,
+        provider: directStoredModelOverride.provider ?? defaultProvider,
+      },
       cfg,
       sessionEntry,
       runtimeModelNormalization,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    const overrideAllowed = visibilityPolicy.allowsKey(key);
+    const overrideAllowed = visibilityPolicy.allows(normalizedOverride);
     // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
     // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const shouldResetOverride =
@@ -430,24 +433,30 @@ export async function createModelSelectionState(params: {
             ...runtimeModelNormalization,
           })
         : null;
-    const normalizedStoredOverride = normalizeStoredRuntimeModelRef(
-      storedAlias?.provider ?? storedProvider,
-      storedAlias?.model ?? storedOverride.model,
+    const normalizedStoredOverride = resolveStoredRuntimeModelRef(
+      {
+        ...storedOverride,
+        provider: storedAlias?.provider ?? storedProvider,
+        model: storedAlias?.model ?? storedOverride.model,
+      },
       cfg,
       sessionEntry,
       runtimeModelNormalization,
     );
-    const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (modelSelectionLocked || visibilityPolicy.allowsKey(key)) {
+    if (modelSelectionLocked || visibilityPolicy.allows(normalizedStoredOverride)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
       requestedRouteResolution =
         storedAlias || storedRouteCataloged ? "resolved" : storedOverride.routeResolution;
+      resolvedStoredOverrideSelected = storedOverride.routeResolution === "resolved";
     }
   }
 
   const skipResolveSelection =
-    params.hasModelDirective || hasOneTurnModelOverride || modelSelectionLocked;
+    params.hasModelDirective ||
+    hasOneTurnModelOverride ||
+    modelSelectionLocked ||
+    resolvedStoredOverrideSelected;
   if (!skipResolveSelection) {
     const unresolvedSelectionKey = modelKey(provider, model);
     const allowedInitialSelection = visibilityPolicy.resolveSelection({

@@ -1,6 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
+import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -190,6 +192,29 @@ export async function runReplyAgent(
           hydrateSkillPromptRefs: false,
         }) ?? activeSessionEntry)
       : activeSessionEntry;
+  // New steering must not reuse a terminal source claim. Compare the active
+  // source identity so unrelated retained tombstones still permit steering.
+  // The parked admission owner rechecks after any predecessor wait.
+  const activeSourceTurnId =
+    replyRunRegistry.getSourceTurnId(sessionKey ?? "") ??
+    normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
+    "";
+  const terminalDeliveryFailClosed = isRestartRecoveryTerminalDeliveryFailClosed(
+    restartRecoveryEntry,
+    activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+    activeSourceTurnId,
+  );
+  const shouldQueueTerminalReceiptSteer =
+    effectiveShouldSteer &&
+    isActive &&
+    !shouldQueueAuthorityMismatch &&
+    messageInjectionDisposition === "none" &&
+    terminalDeliveryFailClosed;
+  if (shouldQueueTerminalReceiptSteer) {
+    logVerbose(
+      `queue: active session ${activeReplyOperation?.sessionId ?? followupRun.run.sessionId} is fail-closed for terminal source-reply delivery; queuing instead of steering`,
+    );
+  }
   if (
     restartRecoverySourceTurnId &&
     isDuplicateRestartRecoverySource(restartRecoveryEntry, restartRecoverySourceTurnId)
@@ -298,6 +323,7 @@ export async function runReplyAgent(
     effectiveShouldSteer &&
     isActive &&
     !shouldQueueAuthorityMismatch &&
+    !shouldQueueTerminalReceiptSteer &&
     messageInjectionDisposition === "none"
   ) {
     bindQueueDisposition();
@@ -313,6 +339,8 @@ export async function runReplyAgent(
       runFollowup: queuedRunFollowupTurn,
       sessionCtx,
       sessionKey,
+      sessionEntry: activeSessionEntry,
+      storePath,
       touchActiveSessionEntry,
       typing,
       typingSignals,

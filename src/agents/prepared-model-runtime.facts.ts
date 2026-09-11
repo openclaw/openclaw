@@ -5,6 +5,7 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,6 +13,7 @@ import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
+import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -40,7 +42,6 @@ import {
   parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   resolvePluginModelCatalogOwnerPluginId,
@@ -428,28 +429,17 @@ export async function prepareWorkspaceBuildGroup(
         ],
         resolveRuntimeModel: resolveConfiguredManifestModel,
       });
-      const configuredEntryKeys = new Set(
-        configuredCatalogEntries.map(resolveModelCatalogIdentityKey),
-      );
-      for (const configured of configuredRuntimeModels) {
-        configuredEntryKeys.add(
-          resolveModelCatalogIdentityKey({ provider: configured.provider, id: configured.modelId }),
-        );
-      }
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          facts.configuredModelRefs.flatMap(({ provider, modelId }) => {
-            if (
-              configuredEntryKeys.has(resolveModelCatalogIdentityKey({ provider, id: modelId }))
-            ) {
-              return [];
-            }
-            const pluginId = resolvePluginModelCatalogOwnerPluginId({
-              providerId: provider,
-              pluginMetadataSnapshot,
-            });
-            return pluginId ? [pluginId] : [];
-          }),
+          (facts.input.config.models?.mode === "replace" ? [] : facts.providerIds).flatMap(
+            (provider) => {
+              const pluginId = resolvePluginModelCatalogOwnerPluginId({
+                providerId: provider,
+                pluginMetadataSnapshot,
+              });
+              return pluginId ? [pluginId] : [];
+            },
+          ),
         ),
       ].toSorted((left, right) => left.localeCompare(right));
       agentFacts.push({
@@ -600,12 +590,14 @@ function groupConfiguredRegistrySources(
   for (const facts of agentFacts) {
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
-    // Capture only unresolved configured catalogs, then group exact bytes and OAuth behavior.
+    // Root files remain authored inventory even when static preparation returned an empty result.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
       facts.input.agentDir,
       facts.configuredGeneratedCatalogPluginIds,
     );
     const key = fingerprintPreparedRuntimeFacts({
+      config: facts.input.config,
+      sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
       modelsJsonContents,
       pluginCatalogs,
@@ -638,6 +630,9 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
 } {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
+  const staticProviderConfigs = resolvePreparedProviderStaticConfigs(
+    params.pluginGeneration.preparedStaticProviderCatalog,
+  );
   for (const group of groupConfiguredRegistrySources(params.agentFacts)) {
     const representative = group.agentFacts[0];
     if (!representative) {
@@ -651,6 +646,7 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
         includePluginCatalogs: true,
         modelsJsonContents: group.modelsJsonContents,
         pluginCatalogs: group.pluginCatalogs,
+        staticProviderConfigs,
         pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
         ...(representative.input.workspaceDir
           ? { workspaceDir: representative.input.workspaceDir }
