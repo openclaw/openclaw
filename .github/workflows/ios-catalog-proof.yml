@@ -193,7 +193,7 @@ jobs:
           xcodebuild test -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests \
             -destination "platform=iOS Simulator,id=$simulator_id" -derivedDataPath "$RUNNER_TEMP/catalog-ios" \
             -resultBundlePath "$RUNNER_TEMP/catalog-proof/catalog.xcresult" -parallel-testing-enabled NO -jobs 4 \
-            -only-testing:OpenClawUITests/ChatCatalogUITests CODE_SIGNING_ALLOWED=NO \
+            -only-testing:OpenClawUITests/ChatCatalogUITests CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
             2>&1 | tee "$RUNNER_TEMP/catalog-proof/simulator.log"
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/catalog-proof/catalog.xcresult" > "$RUNNER_TEMP/catalog-proof/simulator-summary.json"
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/catalog-proof/simulator-summary.json")); if(s.passedTests!==1||s.skippedTests!==0||s.failedTests!==0)throw Error("The selected simulator test must pass without skips")'
