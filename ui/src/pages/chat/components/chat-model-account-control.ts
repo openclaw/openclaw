@@ -203,7 +203,12 @@ export function renderChatModelAccountControl(params: {
           @click=${() => {
             currentInventory.open = !currentInventory.open;
             params.onRequestUpdate();
-            if (currentInventory.open) {
+            if (
+              currentInventory.open &&
+              currentInventory.accounts.length === 0 &&
+              !currentInventory.loading &&
+              !currentInventory.error
+            ) {
               void loadAccounts();
             }
           }}

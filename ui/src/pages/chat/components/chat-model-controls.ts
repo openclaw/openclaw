@@ -218,22 +218,20 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       props.accountSelection?.kind === "automatic"
         ? undefined
         : props.accountSelection?.authProfileId;
-    const active =
-      provider.profiles.find((p) => p.profileId === selectedId) ??
-      provider.profiles.find((p) => p.profileId === provider.profileOrder?.[0]) ??
-      subscriptions[0];
+    const active = provider.profiles.find((p) => p.profileId === selectedId);
     const missing =
       ["missing", "expired"].includes(provider.status) &&
       !provider.apiKey &&
       !provider.profiles.some((p) => ["ok", "expiring", "static"].includes(p.status));
-    // The effective profile decides the kind: a provider can hold both a
-    // subscription and an API key, and the selected one is what the heading names.
+    // Only an explicit selection identifies an account; inventory order is not runtime order.
     const auth: ChatModelProviderAuth | undefined = missing
       ? { kind: "missing", label: t("modelSetup.candidates.signInNeeded") }
       : subscriptions.length && active?.type !== "api_key"
         ? {
             kind: "subscription",
-            label: provider.usage?.plan || t("chat.modelControls.subscription"),
+            label:
+              (subscriptions.length === 1 ? provider.usage?.plan : undefined) ||
+              t("chat.modelControls.subscription"),
             detail: subscriptions.length > 1 ? active?.email : undefined,
           }
         : provider.apiKey || provider.profiles.some((p) => p.type === "api_key")

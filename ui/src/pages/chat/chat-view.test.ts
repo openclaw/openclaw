@@ -7149,7 +7149,7 @@ describe("chat model controls", () => {
         accountSelection: { kind: "personal", label: "Personal", authProfileId: "openai:personal" },
       });
       for (const [provider, expected] of [
-        ["openai", "ChatGPT Pro · peter@steipete.me"],
+        ["openai", "Subscription · peter@steipete.me"],
         ["anthropic", "Claude Max"],
         ["google", "API"],
         ["example", ""],
@@ -7165,27 +7165,55 @@ describe("chat model controls", () => {
   );
 
   it.each([
-    { selected: "openai:work", order: ["openai:personal"], expected: "work@example.com" },
-    { selected: undefined, order: ["openai:personal"], expected: "peter@steipete.me" },
-    { selected: "anthropic:personal", order: ["openai:personal"], expected: "peter@steipete.me" },
-    { selected: undefined, order: undefined, expected: "work@example.com" },
-    { selected: "openai:key", order: ["openai:personal"], expected: "API" },
-    { selected: undefined, order: ["openai:key"], expected: "API" },
-  ])(
-    "resolves subscription identity for $selected with profile order $order",
-    ({ selected, order, expected }) => {
+    {
+      kind: "personal",
+      selected: "openai:work",
+      order: ["openai:personal"],
+      expected: "Subscription · work@example.com",
+    },
+    {
+      kind: "shared",
+      selected: "openai:personal",
+      order: ["openai:work"],
+      expected: "Subscription · peter@steipete.me",
+    },
+    {
+      kind: "automatic",
+      selected: undefined,
+      order: ["openai:personal"],
+      expected: "Subscription",
+    },
+    {
+      kind: "personal",
+      selected: "anthropic:personal",
+      order: ["openai:personal"],
+      expected: "Subscription",
+    },
+    { kind: "personal", selected: undefined, order: undefined, expected: "Subscription" },
+    { kind: undefined, selected: undefined, order: ["openai:personal"], expected: "Subscription" },
+    { kind: "personal", selected: "openai:key", order: ["openai:personal"], expected: "API" },
+    { kind: "automatic", selected: undefined, order: ["openai:key"], expected: "Subscription" },
+  ] as const)(
+    "derives $kind identity from $selected without borrowing the provider plan or order $order",
+    ({ kind, selected, order, expected }) => {
       const { state } = createChatHeaderState({
         models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
       });
       const container = renderModelControls(state, {
-        accountSelection: { kind: "personal", label: "Personal", authProfileId: selected },
+        accountSelection:
+          kind === undefined
+            ? undefined
+            : kind === "automatic"
+              ? { kind, label: "Automatic" }
+              : kind === "shared"
+                ? { kind, label: "Shared account", authProfileId: selected }
+                : { kind, label: "Personal account", authProfileId: selected },
         modelAuthStatusResult: {
           ts: 1,
           providers: [
             {
               ...authStatus.providers[0]!,
-              usage: undefined,
-              profileOrder: order,
+              profileOrder: order ? [...order] : undefined,
               profiles: [
                 ...subscriptionProfiles,
                 { profileId: "openai:key", type: "api_key", status: "static" },
@@ -7198,7 +7226,7 @@ describe("chat model controls", () => {
         container
           .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
           ?.textContent?.trim(),
-      ).toBe(expected === "API" ? "API" : ["Subscription", expected].filter(Boolean).join(" · "));
+      ).toBe(expected);
     },
   );
 

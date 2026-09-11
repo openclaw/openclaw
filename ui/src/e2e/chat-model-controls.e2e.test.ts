@@ -218,14 +218,14 @@ suite.define(() => {
         const heading = composer.locator('[data-chat-model-provider="openai"]');
         await expect
           .poll(() => heading.textContent())
-          .toContain("ChatGPT Pro · personal@example.com");
+          .toContain("Subscription · personal@example.com");
         const account = composer.locator("[data-chat-account-selection]");
         const picker = account;
         const trigger = picker.locator("[data-chat-account-group-toggle]");
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
-          expect(await heading.getAttribute("title")).toBe("ChatGPT Pro · personal@example.com");
+          expect(await heading.getAttribute("title")).toBe("Subscription · personal@example.com");
           expect(
             await heading.locator(".chat-controls__auth-meta svg").evaluate((icon) => ({
               width: getComputedStyle(icon).width,
@@ -319,7 +319,7 @@ suite.define(() => {
           reason: "patch",
         });
         await expect.poll(() => trigger.textContent()).toContain(work.label);
-        await expect.poll(() => heading.textContent()).toContain("ChatGPT Pro · work@example.com");
+        await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
         expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
         if (artifactDir) {
