@@ -7,8 +7,9 @@ import {
 import { mockGatewayTest } from "./mock-gateway-page.test-support.ts";
 
 type Row = Record<string, unknown>;
-type Frame = { type: string; id: string; ok: boolean; payload: Row; error?: Row };
+type Frame = { type: string; id: string; ok: boolean; payload: Row; error?: Row; event?: string };
 type Controls = {
+  emit: (event: string, payload: unknown) => void;
   deferNext: (method: string) => void;
   resolveDeferred: (method: string, payload?: unknown) => void;
   rejectDeferred: (method: string) => void;
@@ -27,6 +28,7 @@ const it = mockGatewayTest.extend<{
     response: (id: string) => Frame | undefined;
     request: (method: string, params?: Row) => Promise<Frame>;
     controls: Controls;
+    frames: Frame[];
   }>;
 }>({
   connect: async ({ gatewayPage }, use) => {
@@ -57,6 +59,7 @@ const it = mockGatewayTest.extend<{
         send,
         response,
         controls,
+        frames,
         request: async (method, params) => {
           const frame = response(await send(method, params));
           if (!frame) {
@@ -580,5 +583,218 @@ it.for([
     expect(
       (await request("chat.history", { sessionKey: scenario.sessionKey })).payload.sessionInfo,
     ).toMatchObject({ key: scenario.sessionKey, kind });
+  },
+);
+
+it("commits targeted and session-wide aborts without replacing session edits or other runs", async ({
+  connect,
+}) => {
+  const active = {
+    key: "agent:main:workboard-onboarding",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["run-a", "run-b"],
+    label: "Onboarding",
+  };
+  const other = {
+    key: "agent:main:other",
+    status: "running",
+    hasActiveRun: true,
+    activeRunIds: ["other-run"],
+    label: "Other",
+  };
+  const { request, frames } = await connect({
+    sessions: [active, other],
+    methodResponses: { "sessions.list": { sessions: [active, other] } },
+  });
+  await request("sessions.patch", { key: active.key, label: "Renamed onboarding" });
+  await request("sessions.patch", { key: other.key, pinned: true });
+  expect(
+    (await request("chat.abort", { sessionKey: active.key, runId: "unknown-run" })).payload,
+  ).toMatchObject({ aborted: false, runIds: [] });
+  expect(
+    (await request("chat.abort", { sessionKey: active.key, runId: "run-a" })).payload,
+  ).toMatchObject({ aborted: true, runIds: ["run-a"] });
+  expect((await request("sessions.list")).payload.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        key: active.key,
+        label: "Renamed onboarding",
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-b"],
+      }),
+    ]),
+  );
+  expect((await request("chat.abort", { sessionKey: active.key })).payload).toMatchObject({
+    aborted: true,
+    runIds: ["run-b"],
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        key: active.key,
+        label: "Renamed onboarding",
+        status: "killed",
+        hasActiveRun: false,
+        activeRunIds: [],
+        abortedLastRun: true,
+      }),
+      expect.objectContaining({
+        key: other.key,
+        pinned: true,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["other-run"],
+      }),
+    ]),
+  );
+  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+    expect.objectContaining({ sessionKey: active.key, runId: "run-a", state: "aborted" }),
+    expect.objectContaining({ sessionKey: active.key, runId: "run-b", state: "aborted" }),
+  ]);
+  expect(frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
+});
+
+it("registers a started send for targeted abort without cancelling another run or reviving a replayed ACK", async ({
+  connect,
+}) => {
+  const key = "agent:main:send-abort";
+  const active = { key, status: "running", hasActiveRun: true, activeRunIds: ["other-run"] };
+  const { request, frames } = await connect({
+    sessions: [active],
+    methodResponses: {
+      "chat.send": { runId: "new-run", status: "started" },
+      "sessions.list": { sessions: [active] },
+    },
+  });
+  const params = { sessionKey: key, message: "Start another run", idempotencyKey: "new-run" };
+  expect((await request("chat.send", params)).payload).toMatchObject({
+    runId: "new-run",
+    status: "started",
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ activeRunIds: ["other-run", "new-run"], hasActiveRun: true }),
+  ]);
+  expect((await request("chat.abort", { sessionKey: key, runId: "new-run" })).payload).toEqual({
+    aborted: true,
+    runIds: ["new-run"],
+  });
+  await request("chat.send", params);
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ activeRunIds: ["other-run"], hasActiveRun: true, status: "running" }),
+  ]);
+  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+    expect.objectContaining({ sessionKey: key, runId: "new-run", state: "aborted" }),
+  ]);
+});
+
+it.for([
+  { event: "final", outcome: "done", otherRun: false },
+  { event: "error", outcome: "failed", otherRun: false },
+  { event: "aborted", outcome: "killed", otherRun: false },
+  { event: "final", outcome: "done", otherRun: true },
+  { event: "error", outcome: "failed", otherRun: true },
+  { event: "aborted", outcome: "killed", otherRun: true },
+])(
+  "retains $event before a started ACK (other active run: $otherRun)",
+  async ({ event, outcome, otherRun }, { connect }) => {
+    const key = "agent:main:fast-completion";
+    const initial = {
+      key,
+      status: otherRun ? "running" : "queued",
+      hasActiveRun: otherRun,
+      activeRunIds: otherRun ? ["other-run"] : [],
+    };
+    const { send, response, request, controls } = await connect({
+      sessions: [initial],
+      deferredMethods: ["chat.send"],
+      methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
+    });
+    const params = { sessionKey: key, message: "Complete quickly", idempotencyKey: "fast-run" };
+    const id = await send("chat.send", params);
+    expect(response(id)).toBeUndefined();
+    controls.emit("chat", { sessionKey: key, runId: "fast-run", state: event });
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining(initial),
+    ]);
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        status: otherRun ? "running" : outcome,
+        hasActiveRun: otherRun,
+        activeRunIds: otherRun ? ["other-run"] : [],
+        abortedLastRun: !otherRun && outcome === "killed",
+      }),
+    ]);
+    expect((await request("chat.abort", { sessionKey: key, runId: "fast-run" })).payload).toEqual({
+      aborted: false,
+      runIds: [],
+    });
+    // A replayed ACK must not overwrite a newer outcome on the same session.
+    if (otherRun) {
+      controls.emit("chat", { sessionKey: key, runId: "other-run", state: "error" });
+    }
+    const beforeReplay = (await request("sessions.list")).payload.sessions;
+    if (otherRun) {
+      expect(beforeReplay).toEqual([
+        expect.objectContaining({ status: "failed", hasActiveRun: false, activeRunIds: [] }),
+      ]);
+    }
+    controls.deferNext("chat.send");
+    await send("chat.send", params);
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect((await request("sessions.list")).payload.sessions).toEqual(beforeReplay);
+  },
+);
+
+it.for([
+  { targeted: true, outcome: "success" },
+  { targeted: false, outcome: "success" },
+  { targeted: true, outcome: "not-aborted" },
+  { targeted: false, outcome: "not-aborted" },
+  { targeted: true, outcome: "error" },
+  { targeted: false, outcome: "error" },
+])(
+  "preserves $outcome abort before send ACK (targeted: $targeted)",
+  async ({ targeted, outcome }, { connect }) => {
+    const key = "agent:main:abort-before-ack";
+    const runId = "pending-run";
+    const aborted = outcome === "success";
+    const { send, request, controls, frames } = await connect({
+      sessions: [{ key, status: "queued", hasActiveRun: false, activeRunIds: [] }],
+      deferredMethods: ["chat.send"],
+      methodResponses: {
+        "chat.send": { runId, status: "started" },
+        "chat.abort":
+          outcome === "error"
+            ? { __mockError: { code: "INVALID_REQUEST", message: "Abort rejected" } }
+            : { aborted, runIds: aborted ? [runId] : [] },
+      },
+    });
+    await send("chat.send", { sessionKey: key, message: "Start", idempotencyKey: runId });
+    const result = await request("chat.abort", { sessionKey: key, ...(targeted ? { runId } : {}) });
+    if (outcome === "error") {
+      expect(result.ok).toBe(false);
+    } else {
+      expect(result.payload).toEqual({ aborted, runIds: aborted ? [runId] : [] });
+    }
+    controls.resolveDeferred("chat.send");
+    await flush();
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        status: aborted ? "killed" : "running",
+        hasActiveRun: !aborted,
+        activeRunIds: aborted ? [] : [runId],
+      }),
+    ]);
+    expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual(
+      aborted ? [expect.objectContaining({ sessionKey: key, runId, state: "aborted" })] : [],
+    );
   },
 );

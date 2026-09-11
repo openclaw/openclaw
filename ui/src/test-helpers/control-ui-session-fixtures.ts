@@ -1,4 +1,5 @@
 import type {
+  SessionRunStatus,
   SessionsResolveCandidate,
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -46,6 +47,33 @@ export function createControlUiSessionRow(
     pinnedAt,
     archived: archivedAt !== undefined,
     archivedAt,
+  };
+}
+
+export function createControlUiMockSessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
+) {
+  const { model, modelProvider, ...extra } = options;
+  return createControlUiSessionRow(key, label, updatedAt, {
+    contextTokens: 200_000,
+    model: model ?? "gpt-5-mini",
+    modelProvider: modelProvider ?? "openai",
+    ...extra,
+  });
+}
+
+export function createControlUiChatHistoryMessage(
+  role: "assistant" | "user",
+  text: string,
+  timestamp: number,
+) {
+  return {
+    content: [{ text, type: "text" }],
+    role,
+    timestamp,
   };
 }
 
@@ -161,6 +189,92 @@ export function createControlUiSessionFixtures(input: {
     }
     return { ok: true, key: next.key, entry: read(key) };
   };
+  type RunStatus = Extract<SessionRunStatus, "running" | "done" | "failed" | "killed">;
+  const trackedRuns = new Map<string, Map<string, { status: RunStatus; acknowledged: boolean }>>();
+  const runsFor = (key: string) => {
+    let runs = trackedRuns.get(key);
+    if (!runs) {
+      runs = new Map();
+      trackedRuns.set(key, runs);
+    }
+    return runs;
+  };
+  const trackRun = (inputKey: string, runId: string, status: RunStatus) => {
+    const key = canonicalKey(inputKey);
+    const runs = runsFor(key);
+    const previous = runs.get(runId);
+    const outcome = status === "running" ? (previous?.status ?? status) : status;
+    const value = record(inputKey);
+    const activeRunIds = Array.isArray(value.row.activeRunIds)
+      ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (status === "running") {
+      // A send ACK consumes an earlier terminal outcome once; replay cannot revive it.
+      if (previous?.acknowledged) {
+        return;
+      }
+      runs.set(runId, { status: outcome, acknowledged: true });
+    } else {
+      if (previous && previous.status !== "running") {
+        return;
+      }
+      const acknowledged = previous?.acknowledged || activeRunIds.includes(runId);
+      runs.set(runId, { status, acknowledged });
+      // Unrelated terminal events do not mutate a row until its send ACK arrives.
+      if (!acknowledged) {
+        return;
+      }
+    }
+    const remaining =
+      outcome === "running"
+        ? [...new Set([...activeRunIds, runId])]
+        : activeRunIds.filter((id) => id !== runId);
+    const fields = {
+      activeRunIds: remaining,
+      hasActiveRun: remaining.length > 0,
+      status: remaining.length > 0 ? "running" : outcome,
+      abortedLastRun: remaining.length === 0 && outcome === "killed",
+      updatedAt: Date.now(),
+    };
+    value.row = { ...value.row, ...fields };
+    for (const field of Object.keys(fields)) {
+      value.changed.add(field);
+    }
+  };
+  const abortRuns = (inputKey: string, runId?: string, confirmedRunIds?: string[]) => {
+    const key = canonicalKey(inputKey);
+    const value = confirmedRunIds?.length ? record(inputKey) : records.get(key);
+    if (!value) {
+      return { aborted: false, runIds: [] as string[] };
+    }
+    const activeRunIds = Array.isArray(value.row.activeRunIds)
+      ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
+      : [];
+    // Explicit abort receipts can precede the send ACK that lists the run locally.
+    const candidates = confirmedRunIds ?? activeRunIds;
+    const runIds = runId ? candidates.filter((id) => id === runId) : candidates;
+    const aborted = runIds.length > 0 || (!runId && value.row.hasActiveRun === true);
+    if (!aborted) {
+      return { aborted: false, runIds };
+    }
+    for (const id of runIds) {
+      runsFor(key).set(id, { status: "killed", acknowledged: true });
+    }
+    const remaining = activeRunIds.filter((id) => !runIds.includes(id));
+    const fields = {
+      activeRunIds: remaining,
+      hasActiveRun: remaining.length > 0,
+      status: remaining.length > 0 ? "running" : "killed",
+      abortedLastRun: remaining.length === 0,
+      updatedAt: Date.now(),
+    };
+    value.row = { ...value.row, ...fields };
+    // Lifecycle writes must override stale wire fixtures like other committed edits.
+    for (const field of Object.keys(fields)) {
+      value.changed.add(field);
+    }
+    return { aborted, runIds };
+  };
   const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
     const value = record(key);
     value.row = { ...value.row, ...fields, key: canonicalKey(key) };
@@ -246,6 +360,8 @@ export function createControlUiSessionFixtures(input: {
     // has no canonical metadata to publish until its caller declares the row.
     sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
     patch,
+    abortRuns,
+    trackRun,
     materialize,
     list,
     materializedCount: () => materializedSequence,

@@ -1822,9 +1822,17 @@ function installControlUiMockGateway(
       // Attachment turns ACK before their source receipt; publish actual source
       // consumption as a separate event after the response reaches the browser.
       window.queueMicrotask(() => {
+        const currentSession = sessions.read(row.key);
+        if (currentSession.sessionId !== source.sessionId) {
+          return;
+        }
         emitGatewayEvent(MockWebSocket.latest, "session.message", {
           sessionKey: row.key,
-          sessionId: row.sessionId,
+          sessionId: currentSession.sessionId,
+          status: currentSession.status,
+          hasActiveRun: currentSession.hasActiveRun,
+          activeRunIds: currentSession.activeRunIds,
+          session: currentSession,
           clientRunId: source.runId,
           messageId: source.message["__openclaw"].id,
           messageSeq: source.message["__openclaw"].seq,
@@ -1933,6 +1941,31 @@ function installControlUiMockGateway(
       return response;
     }
     if (
+      method === "chat.send" &&
+      isRecord(params) &&
+      typeof params.sessionKey === "string" &&
+      isRecord(response) &&
+      response.status === "started" &&
+      typeof response.runId === "string"
+    ) {
+      sessions.trackRun(params.sessionKey, response.runId, "running");
+    }
+    if (
+      method === "chat.abort" &&
+      isRecord(params) &&
+      typeof params.sessionKey === "string" &&
+      isRecord(response) &&
+      response.aborted === true
+    ) {
+      return sessions.abortRuns(
+        params.sessionKey,
+        typeof params.runId === "string" ? params.runId : undefined,
+        Array.isArray(response.runIds)
+          ? response.runIds.filter((id): id is string => typeof id === "string")
+          : undefined,
+      );
+    }
+    if (
       method === "sessions.catalog.startTerminal" &&
       isRecord(response) &&
       typeof response.sessionId === "string" &&
@@ -2017,6 +2050,24 @@ function installControlUiMockGateway(
     event: string,
     payload: unknown,
   ): void {
+    if (
+      event === "chat" &&
+      isRecord(payload) &&
+      typeof payload.sessionKey === "string" &&
+      typeof payload.runId === "string"
+    ) {
+      const status =
+        payload.state === "final"
+          ? "done"
+          : payload.state === "error"
+            ? "failed"
+            : payload.state === "aborted"
+              ? "killed"
+              : undefined;
+      if (status) {
+        sessions.trackRun(payload.sessionKey, payload.runId, status);
+      }
+    }
     const approval = /^(exec|plugin|openclaw)\.approval\.(requested|resolved)$/u.exec(event);
     if (approval && isRecord(payload) && typeof payload.id === "string") {
       // The Gateway registers pending state before publishing its event. A later
@@ -2921,23 +2972,25 @@ function installControlUiMockGateway(
           updateSessionMessageSubscription(method, frame.params);
         }
         if (
+          !mockError &&
           method === "chat.abort" &&
           isRecord(frame.params) &&
-          typeof frame.params.runId === "string" &&
           typeof frame.params.sessionKey === "string" &&
-          // No accepted abort emits no synthetic terminal event. The run may
-          // have finished or may still be finalizing.
-          !(isRecord(payload) && payload.aborted === false)
+          isRecord(payload) &&
+          payload.aborted === true
         ) {
-          this.deliver({
-            event: "chat",
-            payload: {
-              runId: frame.params.runId,
-              sessionKey: frame.params.sessionKey,
-              state: "aborted",
-            },
-            seq: ++seq,
-            type: "event",
+          const sessionKey = frame.params.sessionKey;
+          const runIds = Array.isArray(payload.runIds) ? payload.runIds : [];
+          for (const runId of runIds) {
+            emitGatewayEvent(this, "chat", { runId, sessionKey, state: "aborted" });
+          }
+          const session = sessions.sessionInfo(sessionKey);
+          emitGatewayEvent(this, "sessions.changed", {
+            ...session,
+            sessionKey,
+            reason: "lifecycle",
+            ts: Date.now(),
+            session,
           });
         }
       };
