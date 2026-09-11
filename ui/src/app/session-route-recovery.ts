@@ -22,19 +22,15 @@ export function startSessionRouteRecovery(
   };
   const reconcile = () => {
     const target = currentTarget();
+    if (!target || !isSessionRouteId(target.routeId)) {
+      interrupted = undefined;
+      return;
+    }
     const scope = gatewayPresentationScope(context.gateway);
-    if (
-      !target ||
-      !isSessionRouteId(target.routeId) ||
-      (interrupted && interrupted.controller !== target.abortController)
-    ) {
+    if (interrupted?.controller !== target.abortController) {
       interrupted = undefined;
     }
-    if (
-      !target ||
-      !isSessionRouteId(target.routeId) ||
-      (interrupted && interrupted.scope !== scope)
-    ) {
+    if (interrupted && interrupted.scope !== scope) {
       return;
     }
     if (context.gateway.snapshot.phase !== "connected") {
@@ -43,14 +39,10 @@ export function startSessionRouteRecovery(
       }
       return;
     }
-    if (!interrupted || queued) {
-      return;
-    }
     if (target.status === "success" && !target.isFetching) {
       interrupted = undefined;
-      return;
     }
-    if (target.status !== "error") {
+    if (!interrupted || queued || target.status !== "error") {
       return;
     }
     queued = true;
@@ -58,11 +50,9 @@ export function startSessionRouteRecovery(
     // the same interrupted load after they have published their latest intent.
     queueMicrotask(() => {
       queued = false;
-      if (stopped) {
-        return;
-      }
       const latest = currentTarget();
       if (
+        stopped ||
         !interrupted ||
         latest?.abortController !== interrupted.controller ||
         gatewayPresentationScope(context.gateway) !== interrupted.scope ||
