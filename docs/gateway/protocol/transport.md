@@ -98,6 +98,20 @@ use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
 
+## Connection keepalives
+
+Authenticated control connections use WebSocket ping/pong keepalives. These are
+separate from [scheduled agent heartbeats](/gateway/heartbeat); disabling agent
+heartbeats does not disable connection monitoring.
+
+A ping queued behind outgoing data is governed by transport inactivity, including
+partial write progress and incoming traffic. Once its write completes, the peer
+gets a full 25-second pong window; unrelated incoming messages do not extend that
+window. The periodic check closes expired connections and releases their owners.
+Transport inactivity is not an independent write-only deadline: a peer sending
+traffic can keep a queued write alive. Existing slow-consumer buffer limits still
+apply. Streaming transports retain their stream-owner lifecycle policy.
+
 ## Gateway-controlled WebRTC Talk
 
 `talk.client.create` accepts the additive capability `gateway-control-v1`.
