@@ -97,12 +97,12 @@ function storeWith(profileIds: string[]): AuthProfileStore {
 /** Runs the config mutator captured by the mocked updateConfig. */
 function applyCapturedConfigUpdate(cfg: OpenClawConfig): OpenClawConfig {
   const mutator = mocks.updateConfig.mock.calls[0]?.[0] as
-    | ((current: OpenClawConfig) => OpenClawConfig)
+    | ((current: OpenClawConfig, context: { runtimeConfig: OpenClawConfig }) => OpenClawConfig)
     | undefined;
   if (!mutator) {
     throw new Error("expected updateConfig to be called");
   }
-  return mutator(cfg);
+  return mutator(cfg, { runtimeConfig: cfg });
 }
 
 async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
@@ -304,8 +304,13 @@ describe("models auth logout", () => {
       profiles: { [profileId]: credential },
     });
     mocks.updateConfig.mockImplementation(
-      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
-        liveConfig = await mutator(liveConfig);
+      async (
+        mutator: (
+          current: OpenClawConfig,
+          context: { runtimeConfig: OpenClawConfig },
+        ) => OpenClawConfig | Promise<OpenClawConfig>,
+      ) => {
+        liveConfig = await mutator(liveConfig, { runtimeConfig: liveConfig });
         return liveConfig;
       },
     );
@@ -361,8 +366,13 @@ describe("models auth logout", () => {
       profiles: { [survivorId]: survivor },
     });
     mocks.updateConfig.mockImplementation(
-      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
-        liveConfig = await mutator(liveConfig);
+      async (
+        mutator: (
+          current: OpenClawConfig,
+          context: { runtimeConfig: OpenClawConfig },
+        ) => OpenClawConfig | Promise<OpenClawConfig>,
+      ) => {
+        liveConfig = await mutator(liveConfig, { runtimeConfig: liveConfig });
         return liveConfig;
       },
     );
@@ -434,8 +444,13 @@ describe("models auth logout", () => {
       profiles: { [keyId]: key, [tokenId]: token },
     });
     mocks.updateConfig.mockImplementation(
-      async (mutator: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>) => {
-        liveConfig = await mutator(liveConfig);
+      async (
+        mutator: (
+          current: OpenClawConfig,
+          context: { runtimeConfig: OpenClawConfig },
+        ) => OpenClawConfig | Promise<OpenClawConfig>,
+      ) => {
+        liveConfig = await mutator(liveConfig, { runtimeConfig: liveConfig });
         return liveConfig;
       },
     );

@@ -100,8 +100,8 @@ function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: 
 export function resolveProviderConfigSecretInput(
   cfg: OpenClawConfig | undefined,
   provider: string,
+  sourceConfig = resolveProviderSourceConfig(cfg, provider),
 ) {
-  const sourceConfig = resolveProviderSourceConfig(cfg, provider);
   const entry = resolveMergedModelProviderEntry(sourceConfig, provider);
   const path = entry ? `models.providers.${entry.providerKey}.apiKey` : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
@@ -405,11 +405,16 @@ export function canUseProfileAsProviderEntryApiKey(params: {
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(
+    params.cfg,
+    params.provider,
+    params.sourceConfig,
+  );
   if (ref) {
     return { kind: "none" };
   }
