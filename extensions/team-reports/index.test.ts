@@ -6,6 +6,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configRuntime from "./src/config.js";
 import { createTeamReportsStore } from "./src/store.js";
@@ -17,6 +18,8 @@ vi.mock("./src/store.js", () => ({
 }));
 
 import plugin from "./index.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const pluginConfig = {
   basePath: "/team/activity/",
@@ -62,6 +65,55 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
 describe("Team Reports registration", () => {
+  it("drains storage that opens after retirement without publishing the service", async () => {
+    const directory = tempDirs.make("team-reports-retired-open-");
+    const { createTeamReportsStore: openStore } =
+      await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
+    const store = await openStore({ stateDir: directory });
+    const opened = createDeferred<void>();
+    const releaseOpen = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const closeStore = store.close.bind(store);
+    const close = vi.spyOn(store, "close").mockImplementation(async () => {
+      await releaseClose.promise;
+      await closeStore();
+    });
+    vi.mocked(createTeamReportsStore).mockImplementationOnce(async () => {
+      opened.resolve();
+      await releaseOpen.promise;
+      return store;
+    });
+    const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
+    vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
+      github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
+      people: [],
+    });
+    const { captured, services } = captureReports();
+    const service = services[0]!;
+    const lifecycle = captured.runtimeLifecycles[0]!;
+    const starting = service.start({
+      config,
+      stateDir: directory,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    await opened.promise;
+    const stopped = vi.fn();
+    const cleanup = Promise.resolve(lifecycle.cleanup?.({ reason: "disable" })).then(stopped);
+    try {
+      releaseOpen.resolve();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      expect(stopped).not.toHaveBeenCalled();
+    } finally {
+      releaseOpen.resolve();
+      releaseClose.resolve();
+      await Promise.all([starting, cleanup]);
+    }
+    await expect(store.listRuns()).rejects.toThrow("store is closed");
+    await expect(service.start({ config, stateDir: directory, logger: console })).rejects.toThrow(
+      "runtime has been retired",
+    );
+  });
+
   it("exposes reports through the authenticated tab, read methods, and admin generation method", () => {
     const { captured, services, routes, methods } = captureReports();
     expect(captured.controlUiDescriptors).toEqual([
