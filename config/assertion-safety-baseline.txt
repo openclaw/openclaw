@@ -1127,7 +1127,7 @@ extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	5
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	2
-extensions/slack/src/monitor/slash.ts	11
+extensions/slack/src/monitor/slash.ts	10
 extensions/slack/src/monitor/thread-resolution.ts	1
 extensions/slack/src/monitor/thread.ts	2
 extensions/slack/src/native-data-blocks.ts	1
@@ -2471,7 +2471,6 @@ src/commands/system-agent-with-inference.ts	2
 src/commands/tasks-json.ts	2
 src/commands/tasks.ts	2
 src/commands/telemetry-exporter-summary.ts	3
-src/commands/test-runtime-config-helpers.ts	3
 src/config/agent-dirs.ts	1
 src/config/allowed-values.ts	1
 src/config/bundled-channel-config-metadata.generated.ts	1

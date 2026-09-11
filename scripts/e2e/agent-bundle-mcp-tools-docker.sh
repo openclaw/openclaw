@@ -18,8 +18,7 @@ RUN_LOG="$(mktemp -t openclaw-agent-bundle-mcp-tools-log.XXXXXX)"
 LEGACY_CLIENT_SOURCE_ROOT=""
 
 cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$RUN_LOG"
+  docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$RUN_LOG"
   [ -z "$LEGACY_CLIENT_SOURCE_ROOT" ] || rm -rf "$LEGACY_CLIENT_SOURCE_ROOT"
 }
 trap cleanup EXIT

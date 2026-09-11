@@ -392,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            self.openDashboardAction()
+            DashboardManager.shared.presentDashboard(userGesture: false)
         }
     }
 

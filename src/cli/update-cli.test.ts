@@ -56,6 +56,12 @@ import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 
+const commandTransport = vi.hoisted(() => ({
+  run: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+  hostEnv: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
+  hostCwd: process.cwd(),
+}));
+
 const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
@@ -394,30 +400,67 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("../process/exec.js", () => ({
-  // The real snapshot worker has separate WAL/source-inode boundary coverage.
-  // Retain real rehearsal config projection and drift checks in this CLI fixture.
-  runCommandBuffered: async (_argv: string[], options: { input: string }) => {
-    const input: unknown = JSON.parse(options.input);
-    const mode = isRecord(input) ? input.mode : undefined;
-    if (mode !== "inventory" && mode !== "snapshot") {
-      throw new Error("Unexpected update state worker mode");
-    }
-    return {
-      code: 0,
-      stdout: Buffer.from(
-        JSON.stringify(mode === "inventory" ? [] : { versions: [], pluginPaths: {} }),
-      ),
-      stderr: Buffer.alloc(0),
-    };
-  },
-  runCommandWithTimeout: vi.fn(),
-  runUtf8CommandWithTimeout: vi.fn(),
-  runExec: vi.fn(async () => ({
-    stdout: new Date(Date.now() - 1000).toString(),
-    stderr: "",
-  })),
-}));
+vi.mock("../process/exec.js", async () => {
+  const { spawn: spawnChild } =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    // The real snapshot worker has separate WAL/source-inode boundary coverage.
+    // Retain real rehearsal config projection and drift checks in this CLI fixture.
+    runCommandBuffered: async (_argv: string[], options: { input: string }) => {
+      const input: unknown = JSON.parse(options.input);
+      const mode = isRecord(input) ? input.mode : undefined;
+      if (mode !== "inventory" && mode !== "snapshot") {
+        throw new Error("Unexpected update state worker mode");
+      }
+      return {
+        code: 0,
+        stdout: Buffer.from(
+          JSON.stringify(mode === "inventory" ? [] : { versions: [], pluginPaths: {} }),
+        ),
+        stderr: Buffer.alloc(0),
+      };
+    },
+    // Native effects/results remain fixture-owned. Preserve real child admission,
+    // PID binding and settlement instead of bypassing the update executor.
+    runCommandWithTimeout: async (...[argv, options]: Parameters<typeof commandTransport.run>) => {
+      if (typeof options === "number" || !options.beforeInput) {
+        return commandTransport.run(argv, options);
+      }
+      const child = spawnChild(process.execPath, ["-e", "process.stdin.resume()"], {
+        stdio: ["pipe", "ignore", "ignore"],
+        cwd: commandTransport.hostCwd,
+        env: commandTransport.hostEnv,
+        detached: sqliteHostPlatform !== "win32",
+      });
+      const closed = once(child, "close");
+      try {
+        options.beforeInput(expectDefined(child.pid, "fixture child PID"));
+        if (argv.at(-1) === "check" && argv.includes("--update-executor")) {
+          // A probe must not run the install/restart effect double.
+          return {
+            code: 0,
+            stdout: JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+            cleanup: "normal" as const,
+          };
+        }
+        return await commandTransport.run(argv, options);
+      } finally {
+        child.stdin.end();
+        const [code] = await closed;
+        expect(code).toBe(0);
+      }
+    },
+    runUtf8CommandWithTimeout: vi.fn(),
+    runExec: vi.fn(async () => ({
+      stdout: new Date(Date.now() - 1000).toString(),
+      stderr: "",
+    })),
+  };
+});
 
 vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
   const actual =
@@ -684,8 +727,9 @@ const {
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
-const { runCommandWithTimeout, runExec, runUtf8CommandWithTimeout } =
-  await import("../process/exec.js");
+const { runExec, runUtf8CommandWithTimeout } = await import("../process/exec.js");
+const runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout =
+  commandTransport.run;
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime, ExitError } = await import("../runtime.js");
@@ -1211,8 +1255,10 @@ describe("update-cli", () => {
         packageJsonPaths.has(candidate) || entrypoints.includes(candidate),
     );
     vi.mocked(runGatewayUpdate).mockImplementation(async (options) => {
-      // Finalization-only fixtures do not simulate the earlier native lifecycle.
-      // Baseline-capture cases explicitly exercise its real admission callback.
+      // The real Git runner admits its original owner even without activation.
+      // Finalization-only fixtures retain that read/prepare callback, not a fake fence.
+      await options?.inspectGitTarget?.({});
+      // Baseline-capture cases separately exercise the actual mutation callback.
       if (params?.admitMutation) {
         await options?.beforeGitMutation?.({});
       }
@@ -1228,11 +1274,21 @@ describe("update-cli", () => {
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
 
   const mockCurrentProcessFreshDoctor = (
-    params: { postCoreResumeAttempt?: boolean; packageRoot?: string } = {},
+    params: {
+      postCoreResumeAttempt?: boolean;
+      packageRoot?: string;
+      candidateAdmission?: boolean;
+    } = {},
   ) => {
     // Package Doctor precedes the fresh-process decision; it must have a real entrypoint.
     if (params.packageRoot) {
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+      if (params.candidateAdmission) {
+        // Native capability admission resolves the staged candidate before package Doctor.
+        vi.mocked(resolveGatewayInstallEntrypoint).mockImplementationOnce(async (root) =>
+          path.join(expectDefined(root, "capability candidate root"), "dist", "index.js"),
+        );
+      }
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
         path.join(params.packageRoot, "dist", "index.js"),
       );
@@ -1984,6 +2040,29 @@ describe("update-cli", () => {
       immutableHostUri(file, sqliteHostPlatform),
     );
     vi.spyOn(updateTempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorTmp);
+    const pidAlive = await import("../shared/pid-alive.js");
+    const readHostProcessStartTime = pidAlive.getFileLockProcessStartTime;
+    // Service-platform doubles cannot change the OS that owns real fixture PIDs.
+    // Keep actual PID/start reads, switching only their synchronous platform dispatch.
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockImplementation((...args) => {
+      if (process.platform === sqliteHostPlatform) {
+        return readHostProcessStartTime(...args);
+      }
+      const descriptor = expectDefined(
+        Object.getOwnPropertyDescriptor(process, "platform"),
+        "host platform descriptor",
+      );
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        value: sqliteHostPlatform,
+      });
+      try {
+        return readHostProcessStartTime(...args);
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+    });
     // Cache the real host process identity before cases spoof the native service
     // platform. Lease ownership still uses the production PID/start checks.
     const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
@@ -5526,6 +5605,10 @@ describe("update-cli", () => {
           after: { version: "1.0.0" },
         }),
       );
+      // Candidate admission precedes the intentionally absent post-core handoff CLI.
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+        path.join(process.cwd(), "dist", "index.js"),
+      );
       mockCurrentProcessFreshDoctor();
       serviceLoaded.mockResolvedValue(true);
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
@@ -7448,6 +7531,9 @@ describe("update-cli", () => {
       entrySource: "export {};\n",
     });
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    pathExists.mockImplementation(async (candidate: string) =>
+      [path.join(root, "package.json"), path.join(root, "dist", "index.js")].includes(candidate),
+    );
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
     mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
     const preparations = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
@@ -8171,6 +8257,7 @@ describe("update-cli", () => {
       suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
       resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValue(new Error("task restore denied"));
       const root = await mockPackageInstallAtCaseDir("openclaw-update-autostart-restore-failure");
+      mockCurrentProcessFreshDoctor({ packageRoot: root, candidateAdmission: true });
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       mockFileBackedPathExists();
       setTty(true);
@@ -8493,6 +8580,10 @@ describe("update-cli", () => {
     "uses compatibility-checked package update without full-state startup (%s)",
     async (mode) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
+      mockCurrentProcessFreshDoctor({
+        packageRoot: root,
+        candidateAdmission: mode !== "no-restart",
+      });
       mockFileBackedPathExists();
       mockRunningManagedGateway([
         process.execPath,
@@ -9038,6 +9129,14 @@ describe("update-cli", () => {
     "recovers a failed managed service stop only after an observed mutation (%s)",
     async (mutated) => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-partial-stop");
+      mockFileBackedPathExists();
+      const entrypoints = await vi.importActual<typeof import("../daemon/gateway-entrypoint.js")>(
+        "../daemon/gateway-entrypoint.js",
+      );
+      // A failed stop never reaches package Doctor or the fresh-process decision.
+      vi.mocked(resolveGatewayInstallEntrypoint)
+        .mockReset()
+        .mockImplementation(entrypoints.resolveGatewayInstallEntrypoint);
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       serviceStop.mockImplementationOnce(async ({ onMutation }) => {
         if (mutated) {
@@ -12366,20 +12465,15 @@ describe("update-cli", () => {
     {
       name: "refreshes service env when already installed",
       run: async () => {
-        mockOwnedGitService();
-        mockGitUpdateAfterMutation();
-        vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
-        serviceLoaded.mockResolvedValue(true);
-
-        await updateCommand({});
+        await runRestartFallbackScenario({ daemonInstall: "ok" });
       },
       assert: () => {
-        expect(runDaemonInstall).toHaveBeenCalledWith({
-          force: true,
-          json: undefined,
-        });
-        expect(runRestartScript).toHaveBeenCalledTimes(1);
-        expect(runDaemonRestart).not.toHaveBeenCalled();
+        const install = gatewayCommandCall(path.join(process.cwd(), "dist", "index.js"), "install");
+        expect(install?.[0]).toEqual(
+          expect.arrayContaining(["gateway", "install", "--force", "--json"]),
+        );
+        expect(freshRestartCalls()).toHaveLength(1);
+        expectNoSideEffects(runDaemonInstall, runDaemonRestart);
         expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       },
     },
@@ -12491,6 +12585,8 @@ describe("update-cli", () => {
         "gateway",
         "restart",
         "--json",
+        "--update-executor",
+        "run",
       ]);
       expect(restartCall?.[1].cwd).toBe(updatedRoot);
       expect(runRestartScript).not.toHaveBeenCalled();
@@ -12587,7 +12683,14 @@ describe("update-cli", () => {
     expectNoSideEffects(runRestartScript, runDaemonRestart);
     const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
     expect(restartCall?.[0][0]).toContain("node");
-    expect(restartCall?.[0].slice(1)).toEqual([updatedEntrypoint, "gateway", "restart", "--json"]);
+    expect(restartCall?.[0].slice(1)).toEqual([
+      updatedEntrypoint,
+      "gateway",
+      "restart",
+      "--json",
+      "--update-executor",
+      "run",
+    ]);
     expect(restartCall?.[1].cwd).toBe(updatedRoot);
     expect(restartCall?.[1].timeoutMs).toBe(123_000);
     expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
@@ -12646,6 +12749,8 @@ describe("update-cli", () => {
       "install",
       "--force",
       "--json",
+      "--update-executor",
+      "run",
     ]);
     expect(installCall?.[1].cwd).toBe(updatedRoot);
     expect(installCall?.[1].timeoutMs).toBe(60_000);
@@ -12991,6 +13096,8 @@ describe("update-cli", () => {
       "install",
       "--force",
       "--json",
+      "--update-executor",
+      "run",
     ]);
     expect(installCall?.[1].cwd).toBe(String(root));
     expect(installCall?.[1].timeoutMs).toBe(60_000);
@@ -13015,6 +13122,11 @@ describe("update-cli", () => {
         mockRunningManagedGateway(["node", entrypoint, "gateway"]);
         if (mutatesCore) {
           mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
+        } else {
+          vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
+            await opts?.inspectGitTarget?.({});
+            return makeOkUpdateResult({ root: process.cwd() });
+          });
         }
         prepareRestartScript.mockResolvedValue(null);
         vi.mocked(defaultRuntime.log).mockClear();

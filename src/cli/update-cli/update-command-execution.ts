@@ -60,7 +60,11 @@ import {
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
+import {
+  resolveUpdatedInstallCommandEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
@@ -339,6 +343,37 @@ export async function executeMutableUpdate(
             candidateFailureReason = error.reason;
           }
           throw error;
+        }
+      }
+      if (
+        params.shouldRestart &&
+        opts.run &&
+        preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        const executor = opts.run.executorFence;
+        if (!executor) {
+          throw new UpdatePreMutationError(
+            "target-native-unsupported",
+            "Native candidate admission requires its original update executor.",
+          );
+        }
+        const supported = await isUpdatedInstallGatewayExecutorSupported({
+          root,
+          env: resolveUpdatedInstallCommandEnv({
+            processEnv: env,
+            invocationCwd: params.invocationCwd,
+          }),
+          executor,
+          nodeRunner: params.packageUpdateNodeRunner,
+          signal,
+        });
+        assertUpdateCommandRecovery(opts);
+        if (!supported) {
+          candidateFailureReason = "target-native-unsupported";
+          throw new UpdatePreMutationError(
+            candidateFailureReason,
+            "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+          );
         }
       }
       const snapshot = rehearsal

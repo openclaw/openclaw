@@ -44,6 +44,7 @@ import {
   BOUNDARY_CHECKS,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mts";
+import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import {
@@ -1993,6 +1994,39 @@ function runControlUiI18nSourceFixture(options: {
 }
 
 describe("ci workflow guards", () => {
+  it("credits the max-lines baseline only through an emitted required ratchet guard", () => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: ["config/max-lines-baseline.txt"],
+      changedPlannerSource: `
+        export const hasBuildArtifactAffectingChange = () => false;
+        export const createChangedNodeTestShards = (_paths, options) => {
+          console.log("max-lines-guard:" + JSON.stringify(options.dedicatedMaxLinesRatchet));
+          return [];
+        };
+        export const createChangedExtensionFallbackShards = () => { throw new Error("Unexpected fallback"); };
+      `,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.output).toContain("max-lines-guard:true");
+    const tasks = JSON.parse(
+      expectDefined(manifest.outputs.checks_fast_core_matrix, "fast ratchet matrix"),
+    ).include;
+    expect(tasks).toContainEqual({
+      check_name: "checks-fast-baseline-ratchets",
+      runtime: "node",
+      task: "baseline-ratchets",
+    });
+    const context = { preflightOutputs: manifest.outputs };
+    expect(runCiGateFixture(renderCiGateEnvironment(context)).status).toBe(0);
+    for (const result of ["failure", "skipped"]) {
+      expect(
+        runCiGateFixture(renderCiGateEnvironment(context, { "checks-fast-core": result })).status,
+      ).toBe(1);
+    }
+  });
+
   it("keeps activity unit proof without unrelated dedicated UI E2E on a PR", () => {
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
@@ -5432,6 +5466,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         runnerBackend: runnerProfile,
         dedicatedContractShards: dedicated,
         dedicatedUiE2e: uiE2e,
+        dedicatedMaxLinesRatchet: true,
       });
       for (const job of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
         expect(
@@ -11798,6 +11833,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
     55_000,
   );
+
+  it("runs the startup corpus once on full canonical main pushes", () => {
+    const files = [
+      "src/config/config-startup-corpus.test.ts",
+      "src/config/state-startup-corpus.test.ts",
+    ];
+    const groups = createNodeTestShardBundles({
+      compactMode: "push",
+      includeReleaseOnlyPluginShards: false,
+    }).flatMap((shard) => shard.groups);
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
+    for (const file of files) {
+      expect(
+        buildVitestRunPlans([file]).map((plan) => plan.config),
+        file,
+      ).toEqual(["test/vitest/vitest.runtime-config.config.ts"]);
+      const nodeOwners = groups.filter(
+        (group) =>
+          group.configs.includes("test/vitest/vitest.runtime-config.config.ts") &&
+          (!group.includePatterns ||
+            group.includePatterns.some((pattern) => minimatch(file, pattern))),
+      );
+      expect(nodeOwners, file).toHaveLength(1);
+      const extraOwners = steps.filter(
+        (step) =>
+          step.run?.includes(file) &&
+          (!step.if ||
+            evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+              eventName: "push",
+              repository: "openclaw/openclaw",
+              ref: "refs/heads/main",
+              matrix: { task: "baseline-ratchets" },
+              runCheck: true,
+              runAttempt: 1,
+            })),
+      );
+      expect(nodeOwners.length + extraOwners.length, file).toBe(1);
+    }
+  });
+
+  it.each([
+    { eventName: "pull_request", runCheck: true },
+    { eventName: "pull_request", runCheck: false },
+    { eventName: "push", runCheck: false },
+    { eventName: "push", ref: "refs/heads/release" },
+    { eventName: "push", repository: "fixture/openclaw" },
+    { eventName: "workflow_dispatch", releaseGate: false },
+    { eventName: "workflow_dispatch", releaseGate: true },
+  ] as const)("retains the startup corpus outside full canonical main: %j", (scenario) => {
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
+    const selected = steps.filter(
+      (step) =>
+        step.run?.includes("src/config/state-startup-corpus.test.ts") &&
+        (!step.if ||
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            repository: "openclaw/openclaw",
+            matrix: { task: "baseline-ratchets" },
+            runAttempt: 1,
+            ...scenario,
+          })),
+    );
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.run).toContain("src/config/config-startup-corpus.test.ts");
+  });
 
   it("runs all baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();

@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -15,6 +14,7 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
@@ -45,7 +45,7 @@ type SidebarSessionListHost = SessionListHost & {
 };
 
 type SessionCatalogRenderSnapshot = {
-  catalogs: readonly SessionCatalog[];
+  catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -54,7 +54,6 @@ type SessionCatalogRenderSnapshot = {
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
-  ownerId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -443,7 +442,7 @@ function renderSessionPagination(params: {
 function renderSessionCatalog(params: {
   host: SessionListHost;
   snapshot: SessionCatalogRenderSnapshot;
-  catalog: SessionCatalog;
+  catalog: SidebarSessionCatalog;
   renderer: SessionCatalogGroupsRenderer;
 }) {
   const { host, snapshot, catalog, renderer } = params;
@@ -465,7 +464,6 @@ function renderSessionCatalog(params: {
       visibleSessionLimits: host.sessionData.visibleSessionLimits,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
-      ownerId: snapshot.ownerId,
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,

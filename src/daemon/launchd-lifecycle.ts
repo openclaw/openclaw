@@ -36,6 +36,10 @@ import type {
   GatewayServiceEnv,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
 
 const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
@@ -266,10 +270,16 @@ export async function restartLaunchAgent({
   if (!detached) {
     const { port: cleanupPort, probeHosts } = await resolveLaunchAgentGatewayContext(serviceEnv);
     if (cleanupPort !== null) {
+      assertGatewayServiceUpdateCurrent();
       cleanStaleGatewayProcessesSync(cleanupPort, {
+        assertCurrent: assertGatewayServiceUpdateCurrent,
         // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
         // during enumeration must be protected before candidate filtering/signals.
-        resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
+        resolveProtectedPid: () => {
+          const pid = readLaunchAgentPidForCleanupSync(serviceTarget);
+          assertGatewayServiceUpdateCurrent();
+          return pid;
+        },
       });
       const diagnostics = await inspectPortUsage(cleanupPort, {
         probeHosts,
@@ -309,6 +319,11 @@ export async function restartLaunchAgent({
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (detached) {
+    if (isUpdateOwnedGatewayServiceCommand()) {
+      throw new Error(
+        "UPDATE_NATIVE_AUTHORITY: update-owned native restart requires an external executor, not a detached service handoff.",
+      );
+    }
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: plistReloadNeeded ? "reload" : "kickstart",

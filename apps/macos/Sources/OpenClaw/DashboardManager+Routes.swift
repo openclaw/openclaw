@@ -49,7 +49,7 @@ extension DashboardManager {
             return try await testProfileEndpointProvider(profileID)
         }
         #endif
-        return try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
+        return try await MacGatewayProfileStore.shared.dashboardEndpoint(profileID: profileID)
     }
 
     static func gatewayConnection(for target: DashboardGatewayTarget) async -> GatewayConnection {

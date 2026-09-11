@@ -45,6 +45,8 @@ function nativeGateways(snapshot: NativeGatewaysSnapshot): NativeGatewaysCapabil
     select: vi.fn(),
     openWindow: vi.fn(),
     setPrimary: vi.fn(),
+    reconnect: vi.fn(),
+    reconnectCancel: vi.fn(),
     openSettings: vi.fn(),
   };
 }

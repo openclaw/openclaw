@@ -176,6 +176,7 @@ export function renderChat(props: ChatProps) {
         loading: props.loading && !placementStartup,
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
+        initialTurnId: props.placementStartup?.initialTurn?.id,
         pendingInputs: pendingInputs?.page.items,
         runActive: props.runActive === true,
         runWorking,

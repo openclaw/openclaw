@@ -1086,6 +1086,10 @@ describe("chat run error", () => {
       const onQueueRetry = vi.fn();
       const container = renderChatView({
         canSend: false,
+        messages: [
+          { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
+          { role: "assistant", content: "Worker recovery is pending", timestamp: 4 },
+        ],
         queue: [
           {
             id: "ordinary",
@@ -1105,6 +1109,7 @@ describe("chat run error", () => {
           error: "Retained initial turn",
           initialTurn: {
             id: "initial",
+            sendRunId: "initial",
             text: "original prompt",
             createdAt: 1,
             sendAttempts: 1,
@@ -1116,6 +1121,13 @@ describe("chat run error", () => {
       });
       expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
       expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
+      const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
+      expect(transcript.indexOf("original prompt")).toBeLessThan(
+        transcript.indexOf("Gateway restarted"),
+      );
+      expect(transcript.indexOf("Worker recovery is pending")).toBeLessThan(
+        transcript.indexOf("later draft"),
+      );
       const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
       expect(buttons).toHaveLength(1);
       expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
