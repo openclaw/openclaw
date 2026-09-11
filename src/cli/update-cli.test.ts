@@ -9369,13 +9369,16 @@ describe("update-cli", () => {
       );
       vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
         await opts?.beforeGitMutation?.({});
+        expect(serviceStop).toHaveBeenCalledOnce();
         throw failure;
       });
 
       await expect(
         withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, () => updateCommand({ json })),
       ).rejects.toEqual(new ExitError(expectedExitCode));
-      expect(serviceStop).toHaveBeenCalledOnce();
+      // Handoff recovery fences a still-loaded supervisor; LaunchAgent stop unloads it.
+      const expectedStops = handoff === "1" && process.platform !== "darwin" ? 2 : 1;
+      expect(serviceStop).toHaveBeenCalledTimes(expectedStops);
       expect(freshRestartCalls()).toHaveLength(0);
       expectNoSideEffects(serviceStart, serviceRestart);
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
