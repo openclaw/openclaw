@@ -12,7 +12,11 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
-import { createUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
+import {
+  createUpdateCommandBackup,
+  preflightUpdateCommandBackup,
+  reconcileUpdateCommandBackups,
+} from "./update-command-backup-lifecycle.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { parkCurrentCoreUpdate } from "./update-command-current-core.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
@@ -191,6 +195,7 @@ export async function finishAlreadyCurrentUpdate(
       preUpdatePluginInstallRecords: owned?.pluginInstallRecords ?? {},
     };
     const assertCurrent = createUpdateCommandFinalizationFence(finalization);
+    await reconcileUpdateCommandBackups({ opts: params.opts, root: params.root, env });
     let capture: Promise<UpdateRecoveryBackupRef> | undefined;
     finalization.preparePersistentMutation = async () => {
       assertCurrent();
@@ -220,6 +225,8 @@ export async function finishAlreadyCurrentUpdate(
             "The installed Doctor does not support protected update recovery. Upgrade the core before changing plugins; no protected mutation was started.",
           );
         }
+        await preflightUpdateCommandBackup({ opts: params.opts, root: params.root, env });
+        assertCurrent();
         const stopped = await parkCurrentCoreUpdate(
           {
             ...inspection,

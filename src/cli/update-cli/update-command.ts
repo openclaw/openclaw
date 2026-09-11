@@ -1,7 +1,6 @@
 // Main update orchestration for source checkouts and package installs.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   channelToNpmTag,
@@ -24,14 +23,11 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
@@ -60,6 +56,7 @@ import {
   createUpdateRunProgress,
   failUpdateCommandRun,
   prepareUpdateCommand,
+  prepareMutableUpdateHousekeeping,
   readDevUpdateTarget,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
@@ -599,16 +596,13 @@ async function updateCommandInternal(
     assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey);
     // Cleanup, state-write admission and updater autostart belong after complete target admission.
     await withOwnedManagedUpdateEnv(env, async () => {
-      await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+      const { assertUpdateCommandBackupRecovery } =
+        await import("./update-command-backup-lifecycle.js");
+      await assertUpdateCommandBackupRecovery({ opts, root, env: process.env });
       fence.assertCurrent();
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: resolveOpenClawStateSqlitePath(process.env),
-      });
-      fence.assertCurrent();
-      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-      fence.assertCurrent();
-      preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-      fence.assertCurrent();
+      preUpdatePluginInstallRecords = await prepareMutableUpdateHousekeeping(() =>
+        fence.assertCurrent(),
+      );
     });
     mutableUpdatePrepared = true;
   };
@@ -654,6 +648,10 @@ async function updateCommandInternal(
   result.runId = run.runId;
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
+    // Git no-ops skip mutable preparation; plugin finalization still needs
+    // the same preflight owner that package updates already hold.
+    run.executorFence ??= await executor.enter(result.root ?? root, { preflight: true });
+    run.executorFence.assertCurrent();
     await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,

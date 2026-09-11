@@ -4,7 +4,9 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import {
+  assertNoUnresolvedUpdateRecoveryBackup,
   createUpdateRecoveryBackup,
+  inspectUpdateRecoveryBackups,
   retireUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
@@ -22,7 +24,7 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
@@ -37,6 +39,156 @@ function assertCaptureStateOwner(runEnv: NodeJS.ProcessEnv, captureEnv: NodeJS.P
     throw new Error(
       "Update capture state differs from its admitted run; inspect with openclaw update status --json before retrying.",
     );
+  }
+}
+
+type UpdateBackupParams = { opts: UpdateCommandOptions; root: string; env: NodeJS.ProcessEnv };
+
+export async function reconcileUpdateCommandBackups(params: UpdateBackupParams): Promise<void> {
+  const run = params.opts.run;
+  const executorFence = run?.executorFence;
+  const assertOwned = () => {
+    if (params.opts.run !== run || run?.executorFence !== executorFence) {
+      throw new Error("Update recovery admission lost its original executor.");
+    }
+    assertUpdateCommandRecovery(params.opts);
+  };
+  assertOwned();
+  const captures = await withOwnedManagedUpdateEnv(params.env, () =>
+    inspectUpdateRecoveryBackups({ installRoot: params.root }),
+  );
+  assertOwned();
+  if (captures.length === 0) {
+    return;
+  }
+  if (!run || !executorFence) {
+    throw new Error("Update recovery admission requires its admitted executor.");
+  }
+  assertCaptureStateOwner(run.env, params.env);
+  const { resolveCompletedDoctorUpdateRecovery } =
+    await import("../../commands/doctor-update-recovery.js");
+  try {
+    await withOwnedManagedUpdateEnv(params.env, () =>
+      resolveCompletedDoctorUpdateRecovery({
+        installRoot: params.root,
+        executorFence,
+        runtime: params.opts.json
+          ? { ...defaultRuntime, log: defaultRuntime.error }
+          : defaultRuntime,
+      }),
+    );
+  } catch (cause) {
+    assertOwned();
+    throw new UpdatePreMutationError(
+      "update-recovery-pending",
+      `${formatErrorMessage(cause)} Inspect with openclaw update status --json; resolve with npx openclaw@latest doctor --fix.`,
+      { cause },
+    );
+  }
+  assertOwned();
+}
+
+async function assertUpdateBackupWriters(params: UpdateBackupParams): Promise<void> {
+  const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
+    await import("../../state/openclaw-agent-db-lease.js");
+  const leases = readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: params.env });
+  if (leases.length === 0) {
+    return;
+  }
+  const [
+    { readActiveGatewayLockIdentity },
+    { readGatewayServiceState, resolveGatewayService },
+    { gatewayServiceCommandUsesRoot },
+  ] = await Promise.all([
+    import("../../infra/gateway-lock.js"),
+    import("../../daemon/service.js"),
+    import("./update-command-service-plan.js"),
+  ]);
+  const gateway = await readActiveGatewayLockIdentity({ env: params.env, requireInspection: true });
+  const service = await readGatewayServiceState(resolveGatewayService(), {
+    env: params.env,
+    requireEffective: true,
+  });
+  const ownsGateway =
+    gateway &&
+    service.runtime?.pid === gateway.pid &&
+    (await gatewayServiceCommandUsesRoot({ root: params.root, command: service.command }));
+  const unknown = leases.find(
+    (lease) =>
+      !gateway ||
+      ownsGateway !== true ||
+      lease.owner_pid !== gateway.pid ||
+      lease.owner_start_time === null ||
+      lease.owner_start_time !== gateway.startTime,
+  );
+  if (unknown) {
+    throw new Error(
+      `Agent ${unknown.agent_id} database has an independent or unverified writer in process ${unknown.owner_pid}. Update refused before Gateway shutdown. Stop that writer, then inspect openclaw update status --json and retry; npx openclaw@latest doctor --fix provides explicit recovery.`,
+    );
+  }
+}
+
+export async function assertUpdateCommandBackupRecovery(params: UpdateBackupParams): Promise<void> {
+  assertUpdateCommandRecovery(params.opts);
+  try {
+    if (params.opts.run && !params.opts.run.executorFence) {
+      const captures = await withOwnedManagedUpdateEnv(params.env, () =>
+        inspectUpdateRecoveryBackups(),
+      );
+      // Git acquires its executor after target inspection. Only terminal
+      // candidates can wait for that owner's stricter retirement proof.
+      if (
+        captures.length > 0 &&
+        captures.every(
+          (capture) =>
+            capture.terminalOutcome === "committed" &&
+            capture.captureStatus !== "restored" &&
+            capture.captureStatus !== "restore-failed",
+        )
+      ) {
+        return;
+      }
+      await withOwnedManagedUpdateEnv(params.env, () => assertNoUnresolvedUpdateRecoveryBackup());
+    }
+    await reconcileUpdateCommandBackups(params);
+    await withOwnedManagedUpdateEnv(params.env, () => assertNoUnresolvedUpdateRecoveryBackup());
+  } catch (cause) {
+    throw new UpdatePreMutationError("update-recovery-pending", formatErrorMessage(cause));
+  }
+  assertUpdateCommandRecovery(params.opts);
+}
+
+export async function preflightUpdateCommandBackup(params: UpdateBackupParams): Promise<void> {
+  try {
+    await reconcileUpdateCommandBackups(params);
+    await withOwnedManagedUpdateEnv(params.env, async () => {
+      await assertNoUnresolvedUpdateRecoveryBackup();
+      await assertUpdateBackupWriters(params);
+      const run = params.opts.run;
+      if (!run) {
+        throw new Error("Update recovery admission lost its run.");
+      }
+      const executorFence = run.executorFence;
+      const { preflightUpdateRecoveryBackup } =
+        await import("../../infra/update-recovery-backup-create.js");
+      await preflightUpdateRecoveryBackup({
+        runId: run.runId,
+        installRoot: params.root,
+        assertOwned() {
+          if (params.opts.run !== run || run.executorFence !== executorFence) {
+            throw new Error("Update recovery admission lost its original executor.");
+          }
+          assertUpdateCommandRecovery(params.opts);
+        },
+      });
+    });
+    assertUpdateCommandRecovery(params.opts);
+  } catch (cause) {
+    assertUpdateCommandRecovery(params.opts);
+    if (cause instanceof UpdatePreMutationError) {
+      throw cause;
+    }
+    throw new UpdatePreMutationError("update-capture-failed", formatErrorMessage(cause), { cause });
   }
 }
 
@@ -57,6 +209,8 @@ export async function createUpdateCommandBackup(params: {
     }
     assertUpdateCommandRecovery(params.opts);
   };
+  await reconcileUpdateCommandBackups(params);
+  assertOwned();
   const backup = await withOwnedManagedUpdateEnv(params.env, async () => {
     const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
     assertOwned();

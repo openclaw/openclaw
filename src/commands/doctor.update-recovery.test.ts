@@ -174,7 +174,11 @@ describe("update Doctor state recovery", () => {
         expect(mocks.flow).toHaveBeenCalledOnce();
         expect(runtime.error).toHaveBeenCalledWith(UNPROTECTED_GATEWAY_UPDATE_ADVISORY);
       } else {
-        await expect(run()).rejects.toThrow(/declared Gateway update parent|does not belong/);
+        await expect(run()).rejects.toThrow(
+          declaration === "wrong parent"
+            ? "Unprotected Gateway update requires its live, explicitly declared parent run."
+            : "Unprotected Doctor requires an explicitly declared Gateway update parent.",
+        );
         expect(mocks.flow).not.toHaveBeenCalled();
       }
       expect(mocks.create).not.toHaveBeenCalled();

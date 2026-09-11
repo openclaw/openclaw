@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
@@ -9,18 +10,22 @@ import {
 import * as doctorHealth from "../flows/doctor-health.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
+  assertNoUnresolvedUpdateRecoveryBackup,
   createUpdateRecoveryBackup,
   inspectUpdateRecoveryBackups,
   retireUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
 } from "../infra/update-recovery-backup.js";
+import * as updateRunDriver from "../infra/update-run-driver.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunStep,
+  recordUpdateRunRecoveryCapture,
+  recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -33,6 +38,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { resolveCompletedDoctorUpdateRecovery } from "./doctor-update-recovery.js";
 import { doctorCommand } from "./doctor.js";
 
 const mocks = vi.hoisted(() => ({
@@ -76,14 +82,35 @@ async function prepareState(state: OpenClawTestState) {
   return scope;
 }
 
-function output(): RuntimeEnv {
+function output() {
   return {
     log: vi.fn(),
     error: vi.fn(),
-    exit: (code) => {
+    exit: (code: number) => {
       throw new ExitError(code);
     },
-  };
+  } satisfies RuntimeEnv;
+}
+
+function recordVerifiedCompletion(runId: string) {
+  for (const step of ["openclaw doctor", "post-update verification", "verifying"]) {
+    recordUpdateRunStep(runId, { step, status: "completed", endedAtMs: Date.now() });
+  }
+  recordUpdateRunVerification(runId, {
+    booted: true,
+    serviceRunning: true,
+    runningVersion: "2026.9.3",
+    runningBuildId: "synthetic-upgrade",
+    versionMatch: true,
+    pluginErrors: [],
+    channelsReady: true,
+    readyz: true,
+    settled: true,
+  });
+  finishUpdateRun(runId, {
+    status: "succeeded",
+    after: { version: "2026.9.3", buildId: "synthetic-upgrade" },
+  });
 }
 
 afterEach(() => {
@@ -92,6 +119,150 @@ afterEach(() => {
 });
 
 describe("Doctor recovery ledger reconciliation", () => {
+  it("settles a completed 9.2 capture under the next updater's executor without restoring newer sessions", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      await prepareState(state);
+      const installRoot = state.path("install");
+      const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const ref = await createUpdateRecoveryBackup({
+        ...authority,
+        runId: run.runId,
+        installRoot,
+      });
+      recordVerifiedCompletion(run.runId);
+      // Tagged 9.2 drops unknown fields and records confirmation without newer readiness fields.
+      openOpenClawStateDatabase({ env: state.env })
+        .db.prepare(
+          "UPDATE update_runs SET origin_json = '{}', after_json = json_remove(after_json, '$.buildId'), verification_json = json_remove(verification_json, '$.channelsReady', '$.readyz', '$.settled') WHERE run_id = ?",
+        )
+        .run(run.runId);
+      const newer = { agentId: "main", sessionKey: "agent:main:newer", env: state.env };
+      await upsertSessionEntryCore(newer, { sessionId: "after-upgrade", updatedAt: 2 });
+      const config = await fs.readFile(state.configPath, "utf8");
+      const next = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const runtime = output();
+
+      await withUpdateCommandExecutor(next.runId, async (executor) => {
+        const executorFence = await executor.enter(installRoot);
+        await resolveCompletedDoctorUpdateRecovery({ installRoot, executorFence, runtime });
+        await expect(assertNoUnresolvedUpdateRecoveryBackup()).resolves.toBeUndefined();
+        executorFence.assertCurrent();
+      });
+
+      expect(loadSessionEntryReadOnly(newer)?.sessionId).toBe("after-upgrade");
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(config);
+      expect(getUpdateRun(next.runId)?.status).toBe("running");
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "succeeded",
+        origin: { updateRecoveryCapture: { retirement: { outcome: "committed" } } },
+      });
+      await expect(fs.lstat(ref.directory)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Resolved update capture retired: ${ref.manifestPath}`,
+      );
+    });
+  });
+
+  it.each([
+    "unfinished Doctor",
+    "unverified repair",
+    "mismatched build",
+    "readyz",
+    "settled",
+    "channelsReady",
+    "restored",
+    "restore-failed",
+    "another install",
+  ] as const)(
+    "retains %s captures for explicit recovery when the next updater is admitted",
+    async (scenario) => {
+      await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+        await prepareState(state);
+        const installRoot = state.path("install");
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        const ref = await createUpdateRecoveryBackup({
+          ...authority,
+          runId: run.runId,
+          installRoot,
+        });
+        if (scenario === "unfinished Doctor") {
+          recordUpdateRunRecoveryCapture(
+            run.runId,
+            { manifestSha256: ref.manifestSha256, doctorCompleted: true },
+            () => authority.assertOwned(),
+          );
+        } else if (scenario === "another install") {
+          recordVerifiedCompletion(run.runId);
+        } else if (scenario === "unverified repair") {
+          finishUpdateRun(run.runId, { status: "succeeded" });
+        } else if (scenario === "mismatched build") {
+          recordVerifiedCompletion(run.runId);
+          recordUpdateRunVerification(run.runId, { runningBuildId: "another-build" });
+        } else if (
+          scenario === "readyz" ||
+          scenario === "settled" ||
+          scenario === "channelsReady"
+        ) {
+          recordVerifiedCompletion(run.runId);
+          recordUpdateRunVerification(run.runId, { [scenario]: false });
+        } else {
+          await writeUpdateRecoveryBackupOutcome(ref, { status: scenario }, authority);
+          finishUpdateRun(run.runId, { status: "failed" });
+        }
+        const original = getUpdateRun(run.runId);
+        const newer = { agentId: "main", sessionKey: "agent:main:newer", env: state.env };
+        await upsertSessionEntryCore(newer, { sessionId: "after-capture", updatedAt: 2 });
+        const next = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        const selectedRoot = scenario === "another install" ? state.path("elsewhere") : installRoot;
+
+        await withUpdateCommandExecutor(next.runId, async (executor) => {
+          const executorFence = await executor.enter(selectedRoot);
+          await resolveCompletedDoctorUpdateRecovery({
+            installRoot: selectedRoot,
+            executorFence,
+            runtime: output(),
+          });
+          await expect(assertNoUnresolvedUpdateRecoveryBackup()).rejects.toThrow(
+            /another protected mutation is refused.*openclaw update status --json.*npx openclaw@latest doctor --fix/s,
+          );
+        });
+
+        expect(getUpdateRun(run.runId)).toEqual(original);
+        expect(loadSessionEntryReadOnly(newer)?.sessionId).toBe("after-capture");
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId: run.runId });
+      });
+    },
+  );
+
+  it("keeps a completed capture while its prior owner is still alive", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      await prepareState(state);
+      const installRoot = state.path("install");
+      const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const ref = await createUpdateRecoveryBackup({
+        ...authority,
+        runId: run.runId,
+        installRoot,
+      });
+      recordVerifiedCompletion(run.runId);
+      const next = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      vi.spyOn(updateRunDriver, "inspectUpdateRunDriver").mockReturnValue("alive");
+
+      await withUpdateCommandExecutor(next.runId, async (executor) => {
+        const executorFence = await executor.enter(installRoot);
+        await expect(
+          resolveCompletedDoctorUpdateRecovery({ installRoot, executorFence, runtime: output() }),
+        ).rejects.toThrow("live or unobservable owner");
+        executorFence.assertCurrent();
+      });
+
+      await expect(fs.lstat(path.join(ref.directory, "outcome.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId: run.runId });
+    });
+  });
+
   it.each([
     { extra: undefined, marked: false },
     { extra: "requested", marked: false },

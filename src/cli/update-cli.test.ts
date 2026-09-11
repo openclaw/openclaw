@@ -7313,6 +7313,163 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([true, false])(
+    "restarts the previous Gateway when current-core capture is refused after stop (restart=%s)",
+    async (restart) => {
+      const root = await mockPackageInstallAtCaseDir();
+      await writeOpenClawPackageFixture(root, "2026.9.3");
+      readPackageVersion.mockResolvedValue("2026.9.3");
+      primeNpmChannelTag("latest", "2026.9.3");
+      mockFileBackedPathExists();
+      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      mockPackageGatewayLifecycle();
+      const originalConfig = await fs.readFile(resolveConfigPath(), "utf8");
+      const mutation = vi.fn();
+      updateNpmInstalledPlugins.mockImplementationOnce(async (params) => {
+        await params.beforePersistentEffect?.();
+        mutation();
+        throw new Error("The protected mutation must not start after refused capture");
+      });
+      vi.spyOn(fsSync, "statfsSync").mockImplementation(() =>
+        statfsFixture({
+          bavail: serviceStop.mock.calls.length > 0 ? 256 : 1024 * 1024,
+          bsize: 1024 * 1024,
+        }),
+      );
+
+      await expect(updateCommand({ yes: true, json: true, restart })).rejects.toEqual(
+        new ExitError(1),
+      );
+
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(mutation).not.toHaveBeenCalled();
+      expect(freshRestartCalls()).toHaveLength(1);
+      expect(await fs.readFile(resolveConfigPath(), "utf8")).toBe(originalConfig);
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "update-capture-failed",
+        recovery: { serviceRestartSafe: true, service: "healthy" },
+      });
+      expect(getErrorOutput()).toContain("Insufficient update recovery capacity");
+    },
+  );
+
+  it.each(["package", "git"] as const)(
+    "settles a retained 9.2 capture before a current-core no-op without stopping the Gateway (%s)",
+    async (installKind) => {
+      const root = await mockPackageInstallAtCaseDir();
+      await writeOpenClawPackageFixture(root, "2026.9.3");
+      readPackageVersion.mockResolvedValue("2026.9.3");
+      primeNpmChannelTag("latest", "2026.9.3");
+      if (installKind === "git") {
+        vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+        vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
+          installKind: "git",
+          git: { branch: "main", tag: null },
+        });
+        vi.mocked(runGatewayUpdate).mockResolvedValueOnce({
+          status: "skipped",
+          mode: "git",
+          root,
+          reason: "already-current",
+          before: { version: "2026.9.3", sha: "a".repeat(40) },
+          steps: [],
+          durationMs: 1,
+        });
+      }
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      const { createUpdateRecoveryBackup } = await import("../infra/update-recovery-backup.js");
+      const { finishUpdateRun, recordUpdateRunVerification, recordUpdateRunStep } =
+        await import("../infra/update-run-ledger.js");
+      const driver = await import("../infra/update-run-driver.js");
+      const saved = createUpdateRun({ trigger: "cli" });
+      const creator = requireValue(driver.readUpdateRunDriver(), "synthetic capture host identity");
+      const readDriver = vi
+        .spyOn(driver, "readUpdateRunDriver")
+        .mockReturnValue({ ...creator, pid: 2147483647 });
+      const capture = await createUpdateRecoveryBackup({
+        runId: saved.runId,
+        installRoot: root,
+        assertOwned() {},
+      });
+      readDriver.mockRestore();
+      recordUpdateRunVerification(saved.runId, {
+        booted: true,
+        serviceRunning: true,
+        runningVersion: "2026.9.3",
+        versionMatch: true,
+        pluginErrors: [],
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+      });
+      for (const step of ["openclaw doctor", "post-update verification", "verifying"]) {
+        recordUpdateRunStep(saved.runId, { step, status: "completed", endedAtMs: Date.now() });
+      }
+      finishUpdateRun(saved.runId, { status: "succeeded", after: { version: "2026.9.3" } });
+      const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "UPDATE update_runs SET origin_json = '{}', verification_json = json_remove(verification_json, '$.readyz', '$.settled', '$.channelsReady') WHERE run_id = ?",
+        )
+        .run(saved.runId);
+      const config = await fs.readFile(resolveConfigPath(), "utf8");
+
+      await updateCommand({ yes: true, json: true });
+
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
+      expect(getLogOutput()).not.toContain("Resolved update capture retired");
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        steps: [],
+      });
+      expect(await fs.readFile(resolveConfigPath(), "utf8")).toBe(config);
+      await expect(fs.lstat(capture.directory)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(getUpdateRun(saved.runId)).toMatchObject({
+        status: "succeeded",
+        origin: { updateRecoveryCapture: { retirement: { outcome: "committed" } } },
+      });
+    },
+  );
+
+  it("refuses an independent agent writer before stopping the current-core Gateway", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    await writeOpenClawPackageFixture(root, "2026.9.3");
+    readPackageVersion.mockResolvedValue("2026.9.3");
+    primeNpmChannelTag("latest", "2026.9.3");
+    mockFileBackedPathExists();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    const { claimOpenClawAgentDatabaseLease, releaseOpenClawAgentDatabaseLease } =
+      await import("../state/openclaw-agent-db-lease.js");
+    const lease = claimOpenClawAgentDatabaseLease({
+      agentId: "main",
+      path: path.join(profileStateDir(), "agents", "main", "agent", "openclaw-agent.sqlite"),
+    });
+    const mutation = vi.fn();
+    updateNpmInstalledPlugins.mockImplementationOnce(async (params) => {
+      await params.beforePersistentEffect?.();
+      mutation();
+      throw new Error("Protected mutation should not run with an independent writer");
+    });
+    try {
+      await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart, mutation);
+      expect(freshRestartCalls()).toHaveLength(0);
+      expect(getErrorOutput()).toContain("independent or unverified writer");
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "update-capture-failed",
+      });
+    } finally {
+      releaseOpenClawAgentDatabaseLease(lease);
+    }
+  });
+
   it.each(["incompatible plugin", "changed service owner"])(
     "refuses %s before already-current convergence",
     async (failure) => {
@@ -7612,48 +7769,63 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
 
-  it("refuses low-capacity activation while preserving live files and deliberate backups", async () => {
-    const packageRoot = await mockPackageInstallAtCaseDir();
-    mockCurrentProcessFreshDoctor();
-    const previousBackup = path.join(profileStateDir(), "backups", "manual-backup.tar.gz");
-    await fs.mkdir(path.dirname(previousBackup), { recursive: true });
-    await fs.writeFile(previousBackup, "deliberately retained backup fixture\n");
-    const liveFiles = [
-      path.join(packageRoot, "package.json"),
-      path.join(packageRoot, "dist", "index.js"),
-      resolveConfigPath(),
-      previousBackup,
-    ];
-    const previousContents = await Promise.all(liveFiles.map((file) => fs.readFile(file)));
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
-      statfsFixture({
-        bavail: 256,
-        bsize: 1024 * 1024,
-      }),
-    );
+  it.each([false, true])(
+    "refuses low-capacity activation before stopping the Gateway (running=%s)",
+    async (running) => {
+      const packageRoot = await mockPackageInstallAtCaseDir();
+      if (running) {
+        mockRunningManagedGateway([
+          "node",
+          path.join(packageRoot, "dist", "index.js"),
+          "gateway",
+          "run",
+        ]);
+      }
+      mockCurrentProcessFreshDoctor();
+      const previousBackup = path.join(profileStateDir(), "backups", "manual-backup.tar.gz");
+      await fs.mkdir(path.dirname(previousBackup), { recursive: true });
+      await fs.writeFile(previousBackup, "deliberately retained backup fixture\n");
+      const liveFiles = [
+        path.join(packageRoot, "package.json"),
+        path.join(packageRoot, "dist", "index.js"),
+        resolveConfigPath(),
+        previousBackup,
+      ];
+      const previousContents = await Promise.all(liveFiles.map((file) => fs.readFile(file)));
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        statfsFixture({
+          bavail: 256,
+          bsize: 1024 * 1024,
+        }),
+      );
 
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
-    expectPackageInstallSpec("openclaw@9999.0.0");
-    const preflightParams = vi
-      .mocked(fetchNpmPackageTargetStatus)
-      .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
-    expect(preflightParams).toEqual(
-      expect.objectContaining({
-        target: "9999.0.0",
-        spec: "openclaw@9999.0.0",
-        cwd: process.cwd(),
-      }),
-    );
-    expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(getLogOutput()).toContain("Low disk space near");
-    expect(getErrorOutput()).toContain("Insufficient update recovery capacity");
-    expect(await Promise.all(liveFiles.map((file) => fs.readFile(file)))).toEqual(previousContents);
-    await expect(fs.access(`${profileStateDir()}.update-captures`)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      expectPackageInstallSpec("openclaw@9999.0.0");
+      const preflightParams = vi
+        .mocked(fetchNpmPackageTargetStatus)
+        .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
+      expect(preflightParams).toEqual(
+        expect.objectContaining({
+          target: "9999.0.0",
+          spec: "openclaw@9999.0.0",
+          cwd: process.cwd(),
+        }),
+      );
+      expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(getLogOutput()).toContain("Low disk space near");
+      expect(getErrorOutput()).toContain("Insufficient update recovery capacity");
+      expect(await Promise.all(liveFiles.map((file) => fs.readFile(file)))).toEqual(
+        previousContents,
+      );
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+      expect(freshRestartCalls()).toHaveLength(0);
+      await expect(fs.access(`${profileStateDir()}.update-captures`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
 
   const packageUpdateInGatewayMessage = [
     "Package updates cannot run from inside the gateway service process.",

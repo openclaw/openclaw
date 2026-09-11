@@ -125,12 +125,14 @@ async function writePrivacyMarker(directory: string): Promise<void> {
   requireDirectorySync(await syncDirectory(directory), "Update capture privacy marker");
 }
 
-export async function captureUpdateRecoveryBackup(params: {
+type CaptureParams = {
   assertOwned: () => void;
   runId: string;
   installRoot: string;
   drivers?: UpdateRunDriver[];
-}): Promise<UpdateRecoveryBackupRef> {
+};
+
+async function inspectUpdateRecoveryBackup(params: CaptureParams) {
   params.assertOwned();
   const creator = readUpdateRunDriver();
   if (!creator) {
@@ -425,6 +427,20 @@ export async function captureUpdateRecoveryBackup(params: {
     installRoot,
     files: files.map(({ pathname, before, sqlite }) => ({ pathname, size: before.size, sqlite })),
   });
+  params.assertOwned();
+  return { manifest, directory, stateDir, files, databaseOwners, configFiles };
+}
+
+/** Read-only admission precedes service shutdown; capture repeats it under maintenance. */
+export async function preflightUpdateRecoveryBackup(params: CaptureParams): Promise<void> {
+  await inspectUpdateRecoveryBackup(params);
+}
+
+export async function captureUpdateRecoveryBackup(
+  params: CaptureParams,
+): Promise<UpdateRecoveryBackupRef> {
+  const { manifest, directory, stateDir, files, databaseOwners, configFiles } =
+    await inspectUpdateRecoveryBackup(params);
   params.assertOwned();
   const store = backupStore(stateDir);
   await ensurePrivateSnapshotRepositoryRoot(store);

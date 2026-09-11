@@ -36,6 +36,8 @@ import {
   type UpdateRunLedgerOptions as LedgerOptions,
 } from "./update-run-codec.js";
 import {
+  declareUnprotectedGatewayUpdateRecord,
+  bindUnprotectedGatewayUpdateFinalizerRecord,
   inspectUpdateRunDriver,
   readUpdateRunDriver,
   sameUpdateRunDriver,
@@ -53,8 +55,6 @@ import {
 import {
   finishUpdateRunRecord,
   upsertUpdateRunStep,
-  declareUnprotectedGatewayUpdateRecord,
-  bindUnprotectedGatewayUpdateFinalizerRecord,
   type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,

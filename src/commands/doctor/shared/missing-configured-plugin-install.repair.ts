@@ -9,7 +9,10 @@ import {
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
+import { hashStableJson } from "../../../plugins/installed-plugin-index-hash.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
@@ -467,7 +470,18 @@ async function repairMissingPluginInstallsWithLease(
   // An explicit baseline may include earlier unpersisted sync/npm changes;
   // commit it even when this repair made no further changes.
   if (nextRecords !== persistedRecords || params.baselineRecords) {
-    await params.beforePersistentEffect?.();
+    if (params.beforePersistentEffect) {
+      const persistedIndex = readPersistedInstalledPluginIndexSync(persistedIndexOptions);
+      // Republishing an unchanged baseline preserves the index contract without
+      // starting a protected update or stopping a healthy Gateway.
+      if (
+        !persistedIndex ||
+        hashStableJson(nextRecords) !== hashStableJson(persistedIndex.installRecords) ||
+        persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.cfg, env)
+      ) {
+        await params.beforePersistentEffect();
+      }
+    }
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
   const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;

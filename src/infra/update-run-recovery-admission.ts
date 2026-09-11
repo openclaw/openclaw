@@ -8,9 +8,12 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import type { UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
-import { readUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
+import {
+  readUpdateRunDriver,
+  requireUnprotectedGatewayUpdate,
+  sameUpdateRunDriver,
+} from "./update-run-driver.js";
 import { bindUnprotectedGatewayUpdateDriver, getUpdateRun } from "./update-run-ledger.js";
-import { requireUnprotectedGatewayUpdate } from "./update-run-record.js";
 import {
   isUpdateRecoveryPending,
   UpdateRecoveryRequiredError,

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
   readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";
@@ -16,6 +18,48 @@ import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js"
 afterEach(() => vi.restoreAllMocks());
 
 describe("post-core plugin persistence cancellation", () => {
+  it.each(["unchanged", "records", "policy"] as const)(
+    "requires protection only for semantic plugin changes: %s",
+    async (change) => {
+      await withOpenClawTestState({ label: "plugin-convergence-intent" }, async (state) => {
+        const cfg: OpenClawConfig = { plugins: { enabled: false } };
+        const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
+        await writePersistedInstalledPluginIndexInstallRecords(previous, {
+          config: cfg,
+          env: state.env,
+        });
+        const previousPolicy = readPersistedInstalledPluginIndexSync({
+          env: state.env,
+        })?.policyHash;
+        const refusal = new Error("an unresolved recovery set forbids plugin mutations");
+        const beforePersistentEffect = vi.fn(async () => {
+          throw refusal;
+        });
+        const convergence = runPostCorePluginConvergence({
+          cfg: change === "policy" ? { plugins: { enabled: false, allow: ["previous"] } } : cfg,
+          env: state.env,
+          baselineInstallRecords:
+            change === "records" ? { next: { source: "archive" } } : structuredClone(previous),
+          beforePersistentEffect,
+        });
+        if (change === "unchanged") {
+          const result = await convergence;
+          expect(result.changes).toEqual([]);
+          expect(beforePersistentEffect).not.toHaveBeenCalled();
+        } else {
+          await expect(convergence).rejects.toBe(refusal);
+          expect(beforePersistentEffect).toHaveBeenCalledOnce();
+        }
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
+          previous,
+        );
+        expect(readPersistedInstalledPluginIndexSync({ env: state.env })?.policyHash).toBe(
+          previousPolicy,
+        );
+      });
+    },
+  );
+
   it.each([false, true])("preserves the repair index when cancelled=%s", async (cancelled) => {
     await withOpenClawTestState({ label: "plugin-repair-cancellation" }, async (state) => {
       const cfg = { plugins: { enabled: false } };

@@ -2,11 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import {
-  inspectUpdateRunDriver,
-  readUpdateRunDriver,
-  sameUpdateRunDriver,
-} from "./update-run-driver.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateStepResult, UpdateRunResult } from "./update-runner-types.js";
 
@@ -78,60 +73,26 @@ export type UpdateFetchFailure = {
 export const UNPROTECTED_GATEWAY_UPDATE_ADVISORY =
   "This Gateway-initiated update is not protected by a recovery capture. Run `openclaw update` from a terminal for a protected update.";
 
-export function requireUnprotectedGatewayUpdate(record: UpdateRunRecord | undefined) {
-  const declaration = record?.origin.unprotectedGatewayUpdate;
-  if (
-    !record ||
-    !declaration ||
-    record.status !== "running" ||
-    record.trigger === "cli" ||
-    record.target.kind !== "git" ||
-    record.origin.updateRecoveryCapture ||
-    inspectUpdateRunDriver(declaration.owner) !== "alive"
-  ) {
-    throw new Error(
-      "Unprotected Gateway update requires its live, explicitly declared parent run.",
-    );
+export function resolveUpdateRecoveryTerminalOutcome(
+  run: UpdateRunRecord | undefined,
+  manifestSha256: string,
+): "committed" | "restored" | undefined {
+  if (run?.status === "succeeded") {
+    return "committed";
   }
-  return { record, declaration };
-}
-
-/** Only the serving RPC driver may declare this intentionally unprotected update. */
-export function declareUnprotectedGatewayUpdateRecord(record: UpdateRunRecord): void {
-  const owner = readUpdateRunDriver();
   if (
-    !owner ||
-    !record.origin.driver ||
-    !sameUpdateRunDriver(record.origin.driver, owner) ||
-    record.status !== "running" ||
-    record.trigger === "cli" ||
-    record.target.kind !== "git" ||
-    record.verification.pid !== owner.pid ||
-    record.verification.serviceRunning !== true ||
-    record.origin.updateRecoveryCapture ||
-    record.origin.unprotectedGatewayUpdate
+    run?.status === "rolled-back" ||
+    (run?.origin.updateRecoveryCapture?.restored === true &&
+      run.origin.updateRecoveryCapture.manifestSha256 === manifestSha256) ||
+    run?.steps.some(
+      (step) =>
+        (step.step === "state rollback" || step.step === "previous generation restoration") &&
+        step.status === "completed",
+    )
   ) {
-    throw new Error("Only the admitted Gateway driver may declare an unprotected Git update.");
+    return "restored";
   }
-  record.origin.unprotectedGatewayUpdate = { owner };
-  record.origin.nextAction = UNPROTECTED_GATEWAY_UPDATE_ADVISORY;
-}
-
-export function bindUnprotectedGatewayUpdateFinalizerRecord(record: UpdateRunRecord): void {
-  const self = readUpdateRunDriver();
-  const directParent = readUpdateRunDriver(process.ppid);
-  const { declaration } = requireUnprotectedGatewayUpdate(record);
-  if (
-    !self ||
-    !directParent ||
-    !sameUpdateRunDriver(declaration.owner, directParent) ||
-    !record.origin.driver ||
-    !sameUpdateRunDriver(record.origin.driver, directParent) ||
-    (declaration.finalizer && !sameUpdateRunDriver(declaration.finalizer, self))
-  ) {
-    throw new Error("Unprotected Gateway finalizer is not the declared owner's child.");
-  }
-  record.origin.unprotectedGatewayUpdate = { ...declaration, finalizer: self };
+  return undefined;
 }
 
 export function withUnprotectedGatewayUpdateAdvisory(result: UpdateRunResult): UpdateRunResult {

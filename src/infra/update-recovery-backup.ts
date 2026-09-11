@@ -44,7 +44,7 @@ import {
   withUpdateRecoveryConfigWrites,
 } from "./update-recovery-config-writes.js";
 import type { UpdateRunDriver } from "./update-run-driver.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { resolveUpdateRecoveryTerminalOutcome } from "./update-run-record.js";
 
 const log = createSubsystemLogger("update/backup");
 type Authority = { assertOwned: () => void };
@@ -478,28 +478,6 @@ export async function assertNoUnresolvedUpdateRecoveryBackup(
   }
 }
 
-function settledRunOutcome(
-  run: UpdateRunRecord | undefined,
-  manifestSha256: string,
-): "committed" | "restored" | undefined {
-  if (run?.status === "succeeded") {
-    return "committed";
-  }
-  if (
-    run?.status === "rolled-back" ||
-    (run?.origin.updateRecoveryCapture?.restored === true &&
-      run.origin.updateRecoveryCapture.manifestSha256 === manifestSha256) ||
-    run?.steps.some(
-      (step) =>
-        (step.step === "state rollback" || step.step === "previous generation restoration") &&
-        step.status === "completed",
-    )
-  ) {
-    return "restored";
-  }
-  return undefined;
-}
-
 /** Backup-local pending markers cannot override the update's durable terminal result. */
 export async function inspectUpdateRecoveryBackups(params: { installRoot?: string } = {}) {
   const snapshots = await listBackups(params.installRoot);
@@ -510,7 +488,7 @@ export async function inspectUpdateRecoveryBackups(params: { installRoot?: strin
       let ambiguity: string | undefined;
       try {
         const run = await getUpdateRunAsync(manifest.runId);
-        terminalOutcome = settledRunOutcome(run, ref.manifestSha256);
+        terminalOutcome = resolveUpdateRecoveryTerminalOutcome(run, ref.manifestSha256);
         if (outcome.status === "committed" || outcome.status === "restored") {
           if (terminalOutcome && terminalOutcome !== outcome.status) {
             terminalOutcome = undefined;
@@ -547,12 +525,42 @@ export async function inspectUpdateRecoveryBackups(params: { installRoot?: strin
       return {
         ref,
         runId: manifest.runId,
+        captureStatus: outcome.status,
         status,
         terminalOutcome,
         nextAction,
         message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? "Keep the Gateway stopped and run" : "Automatic restoration is refused; inspect with"} \`${nextAction}\`.${status === "ambiguous" ? " Resolve the recorded outcome before retrying `npx openclaw@latest doctor --fix`." : ""}`,
       };
     }),
+  );
+}
+
+/** Publish only the matching run's durable outcome; a retained file alone cannot authorize it. */
+export async function reconcileUpdateRecoveryBackupOutcome(
+  inspection: Awaited<ReturnType<typeof inspectUpdateRecoveryBackups>>[number],
+  authority: Authority,
+): Promise<void> {
+  const outcome = inspection.terminalOutcome;
+  if (!outcome) {
+    throw new Error(inspection.message);
+  }
+  const { getUpdateRun } = await import("./update-run-ledger.js");
+  await writeUpdateRecoveryBackupOutcome(
+    inspection.ref,
+    { status: outcome, error: inspection.message },
+    {
+      assertOwned: () => {
+        authority.assertOwned();
+        if (
+          resolveUpdateRecoveryTerminalOutcome(
+            getUpdateRun(inspection.runId),
+            inspection.ref.manifestSha256,
+          ) !== outcome
+        ) {
+          throw new Error("Update terminal outcome changed during backup reconciliation.");
+        }
+      },
+    },
   );
 }
 
@@ -564,22 +572,8 @@ export async function findPendingUpdateRecoveryBackup(
   for (const inspection of inspections) {
     warn(inspection.message);
     if (inspection.terminalOutcome) {
-      const { getUpdateRun } = await import("./update-run-ledger.js");
       try {
-        await writeUpdateRecoveryBackupOutcome(
-          inspection.ref,
-          { status: inspection.terminalOutcome, error: inspection.message },
-          {
-            assertOwned: () => {
-              if (
-                settledRunOutcome(getUpdateRun(inspection.runId), inspection.ref.manifestSha256) !==
-                inspection.terminalOutcome
-              ) {
-                throw new Error("Update terminal outcome changed during backup reconciliation.");
-              }
-            },
-          },
-        );
+        await reconcileUpdateRecoveryBackupOutcome(inspection, { assertOwned() {} });
       } catch (error) {
         warn(
           `Stale set remains ineligible, but its outcome could not be recorded: ${formatErrorMessage(error)}`,

@@ -45,6 +45,7 @@ it.each([true, false])("reports every retained recovery set (JSON: %s)", async (
         manifestSha256: "a".repeat(64),
       },
       runId: `recovery-${index}`,
+      captureStatus: "pending" as const,
       status,
       terminalOutcome: status === "stale" ? ("committed" as const) : undefined,
       message: `Retained set ${index} is ${status}.`,

@@ -413,7 +413,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (params.result.status === "error" || params.result.recovery?.serviceRestartSafe === false) {
       const reported = await reportResult(
         { ...params.result, status: "error" },
-        params.shouldRestart && params.result.recovery?.serviceRestartSafe === true,
+        params.result.recovery?.serviceRestartSafe === true,
       );
       throw createFailure(
         reported,
@@ -719,7 +719,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           },
         ],
       },
-      preMutation && params.shouldRestart,
+      preMutation,
     );
     throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
       cause: error,

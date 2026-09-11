@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { withConfigFileWriteCapture } from "../config/write-capture.js";
@@ -24,6 +25,7 @@ import {
   type UpdateRunDriver,
 } from "../infra/update-run-driver.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import type { UpdateRecoveryFence } from "../infra/update-run-recovery.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import type { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -577,50 +579,133 @@ export function doctorUpdateRecoveryRuntime(runtime: RuntimeEnv): RuntimeEnv {
   };
 }
 
-/** Explicit Doctor completion resolves retained recovery without replaying terminal captures. */
+function hasVerifiedCompletedUpdate(run: UpdateRunRecord | undefined): run is UpdateRunRecord {
+  if (!run) {
+    return false;
+  }
+  const completed = (names: string[]) =>
+    run.steps.some((step) => names.includes(step.step) && step.status === "completed");
+  const health = run.verification;
+  return (
+    run.status === "succeeded" &&
+    run.finishedAtMs !== null &&
+    run.confirmedAtMs !== null &&
+    Boolean(run.after.version) &&
+    health.runningVersion === run.after.version &&
+    (!run.after.buildId || health.runningBuildId === run.after.buildId) &&
+    health.serviceRunning === true &&
+    health.versionMatch === true &&
+    health.readyz !== false &&
+    health.settled !== false &&
+    health.channelsReady !== false &&
+    health.pluginErrors?.length === 0 &&
+    completed(["openclaw doctor", "post-update verification"]) &&
+    completed(["gateway verification", "verifying"]) &&
+    run.origin.updateRecoveryCapture?.status !== "restore-failed" &&
+    run.origin.updateRecoveryCapture?.restored !== true
+  );
+}
+
+/** Admission may settle a completed prior update, but never adopt unresolved recovery. */
+export async function resolveCompletedDoctorUpdateRecovery(params: {
+  installRoot: string;
+  executorFence: UpdateRecoveryFence;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  params.executorFence.assertCurrent();
+  const { inspectUpdateRecoveryBackups } = await import("../infra/update-recovery-backup.js");
+  const { getUpdateRun } = await import("../infra/update-run-ledger.js");
+  const inspections = await inspectUpdateRecoveryBackups({ installRoot: params.installRoot });
+  params.executorFence.assertCurrent();
+  for (const inspection of inspections) {
+    if (
+      inspection.terminalOutcome !== "committed" ||
+      inspection.captureStatus === "restored" ||
+      inspection.captureStatus === "restore-failed" ||
+      !hasVerifiedCompletedUpdate(getUpdateRun(inspection.runId))
+    ) {
+      continue;
+    }
+    await retireDoctorResolvedCapture(inspection.ref, params.runtime, undefined, params);
+  }
+}
+
+/** Doctor and update admission share terminal reconciliation without replaying stale captures. */
 async function retireDoctorResolvedCapture(
   ref: UpdateRecoveryBackupRef,
   runtime: RuntimeEnv,
   retirement?: { runId: string; installRoot: string },
+  admission?: { installRoot: string; executorFence: UpdateRecoveryFence },
 ): Promise<void> {
   const {
     readUpdateRecoveryBackupManifest,
     inspectUpdateRecoveryBackups,
+    reconcileUpdateRecoveryBackupOutcome,
     retireUpdateRecoveryBackup,
   } = await import("../infra/update-recovery-backup.js");
   const { withUpdateCommandExecutor } =
     await import("../cli/update-cli/update-command-executor.js");
   const manifest = retirement
     ? undefined
-    : await readUpdateRecoveryBackupManifest(ref, { assertOwned() {} });
+    : await readUpdateRecoveryBackupManifest(ref, {
+        assertOwned: () => admission?.executorFence.assertCurrent(),
+      });
   const target = retirement ?? manifest;
   if (!target) {
     throw new Error("Capture retirement has no recorded identity");
+  }
+  if (admission && target.installRoot !== path.resolve(admission.installRoot)) {
+    throw new Error(`Update capture belongs to another installation: ${ref.manifestPath}`);
   }
   const drivers = manifest ? [manifest.creator, ...manifest.drivers] : [];
   const { assertUpdateRecoveryAdmission } =
     await import("../infra/update-run-recovery-admission.js");
   const { assertNoPendingUpdateRecovery } = await import("../infra/update-run-recovery.js");
-  await withUpdateCommandExecutor(target.runId, async (executor) => {
-    const fence = await executor.enter(target.installRoot);
+  const { getUpdateRun } = await import("../infra/update-run-ledger.js");
+  const retire = async (fence: UpdateRecoveryFence) => {
+    fence.assertCurrent();
     await assertUpdateRecoveryAdmission({ env: process.env });
     const assertOwned = () => {
       fence.assertCurrent();
       assertNoPendingUpdateRecovery({ env: process.env });
       assertRecoveryDriversExited(drivers);
+      if (admission) {
+        if (!hasVerifiedCompletedUpdate(getUpdateRun(target.runId))) {
+          throw new Error(
+            `Update capture has no proven successful outcome: ${ref.manifestPath}. Inspect with openclaw update status --json; resolve with npx openclaw@latest doctor --fix.`,
+          );
+        }
+      }
     };
     if (!retirement) {
       const current = (await inspectUpdateRecoveryBackups()).find(
-        (entry) => entry.ref.manifestSha256 === ref.manifestSha256,
+        (entry) =>
+          entry.ref.directory === ref.directory && entry.ref.manifestSha256 === ref.manifestSha256,
       );
-      if (current?.status !== "stale") {
+      if (
+        current?.status !== "stale" ||
+        (admission &&
+          (current.terminalOutcome !== "committed" ||
+            current.captureStatus === "restored" ||
+            current.captureStatus === "restore-failed"))
+      ) {
         throw new Error(
           `Capture resolution is ambiguous: ${ref.manifestPath}. Inspect with openclaw update status --json.`,
         );
+      }
+      if (admission) {
+        await reconcileUpdateRecoveryBackupOutcome(current, { assertOwned });
       }
     }
     assertOwned();
     await retireUpdateRecoveryBackup(ref, { assertOwned });
     runtime.log(`Resolved update capture retired: ${ref.manifestPath}`);
-  });
+  };
+  if (admission) {
+    await retire(admission.executorFence);
+  } else {
+    await withUpdateCommandExecutor(target.runId, async (executor) =>
+      retire(await executor.enter(target.installRoot)),
+    );
+  }
 }

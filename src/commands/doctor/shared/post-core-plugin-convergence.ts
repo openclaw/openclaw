@@ -205,11 +205,11 @@ export async function runPostCorePluginConvergence(params: {
   };
   // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
   // became bundled with the new core must not survive into the next startup's contract graph.
-  await params.beforePersistentEffect?.();
-  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins({
+  const staleManagedNpmBundledPluginRepair = await maybeRepairStaleManagedNpmBundledPlugins({
     config: params.cfg,
     env,
     prompter: { shouldRepair: true },
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.baselineInstallRecords ? { installRecords: params.baselineInstallRecords } : {}),
   });
   const convergenceBaseline =

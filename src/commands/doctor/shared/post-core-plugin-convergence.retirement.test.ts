@@ -175,9 +175,16 @@ describe("post-core bundled plugin retirement", () => {
       return { changes: [], warnings: [], records };
     });
 
-    const first = await runPostCorePluginConvergence({ cfg, env });
+    const beforePersistentEffect = vi.fn(async () => {
+      await Promise.resolve();
+      expect(fs.existsSync(packageDir)).toBe(true);
+    });
+    const first = await runPostCorePluginConvergence({ cfg, env, beforePersistentEffect });
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    beforePersistentEffect.mockClear();
     const projectsAfterFirst = fs.readdirSync(path.join(stateDir, "npm", "projects"));
-    const second = await runPostCorePluginConvergence({ cfg, env });
+    const second = await runPostCorePluginConvergence({ cfg, env, beforePersistentEffect });
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
 
     expect(fs.existsSync(packageDir)).toBe(false);
     expect(installAttempts).toBe(0);

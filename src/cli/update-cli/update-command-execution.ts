@@ -17,7 +17,6 @@ import {
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
 import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
-import { assertNoUnresolvedUpdateRecoveryBackup } from "../../infra/update-recovery-backup.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -43,7 +42,11 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
-import { createUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
+import {
+  assertUpdateCommandBackupRecovery,
+  createUpdateCommandBackup,
+  preflightUpdateCommandBackup,
+} from "./update-command-backup-lifecycle.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
@@ -461,14 +464,6 @@ export async function executeMutableUpdate(
     }
     return validation.steps;
   };
-  const assertRecoveryCaptureAdmission = async (env: NodeJS.ProcessEnv) => {
-    try {
-      await withOwnedManagedUpdateEnv(env, () => assertNoUnresolvedUpdateRecoveryBackup());
-    } catch (cause) {
-      throw new UpdatePreMutationError("update-recovery-pending", formatErrorMessage(cause));
-    }
-    assertUpdateCommandRecovery(opts);
-  };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertUpdateCommandRecovery(opts);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
@@ -550,12 +545,21 @@ export async function executeMutableUpdate(
         env: opts.run.env,
       });
     }
-    await assertRecoveryCaptureAdmission(env);
+    if (opts.run) {
+      await preflightUpdateCommandBackup({ opts, root: params.root, env });
+    }
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertUpdateCommandRecovery(opts);
     if (opts.run) {
-      updateRecoveryBackup = await createUpdateCommandBackup({ opts, root: params.root, env });
+      try {
+        updateRecoveryBackup = await createUpdateCommandBackup({ opts, root: params.root, env });
+      } catch (cause) {
+        assertUpdateCommandRecovery(opts);
+        throw new UpdatePreMutationError("update-capture-failed", formatErrorMessage(cause), {
+          cause,
+        });
+      }
       assertUpdateCommandRecovery(opts);
     }
     // Git owns this fence after its post-stop schema check completes.
@@ -578,7 +582,11 @@ export async function executeMutableUpdate(
         legacyConfigPlan: params.legacyConfigPlan,
       });
     }
-    await assertRecoveryCaptureAdmission(admission?.managedEnv ?? opts.run?.env ?? process.env);
+    await assertUpdateCommandBackupRecovery({
+      opts,
+      root: params.root,
+      env: admission?.managedEnv ?? opts.run?.env ?? process.env,
+    });
     if (params.updateInstallKind === "package") {
       if (!stagedPluginAdmission) {
         await preflightPlugins(params.packageTargetVersion ?? null);

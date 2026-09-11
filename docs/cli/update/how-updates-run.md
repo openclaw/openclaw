@@ -39,6 +39,7 @@ The same capture protects subsequent Doctor migrations. A true no-op leaves the
 Gateway running and creates no capture. If protected changes fail while the
 core remains unchanged, recovery restores the captured state without replacing
 the core package, then follows the normal service and health checks.
+Republishing unchanged plugin install records does not start a protected mutation.
 
 Explicit package artifacts, such as tarball paths and URLs, still pass through
 validation and installation when their version matches the installed version.
@@ -156,17 +157,25 @@ backups, these SQLite copies are unsanitized. The run records the set at
 privacy marker keep captures out of ordinary backup and support exports, even
 through a containing or nested workspace selection.
 
-Before protected mutation, capacity admission reserves room for capture,
+Before stopping the Gateway, capacity admission reserves room for capture,
 verification and recovery staging, package staging, migration growth, and a
 reserve. An insufficient or unknown capacity refuses the mutation without
 deleting earlier sets or changing live data.
+The updater also checks for independent agent database writers before shutdown.
+It rechecks admission after stopping the service. If that later check refuses
+before mutation, it restarts the verified previous Gateway and reports the
+refusal, including when `--no-restart` was requested.
 
 A set becomes eligible for retirement only after its own update has persisted
 terminal success, validated runtime identity and data compatibility, settled
 mutating children, and released every recovery dependency. The existing update
 lifecycle then retires that set. No count, age, or disk-pressure policy prunes
-captures. Failed and unresolved updates retain theirs, and a retained capture
-blocks a second protected update until explicit recovery resolves it. Inspect
+captures. Before refusing a retained set, update admission uses Doctor's existing
+reconciliation owner to retire it when the original run durably records successful
+Doctor and Gateway verification with matching runtime identity. This also handles
+older updaters that completed successfully but left the capture outcome pending.
+Failed, restored, and unproven updates retain their sets and block another
+protected mutation until explicit recovery resolves them. Inspect
 with `openclaw update status --json`, then use
 `npx openclaw@latest doctor --fix` with the same state selection. See
 [Update recovery sets](/cli/backup#update-recovery-sets) for coverage and lifecycle.

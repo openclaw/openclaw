@@ -120,7 +120,13 @@ can restore the captured state without a package rollback, after all mutating
 children have settled. It never treats an uncertain child exit as permission to
 restore over a possible writer.
 
-A retained set blocks another protected update over the same state. Inspect it
+A retained set blocks another protected update over the same state unless
+Doctor's existing reconciliation owner can prove the original update completed
+successfully from its durable verification and runtime identity. Update admission
+then records the outcome and retires that set before proceeding. A missing outcome
+alone never proves success; unfinished and failed recovery remains protected.
+Admission runs before stopping the Gateway, and a later refusal before mutation
+restores the previously running service. Inspect a retained set
 and resolve it explicitly with the same profile and state/config selection:
 
 ```bash

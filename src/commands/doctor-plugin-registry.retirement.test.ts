@@ -74,7 +74,7 @@ describe("stale managed bundled plugin retirement", () => {
       VITEST: "true",
     };
 
-    const result = maybeRepairStaleManagedNpmBundledPlugins({
+    const result = await maybeRepairStaleManagedNpmBundledPlugins({
       stateDir,
       candidates: [],
       env,
