@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { deferred } from "../../lib/config/config-test-harness.ts";
-import { showToast } from "../../lib/toast.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
