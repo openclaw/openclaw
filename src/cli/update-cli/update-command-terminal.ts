@@ -189,6 +189,7 @@ export async function reportPreMutationUpdateFailure(params: {
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;
+  errorDetails?: Record<string, string>;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
 }): Promise<never> {
@@ -235,6 +236,7 @@ export async function reportPreMutationUpdateFailure(params: {
     result,
     resolveManagedServiceUpdateFailureExitCode(result),
     params.message,
+    params.errorDetails ? { errorDetails: params.errorDetails } : undefined,
   );
 }
 

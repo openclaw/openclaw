@@ -158,4 +158,49 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain("- Failed phase: doctor-failed\n");
     expect(report.body).not.toContain("openclaw doctor");
   });
+
+  it("renders structured error facts in bounded diagnostics", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "preflight-details",
+        errorDetails: {
+          "Target package": "openclaw@2026.9.4",
+          "Minimum Node engine": "26.0.0",
+        },
+        result: {
+          mode: "unknown",
+          status: "error",
+          reason: "node-runtime-preflight",
+          steps: [],
+          durationMs: 1,
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain("- Target package: openclaw@2026.9.4\n");
+    expect(report.body).toContain("- Minimum Node engine: 26.0.0\n");
+  });
+
+  it("redacts private paths and commands inside structured error facts", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "redacted-details",
+        errorDetails: {
+          "Private path": "/Users/private-customer-text/openclaw",
+          "Plain fact": "build",
+        },
+        result: { mode: "npm", status: "error", reason: "build-failed", steps: [], durationMs: 1 },
+      },
+      context,
+    );
+    expect(report.body).not.toContain("private-customer-text");
+    expect(report.body).toContain("- Private path: [redacted-path]\n");
+    expect(report.body).toContain("- Plain fact: build\n");
+  });
+
+  it("omits structured error facts when none are supplied", async () => {
+    const report = await prepareDiagnosticReport("node-runtime-preflight");
+    expect(report.body).not.toContain("- Target package:");
+    expect(report.body).not.toContain("- Minimum Node engine:");
+  });
 });

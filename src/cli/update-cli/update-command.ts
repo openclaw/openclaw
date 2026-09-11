@@ -1,4 +1,5 @@
 // Main update orchestration for source checkouts and package installs.
+import { minVersion } from "semver";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -180,12 +181,13 @@ async function updateCommandInternal(
 
   let root = discoveredRoot;
   let updateInstallKind = installKind;
-  const refuseUpdate = (reason: string, message?: string) =>
+  const refuseUpdate = (reason: string, message?: string, errorDetails?: Record<string, string>) =>
     reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
       reason,
       message,
+      errorDetails,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
@@ -549,7 +551,24 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
+      // Free-form refusal prose is redacted from the public report, so the
+      // diagnostic facts a maintainer needs travel as sanitized scalars:
+      // the exact target build and the engine floor it requires.
+      const engineFloor = (() => {
+        const engine = packageRuntimeTarget?.nodeEngine;
+        if (!engine) {
+          return "unspecified";
+        }
+        try {
+          return minVersion(engine)?.version ?? "unspecified";
+        } catch {
+          return "unspecified";
+        }
+      })();
+      await refuseUpdate("node-runtime-preflight", runtimePreflight.error, {
+        "Target package": `openclaw@${packageRuntimeTarget?.version ?? "unknown"}`,
+        "Minimum Node engine": engineFloor,
+      });
       return;
     }
     const runtimeSelection = runtimePreflight.value;

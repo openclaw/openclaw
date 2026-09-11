@@ -28,6 +28,8 @@ export type PreparedUpdateFailureReport = PreparedGithubIssue & {
 export type UpdateFailureReportInput = {
   attemptId: string;
   error?: string;
+  /** Refusal-time scalar facts (versions, engine bounds) that survive redaction. */
+  errorDetails?: Record<string, string>;
   result: UpdateRunResult;
   target?: string;
 };
@@ -151,6 +153,15 @@ function renderBoundedDiagnostics(
     `Update mode: ${sanitizeReportField(input.result.mode, context)}`,
     `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
   ];
+  // Refusal sites supply scalar facts (versions, engine bounds) because free-form
+  // prose is redacted below; labels are code constants, values still pass the
+  // same sanitization as every other diagnostic field.
+  for (const [label, value] of Object.entries(input.errorDetails ?? {})) {
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    diagnostics.push(`${label}: ${sanitizeReportField(value, context)}`);
+  }
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
   }

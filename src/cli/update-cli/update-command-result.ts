@@ -95,16 +95,22 @@ export async function withUpdateAdmissionReporting<T>(
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
   readonly automaticTriage?: TriageFailureContext;
+  /** Refusal-time scalar facts that the failure report can render verbatim-safe. */
+  readonly errorDetails?: Record<string, string>;
 
   constructor(
     readonly result: UpdateRunResult,
     readonly exitCode = 1,
     readonly detail?: string,
-    options?: ErrorOptions & { automaticTriage?: TriageFailureContext },
+    options?: ErrorOptions & {
+      automaticTriage?: TriageFailureContext;
+      errorDetails?: Record<string, string>;
+    },
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
     this.automaticTriage = options?.automaticTriage;
+    this.errorDetails = options?.errorDetails;
   }
 }
 

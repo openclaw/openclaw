@@ -119,6 +119,9 @@ export async function withUpdateFailureTriage(
               attemptId: updateAttemptId,
               env: opts.run?.env ?? target.env,
               ...(failure.error ? { error: failure.error } : {}),
+              ...(reportedFailure && error.errorDetails
+                ? { errorDetails: error.errorDetails }
+                : {}),
               ...(failure.result ? { result: failure.result } : {}),
               ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,

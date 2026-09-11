@@ -39,6 +39,7 @@ export async function runInteractiveUpdateFailureAction(params: {
   attemptId: string;
   env: NodeJS.ProcessEnv;
   error?: string;
+  errorDetails?: Record<string, string>;
   result?: UpdateRunResult;
   rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
@@ -74,6 +75,7 @@ export async function runInteractiveUpdateFailureAction(params: {
         {
           attemptId: params.attemptId,
           ...(params.error ? { error: params.error } : {}),
+          ...(params.errorDetails ? { errorDetails: params.errorDetails } : {}),
           result,
           ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
         },
