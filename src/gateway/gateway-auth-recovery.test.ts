@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
@@ -13,6 +12,7 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -21,9 +21,6 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-const REWARM_MESSAGE = "provider auth state re-warmed (auth-profile-failure)";
-const RATE_OBSERVATION_MS = 5_000;
 
 async function verifyBuiltGatewayHead(repoRoot: string) {
   const head = resolveGitHead({ cwd: repoRoot });
@@ -40,8 +37,7 @@ async function verifyBuiltGatewayHead(repoRoot: string) {
   return head;
 }
 
-// Unit regressions prove the immediate no-invalidation decision. This smoke
-// preserves the real HTTP -> persisted profile -> Gateway subscriber composition.
+// Exercise HTTP failures, persisted credential replacement, and recovery in one built Gateway.
 describe("Gateway profile failure recovery", () => {
   it(
     "records rate limits and retains authentication recovery through the built Gateway",
@@ -52,9 +48,13 @@ describe("Gateway profile failure recovery", () => {
       const repoRoot = process.cwd();
       const head = await verifyBuiltGatewayHead(repoRoot);
 
-      const credentials = { rate: "qa-rate-profile-key", auth: "qa-auth-profile-key" };
+      const credentials = {
+        rate: "qa-rate-profile-key",
+        auth: "qa-auth-profile-key",
+        recovered: "qa-recovered-profile-key",
+      };
       const profileIds = { rate: "mock-openai:rate", auth: "mock-openai:auth" };
-      const requests = { rate: 0, auth: 0 };
+      const requests = { rate: 0, auth: 0, recovered: 0 };
       let phase: keyof typeof requests = "rate";
       let unexpectedCredential = false;
       const providerServer = createServer((request, response) => {
@@ -65,7 +65,16 @@ describe("Gateway profile failure recovery", () => {
           return;
         }
         requests[phase] += 1;
-        unexpectedCredential ||= request.headers.authorization !== `Bearer ${credentials[phase]}`;
+        const credentialMatches = request.headers.authorization === `Bearer ${credentials[phase]}`;
+        unexpectedCredential ||= !credentialMatches;
+        if (phase === "recovered" && credentialMatches) {
+          writeOpenAiResponsesText(response, {
+            text: "AUTH_RECOVERY_OK",
+            messageId: "msg_auth_recovery",
+            responseId: "resp_auth_recovery",
+          });
+          return;
+        }
         response.writeHead(phase === "rate" ? 429 : 401, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -95,7 +104,7 @@ describe("Gateway profile failure recovery", () => {
             "gpt-5.6-luna",
           );
           instance = await createOpenClawTestInstance({
-            name: "auth-rewarm",
+            name: "auth-recovery",
             cwd: repoRoot,
             stopTimeoutMs: 10_000,
             env: {
@@ -179,6 +188,8 @@ describe("Gateway profile failure recovery", () => {
           }
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           await gateway.startGateway();
+          const gatewayPid = gateway.child?.pid;
+          expect(gatewayPid).toBeTypeOf("number");
           client = await acquireGatewayTestClient(
             {
               url: gateway.url,
@@ -190,18 +201,19 @@ describe("Gateway profile failure recovery", () => {
             },
             {
               timeoutMs: 30_000,
-              timeoutMessage: "Auth-rewarm Gateway client did not connect",
-              closeMessage: "Auth-rewarm Gateway closed",
+              timeoutMessage: "Auth-recovery Gateway client did not connect",
+              closeMessage: "Auth-recovery Gateway closed",
             },
           );
           const activeClient = client;
-          const failTurn = async (agentId: keyof typeof requests) => {
+          const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
+            const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
             const accepted = await activeClient.request<{ runId: string; status: string }>(
               "agent",
               {
                 agentId,
-                sessionKey: `agent:${agentId}:auth-rewarm`,
-                message: `AUTH_REWARM_${agentId.toUpperCase()}`,
+                sessionKey,
+                message,
                 deliver: false,
                 idempotencyKey: randomUUID(),
               },
@@ -215,6 +227,10 @@ describe("Gateway profile failure recovery", () => {
               },
               { timeoutMs: 65_000 },
             );
+            return { sessionKey, terminal };
+          };
+          const failTurn = async (agentId: keyof typeof profileIds) => {
+            const { terminal } = await runTurn(agentId, `AUTH_FAILURE_${agentId.toUpperCase()}`);
             expect(terminal.status).toBe("error");
             expect(requests[agentId]).toBeGreaterThan(0);
             expect(unexpectedCredential).toBe(false);
@@ -222,29 +238,81 @@ describe("Gateway profile failure recovery", () => {
               profileIds[agentId]
             ];
           };
-          const rewarmCount = () => gateway.logs().split(REWARM_MESSAGE).length - 1;
-          expect((await failTurn("rate"))?.cooldownReason).toBe("rate_limit");
+          const rateStats = await failTurn("rate");
+          expect(rateStats?.cooldownReason).toBe("rate_limit");
           expect(requests.rate).toBe(2);
-          await sleep(RATE_OBSERVATION_MS);
-          const afterRate = rewarmCount();
-          expect(afterRate).toBe(0);
 
           phase = "auth";
           const authStats = await failTurn("auth");
           expect(["auth", "auth_permanent"]).toContain(
             authStats?.cooldownReason ?? authStats?.disabledReason,
           );
-          await vi.waitFor(() => expect(rewarmCount()).toBe(1), { timeout: 60_000, interval: 100 });
+          await gateway.state.writeAuthProfiles(
+            {
+              version: 1,
+              profiles: {
+                [profileIds.auth]: {
+                  type: "api_key",
+                  provider: provider.providerId,
+                  key: credentials.recovered,
+                },
+              },
+            },
+            "auth",
+          );
+          const refreshed = await activeClient.request<{ refreshed: boolean }>(
+            "models.authRefresh",
+            { agentId: "auth", operation: "login" },
+            { timeoutMs: 30_000 },
+          );
+          expect(refreshed.refreshed).toBe(true);
+          const catalog = await activeClient.request<{ models: ModelChoice[] }>("models.list", {
+            agentId: "auth",
+            view: "configured",
+          });
+          expect(
+            catalog.models.find(
+              (model) => model.provider === provider.providerId && model.id === provider.modelId,
+            ),
+          ).toMatchObject({ available: true });
+
+          phase = "recovered";
+          const { sessionKey, terminal } = await runTurn("auth", "Reply AUTH_RECOVERY_OK.");
+          expect(terminal.status, gateway.logs()).toBe("ok");
+          expect(requests.recovered).toBe(1);
+          expect(unexpectedCredential).toBe(false);
+          const history = await activeClient.request<{ messages: unknown[] }>("chat.history", {
+            sessionKey,
+          });
+          expect(history.messages).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                role: "assistant",
+                content: expect.arrayContaining([
+                  expect.objectContaining({ type: "text", text: "AUTH_RECOVERY_OK" }),
+                ]),
+              }),
+            ]),
+          );
+          expect(gateway.child?.pid).toBe(gatewayPid);
+          expect(
+            loadPersistedAuthProfileStore(gateway.state.agentDir("rate"))?.usageStats?.[
+              profileIds.rate
+            ],
+          ).toEqual(rateStats);
           console.info(
-            "[auth-rewarm-runtime-proof]",
+            "[auth-recovery-runtime-proof]",
             JSON.stringify({
               head,
+              gatewayPid,
               requests,
               rateCooldownRecorded: true,
               authFailureRecorded: true,
-              rateObservationMs: RATE_OBSERVATION_MS,
-              afterRateRewarms: afterRate,
-              afterAuthRewarms: rewarmCount(),
+              authRefreshAcknowledged: true,
+              recoveredModelAvailable: true,
+              responseTextVerified: true,
+              sameGatewayProcess: true,
+              rateStatePreserved: true,
             }),
           );
         },
