@@ -12,7 +12,6 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
-import { ensureSqliteLibrarySelected } from "../../src/infra/bun-sqlite-library.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -24,6 +23,7 @@ import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 if (process.versions.bun) {
   // Removal: delete this Vitest bootstrap after oven-sh/bun#42349 ships in supported Bun.
+  const { ensureSqliteLibrarySelected } = await import("../../src/infra/bun-sqlite-library.ts");
   ensureSqliteLibrarySelected();
 }
 
