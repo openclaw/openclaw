@@ -49,7 +49,6 @@ extension DashboardWindowController {
         case let .requestPermission(id):
             if let capability = id.capability {
                 _ = await PermissionManager.ensure([capability], interactive: true)
-                await PermissionMonitor.shared.refreshNow()
             }
         case let .openSystemSettings(id):
             if let capability = id.capability {
