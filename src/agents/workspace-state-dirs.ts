@@ -83,12 +83,12 @@ export function listWorkspaceStateDirs(params: {
   return [...dirs];
 }
 
-/** Refuse completion before channels accept work that a workspace cannot execute. */
-export function assertConfiguredWorkspaceStateReady(params: {
+type ConfiguredWorkspaceStateParams = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  operation?: "doctor";
-}): void {
+};
+
+function configuredWorkspaceStateScope(params: ConfiguredWorkspaceStateParams) {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
   const workspaceDirs = listWorkspaceStateDirs({
@@ -97,10 +97,20 @@ export function assertConfiguredWorkspaceStateReady(params: {
     homedir,
     stateDir: resolveStateDir(env, homedir),
   });
-  if (params.operation === "doctor") {
-    for (const workspaceDir of workspaceDirs) {
-      readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
-    }
+  return { ...params, workspaceDirs, env, homedir };
+}
+
+/** Refuse completion before channels accept work that a workspace cannot execute. */
+export function assertConfiguredWorkspaceStateReady(params: ConfiguredWorkspaceStateParams): void {
+  assertWorkspaceStateMigrationReady(configuredWorkspaceStateScope(params));
+}
+
+export async function assertConfiguredWorkspaceStateReadyForDoctor(
+  params: ConfiguredWorkspaceStateParams,
+): Promise<void> {
+  const scope = configuredWorkspaceStateScope(params);
+  for (const workspaceDir of scope.workspaceDirs) {
+    await readWorkspaceStateSnapshot(workspaceDir, { env: scope.env, readOnly: true });
   }
-  assertWorkspaceStateMigrationReady({ ...params, workspaceDirs, env, homedir });
+  assertWorkspaceStateMigrationReady({ ...scope, operation: "doctor" });
 }

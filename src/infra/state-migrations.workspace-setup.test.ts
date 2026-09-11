@@ -125,7 +125,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(canonicalSiblingPath)).toBe(false);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       setup: { setupCompletedAt: completedAt },
     });
@@ -168,7 +168,7 @@ describe("legacy workspace Doctor migration", () => {
     expect((await migrate(aliasContext)).warnings).toEqual([]);
     fs.unlinkSync(workspaceAlias);
 
-    expect(readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
+    expect(await readWorkspaceStateSnapshot(workspaceAlias)).toMatchObject({
       identity,
       attestation: { attestedAtMs: attestedAt.getTime() },
     });
@@ -202,7 +202,7 @@ describe("legacy workspace Doctor migration", () => {
 
     fs.unlinkSync(workspaceAlias);
     fs.symlinkSync(targetB, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
+    await deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
     const identityB = resolveWorkspaceStateIdentity(targetB);
     await fsp.writeFile(
       sourcePath,
@@ -787,7 +787,7 @@ describe("legacy workspace Doctor migration", () => {
       expect(result.warnings).toEqual([]);
       expect(fs.existsSync(setupPath)).toBe(false);
       expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
-      expect(readWorkspaceStateSnapshot(context.workspaceDir).setup).toEqual({
+      expect((await readWorkspaceStateSnapshot(context.workspaceDir)).setup).toEqual({
         version: 1,
         bootstrapSeededAt: seededAt,
         ...(completedAt ? { setupCompletedAt: completedAt } : {}),

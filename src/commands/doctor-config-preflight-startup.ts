@@ -303,10 +303,10 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
     if (error instanceof DoctorStateMigrationRefusalError) {
       // A refused owner stops all later repairs. Still diagnose canonical
       // workspace state read-only before final completion becomes unreachable.
-      const { assertConfiguredWorkspaceStateReady } =
+      const { assertConfiguredWorkspaceStateReadyForDoctor } =
         await import("../agents/workspace-state-dirs.js");
       try {
-        assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
+        await assertConfiguredWorkspaceStateReadyForDoctor({ cfg: params.cfg });
       } catch (workspaceError) {
         params.report({ changes: [], warnings: [String(workspaceError)] });
       }

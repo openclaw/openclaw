@@ -839,7 +839,7 @@ describe("state migrations", () => {
     expect(repaired.warnings).toEqual([]);
     expect(assertReady).not.toThrow();
     expect(fsSync.existsSync(sourcePath)).toBe(false);
-    expect(readWorkspaceStateSnapshot(workspaceDir, { env }).setup.setupCompletedAt).toBe(
+    expect((await readWorkspaceStateSnapshot(workspaceDir, { env })).setup.setupCompletedAt).toBe(
       completedAt,
     );
   });
