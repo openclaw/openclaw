@@ -27,17 +27,17 @@ it("retains bulk locks through contention, reentry, and failure", async () => {
   const run = createSessionIdentityLockRunner(state);
   const identities = Array.from({ length: 5_000 }, (_, index) => `session-${index}`);
   const releaseBlocker = createDeferred();
-  const blocker = run([identities[2_500]], async () => await releaseBlocker.promise);
+  const blocker = run(["session-2500"], async () => await releaseBlocker.promise);
   const failure = new Error("bulk mutation failed");
   const order: string[] = [];
   const bulk = run(identities, async () => {
-    await run([identities[0], identities[2_500], identities[4_999]], async () => {
+    await run(["session-0", "session-2500", "session-4999"], async () => {
       order.push("bulk");
     });
     throw failure;
   });
   const rejected = expect(bulk).rejects.toBe(failure);
-  const successor = run([identities[0]], async () => {
+  const successor = run(["session-0"], async () => {
     order.push("successor");
   });
   expect(order).toEqual([]);
