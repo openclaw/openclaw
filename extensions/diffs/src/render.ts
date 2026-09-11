@@ -742,7 +742,9 @@ function shouldFallbackToClientHydration(error: unknown): boolean {
   );
 }
 
-async function preloadDiffHTMLWithFallback(params: PreloadDiffOptions<undefined>): Promise<string> {
+async function preloadDiffHTMLWithFallback(
+  params: PreloadDiffOptions<undefined, undefined>,
+): Promise<string> {
   try {
     return await preloadDiffHTML(params);
   } catch (error) {
