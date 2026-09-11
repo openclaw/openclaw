@@ -16,7 +16,9 @@ const desktopProofTestPhases = [
   "file-loaded",
   "fixture",
   "gateway-config",
+  "gateway-import",
   "gateway-start",
+  "gateway-startup-settled",
   "admin-connect",
   "node-admission",
   "guest-ssh",
@@ -28,6 +30,78 @@ const desktopProofTestPhases = [
   "control-takeover",
   "resize-matrix",
 ] as const;
+// Names emitted by the Gateway startup owner; never accept arbitrary diagnostic labels.
+const gatewayStartupPhases = new Set([
+  "config.snapshot.read",
+  "config.load",
+  "config.normalize",
+  "config.runtime-imports",
+  "state.ownership",
+  "state.runtime-imports",
+  "state.schema-preflight",
+  "runtime.network-imports",
+  "runtime.network-bootstrap",
+  "runtime.agent-cli",
+  "control-ui.seed",
+  "agents.github-profile-cleanup",
+  "worker-environments.store-import",
+  "plugins.bootstrap-imports",
+  "startup.maintenance",
+  "plugins.load",
+  "gateway.kernel-state",
+  "gateway.shutdown-runtime-import",
+  "gateway.lifecycle",
+  "gateway.core-runtime",
+  "gateway.request-runtime",
+  "gateway.ws-imports",
+  "gateway.ws-attach",
+  "http.listen",
+  "gateway.active-work-import",
+  "gateway.ready",
+  "post-attach.system-ca",
+  "plugins.runtime-post-bind",
+  "post-attach.log",
+  "sidecars.total",
+  "sidecars.internal-hooks",
+  "sidecars.main-session-recovery",
+  "sidecars.main-session-recovery-load",
+  "sidecars.main-session-recovery-scan",
+  "sidecars.model-runtime",
+  "sidecars.model-auth",
+  "sidecars.reply-runtime",
+  "sidecars.chat-metadata",
+  "sidecars.channels",
+  "sidecars.channel-skip",
+  "sidecars.channel-start",
+  "sidecars.plugin-services",
+  "sidecars.acp.runtime-ready",
+  "sidecars.acp.identity-reconcile",
+]);
+
+/** Global diagnostic observations can overlap; names do not identify the blocked await. */
+export function desktopProofStartupSnapshot(value: unknown) {
+  const empty = { currentPhase: null, recentPhases: [] as string[] };
+  if (value === undefined) {
+    return { status: "unavailable" as const, ...empty };
+  }
+  if (
+    !isRecord(value) ||
+    (value.currentPhase !== null && typeof value.currentPhase !== "string") ||
+    !Array.isArray(value.recentPhases) ||
+    value.recentPhases.length > 8 ||
+    value.recentPhases.some((phase) => typeof phase !== "string")
+  ) {
+    return { status: "invalid" as const, ...empty };
+  }
+  return {
+    status: "available" as const,
+    currentPhase:
+      typeof value.currentPhase === "string" && gatewayStartupPhases.has(value.currentPhase)
+        ? value.currentPhase
+        : null,
+    recentPhases: value.recentPhases.filter((phase: string) => gatewayStartupPhases.has(phase)),
+  };
+}
 const desktopTestFile = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
 const failureSourceFiles = [
   desktopTestFile,
@@ -146,17 +220,21 @@ export async function readDesktopProofTestReport(file: string) {
 
 /** The joined child's last observed phase is evidence, not a completion or stall verdict. */
 export async function readDesktopProofPhase(file: string) {
+  const absent = {
+    lastObservedPhase: null,
+    startupAtAbort: desktopProofStartupSnapshot(undefined),
+  };
   try {
     const stat = await lstat(file);
-    if (!stat.isFile() || stat.size > 256) {
-      return { status: "invalid" as const, lastObservedPhase: null };
+    if (!stat.isFile() || stat.size > 2 * 1024) {
+      return { status: "invalid" as const, ...absent };
     }
     let value: unknown;
     try {
       value = JSON.parse(await readFile(file, "utf8"));
     } catch (error) {
       if (error instanceof SyntaxError) {
-        return { status: "invalid" as const, lastObservedPhase: null };
+        return { status: "invalid" as const, ...absent };
       }
       throw error;
     }
@@ -164,10 +242,16 @@ export async function readDesktopProofPhase(file: string) {
       ? desktopProofTestPhases.find((candidate) => candidate === value.lastObservedPhase)
       : undefined;
     return phase
-      ? { status: "available" as const, lastObservedPhase: phase }
-      : { status: "invalid" as const, lastObservedPhase: null };
+      ? {
+          status: "available" as const,
+          lastObservedPhase: phase,
+          startupAtAbort: desktopProofStartupSnapshot(
+            isRecord(value) ? value.startupAtAbort : undefined,
+          ),
+        }
+      : { status: "invalid" as const, ...absent };
   } catch {
-    return { status: "unavailable" as const, lastObservedPhase: null };
+    return { status: "unavailable" as const, ...absent };
   }
 }
 

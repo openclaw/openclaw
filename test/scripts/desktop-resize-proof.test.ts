@@ -7,6 +7,7 @@ import {
   desktopProofCommit,
   desktopProofSource,
   desktopProofSshdFailure,
+  desktopProofStartupSnapshot,
   desktopProofTestReport,
   desktopResizeStages,
   exportDesktopResizeProof,
@@ -255,7 +256,11 @@ describe("desktop proof identity and public evidence", () => {
     expect(aggregate.errors[0]).toBe(child);
     expect(aggregate.errors[1].errors[0]).toMatchObject({ code: "ENOENT" });
     expect(aggregate.errors[1].errors[1]).toBe(exporting);
-    expect(lastObserved).toEqual({ status: "available", lastObservedPhase: "node-admission" });
+    expect(lastObserved).toEqual({
+      status: "available",
+      lastObservedPhase: "node-admission",
+      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+    });
   });
 
   it("projects only known phases from bounded regular checkpoints", async () => {
@@ -264,27 +269,75 @@ describe("desktop proof identity and public evidence", () => {
     expect(await readDesktopProofPhase(file)).toEqual({
       status: "unavailable",
       lastObservedPhase: null,
+      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
     });
     await writeFile(file, JSON.stringify({ lastObservedPhase: "file-loaded", secret: "private" }));
     expect(await readDesktopProofPhase(file)).toEqual({
       status: "available",
       lastObservedPhase: "file-loaded",
+      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
     });
     const link = path.join(root, "linked-phase.json");
     await symlink(file, link);
     expect(await readDesktopProofPhase(link)).toEqual({
       status: "invalid",
       lastObservedPhase: null,
+      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
     });
     expect(await readDesktopProofPhase(root)).toEqual({
       status: "invalid",
       lastObservedPhase: null,
+      startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
     });
-    for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(257)]) {
+    for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(2049)]) {
       await writeFile(file, content);
       expect(await readDesktopProofPhase(file)).toEqual({
         status: "invalid",
         lastObservedPhase: null,
+        startupAtAbort: { status: "unavailable", currentPhase: null, recentPhases: [] },
+      });
+    }
+  });
+
+  it("projects only fixed startup names, never diagnostic details or arbitrary labels", async () => {
+    const snapshot = desktopProofStartupSnapshot({
+      currentPhase: "sidecars.model-runtime",
+      recentPhases: ["config.load", "private-token", "gateway.lifecycle"],
+      details: { secret: "private-token" },
+      startedAt: 123,
+    });
+    expect(snapshot).toEqual({
+      status: "available",
+      currentPhase: "sidecars.model-runtime",
+      recentPhases: ["config.load", "gateway.lifecycle"],
+    });
+    const root = dirs.make("desktop-startup-snapshot-");
+    const file = path.join(root, "desktop-phase.json");
+    await writeFile(
+      file,
+      JSON.stringify({ lastObservedPhase: "gateway-start", startupAtAbort: snapshot }),
+    );
+    expect(await readDesktopProofPhase(file)).toEqual({
+      status: "available",
+      lastObservedPhase: "gateway-start",
+      startupAtAbort: snapshot,
+    });
+    expect(
+      desktopProofStartupSnapshot({ currentPhase: "private-token", recentPhases: [] }),
+    ).toEqual({
+      status: "available",
+      currentPhase: null,
+      recentPhases: [],
+    });
+    for (const value of [
+      null,
+      { currentPhase: null, recentPhases: Array(9).fill("config.load") },
+      { currentPhase: null, recentPhases: [42] },
+    ]) {
+      expect(desktopProofStartupSnapshot(value)).toEqual({
+        status: "invalid",
+        currentPhase: null,
+        recentPhases: [],
       });
     }
   });

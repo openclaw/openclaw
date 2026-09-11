@@ -7,8 +7,15 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import { createServer } from "vite";
 import { expect, it } from "vitest";
-import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
+import {
+  desktopProofStartupSnapshot,
+  type desktopProofTestReport,
+} from "../../../scripts/lib/desktop-resize-proof.mts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
+import {
+  getCurrentDiagnosticPhase,
+  getRecentDiagnosticPhases,
+} from "../../../src/logging/diagnostic-phase.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
@@ -38,11 +45,16 @@ declare module "vitest" {
 
 const fixturePath = process.env.OPENCLAW_DESKTOP_REAL_FIXTURE;
 const diagnosticDirectory = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
-function recordPhase(value: DesktopProofPhase) {
+function recordPhase(
+  value: DesktopProofPhase,
+  startupAtAbort?: ReturnType<typeof desktopProofStartupSnapshot>,
+) {
   if (fixturePath && diagnosticDirectory) {
     const file = path.join(diagnosticDirectory, "desktop-phase.json");
     // Commit before the next await; interruption during writing retains the prior record.
-    writeFileSync(`${file}.next`, JSON.stringify({ lastObservedPhase: value }), { mode: 0o600 });
+    writeFileSync(`${file}.next`, JSON.stringify({ lastObservedPhase: value, startupAtAbort }), {
+      mode: 0o600,
+    });
     renameSync(`${file}.next`, file);
   }
 }
@@ -141,10 +153,32 @@ suite.define(() => {
   it.skipIf(!fixturePath)(
     "matches a real XFCE display through the configured worker carrier and preserves controller ownership",
     async (context) => {
+      let lastPhase: DesktopProofPhase = "fixture";
+      const observedAfter = Date.now();
+      const captureStartupAtAbort = () => {
+        try {
+          recordPhase(
+            lastPhase,
+            desktopProofStartupSnapshot({
+              currentPhase: getCurrentDiagnosticPhase() ?? null,
+              recentPhases: getRecentDiagnosticPhases(8, { completedAfter: observedAfter }).map(
+                (phase) => phase.name,
+              ),
+            }),
+          );
+        } catch {
+          // Keep the prior atomic checkpoint; diagnostics must not replace the test failure.
+        }
+      };
+      context.signal.addEventListener("abort", captureStartupAtAbort, { once: true });
+      context.onTestFinished(() =>
+        context.signal.removeEventListener("abort", captureStartupAtAbort),
+      );
       const phase = (value: DesktopProofPhase) => {
         // A timed-out callback can continue while the suite joins its cleanup.
         if (!context.signal.aborted) {
           recordPhase(value);
+          lastPhase = value;
           context.task.meta.desktopProofPhase = value;
         }
       };
@@ -218,12 +252,14 @@ suite.define(() => {
               trustedProxies: ["127.0.0.1", "::1"],
             },
           });
-          phase("gateway-start");
+          phase("gateway-import");
           const { startGatewayServer } = await import("../../../src/gateway/server.js");
+          phase("gateway-start");
           gateway = await startGatewayServer(gatewayPort, {
             bind: "loopback",
             sidecarStartup: "start",
           });
+          phase("gateway-startup-settled");
           await gateway.startupSettled;
           if (fixture.carrier === "node") {
             const endpoint = {

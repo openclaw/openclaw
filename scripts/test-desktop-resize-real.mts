@@ -11,6 +11,7 @@ import {
   desktopProofCommit,
   desktopProofSource,
   desktopProofSshdFailure,
+  desktopProofStartupSnapshot,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
@@ -545,7 +546,11 @@ async function main() {
         carrier,
         status: "pending",
         report: null,
-        checkpoint: { status: "unavailable", lastObservedPhase: null },
+        checkpoint: {
+          status: "unavailable",
+          lastObservedPhase: null,
+          startupAtAbort: desktopProofStartupSnapshot(undefined),
+        },
       };
       receipt.testDiagnostics.push(diagnostic);
       await writeFile(fixtureFile, JSON.stringify({ ...fixture, carrier }), { mode: 0o600 });
