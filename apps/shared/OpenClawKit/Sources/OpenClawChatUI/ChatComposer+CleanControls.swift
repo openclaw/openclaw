@@ -163,15 +163,10 @@ extension OpenClawChatComposer {
                     .accessibilityIdentifier("chat-composer-model-selection-target")
                 Divider()
             }
-            Picker(
-                "Model",
-                selection: Binding(
-                    get: { self.viewModel.canonicalModelSelectionID },
-                    set: { self.viewModel.selectModel($0) }))
-            {
-                Text(self.viewModel.defaultModelLabel)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tag(OpenClawChatViewModel.defaultModelSelectionID)
+            Group {
+                self.modelMenuOption(
+                    self.viewModel.defaultModelLabel,
+                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
                         self.cleanInlineModelOptions(sections.pinned)
@@ -188,10 +183,6 @@ extension OpenClawChatComposer {
                     }
                 }
             }
-            .labelsHidden()
-            #if os(macOS)
-            .pickerStyle(.inline)
-            #endif
             .disabled(
                 !self.viewModel.composerModelMutationAvailable ||
                     self.viewModel.isUpdatingSessionSettings)
@@ -273,10 +264,10 @@ extension OpenClawChatComposer {
     private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
             let unavailable = self.viewModel.modelUnavailableDescription(model)
-            Text(verbatim: [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
-                .filter { !$0.isEmpty }.joined(separator: " — "))
-                .font(OpenClawChatTypography.captionSemiBold)
-                .tag(model.selectionID)
+            self.modelMenuOption(
+                [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
+                    .filter { !$0.isEmpty }.joined(separator: " — "),
+                selectionID: model.selectionID)
                 .disabled(unavailable != nil)
                 .accessibilityHint(unavailable ?? "")
         }

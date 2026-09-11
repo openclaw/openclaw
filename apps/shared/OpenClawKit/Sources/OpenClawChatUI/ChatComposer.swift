@@ -423,7 +423,7 @@ struct OpenClawChatComposer: View {
                         #endif
                     }
                     if self.viewModel.showsModelPicker {
-                        self.modelPicker.labelsHidden()
+                        self.modelPicker
                         if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                             self.modelPinButton
                         }
