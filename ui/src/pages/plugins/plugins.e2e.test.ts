@@ -658,7 +658,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         categories: ["missing-category"],
       },
     }));
-    const featured = discoveryResult.items.filter((plugin) => plugin.catalog.featured).slice(0, 2);
+    const featuredOverviewItems = discoveryResult.items
+      .filter((plugin) => plugin.catalog.featured)
+      .slice(0, 2);
     await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
@@ -668,7 +670,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
             {
               match: { intent: "all", pageSize: 100 },
               response: {
-                items: [...featured, ...uncategorized],
+                items: [...featuredOverviewItems, ...uncategorized],
                 categories: discoveryResult.categories,
               },
             },
@@ -680,7 +682,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}plugins`);
       const explore = page.getByRole("region", { name: "Explore plugins" });
-      const featured = explore.locator('[data-catalog-section="featured"]');
+      const featuredSection = explore.locator('[data-catalog-section="featured"]');
       const unmatched = explore.locator('[data-catalog-section="uncategorized"]');
       await unmatched.getByRole("link", { name: "Uncategorized 3" }).waitFor();
 
@@ -696,7 +698,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(
         await visibleCardCount('[data-catalog-section="uncategorized"] .plugin-catalog-card'),
       ).toBe(3);
-      expect(await featured.getByRole("button", { name: "View all" }).count()).toBe(1);
+      expect(await featuredSection.getByRole("button", { name: "View all" }).count()).toBe(1);
       expect(await unmatched.getByRole("button", { name: "View all" }).count()).toBe(0);
     } finally {
       await context.close();

@@ -140,16 +140,19 @@ export const discoveryCategories = {
 const firstDiscoveryPageItems = Array.from({ length: 22 }, (_, index) =>
   availableDiscoveryPlugin(index, "First page"),
 );
-const additionalOverviewShelfItems = firstDiscoveryPageItems.slice(0, 6).map((plugin, index) => ({
-  ...plugin,
-  catalog: {
-    ...plugin.catalog,
-    featured: true,
-    trending: true,
-    featuredRank: index + 2,
-    trendingRank: index + 2,
-  },
-}));
+const additionalOverviewShelfItems: PluginDiscoveryEntry[] = [];
+for (const [index, plugin] of firstDiscoveryPageItems.slice(0, 6).entries()) {
+  additionalOverviewShelfItems.push({
+    ...plugin,
+    catalog: {
+      ...plugin.catalog,
+      featured: true,
+      trending: true,
+      featuredRank: index + 2,
+      trendingRank: index + 2,
+    },
+  });
+}
 
 export const discoveryResult: PluginDiscoveryResult = {
   items: [
