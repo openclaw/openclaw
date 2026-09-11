@@ -24,7 +24,7 @@ struct ChatCatalogProjectionTests {
         let model = OpenClawChatViewModel(sessionKey: "main", transport: CatalogProjectionTransport())
         model.modelChoices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(
             Data("{\"models\":[\(row)]}".utf8))
-        model.modelSelectionID = "fixture/choice"
+        model.sessionDefaults = .init(modelProvider: "fixture", model: "choice", contextTokens: nil)
         return model
     }
 

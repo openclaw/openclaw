@@ -41,7 +41,8 @@ final class ChatCatalogUITests: XCTestCase {
         let modelPicker = app.buttons["chat-composer-inline-model"]
         XCTAssertTrue(modelPicker.waitForExistence(timeout: 30))
         modelPicker.tap()
-        let modelRow = app.buttons["\(model.provider)/\(model.id)"]
+        let modelRow = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "\(model.provider)/\(model.id)")).firstMatch
         XCTAssertTrue(modelRow.waitForExistence(timeout: 10), app.debugDescription)
         self.capture(app, named: "published-model-picker")
         modelRow.tap()
