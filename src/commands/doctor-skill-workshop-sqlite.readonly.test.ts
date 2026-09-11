@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePathFromConfig,
@@ -55,7 +56,9 @@ async function snapshotDatabase(databasePath: string) {
 describe("read-only Skill Workshop migration inspection", () => {
   it("reports each stale automation field after relocation without changing stored state", async () => {
     await withOpenClawTestState({ label: "workshop-automation-paths" }, async (state) => {
-      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+      };
       const legacy = path.join(state.workspaceDir, "skills", "relocated");
       const content = "---\nname: relocated\ndescription: Saved procedure\n---\n\n# Saved\n";
       const record = createAppliedLegacyProposal({
