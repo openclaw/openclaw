@@ -284,7 +284,7 @@ export async function executeTelegramLoginCommand(params: {
           flowSignal.throwIfAborted();
           dispatch.runtime.error?.(
             danger(
-              `telegram ${formatProviderLoginCommand(loginChoice)} completed but failed to update session auth profile: ${String(
+              `telegram ${formatProviderLoginCommand(loginChoice.command)} completed but failed to update session auth profile: ${String(
                 error,
               )}`,
             ),
@@ -308,7 +308,9 @@ export async function executeTelegramLoginCommand(params: {
         return;
       }
       dispatch.runtime.error?.(
-        danger(`telegram ${formatProviderLoginCommand(loginChoice)} failed: ${String(error)}`),
+        danger(
+          `telegram ${formatProviderLoginCommand(loginChoice.command)} failed: ${String(error)}`,
+        ),
       );
       terminalMessage = formatProviderLoginFailure(loginChoice, error);
     }
@@ -330,7 +332,7 @@ export async function executeTelegramLoginCommand(params: {
     } catch (error) {
       dispatch.runtime.error?.(
         danger(
-          `telegram ${formatProviderLoginCommand(loginChoice)} result notification failed: ${String(error)}`,
+          `telegram ${formatProviderLoginCommand(loginChoice.command)} result notification failed: ${String(error)}`,
         ),
       );
     }

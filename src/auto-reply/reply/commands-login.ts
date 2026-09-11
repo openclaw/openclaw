@@ -248,7 +248,7 @@ async function runChannelProviderLogin(params: {
   const sendReply = params.commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
-      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(params.choice)}\` again.`,
+      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(params.choice.command)}\` again.`,
     };
   }
 

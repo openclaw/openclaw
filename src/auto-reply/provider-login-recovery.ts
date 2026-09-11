@@ -10,10 +10,7 @@ import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
 } from "../shared/provider-auth-result.js";
-
-export function formatProviderLoginCommand(choice: ProviderChannelLoginChoice): string {
-  return `/login ${choice.command}`;
-}
+import { formatProviderLoginCommand } from "../shared/provider-login-command.js";
 
 export function formatProviderLoginCompletion(
   choice: ProviderChannelLoginChoice,
@@ -43,7 +40,7 @@ export function formatProviderLoginFailure(
   if (error instanceof ProviderCredentialsSavedError) {
     return `Some ${choice.providerLabel} sign-in details were saved, but setup is incomplete. Open Models to review the saved connection and finish setup.`;
   }
-  return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice)}\` to try again.`;
+  return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice.command)}\` to try again.`;
 }
 
 export type ProviderLoginRecoveryEvidence = {

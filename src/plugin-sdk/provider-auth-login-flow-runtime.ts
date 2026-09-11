@@ -20,6 +20,7 @@ import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
 } from "../shared/provider-auth-result.js";
+import { formatProviderLoginCommand } from "../shared/provider-login-command.js";
 import { buildCommandChoiceReply, createLoginChoicePrompt } from "../wizard/command-choice.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
@@ -37,10 +38,10 @@ export {
   isProviderLoginPatchPersisted,
 } from "../config/sessions/auth-profile-override-provenance.js";
 export {
-  formatProviderLoginCommand,
   formatProviderLoginCompletion,
   formatProviderLoginFailure,
 } from "../auto-reply/provider-login-recovery.js";
+export { formatProviderLoginCommand };
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 
@@ -646,7 +647,7 @@ export function buildProviderLoginChoicesReply(
           label: provider.label,
           action: {
             type: "command" as const,
-            command: `/login ${formatProviderOAuthLoginRef(provider)}`,
+            command: formatProviderLoginCommand(formatProviderOAuthLoginRef(provider)),
           },
         }))
       : resolution.choices
@@ -655,7 +656,7 @@ export function buildProviderLoginChoicesReply(
             label: choice.label,
             action: {
               type: "command" as const,
-              command: `/login ${formatProviderLoginChoiceRef(choice)}`,
+              command: formatProviderLoginCommand(formatProviderLoginChoiceRef(choice)),
             },
           }));
   if (buttons.length === 0) {

@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
  * commands without trusting raw provider text.
  */
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
 import type { AuthProfileFailureReason } from "./types.js";
 
 export type OAuthRefreshFailureReason =
@@ -324,9 +325,9 @@ export function buildOAuthRefreshFailureLoginCommand(
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
   if (options?.surface === "chat") {
-    return sanitizedProvider && sanitizedProvider !== "claude-cli"
-      ? `/login ${sanitizedProvider}`
-      : "/login";
+    return formatProviderLoginCommand(
+      sanitizedProvider === "claude-cli" ? null : sanitizedProvider,
+    );
   }
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   if (sanitizedProvider === "claude-cli") {
