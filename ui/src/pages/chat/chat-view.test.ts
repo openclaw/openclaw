@@ -6933,6 +6933,7 @@ describe("chat welcome", () => {
     expect(getComposerTextarea(container).disabled).toBe(false);
     const send = expectDefined(
       container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+      "model-free command send button",
     );
     expect(send.disabled).toBe(false);
     send.click();

@@ -9,7 +9,6 @@ import {
 export {
   buildPreparedModelsProviderData,
   formatModelsAvailableHeader,
-  formatModelsAvailability,
   getModelsRuntimeChoices,
   resolveModelsCommandReply,
 } from "../auto-reply/reply/commands-models.js";

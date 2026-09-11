@@ -150,15 +150,17 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
 
 ## Model menu readiness
 
-`openclaw/plugin-sdk/models-provider-runtime` exposes `formatModelsAvailability`
-for channel model menus. Pass the published `ModelsProviderData` to get ready
-counts, display labels, and recovery notices from its paired readiness facts.
-The helper does not refresh the catalog or change model names or selection IDs.
-Its optional `loginProviders` set identifies connections supported by the login
-owner. Other connections receive a link to the custom-provider guide instead of
-a login command.
-Pass its result to `formatModelsAvailableHeader` as `availability` and use its
-`modelNames` for button labels. Older SDK producers can omit readiness facts.
+The model-data builders in `openclaw/plugin-sdk/models-provider-runtime` prepare
+an optional `ModelsProviderData.modelMenu` projection from the published catalog
+and its paired readiness facts. Use `modelMenu.modelNames` for button labels and
+pass `modelMenu.byProvider.get(provider)` to `formatModelsAvailableHeader` as
+`availability` for ready counts and recovery notices. Provider menus can join the
+notices from `modelMenu.byProvider.values()`.
+
+The projection does not refresh the catalog or change selection IDs. Login
+metadata determines whether recovery offers a login command or the custom-provider
+guide. Older SDK producers can omit `modelMenu`; consumers then use the existing
+`modelNames` and header behavior.
 
 ## Prepared completion SDK compatibility
 

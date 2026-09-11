@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthStore,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -10,7 +14,6 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { modelProviderAuthMocks } from "./commands-models-auth.test-support.js";
 import {
   buildPreparedModelsProviderData,
-  formatModelsAvailability,
   formatModelsAvailableHeader,
   handleModelsCommand,
 } from "./commands-models.js";
@@ -60,23 +63,30 @@ beforeEach(() => {
         throw new Error("The browse fixture requires its captured config");
       }
       const entries = modelCatalogMocks.loadModelCatalog(params);
-      const owner = createModelsTestOwner(params.config, entries, params);
-      owner.metadataSnapshot = createPluginMetadataSnapshotFixture({
-        plugins: ["anthropic", "xai"].map((id) => ({
-          id,
-          providerAuthChoices: [
-            {
-              provider: id,
-              method: "device-code",
-              choiceId: `${id}-device-code`,
-              choiceLabel: id,
-              appGuidedAuth: "device-code",
-              credentialOnly: true,
-              channelLogin: {},
-            },
-          ],
-        })),
-      });
+      const baseOwner = createModelsTestOwner(params.config, entries, params);
+      const owner = {
+        ...baseOwner,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: ["anthropic", "xai"].map((id) => ({
+            id,
+            providerAuthChoices: [
+              {
+                provider: id,
+                method: "device-code",
+                choiceId: `${id}-device-code`,
+                choiceLabel: id,
+                appGuidedAuth: "device-code",
+                credentialOnly: true,
+                channelLogin: {},
+              },
+            ],
+          })),
+        }),
+      };
+      setPreparedModelRuntimeAuthStore(
+        owner,
+        expectDefined(getPreparedModelRuntimeAuthStore(baseOwner), "prepared model auth store"),
+      );
       return owner;
     },
   );
@@ -409,19 +419,7 @@ describe("handleModelsCommand", () => {
     },
   );
 
-  it("preserves formatter and header output for plugin data without readiness metadata", () => {
-    const data = {
-      byProvider: new Map([["anthropic", new Set(["claude-sonnet-4-5"])]]),
-      providers: ["anthropic"],
-      resolvedDefault: { provider: "anthropic", model: "claude-sonnet-4-5" },
-      modelNames: new Map([["anthropic/claude-sonnet-4-5", "Claude Sonnet"]]),
-    };
-
-    expect(formatModelsAvailability(data)).toEqual({
-      available: 1,
-      modelNames: new Map([["anthropic/claude-sonnet-4-5", "Claude Sonnet"]]),
-      notice: "",
-    });
+  it("preserves header output without a prepared menu", () => {
     expect(formatModelsAvailableHeader({ provider: "anthropic", total: 1, cfg: {} })).toBe(
       "Models (anthropic) — 1 available",
     );

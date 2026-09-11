@@ -6525,23 +6525,30 @@ describe("createTelegramBot", () => {
         },
       });
       vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockImplementationOnce(
-        async (_cfg, _agentId, options) => ({
-          byProvider: new Map([["xai", new Set(["grok-test"])]]),
-          providers: ["xai"],
-          resolvedDefault: { provider: "xai", model: "grok-test" },
-          modelNames: new Map([["xai/grok-test", "Grok Test"]]),
-          loginProviders: new Set(["xai"]),
-          modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
-          modelAvailability: new Map([
-            [
-              "xai/grok-test",
-              {
-                availability: options?.sessionEntry?.authProfileOverride !== "xai:missing",
-                unavailableReason: "missing-auth",
-              },
-            ],
-          ]),
-        }),
+        async (_cfg, _agentId, options) => {
+          const missingAccess = options?.sessionEntry?.authProfileOverride === "xai:missing";
+          return {
+            byProvider: new Map([["xai", new Set(["grok-test"])]]),
+            providers: ["xai"],
+            resolvedDefault: { provider: "xai", model: "grok-test" },
+            modelNames: new Map([["xai/grok-test", "Grok Test"]]),
+            modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
+            modelMenu: {
+              modelNames: new Map([
+                ["xai/grok-test", missingAccess ? "Sign-in needed — Grok Test" : "Grok Test"],
+              ]),
+              byProvider: new Map([
+                [
+                  "xai",
+                  {
+                    available: missingAccess ? 0 : 1,
+                    notice: missingAccess ? "xai: Sign-in needed. Connect with /login xai." : "",
+                  },
+                ],
+              ]),
+            },
+          };
+        },
       );
       createTelegramBot({ token: "tok" });
       await getCallbackHandler()(

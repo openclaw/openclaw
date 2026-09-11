@@ -81,15 +81,17 @@ export type ModelsProviderData = {
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
-  modelAvailability?: Map<
-    string,
-    Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">
-  >;
-  loginProviders?: ReadonlySet<string>;
+  modelMenu?: {
+    modelNames: ReadonlyMap<string, string>;
+    byProvider: ReadonlyMap<string, ModelsProviderMenu>;
+  };
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
   isCurrent?: () => boolean;
 };
+
+type ModelsProviderMenu = { available: number; notice: string };
+type ModelReadiness = Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">;
 
 type PreparedModelsProviderData = ModelsProviderData & {
   modelCatalog: ModelCatalogEntry[];
@@ -255,7 +257,7 @@ async function projectPreparedModelsProviderData(
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
-  const modelAvailability: NonNullable<ModelsProviderData["modelAvailability"]> = new Map();
+  const modelAvailability = new Map<string, ModelReadiness>();
   const hasAuth: ModelCatalogAuthChecker =
     options.view === "all"
       ? async () => true
@@ -496,8 +498,7 @@ async function projectPreparedModelsProviderData(
     providers,
     resolvedDefault,
     modelNames,
-    modelAvailability,
-    loginProviders,
+    modelMenu: buildModelsMenu({ byProvider, modelNames, modelAvailability, loginProviders }),
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
@@ -612,19 +613,22 @@ function resolveProviderLabel(params: {
   return `${params.provider} · 🔑 ${authLabel}`;
 }
 
-export function formatModelsAvailability(data: ModelsProviderData, provider?: string) {
+function buildModelsMenu(data: {
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  modelNames: ReadonlyMap<string, string>;
+  modelAvailability: ReadonlyMap<string, ModelReadiness>;
+  loginProviders: ReadonlySet<string>;
+}): NonNullable<ModelsProviderData["modelMenu"]> {
   const modelNames = new Map(data.modelNames);
-  const notices = new Set<string>();
-  let available = 0;
+  const byProvider = new Map<string, ModelsProviderMenu>();
   for (const [id, models] of data.byProvider) {
-    if (provider && id !== provider) {
-      continue;
-    }
-    const loginSupported = data.loginProviders?.has(id) === true;
+    const notices = new Set<string>();
+    let available = 0;
+    const loginSupported = data.loginProviders.has(id);
     for (const model of models) {
       const key = `${id}/${model}`;
-      const state = data.modelAvailability?.get(key);
-      if (!state || state.availability === true) {
+      const state = data.modelAvailability.get(key)!;
+      if (state.availability === true) {
         available += 1;
         continue;
       }
@@ -657,8 +661,9 @@ export function formatModelsAvailability(data: ModelsProviderData, provider?: st
       modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
       notices.add(`${id}: ${label}. ${recovery}`);
     }
+    byProvider.set(id, { available, notice: [...notices].join("\n") });
   }
-  return { available, modelNames, notice: [...notices].join("\n") };
+  return { modelNames, byProvider };
 }
 
 export function formatModelsAvailableHeader(params: {
@@ -669,7 +674,7 @@ export function formatModelsAvailableHeader(params: {
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
-  availability?: ReturnType<typeof formatModelsAvailability>;
+  availability?: ModelsProviderMenu;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
@@ -758,13 +763,19 @@ export async function resolveModelsCommandReply(params: {
     throw error;
   }
   const { byProvider, providers } = data;
-  const availability = formatModelsAvailability(
-    data,
-    parsed.action === "list" ? parsed.provider : undefined,
-  );
-  const { modelNames } = availability;
-  const withAvailability = (text: string) =>
-    [text, availability.notice].filter(Boolean).join("\n\n");
+  const availability =
+    parsed.action === "list" && parsed.provider
+      ? data.modelMenu?.byProvider.get(parsed.provider)
+      : undefined;
+  const modelNames = data.modelMenu?.modelNames ?? data.modelNames;
+  const notice =
+    parsed.action === "list" && parsed.provider
+      ? availability?.notice
+      : [...(data.modelMenu?.byProvider.values() ?? [])]
+          .map((provider) => provider.notice)
+          .filter(Boolean)
+          .join("\n");
+  const withAvailability = (text: string) => [text, notice].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
 

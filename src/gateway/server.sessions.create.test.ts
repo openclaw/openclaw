@@ -4325,8 +4325,14 @@ test.each([undefined, "main"])(
     // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
-    const child = expectDefined(loadSessionEntry({ sessionKey: key, storePath }));
-    const parent = expectDefined(loadSessionEntry({ sessionKey: "agent:main:main", storePath }));
+    const child = expectDefined(
+      loadSessionEntry({ sessionKey: key, storePath }),
+      "created session",
+    );
+    const parent = expectDefined(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
+      "grouping parent session",
+    );
     const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
     const cfg = getRuntimeConfig();
     const reply = await createModelSelectionState({
