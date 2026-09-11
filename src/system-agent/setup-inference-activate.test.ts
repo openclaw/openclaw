@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -495,20 +497,22 @@ describe("setup activation credentials and configuration", () => {
     });
     await fs.writeFile(setup.configPath, JSON.stringify(configured));
     clearConfigCache();
-    const saved = await saveSetupCredential({
-      profile: { profileId: "openai:replacement", credential },
-      config: {
-        ...configured,
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://provider.example/v1",
-              api: "openai-responses",
-              models: [{ id: "gpt-4.1-mini", name: "Sparse saved model" }],
-            },
+    const sparse = validateConfigObjectRaw({
+      ...configured,
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://provider.example/v1",
+            api: "openai-responses",
+            models: [{ id: "gpt-4.1-mini", name: "Sparse saved model" }],
           },
         },
       },
+    });
+    assert.ok(sparse.ok);
+    const saved = await saveSetupCredential({
+      profile: { profileId: "openai:replacement", credential },
+      config: sparse.config,
       baseConfig: configured,
       agentDir: setup.agentDir,
       modelRef,
