@@ -14,19 +14,35 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
 
-/** Carries the Gateway-owned metadata snapshot through one model-selection run. */
-export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNormalization {
+/**
+ * Carries the Gateway-owned metadata snapshot through one model-selection run.
+ *
+ * Callers with an existing snapshot pass it through so one model-selection run
+ * does not resolve plugin metadata again.
+ */
+export function resolveRuntimeNormalization(
+  cfg: OpenClawConfig,
+  metadataSnapshot?: PluginMetadataSnapshot,
+): RuntimeModelNormalization {
   return {
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: getCurrentPluginMetadataSnapshot({
-      config: cfg,
-      allowWorkspaceScopedSnapshot: true,
-    }),
+    manifestPlugins: metadataSnapshot ?? readRuntimeNormalizationMetadataSnapshot(cfg),
   };
+}
+
+/** Reads the metadata snapshot `resolveRuntimeNormalization` would resolve for `cfg`. */
+function readRuntimeNormalizationMetadataSnapshot(
+  cfg: OpenClawConfig,
+): PluginMetadataSnapshot | undefined {
+  return getCurrentPluginMetadataSnapshot({
+    config: cfg,
+    allowWorkspaceScopedSnapshot: true,
+  });
 }
 
 export function normalizeRuntimeRef(
