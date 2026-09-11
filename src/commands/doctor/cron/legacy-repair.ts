@@ -594,7 +594,9 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
           resolve: ({ modelRef }) => repairModelRefAuthProfile(modelRef, params.authProfileIdMap),
           changes,
         });
-        if (changes.length > before) repaired.jobs[index] = candidate;
+        if (changes.length > before) {
+          repaired.jobs[index] = candidate;
+        }
       }
       await saveCronJobsStoreChanges(storePath, store, repaired);
       return { changes, warnings: [] };

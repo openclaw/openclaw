@@ -80,7 +80,9 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
         question === "Migrate auth profile JSON files into SQLite now?" ||
         question === "Apply recommended config repairs now?"
       ) {
-        if (question.startsWith("Migrate auth")) importsAccepted++;
+        if (question.startsWith("Migrate auth")) {
+          importsAccepted++;
+        }
         child.write("y");
       } else if (
         /^(?:Rebuild stale Control UI assets now|Build Control UI assets now|Update OpenClaw from git before running doctor|Migrate generated provider model catalogs into agent SQLite now|Repair model credentials in agent SQLite now|Tighten permissions on .+ to (?:700|600)|Disable \d+ unavailable skills in config|Enable \w+ shell completion for openclaw|Create .+ at .+)\?$/.test(
