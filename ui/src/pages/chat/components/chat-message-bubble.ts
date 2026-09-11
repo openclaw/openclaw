@@ -34,6 +34,7 @@ import "./chat-clawhub-card.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -224,6 +225,7 @@ export function renderGroupedMessage(
     showReasoning: boolean;
     showToolCalls?: boolean;
     runActive?: boolean;
+    asyncQuestions?: AsyncQuestionPresentation;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -263,6 +265,7 @@ export function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
+  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
@@ -348,6 +351,7 @@ export function renderGroupedMessage(
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   if (
     !markdown &&
+    !asyncQuestions &&
     !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
@@ -459,17 +463,25 @@ export function renderGroupedMessage(
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>
-    jsonResult
-      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
-      : bodyMarkdown
-        ? renderMessageMarkdown(
-            bodyMarkdown,
-            messageKey,
-            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-            markdownRenderOptions,
-            duplicateSuffix,
+    asyncQuestions
+      ? html`<openclaw-chat-async-question
+          .questions=${asyncQuestions}
+          .presentation=${opts.asyncQuestions}
+        ></openclaw-chat-async-question>`
+      : jsonResult
+        ? renderMessageJson(
+            jsonResult,
+            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
           )
-        : nothing;
+        : bodyMarkdown
+          ? renderMessageMarkdown(
+              bodyMarkdown,
+              messageKey,
+              { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+              markdownRenderOptions,
+              duplicateSuffix,
+            )
+          : nothing;
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`

@@ -33,6 +33,7 @@ import {
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
+import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
@@ -78,6 +79,7 @@ export function projectChatTranscript(
   transcript: ChatTranscriptSession,
 ): ChatTranscriptProjection {
   const state = getTranscriptState(props.paneId);
+  const asyncQuestions = createAsyncQuestionPresentation(state, props);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
@@ -286,6 +288,7 @@ export function projectChatTranscript(
     boardProvider: props.boardProvider,
     agentId: props.currentAgentId ?? props.fullMessageAgentId,
     runActive: props.runActive,
+    asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
@@ -688,6 +691,7 @@ export function projectChatTranscript(
     props.githubRepo?.repo,
     threadContextWindow,
     Boolean(props.onSetReply),
+    Boolean(props.onAsyncQuestionSubmit),
     Boolean(props.onRetryQueuedMessage),
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
@@ -700,6 +704,7 @@ export function projectChatTranscript(
     props.runStatus?.occurredAt ?? 0,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
+  state.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     const loaded = loadedReplySources.get(replyToId);
     if (loaded && resolveMessageReplyText(loaded.message)) {
