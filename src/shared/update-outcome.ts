@@ -1,10 +1,10 @@
 export const UPDATE_INSTALL_SKIP_GUIDANCE: Readonly<Record<string, string>> = {
   "container-image-install":
-    "This OpenClaw installation is part of a Docker/container image. Pull or build an image with the target version, then recreate or redeploy the container with the same state/config mounts. No package changes or Gateway restart were attempted.",
+    "Pull or build the target Docker/container image, then redeploy it with the same state/config mounts. No package changes or Gateway restart were attempted.",
   "unmanaged-package-install":
-    "This standalone/tarball or unrecognized package layout has no detected npm, pnpm, or Bun global owner. Reinstall it using the original installation method; for Yarn global installs, use Yarn to update it. No package changes or Gateway restart were attempted.",
+    "No npm, pnpm, or Bun global owner was detected. Reinstall using the original method; use Yarn for Yarn global installs. No package changes or Gateway restart were attempted.",
   "package-update-requires-cli":
-    "Run `openclaw update` through this installation's npm, pnpm, or Bun global launcher to update this package installation. No package changes or Gateway restart were attempted.",
+    "Run `openclaw update` through this install's npm, pnpm, or Bun global launcher. No package changes or Gateway restart were attempted.",
 };
 
 export const SKIPPED_UPDATE_OUTCOMES: Readonly<Record<string, "pending" | "noop">> = {
