@@ -30,6 +30,7 @@ import {
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
+import { registerPackageRootRollbackTests } from "./update-command-service-rollback.test-support.js";
 import {
   registerInstallRootTransitionTests,
   registerPluginMaintenanceTests,
@@ -51,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   terminateStale: vi.fn(async (pids: number[]) => pids),
   running: true,
   loaded: true,
+  managerUid: 2001 as number | undefined,
   listenerPids: vi.fn(() => [4242]),
   ports: vi.fn<typeof import("../../infra/ports-inspect.js").inspectPortUsage>(),
   call: vi.fn<(opts: import("../../gateway/call.js").CallGatewayOptions) => Promise<unknown>>(),
@@ -122,7 +124,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
   readSystemdServiceRuntime: async () => ({
-    systemd: { managerUid: 2001 },
+    systemd: { managerUid: mocks.managerUid },
     status: mocks.running ? "running" : "stopped",
     ...(mocks.running ? { pid: 4242 } : {}),
   }),
@@ -214,6 +216,7 @@ beforeEach(async () => {
   );
   mocks.running = true;
   mocks.loaded = true;
+  mocks.managerUid = 2001;
   mocks.inLaunchd = false;
   mocks.launchctl.mockImplementation(async () => {
     throw new Error("Unexpected native control in fixture");
@@ -569,6 +572,7 @@ describe("preserved update activation with real version guards", () => {
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
   registerInstallRootTransitionTests(() => ({ root, run, mocks }));
+  registerPackageRootRollbackTests(() => ({ root, run, mocks }));
 
   it.each(["metadata", "profile", "unit"])(
     "pins writable service identity across %s changes",

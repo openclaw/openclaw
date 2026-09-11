@@ -38,7 +38,6 @@ extensions/anthropic/stream-wrappers.ts	5
 extensions/baseten/models.ts	3
 extensions/beam/src/mirror.ts	3
 extensions/beam/src/types.ts	2
-extensions/bonjour/src/advertiser.ts	2
 extensions/brave/src/brave-web-search-provider.shared.ts	1
 extensions/browser/plugin-registration.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
@@ -192,7 +191,6 @@ extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
 extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
 extensions/codex/src/app-server/protocol-validators.ts	7
-extensions/codex/src/app-server/rate-limits.ts	1
 extensions/codex/src/app-server/reasoning-effort.ts	1
 extensions/codex/src/app-server/remote-workspace-media.ts	6
 extensions/codex/src/app-server/request.ts	2
@@ -252,9 +250,9 @@ extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
 extensions/copilot/src/attempt-config.ts	16
 extensions/copilot/src/attempt-execution.ts	4
-extensions/copilot/src/attempt-finalize.ts	5
+extensions/copilot/src/attempt-finalize.ts	4
 extensions/copilot/src/attempt-prepare.ts	4
-extensions/copilot/src/attempt-transcript-journal.ts	25
+extensions/copilot/src/attempt-transcript-journal.ts	24
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	3
@@ -490,7 +488,7 @@ extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
 extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/connection-bound-ids.ts	1
 extensions/github-copilot/embeddings.ts	6
-extensions/github-copilot/index.ts	6
+extensions/github-copilot/index.ts	4
 extensions/github-copilot/login.ts	2
 extensions/github-copilot/models.ts	3
 extensions/github-copilot/oauth.ts	1
@@ -698,7 +696,7 @@ extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
-extensions/mattermost/src/mattermost/client.ts	9
+extensions/mattermost/src/mattermost/client.ts	8
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	4
 extensions/mattermost/src/mattermost/model-picker.ts	1
@@ -727,7 +725,7 @@ extensions/memory-core/src/memory/manager-embedding-ops.ts	1
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	1
 extensions/memory-core/src/memory/manager-search.ts	6
-extensions/memory-core/src/memory/manager-sync-base.ts	4
+extensions/memory-core/src/memory/manager-sync-base.ts	3
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager-watch-ops.ts	4
 extensions/memory-core/src/memory/manager.ts	2
@@ -1638,7 +1636,7 @@ src/agents/cache-trace.ts	3
 src/agents/channel-tools.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
-src/agents/cli-credentials.ts	10
+src/agents/cli-credentials.ts	9
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
 src/agents/cli-runner.ts	1
@@ -1840,7 +1838,6 @@ src/agents/model-auth-model.ts	2
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	1
-src/agents/model-provider-auth.worker.ts	1
 src/agents/model-scan.ts	3
 src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
@@ -2015,7 +2012,7 @@ src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
 src/agents/tools/video-generate-tool.ts	2
-src/agents/tools/web-fetch.ts	3
+src/agents/tools/web-fetch.ts	2
 src/agents/tools/web-guarded-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
@@ -2078,7 +2075,6 @@ src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
 src/auto-reply/reply/directive-handling.levels.ts	9
-src/auto-reply/reply/directive-handling.model-picker.ts	1
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directive-handling.shared.ts	2
 src/auto-reply/reply/directives.ts	2
@@ -2387,7 +2383,7 @@ src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	6
 src/commands/doctor-session-sqlite-readers.ts	5
-src/commands/doctor-session-sqlite-recover-report.ts	3
+src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-sqlite.ts	2
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	5
@@ -2676,8 +2672,6 @@ src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	6
-src/gateway/channel-health-monitor.ts	6
-src/gateway/channel-thaw-restart.ts	1
 src/gateway/chat-attachments.ts	4
 src/gateway/chat-display-projection.canvas.ts	13
 src/gateway/chat-display-projection.core.ts	5
@@ -3224,7 +3218,7 @@ src/plugin-sdk/migration-runtime.ts	4
 src/plugin-sdk/migration.ts	8
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-copilot-cache.ts	1
-src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
+src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
@@ -3643,7 +3637,7 @@ src/wizard/setup.migration-stage.ts	9
 src/wizard/setup.plugin-config.ts	5
 src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
-src/wizard/setup.ts	2
+src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	5
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
@@ -3831,14 +3825,13 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	1
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-markdown.ts	1
 ui/src/pages/chat/components/chat-message-media.ts	3
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	5
 ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1
-ui/src/pages/chat/components/chat-session-rail.ts	4
+ui/src/pages/chat/components/chat-session-rail.ts	3
 ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2

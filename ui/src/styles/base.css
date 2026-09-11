@@ -369,8 +369,7 @@
    Each selector below is doubled (`.card.card`) to outrank that one bare
    declaration by specificity regardless of load order — deliberately not
    !important, so a genuinely more specific state override elsewhere (e.g.
-   `.chat:has(> .agent-chat__search-bar)`, `.chat-task-detail__transcript >
-   .chat-thread`, both already in the app) keeps winning as it did before
+   `.chat:has(> .agent-chat__search-bar)`) keeps winning as it did before
    this block existed, instead of every such rule needing a matching
    !important of its own. */
 @supports (corner-shape: superellipse(1.5)) {

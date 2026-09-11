@@ -17,7 +17,7 @@ import { areBundledPluginsDisabled } from "./bundled-dir.js";
 import { resolveBundledPluginScanDir } from "./bundled-plugin-scan.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
@@ -162,16 +162,19 @@ function loadPluginDoctorContractEntry(
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
     return null;
   }
-  const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
-  if (!contractSource) {
+  const contractArtifact = resolvePluginDoctorContractArtifact(record);
+  if (!contractArtifact) {
     return null;
   }
   let mod: PluginDoctorContractModule;
   try {
-    mod = loadPluginDoctorContractModule({ modulePath: contractSource, rootDir: record.rootDir });
+    mod = loadPluginDoctorContractModule({
+      modulePath: contractArtifact.modulePath,
+      rootDir: contractArtifact.boundaryRoot,
+    });
   } catch (error) {
     log.warn(
-      `failed to load doctor contract for ${record.id} from ${contractSource}: ${formatErrorMessage(error)}`,
+      `failed to load doctor contract for ${record.id} from ${contractArtifact.modulePath}: ${formatErrorMessage(error)}`,
     );
     return null;
   }
@@ -518,7 +521,9 @@ function filterPluginDoctorStateMigrationRecords(
     }
     records.push(record);
   }
-  return records;
+  // Alias cleanup can change discovery order without changing migration owners.
+  // Stabilize owner order while preserving each owner's declared action order.
+  return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export type PluginDoctorStateMigrationInventory = {

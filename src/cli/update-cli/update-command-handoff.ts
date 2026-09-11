@@ -177,6 +177,7 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
+    reapplyLocalOverrides: params.opts.reapplyLocalOverrides,
     meta: { runId: params.opts.run?.runId },
   });
   if (started.status === "joined") {

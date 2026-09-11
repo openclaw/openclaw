@@ -147,13 +147,20 @@ describe("memory source temporal ranking", () => {
       });
       if (ftsUnavailable) {
         await manager.close();
+        // Force reconciliation to write: an empty view cannot be rebuilt as an FTS index.
         openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
           DROP TABLE memory_index_chunks_fts;
           CREATE VIEW memory_index_chunks_fts AS
-            SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
+            SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks WHERE 0;
         `);
         manager = await fixture.getFreshManager(cfg, "cli");
-        expect(manager.status().fts).toMatchObject({ enabled: true, available: false });
+        expect(manager.status().fts).toMatchObject({
+          enabled: true,
+          available: false,
+          error: expect.stringContaining(
+            "cannot modify memory_index_chunks_fts because it is a view",
+          ),
+        });
       }
 
       const searchOptions = {

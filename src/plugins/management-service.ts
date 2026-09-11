@@ -415,6 +415,9 @@ export const listManagedPlugins = withManagedPluginCache(
       if (installedIconsById.get(normalizedPluginId)) {
         plugin.hasIcon = true;
       }
+      if (manifest?.channels.length) {
+        plugin.channelIds = [...manifest.channels];
+      }
       if (error) {
         plugin.error = error;
       }

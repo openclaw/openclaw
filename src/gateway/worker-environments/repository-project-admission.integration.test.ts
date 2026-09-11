@@ -62,9 +62,6 @@ it("admits public source without a native CLI and fences later configured identi
     assertCurrent: () => {},
   });
 
-  if (!admitted) {
-    throw new Error("Public fixture was classified as private");
-  }
   expect(admitted.project.baseCommit).toBe(commit);
   expect(admitted.project.source.owner.identity).toEqual({ source: "anonymous" });
   await expect(admitted.revalidate()).resolves.toBeUndefined();

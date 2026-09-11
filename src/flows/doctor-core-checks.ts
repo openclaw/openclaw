@@ -361,8 +361,16 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       config: ctx.cfg,
       env: process.env,
     });
+    const automationFindings = (inspection.automationReferences ?? []).map((reference) => ({
+      checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+      severity: "warning" as const,
+      target: reference.automationId,
+      path: reference.field,
+      message: reference.message,
+      fixHint: reference.fixHint,
+    }));
     if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
-      return [];
+      return automationFindings;
     }
     const fixHints: string[] = [];
     if (
@@ -381,6 +389,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       );
     }
     return [
+      ...automationFindings,
       {
         checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
         severity: "warning",
@@ -615,12 +624,14 @@ const bootstrapSizeCheck: HealthCheck = {
     if (!ctx.cwd) {
       return [];
     }
-    const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
+    const { buildBootstrapInjectionStats, analyzeBootstrapBudget, isFixedUserCapFile } =
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForDiagnostics } =
       await import("../agents/bootstrap-files-diagnostics.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
+    const { USER_BOOTSTRAP_MAX_CHARS } =
+      await import("../agents/embedded-agent-helpers/bootstrap.js");
     const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
     const workspaceDir = ctx.cwd;
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
@@ -636,15 +647,26 @@ const bootstrapSizeCheck: HealthCheck = {
       bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
       bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
+    // USER.md's fixed cap makes per-file tuning advice a dead end: name the cap
+    // and the compaction action instead, matching the interactive Doctor note.
+    const fixedCapHint = `Reduce the file size; USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS.toLocaleString("en-US")}-character bootstrap cap that \`bootstrapMaxChars\` cannot raise.`;
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
+      let fixHint =
+        "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.";
+      if (file.causes.includes("per-file-limit") && isFixedUserCapFile(file)) {
+        fixHint = fixedCapHint;
+        if (file.causes.includes("total-limit")) {
+          fixHint +=
+            " Also reduce total bootstrap size or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.";
+        }
+      }
       findings.push({
         checkId: "core/doctor/bootstrap-size",
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+        fixHint,
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -656,8 +678,9 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        fixHint: isFixedUserCapFile(file)
+          ? fixedCapHint
+          : "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {

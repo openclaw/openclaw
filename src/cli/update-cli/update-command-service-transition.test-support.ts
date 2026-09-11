@@ -17,7 +17,7 @@ import {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
-type InstallRootTransitionFixture = {
+export type InstallRootTransitionFixture = {
   root: string;
   run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {

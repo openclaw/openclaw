@@ -2025,6 +2025,28 @@ async function createChatPickerScenario(
       status: "failed",
       lastRunError: "Model access expired: openai/gpt-5-mini",
     }),
+    // Running rows with participants exercise the paired run trace in the lead slot.
+    sessionRow("agent:main:release-prep", "Release 2026.9.4 preparation", baseTime - 82_000, {
+      createdActor: MOCK_ACTOR_PETER,
+      execCwd: "/Users/demo/Work/openclaw",
+      hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 1,
+      participants: [{ identity: { type: "profile", id: "profile-mira" }, label: "Mira" }],
+      status: "running",
+    }),
+    sessionRow("agent:main:release-notes", "Release notes review", baseTime - 83_000, {
+      createdActor: MOCK_ACTOR_MIRA,
+      execCwd: "/Users/demo/Work/openclaw",
+      hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_MIRA },
+      participantCount: 2,
+      participants: [
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+      ],
+      status: "running",
+    }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       createdActor: MOCK_ACTOR_PETER,
       execCwd: "/Users/demo/Work/openclaw",

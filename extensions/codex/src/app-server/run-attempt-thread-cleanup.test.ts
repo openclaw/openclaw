@@ -720,7 +720,12 @@ describe("Codex app-server main thread cleanup", () => {
         const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
         harness.send({ id: unsubscribe.id, result: {} });
       }
-      await expect(failure).resolves.toMatchObject({ message: "turn/start aborted" });
+      await expect(failure).resolves.toMatchObject({
+        message: "turn/start aborted: cancelled",
+        cause: "cancelled",
+        reason: "aborted",
+        mayHaveWritten: true,
+      });
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
         "initialize",
         "initialized",

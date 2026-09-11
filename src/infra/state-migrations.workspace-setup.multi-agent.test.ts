@@ -101,7 +101,7 @@ describe("legacy workspace Doctor multi-agent migration", () => {
           )
           .get(identity.workspaceKey),
       ).toEqual({ filename: "AGENTS.md", sha256: HASH });
-      expect(readWorkspaceStateSnapshot(workspace)).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(workspace)).toMatchObject({
         identity,
         setup: { bootstrapSeededAt: seededAt, setupCompletedAt: completedAt },
         attestation: { attestedAtMs: mtime.getTime() },

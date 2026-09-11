@@ -1058,6 +1058,128 @@ describe("memory-core dreaming phases", () => {
     expect(after.some((entry) => entry.snippet.includes("Canonical daily note"))).toBe(true);
   });
 
+  it("retains current unvisited daily checkpoints and prunes notes outside lookback", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const files = [
+      "2026-04-05.md",
+      "2026-04-05-alpha.md",
+      "2026-04-05-beta.md",
+      "2026-04-05-delta.md",
+      "2026-04-05-gamma.md",
+    ];
+    for (const fileName of files) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", fileName),
+        `- Initial ${fileName} checkpoint has enough detail to ingest.\n`,
+        "utf-8",
+      );
+    }
+    const oldRelativePath = "memory/2026-03-16.md";
+    const gammaRelativePath = "memory/2026-04-05-gamma.md";
+    await fs.writeFile(
+      path.join(workspaceDir, oldRelativePath),
+      "- Historical kiln inspection records belong in the blue archive.\n",
+      "utf-8",
+    );
+    const initialHarness = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      limit: 1,
+      lookbackDays: 30,
+    });
+    const narrowedHarness = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      limit: 1,
+      lookbackDays: 2,
+    });
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(initialHarness.beforeAgentReply, workspaceDir, 0);
+      const initial = await dreamingTestState.readDailyIngestionState(workspaceDir);
+      expect(initial.files[oldRelativePath]).toBeDefined();
+      expect(initial.files[gammaRelativePath]).toBeDefined();
+
+      for (const fileName of files.slice(0, -1)) {
+        await fs.writeFile(
+          path.join(workspaceDir, "memory", fileName),
+          dailyCapStressLines(`Updated ${fileName}`).join("\n"),
+          "utf-8",
+        );
+      }
+
+      await triggerLightDreaming(narrowedHarness.beforeAgentReply, workspaceDir, 1);
+      const capped = await dreamingTestState.readDailyIngestionState(workspaceDir);
+      expect(capped.files[oldRelativePath]).toBeUndefined();
+      expect(capped.files[gammaRelativePath]).toEqual(initial.files[gammaRelativePath]);
+
+      await triggerLightDreaming(narrowedHarness.beforeAgentReply, workspaceDir, 2);
+      const recalls = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        new Date(DREAMING_TEST_BASE_TIME.getTime() + 2 * 60_000).toISOString(),
+      );
+      expect(
+        Object.values(recalls.entries).find((entry) => entry.path === gammaRelativePath),
+      ).toMatchObject({
+        dailyCount: 1,
+      });
+      expect(
+        Object.values(recalls.entries).find((entry) => entry.path === oldRelativePath),
+      ).toMatchObject({
+        dailyCount: 1,
+      });
+    });
+  });
+
+  it("drops a daily checkpoint when its file disappears before stat", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const removedRelativePath = "memory/2026-04-05-alpha.md";
+    const keptRelativePath = "memory/2026-04-05-beta.md";
+    const removedPath = path.join(workspaceDir, removedRelativePath);
+    await fs.writeFile(removedPath, "- Alpha archive keeps signed delivery receipts.\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, keptRelativePath),
+      "- Beta workshop stores the copper gauge in cabinet seven.\n",
+      "utf-8",
+    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      limit: 1,
+      lookbackDays: 2,
+    });
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 0);
+      const initial = await dreamingTestState.readDailyIngestionState(workspaceDir);
+      expect(initial.files[removedRelativePath]).toBeDefined();
+      expect(initial.files[keptRelativePath]).toBeDefined();
+
+      const stat = fs.stat.bind(fs);
+      let removed = false;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        if (!removed && args[0] === removedPath) {
+          removed = true;
+          await fs.unlink(removedPath);
+        }
+        return await stat(...args);
+      });
+      try {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect(removed).toBe(true);
+      const after = await dreamingTestState.readDailyIngestionState(workspaceDir);
+      expect(after.files[removedRelativePath]).toBeUndefined();
+      expect(after.files[keptRelativePath]).toEqual(initial.files[keptRelativePath]);
+      const recalls = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        new Date(DREAMING_TEST_BASE_TIME.getTime() + 60_000).toISOString(),
+      );
+      expect(
+        Object.values(recalls.entries).find((entry) => entry.path === keptRelativePath),
+      ).toMatchObject({
+        dailyCount: 1,
+      });
+    });
+  });
+
   it("prioritizes the date-only daily file before same-day slugged files during historical seeding", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");

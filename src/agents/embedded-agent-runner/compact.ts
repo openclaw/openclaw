@@ -544,6 +544,7 @@ export async function compactEmbeddedAgentSessionDirect(
               ...params,
               provider,
               model,
+              requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
               authProfileId,
               authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
               // The primary attempt retains its already prepared atomic plan. An

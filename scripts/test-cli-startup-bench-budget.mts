@@ -6,7 +6,9 @@ import { z } from "zod";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
 import {
+  assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
+  cliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
 import { readJsonFile } from "./test-report-utils.mts";
@@ -216,8 +218,13 @@ const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentC
 let failed = false;
 
 try {
+  cliStartupExecutionMode(isRecord(current) ? current.primary : undefined);
   cliStartupMemoryMetric(isRecord(current) ? current.primary : undefined);
   if (!opts.skipBaseline) {
+    assertCompatibleCliStartupExecutionModes(
+      isRecord(baseline) ? baseline.primary : undefined,
+      isRecord(current) ? current.primary : undefined,
+    );
     assertCompatibleCliStartupMemoryMetrics(
       isRecord(baseline) ? baseline.primary : undefined,
       isRecord(current) ? current.primary : undefined,

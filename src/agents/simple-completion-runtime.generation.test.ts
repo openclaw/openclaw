@@ -308,3 +308,61 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     }
   }
 });
+
+it.each(["/", "entry"])(
+  "materializes a bare default once through actual agent acquisition (override=%s)",
+  async (modelRef) => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "default-normalizer",
+          modelIdNormalization: {
+            providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "ollama-local",
+      source: "local marker",
+      mode: "api-key",
+    });
+    const release = vi.fn();
+    mocks.acquireRuntimeLease.mockResolvedValue({ snapshot: preparedModelRuntime, release });
+    const resolveModel = createOllamaModelResolver();
+    const modelResolver: SimpleCompletionModelResolver = async (...args) => {
+      const resolved = await resolveModel(...args);
+      return args[1] === "middle"
+        ? resolved
+        : { ...resolved, model: undefined, error: `Unexpected selected model: ${args[1]}` };
+    };
+    const result = await acquireSimpleCompletionModelForAgent({
+      cfg: { agents: { entries: { main: {} }, defaults: { model: "entry" } } },
+      agentId: "main",
+      modelRef,
+      modelResolver,
+    });
+
+    try {
+      expect(result).toMatchObject({
+        selection: { provider: "openai", modelId: "middle" },
+        model: { provider: "openai", id: "middle", contextWindow: 8192 },
+      });
+      expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePluginSelections: [{ provider: "openai", modelId: "middle", agentId: "main" }],
+        }),
+        expect.objectContaining({
+          catalogMode: "static",
+          pluginMetadataSnapshot: metadataSnapshot,
+        }),
+      );
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
+    expect(release).toHaveBeenCalledOnce();
+  },
+);

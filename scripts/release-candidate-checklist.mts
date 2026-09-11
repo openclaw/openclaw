@@ -1977,6 +1977,20 @@ async function main() {
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  if (!options.fullReleaseRunId && !options.skipDispatch) {
+    const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
+    const train = version && classifyReleaseTrain(version);
+    if (train === "unsupported-extended-stable-correction") {
+      throw new Error(
+        `Extended-stable correction suffixes are invalid (${options.tag}); use a new monthly maintenance patch. See the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md.`,
+      );
+    }
+    if (options.npmDistTag === "extended-stable" || train === "extended-stable") {
+      throw new Error(
+        "Fresh extended-stable checklist launches are not supported. Use the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md: Full Release Validation, then the separate plugin npm and core npm publication owners.",
+      );
+    }
+  }
   writeReleaseCandidateState(statePath, candidateState);
   const androidVersionCheck = checkCandidateAndroidVersion(targetSha, options.tag);
   if (androidVersionCheck) {

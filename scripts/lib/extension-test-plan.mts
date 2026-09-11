@@ -22,6 +22,7 @@ import {
   isProviderOpenAiExtensionRoot,
 } from "../../test/vitest/vitest.extension-provider-paths.mjs";
 import { isQaExtensionRoot } from "../../test/vitest/vitest.extension-qa-paths.mjs";
+import { isTeamReportsExtensionRoot } from "../../test/vitest/vitest.extension-team-reports-paths.mjs";
 import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
@@ -145,6 +146,7 @@ const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> =
   [isMiscExtensionRoot, "test/vitest/vitest.extension-misc.config.ts"],
   [isMsTeamsExtensionRoot, "test/vitest/vitest.extension-msteams.config.ts"],
   [isQaExtensionRoot, "test/vitest/vitest.extension-qa.config.ts"],
+  [isTeamReportsExtensionRoot, "test/vitest/vitest.extension-team-reports.config.ts"],
   [isTelegramExtensionRoot, "test/vitest/vitest.extension-telegram.config.ts"],
   [isVoiceCallExtensionRoot, "test/vitest/vitest.extension-voice-call.config.ts"],
   [isWhatsAppExtensionRoot, "test/vitest/vitest.extension-whatsapp.config.ts"],

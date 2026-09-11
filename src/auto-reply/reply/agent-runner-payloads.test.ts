@@ -1377,6 +1377,30 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it.each<DirectBlockDedupeCase>([
+    ...[false, true].map((blockStreamingEnabled) => ({
+      name: `drops a final caption already sent with direct media (streaming: ${blockStreamingEnabled})`,
+      keyPayloads: [{ text: "response", mediaUrl: "/tmp/fetched.png" }],
+      directlySentBlockPayloads: [
+        setReplyPayloadMetadata(
+          { text: "response", mediaUrl: "/tmp/fetched.png" },
+          { assistantMessageIndex: 1 },
+        ),
+      ],
+      payloads: [setReplyPayloadMetadata({ text: "response" }, { assistantMessageIndex: 1 })],
+      params: { blockStreamingEnabled },
+    })),
+    {
+      name: "preserves the same caption from a different assistant message",
+      keyPayloads: [{ text: "response", mediaUrl: "/tmp/fetched.png" }],
+      directlySentBlockPayloads: [
+        setReplyPayloadMetadata(
+          { text: "response", mediaUrl: "/tmp/fetched.png" },
+          { assistantMessageIndex: 1 },
+        ),
+      ],
+      payloads: [setReplyPayloadMetadata({ text: "response" }, { assistantMessageIndex: 2 })],
+      expected: { text: "response" },
+    },
     {
       name: "deduplicates final payloads against directly sent block keys regardless of replyToId",
       keyPayloads: [{ text: "response", replyToId: "post-1" }],

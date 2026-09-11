@@ -29,13 +29,19 @@ import {
   createOpenClawDatabaseVerificationError,
   readOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
-import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabase,
+} from "./openclaw-state-db-contract.js";
 import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 type StateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path"> &
   Partial<Pick<OpenClawStateDatabase, "walMaintenance">>;
+type OpenClawStateDatabaseCloseOptions = NonNullable<
+  Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0]
+> & { busyTimeoutMs?: number };
 // Failed native closes stay disposal-owned, never eligible for a successful cache hit.
 const retainedDatabaseHandles = new Map<DatabaseSync, StateDatabaseHandle>();
 let unregisterRetainedExitClose: (() => void) | undefined;
@@ -289,13 +295,19 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
 /** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */
 function retireOpenClawStateDatabaseHandle(
   database: StateDatabaseHandle,
-  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+  options?: OpenClawStateDatabaseCloseOptions,
 ): void {
-  const coordinator = acquireStateDatabaseCoordinator({ databasePath: database.path });
+  const { busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, ...closeOptions } = options ?? {};
+  // Wait opportunistically within the budget; contended retirement must not write
+  // any database or sidecar bytes while a foreign lifecycle owner holds exclusion.
+  const coordinator = acquireStateDatabaseCoordinator({
+    databasePath: database.path,
+    busyTimeoutMs,
+  });
   runWithSqliteCoordinator(coordinator, "state database retirement", () => {
     // Refused acquisition leaves both cache and physical ownership untouched.
     const wasCached = cachedDatabases.get(database.path)?.db === database.db;
-    const errors = closeOpenClawStateDatabaseHandle(database, options);
+    const errors = closeOpenClawStateDatabaseHandle(database, closeOptions);
     if (wasCached) {
       try {
         notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
@@ -322,7 +334,7 @@ function throwStateDatabaseCleanupErrors(errors: unknown[], message: string): vo
 /** Close cached and disposal-only handles, preserving independent cleanup failures. */
 function retireOpenClawStateDatabaseHandles(
   pathname?: string,
-  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+  options?: OpenClawStateDatabaseCloseOptions,
 ): boolean {
   const databases = new Set<StateDatabaseHandle>([
     ...retainedDatabaseHandles.values(),
@@ -346,14 +358,15 @@ function retireOpenClawStateDatabaseHandles(
 }
 
 /** Close one cached shared state database handle by exact pathname. */
-export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
-  return retireOpenClawStateDatabaseHandles(path.resolve(pathname));
+export function closeOpenClawStateDatabaseByPath(
+  pathname: string,
+  options?: OpenClawStateDatabaseCloseOptions,
+): boolean {
+  return retireOpenClawStateDatabaseHandles(path.resolve(pathname), options);
 }
 
 /** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(
-  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
-): void {
+export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
 

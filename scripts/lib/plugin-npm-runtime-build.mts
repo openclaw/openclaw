@@ -23,7 +23,12 @@ export type PluginPackageJson = JsonRecord & {
   dependencies?: JsonRecord;
   openclaw?: {
     assetScripts?: { build?: unknown };
-    build?: { bundledDist?: unknown; openclawVersion?: unknown; runtimeFormat?: unknown };
+    build?: {
+      bundledDist?: unknown;
+      openclawVersion?: unknown;
+      runtimeFormat?: unknown;
+      workerEntries?: unknown;
+    };
     compat?: { pluginApi?: unknown };
     release?: {
       bundleRuntimeDependencies?: unknown;

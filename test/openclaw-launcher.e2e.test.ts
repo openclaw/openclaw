@@ -1328,9 +1328,10 @@ describe("openclaw launcher", () => {
   );
 
   it.runIf(process.platform !== "win32").each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])("exits $exitCode when the respawn child terminates from $signal", async (testCase) => {
+    { signal: "SIGINT" as const, target: "launcher" },
+    { signal: "SIGTERM" as const, target: "launcher" },
+    { signal: "SIGKILL" as const, target: "child" },
+  ])("preserves $signal when the respawn $target is signaled", async (testCase) => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addGitMarker(fixtureRoot);
     const childInfoPath = path.join(fixtureRoot, "child-info.json");
@@ -1359,11 +1360,15 @@ describe("openclaw launcher", () => {
       const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
       respawnChildPid = childInfo.pid;
 
-      launcher.kill(testCase.signal);
+      if (testCase.target === "launcher") {
+        launcher.kill(testCase.signal);
+      } else {
+        process.kill(respawnChildPid, testCase.signal);
+      }
 
       await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
-        code: testCase.exitCode,
-        signal: null,
+        code: null,
+        signal: testCase.signal,
       });
       expect(isProcessAlive(respawnChildPid)).toBe(false);
     } finally {
@@ -1374,6 +1379,25 @@ describe("openclaw launcher", () => {
         process.kill(launcher.pid!, "SIGKILL");
       }
     }
+  });
+
+  it("preserves an explicit exit 143 from a compile-cache respawn child", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addGitMarker(fixtureRoot);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      'process.stdout.write(process.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED ?? "0", () => process.exit(143));\n',
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache") }),
+      encoding: "utf8",
+    });
+
+    expect(result.stdout).toBe("1");
+    expect(result.status).toBe(143);
+    expect(result.signal).toBeNull();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1411,8 +1435,8 @@ describe("openclaw launcher", () => {
         launcher.kill("SIGTERM");
 
         await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
-          code: 1,
-          signal: null,
+          code: null,
+          signal: "SIGKILL",
         });
         expect(isProcessAlive(launcher.pid)).toBe(false);
         expect(isProcessAlive(respawnChildPid)).toBe(false);

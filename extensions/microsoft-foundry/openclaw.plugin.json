@@ -1,6 +1,6 @@
 {
   "id": "microsoft-foundry",
-  "categories": ["models", "media"],
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

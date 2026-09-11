@@ -26,6 +26,7 @@ import {
   createGlobalInstallEnv,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
@@ -177,6 +178,37 @@ describe("update global helpers", () => {
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw.tgz")).toBe(false);
+  });
+
+  it.each([
+    { target: "latest", currentVersion: "1.0.0", targetVersion: "1.0.0", expected: true },
+    {
+      target: "/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "file:/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "openclaw@file:/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "openclaw@1.0.0",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: true,
+    },
+    { target: "latest", currentVersion: "1.0.0", targetVersion: "1.0.1", expected: false },
+  ])("classifies same-version package target $target", (testCase) => {
+    expect(isPackageTargetAlreadyCurrent(testCase)).toBe(testCase.expected);
   });
 
   it.each([

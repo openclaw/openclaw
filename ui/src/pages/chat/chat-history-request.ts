@@ -29,7 +29,7 @@ import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
-export const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
+const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
 // Back-scroll pages are larger than the startup tail: session open stays cheap
@@ -37,7 +37,7 @@ const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 // The gateway independently bounds each response (entry cap + byte budget).
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 
-export const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
+const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: ChatHistoryObservation;
@@ -86,7 +86,7 @@ function updateChatHistoryOwnerRequestCount(
   counts.set(requestKey, nextCount);
 }
 
-export async function requestChatHistory<T extends ChatHistoryResponse>(
+async function requestChatHistory<T extends ChatHistoryResponse>(
   method: "chat.history" | "chat.startup",
   attempt: () => Promise<T>,
   shouldContinue: () => boolean,

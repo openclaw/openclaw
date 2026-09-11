@@ -18,6 +18,7 @@ import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from 
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
   isVerifiedUpdateRollback,
+  reportUpdateCommandPendingRecovery,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -55,14 +56,7 @@ export async function withUpdateFailureTriage(
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      // Do not use printResult: resolving its run would reopen canonical state.
-      if (opts.json) {
-        defaultRuntime.writeJson(error.result);
-      }
-      defaultRuntime.error(
-        `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.`,
-      );
-      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+      return reportUpdateCommandPendingRecovery(error, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
     const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);

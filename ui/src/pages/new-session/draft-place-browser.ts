@@ -45,6 +45,7 @@ export class DraftPlaceBrowser {
   private projectRecentsValue: ProjectRecent[] | undefined;
   private projectSelection: DraftProjectSelection = null;
   private projectQueryValue = "";
+  private environmentQueryValue = "";
   private debouncedProjectQuery = "";
   private browserOpenValue = false;
   private browserProjectPathValue: string | null = null;
@@ -185,6 +186,15 @@ export class DraftPlaceBrowser {
 
   get projectQuery(): string {
     return this.projectQueryValue;
+  }
+
+  get environmentQuery(): string {
+    return this.environmentQueryValue;
+  }
+
+  changeEnvironmentQuery(query: string) {
+    this.environmentQueryValue = query;
+    this.callbacks.requestUpdate();
   }
 
   get projectSearchResult(): ProjectsSearchRemoteResult | null {
@@ -441,6 +451,9 @@ export class DraftPlaceBrowser {
 
   onPopoverShow(kind: DraftPickerKind) {
     this.openPopoverValue = kind;
+    if (kind === "where") {
+      this.environmentQueryValue = "";
+    }
     if (kind === "project") {
       this.showRoot();
     } else {
@@ -480,6 +493,7 @@ export class DraftPlaceBrowser {
   }
 
   disconnect() {
+    this.environmentQueryValue = "";
     this.browser.reset();
     this.clearProjectSearchTimer();
     void this.projectsTask.run([null, false, -1]);

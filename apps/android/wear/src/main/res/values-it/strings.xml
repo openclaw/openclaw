@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Azione non accettata"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Si è verificato un problema"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiorna gli elenchi e riprova."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Non è stato possibile aggiornare alcuni modelli. I modelli elencati sono ancora disponibili."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aggiorna OpenClaw sul telefono e Gateway per scegliere i modelli per questa chat."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Riprova dall\'orologio."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiornamento richiesto"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiorna OpenClaw sia sul telefono sia sull\'orologio."</string>

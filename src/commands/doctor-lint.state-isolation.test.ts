@@ -26,6 +26,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -270,11 +271,13 @@ describe("doctor lint state isolation", () => {
           typeof import("../flows/doctor-health-contributions.js")
         >("../flows/doctor-health-contributions.js");
         const checks = await actual.resolveDoctorContributionHealthChecks();
+        const sourceDatabase = openOpenClawStateDatabase();
+        let privateDatabase: ReturnType<typeof openOpenClawStateDatabase> | undefined;
         const privateInspection = vi.fn(async () => {
           expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
           // Runtime inspectors can refresh OAuth state; that write must stay private.
           writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
-          closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath());
+          privateDatabase = openOpenClawStateDatabase();
           return [];
         });
         mocks.resolveDoctorContributionHealthChecks.mockResolvedValue(
@@ -310,6 +313,10 @@ describe("doctor lint state isolation", () => {
             );
           }
           expect(privateInspection).toHaveBeenCalledOnce();
+          expect(privateDatabase).toBeDefined();
+          expect(privateDatabase?.db.isOpen).toBe(false);
+          expect(fs.existsSync(privateDatabase!.path)).toBe(false);
+          expect(sourceDatabase.db.isOpen).toBe(true);
           expect(readConfigMachineState("doctorLint.synthetic.privateWrite")).toBeUndefined();
         } finally {
           stdout.mockRestore();

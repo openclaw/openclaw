@@ -447,7 +447,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       expect(
-        claimHeartbeatOutcomeForRun({
+        await claimHeartbeatOutcomeForRun({
           agentId: "main",
           sessionKey,
           storePath,

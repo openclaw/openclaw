@@ -81,6 +81,9 @@ describe("renderSkills ClawHub", () => {
               version: "1.2.3",
             },
           ],
+          clawhubIconUrls: {
+            [`https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`]: "blob:clawhub-search-icon",
+          },
           onClawHubDetailOpen,
           onClawHubInstall,
         }),
@@ -105,7 +108,7 @@ describe("renderSkills ClawHub", () => {
     expect(resultItem?.querySelector(".plugin-card-author")?.textContent?.trim()).toBe("github");
     expect(resultItem?.textContent).toContain("GitHub integration for OpenClaw");
     expect(resultItem?.querySelector<HTMLImageElement>("img")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+      "blob:clawhub-search-icon",
     );
     expect(installButton?.textContent?.trim()).toBe("Install");
     detailButton!.click();
@@ -148,6 +151,9 @@ describe("renderSkills ClawHub", () => {
               handle: "openclaw",
             },
           },
+          clawhubIconUrls: {
+            [`https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`]: "blob:clawhub-detail-icon",
+          },
           onClawHubInstall,
         }),
       ),
@@ -163,7 +169,7 @@ describe("renderSkills ClawHub", () => {
       "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
+      "blob:clawhub-detail-icon",
     );
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 

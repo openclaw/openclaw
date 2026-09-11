@@ -764,58 +764,70 @@ describe("mantis Slack desktop smoke runtime", () => {
     },
   );
 
-  it("stops a created no-keep lease when the remote Slack QA run fails", async () => {
-    const commands: { args: readonly string[]; command: string }[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      commands.push({ command, args });
-      if (command === "/tmp/crabbox" && args[0] === "warmup") {
-        return { stdout: "ready lease cbx_fade123\n", stderr: "" };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return {
-          stdout: `${JSON.stringify({
-            host: "203.0.113.10",
-            id: "cbx_fade123",
-            provider: "hetzner",
-            sshKey: "/tmp/key",
-            sshPort: "2222",
-            sshUser: "crabbox",
-          })}\n`,
-          stderr: "",
-        };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "run") {
-        throw new Error("remote Slack QA failed");
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1);
-        await fs.mkdir(outputDir as string, { recursive: true });
-        if (!String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-          await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
+  it.each(["run", "inspect"] as const)(
+    "stops a created no-keep lease when %s fails",
+    async (failure) => {
+      const commands: { args: readonly string[]; command: string }[] = [];
+      const runner = vi.fn(async (command: string, args: readonly string[]) => {
+        commands.push({ command, args });
+        if (command === "/tmp/crabbox" && args[0] === failure) {
+          throw new Error(`${failure} failed`);
         }
-      }
-      return { stdout: "", stderr: "" };
-    });
+        if (command === "/tmp/crabbox" && args[0] === "warmup") {
+          return { stdout: "ready lease cbx_fade123\n", stderr: "" };
+        }
+        if (command === "/tmp/crabbox" && args[0] === "inspect") {
+          return {
+            stdout: `${JSON.stringify({
+              host: "203.0.113.10",
+              id: "cbx_fade123",
+              provider: "hetzner",
+              slug: "brisk-mantis",
+              state: "active",
+              sshKey: "/tmp/key",
+              sshPort: "2222",
+              sshUser: "crabbox",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        if (command === "rsync") {
+          const outputDir = args.at(-1);
+          await fs.mkdir(outputDir as string, { recursive: true });
+          if (!String(outputDir).endsWith("slack-qa/")) {
+            await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+            await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
+          }
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const result = await runMantisSlackDesktopSmoke({
-      commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
-      keepLease: false,
-      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-created-fail",
-      repoRoot,
-    });
+      const result = await runMantisSlackDesktopSmoke({
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        keepLease: false,
+        outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-created-fail",
+        repoRoot,
+      });
 
-    expect(result.status).toBe("fail");
-    expect(
-      commands.some(
-        (entry) =>
-          entry.command === "/tmp/crabbox" &&
-          JSON.stringify(entry.args) ===
-            JSON.stringify(["stop", "--provider", "hetzner", "cbx_fade123"]),
-      ),
-    ).toBe(true);
-  });
+      expect(result.status).toBe("fail");
+      expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
+        bin: "/tmp/crabbox",
+        createdLease: true,
+        id: "cbx_fade123",
+        provider: "hetzner",
+        vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_fade123 --open",
+      });
+      expect(
+        commands.some(
+          (entry) =>
+            entry.command === "/tmp/crabbox" &&
+            JSON.stringify(entry.args) ===
+              JSON.stringify(["stop", "--provider", "hetzner", "cbx_fade123"]),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("passes gateway setup when Crabbox returns non-zero after remote metadata proves success", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {

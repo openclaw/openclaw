@@ -82,12 +82,15 @@ it.each(["cjs", "ts"])(
       const selection = modelConfig.resolveAllowedModelRef({
         cfg: api.config, catalog: [], raw: "fixture/allowed", defaultProvider: "fixture", manifestPlugins: [],
       });
+      const runtimePolicy = modelConfig.resolveModelRuntimePolicy({
+        config: api.config, provider: "fixture", modelId: "allowed",
+      });
       const provider = api.runtime.modelAuth.resolveProviderIdForAuth(" Fixture ", { metadataSnapshot: { plugins: [] } });
       const system = api.runtime.system;
       system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
       system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
-      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, provider, config: api.runtime.config.current() }));
+      fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
         sync.register("before", { value: "retained" });
         const chunks = api.runtime.channel.text.chunkText("channel runtime works", 100);
@@ -153,7 +156,12 @@ it.each(["cjs", "ts"])(
           };
           const dispatchReplyFromConfig =
             vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
-          const config = { plugins: { entries: { [plugin.id]: { enabled: true } } } };
+          const config = {
+            agents: {
+              defaults: { models: { "fixture/*": { agentRuntime: { id: "openclaw" } } } },
+            },
+            plugins: { entries: { [plugin.id]: { enabled: true } } },
+          };
           setRuntimeConfigSnapshot(config);
           const metadata = await loadOpenClawPluginCliRegistry({
             config,
@@ -192,6 +200,11 @@ it.each(["cjs", "ts"])(
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
             entries: [],
             selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },
+            runtimePolicy: {
+              policy: { id: "openclaw" },
+              source: "model",
+              matchedProvider: "fixture",
+            },
             provider: "fixture",
             config,
           });

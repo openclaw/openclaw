@@ -1,4 +1,3 @@
-// Google plugin entrypoint registers its OpenClaw integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
@@ -8,6 +7,7 @@ import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
   createGoogleImageGenerationProviderMetadata,
+  createGoogleMediaUnderstandingProviderMetadata,
   createGoogleMusicGenerationProviderMetadata,
   createGoogleVideoGenerationProviderMetadata,
 } from "./generation-provider-metadata.js";
@@ -79,17 +79,7 @@ function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
 
 function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvider {
   return {
-    id: "google",
-    capabilities: ["image", "audio", "video"],
-    defaultModels: {
-      image: "gemini-3-flash-preview",
-      audio: "gemini-3-flash-preview",
-      video: "gemini-3-flash-preview",
-    },
-    autoPriority: { image: 30, audio: 40, video: 10 },
-    nativeDocumentInputs: ["pdf"],
-    describeImage: undefined,
-    describeImages: undefined,
+    ...createGoogleMediaUnderstandingProviderMetadata(),
     transcribeAudio: async (...args) =>
       await (await loadGoogleRequiredMediaUnderstandingProvider()).transcribeAudio(...args),
     describeVideo: async (...args) =>

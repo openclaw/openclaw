@@ -144,7 +144,7 @@ export function buildDiscordCommandOptions(params: {
             provider: context?.provider,
             model: context?.model,
             agentRuntime: context?.agentRuntime,
-            ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
+            catalog: choiceCatalog,
           });
           const filtered = focusValue
             ? choices.filter((choice) =>

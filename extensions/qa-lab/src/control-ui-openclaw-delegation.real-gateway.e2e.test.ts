@@ -351,173 +351,235 @@ suite.define(() => {
       throw new AggregateError(errors, "native OpenClaw approval proof failed");
     }
   }, 180_000);
+});
 
-  it.each(["default", "full"] as const)(
-    "%s Full Access saves a delegated config change without a system-agent approval",
-    { timeout: 180_000 },
-    async (mode) => {
-      const owner = createQaLiveLaneGateway();
-      const proofDir = suite.artifactDir;
-      const errors: unknown[] = [];
-      try {
-        const repoRoot = process.cwd();
-        const runtime = await owner.start({
-          repoRoot,
-          // The isolated HOME must not make the development launcher rebuild the checkout.
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-            cwd: repoRoot,
-            usePackagedPlugins: true,
-          },
-          providerMode: "mock-openai",
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          transport: { requiredPluginIds: [], createGatewayConfig: () => ({}) },
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
-          controlUiEnabled: false,
-          mutateConfig: (cfg) => ({
-            ...cfg,
-            logging: { ...cfg.logging, level: "debug" },
-            tools: { ...cfg.tools, exec: { ...cfg.tools?.exec, mode: "full" } },
-            agents: {
-              ...cfg.agents,
-              entries: {
-                ...cfg.agents?.entries,
-                qa: {
-                  ...cfg.agents?.entries?.qa,
-                  identity: { name: "Approval proof" },
-                  tools: {
-                    ...cfg.agents?.entries?.qa?.tools,
-                    alsoAllow: ["openclaw"],
-                  },
+const fullAccessOwner = createQaLiveLaneGateway();
+let fullAccessRuntime: Awaited<ReturnType<typeof fullAccessOwner.start>>;
+let fullAccessProofDir: string;
+let fullAccessGatewayUsed = false;
+const fullAccessSuite = createControlUiE2eSuite({
+  name: "Control UI OpenClaw delegation with a real Gateway",
+  startServerBeforeBrowser: true,
+  setupTimeoutMs: 180_000,
+  resources: {
+    retainedState: () => fullAccessRuntime?.gateway.tempRoot,
+    run: async (signal) => {
+      // Suite logs span both cases; per-case artifact directories rotate before each test.
+      fullAccessProofDir = fullAccessSuite.artifactDir;
+      signal.throwIfAborted();
+      const repoRoot = process.cwd();
+      fullAccessRuntime = await fullAccessOwner.start({
+        repoRoot,
+        // The isolated HOME must not make the development launcher rebuild the checkout.
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
+          cwd: repoRoot,
+          usePackagedPlugins: true,
+        },
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        transport: { requiredPluginIds: [], createGatewayConfig: () => ({}) },
+        transportBaseUrl: "http://127.0.0.1",
+        controlUiAllowedOrigins: [new URL(fullAccessSuite.server.baseUrl).origin],
+        controlUiEnabled: false,
+        mutateConfig: (cfg) => ({
+          ...cfg,
+          logging: { ...cfg.logging, level: "debug" },
+          tools: { ...cfg.tools, exec: { ...cfg.tools?.exec, mode: "full" } },
+          agents: {
+            ...cfg.agents,
+            entries: {
+              ...cfg.agents?.entries,
+              qa: {
+                ...cfg.agents?.entries?.qa,
+                identity: { name: "Approval proof" },
+                tools: {
+                  ...cfg.agents?.entries?.qa?.tools,
+                  alsoAllow: ["openclaw"],
                 },
               },
             },
-          }),
-        });
-        const gateway = runtime.gateway;
-        const sessionKey = `agent:qa:dashboard:delegation-${mode}`;
-        const created = await gateway.call("sessions.create", {
-          key: sessionKey,
-          label: mode === "full" ? "Full Access delegation" : "Default Full Access delegation",
-          ...(mode === "full" ? { permissionMode: "full" } : {}),
-        });
-        expect(created).toMatchObject({ key: sessionKey });
-        const entry = isRecord(created) && isRecord(created.entry) ? created.entry : undefined;
-        expect(entry?.permissionMode).toBe(mode === "full" ? "full" : undefined);
-        expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe("debug");
-
-        await suite.withPage(
-          {
-            locale: "en-US",
-            ...(captureUiProof
-              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
-              : {}),
-            serviceWorkers: "block",
-            viewport: { width: 1280, height: 900 },
           },
-          async ({ page }) => {
-            const approvalEvents: string[] = [];
-            let finalEvents = 0;
-            // Observe the real UI connection, not a mocked approval registry or emitted event.
-            page.on("websocket", (socket) => {
-              if (new URL(socket.url()).origin !== new URL(gateway.wsUrl).origin) {
-                return;
-              }
-              socket.on("framereceived", ({ payload }) => {
-                const frame: unknown = JSON.parse(String(payload));
-                if (!isRecord(frame) || frame.type !== "event") {
+        }),
+      });
+      signal.throwIfAborted();
+    },
+    close: async () => {
+      const stopped = await fullAccessOwner.stop({
+        preserveToDir: path.join(fullAccessProofDir, "gateway"),
+      });
+      if (stopped.errors.length > 0) {
+        throw new AggregateError(stopped.errors, "Full Access Gateway cleanup failed");
+      }
+    },
+  },
+});
+
+fullAccessSuite.define(() => {
+  it.for(["default", "full"] as const)(
+    "%s Full Access saves a delegated config change without a system-agent approval",
+    { timeout: 180_000 },
+    async (mode, context) => {
+      let completed = false;
+      await fullAccessSuite.runScenario(context, {
+        run: async (signal) => {
+          signal.throwIfAborted();
+          const proofDir = fullAccessSuite.artifactDir;
+          const gateway = fullAccessRuntime.gateway;
+          if (fullAccessGatewayUsed) {
+            // Retain provisioned credentials, but retire the previous run authority before reset.
+            await gateway.restartAfterStateMutation(async () => {
+              await gateway.runCli([
+                "config",
+                "set",
+                "logging.level",
+                '"debug"',
+                "--strict-json",
+                "--expect-current-json",
+                '"info"',
+              ]);
+            });
+          }
+          fullAccessGatewayUsed = true;
+          signal.throwIfAborted();
+          const initialConfig = await gateway.call("config.get", {});
+          expect(isRecord(initialConfig) && loggingLevel(initialConfig.config)).toBe("debug");
+          const sessionKey = `agent:qa:dashboard:delegation-${mode}`;
+          const created = await gateway.call("sessions.create", {
+            key: sessionKey,
+            label: mode === "full" ? "Full Access delegation" : "Default Full Access delegation",
+            ...(mode === "full" ? { permissionMode: "full" } : {}),
+          });
+          expect(created).toMatchObject({ key: sessionKey });
+          const entry = isRecord(created) && isRecord(created.entry) ? created.entry : undefined;
+          expect(entry?.permissionMode).toBe(mode === "full" ? "full" : undefined);
+          expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe(
+            "debug",
+          );
+
+          await fullAccessSuite.withPage(
+            {
+              locale: "en-US",
+              ...(captureUiProof
+                ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
+                : {}),
+              serviceWorkers: "block",
+              viewport: { width: 1280, height: 900 },
+            },
+            async ({ page }) => {
+              const approvalEvents: string[] = [];
+              let finalEvents = 0;
+              // Observe the real UI connection, not a mocked approval registry or emitted event.
+              page.on("websocket", (socket) => {
+                if (new URL(socket.url()).origin !== new URL(gateway.wsUrl).origin) {
                   return;
                 }
-                if (
-                  typeof frame.event === "string" &&
-                  frame.event.startsWith("openclaw.approval.")
-                ) {
-                  approvalEvents.push(frame.event);
-                }
-                if (
-                  frame.event === "chat" &&
-                  isRecord(frame.payload) &&
-                  frame.payload.sessionKey === sessionKey &&
-                  frame.payload.state === "final"
-                ) {
-                  finalEvents += 1;
-                }
-              });
-            });
-            await page.addInitScript(
-              ({ gatewayUrl, token }) => {
-                (
-                  window as Window & {
-                    __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
+                socket.on("framereceived", ({ payload }) => {
+                  const frame: unknown = JSON.parse(String(payload));
+                  if (!isRecord(frame) || frame.type !== "event") {
+                    return;
                   }
-                )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
-              },
-              { gatewayUrl: gateway.wsUrl, token: gateway.token },
-            );
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-            const composer = page.locator(".agent-chat__composer-combobox textarea");
-            await composer.fill(prompt);
-            if (captureUiProof) {
-              await page.screenshot({ path: path.join(proofDir, "01-request.png") });
-            }
-            await page.getByRole("button", { name: "Send message" }).click();
-
-            await expect.poll(() => finalEvents, { timeout: 60_000 }).toBeGreaterThan(0);
-            const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
-            const result = readDelegationResult(history);
-            expect(result).toBeDefined();
-            expect(result?.needsApproval).not.toBe(true);
-            expect(result?.proposalId).toBeUndefined();
-            expect(result?.reply).toContain("Updated logging.level");
-            expect(approvalEvents).toEqual([]);
-
-            const savedConfig: unknown = JSON.parse(await readFile(gateway.configPath, "utf8"));
-            expect(loggingLevel(savedConfig)).toBe("info");
-            const configSnapshot = await gateway.call("config.get", {});
-            expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
-            await page.locator(".chat-work-group > .chat-activity-group__summary").first().click();
-            const toolSummaries = page.locator(".chat-tool-msg-summary");
-            await toolSummaries.first().waitFor();
-            for (const summary of await toolSummaries.all()) {
-              await summary.click();
-            }
-            const appliedResult = page.getByText(/Updated logging\.level/u).first();
-            await appliedResult.waitFor();
-            await appliedResult.scrollIntoViewIfNeeded();
-            expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(0);
-            if (captureUiProof) {
-              await page.screenshot({ path: path.join(proofDir, "02-applied.png") });
-            }
-            // Keep public proof independent of runtime tokens, paths, model metadata, and run ids.
-            await writeFile(
-              path.join(proofDir, "verdict.json"),
-              `${JSON.stringify(
-                {
-                  mode,
-                  initialLoggingLevel: "debug",
-                  savedLoggingLevel: loggingLevel(savedConfig),
-                  finalDelegateResultObserved: true,
-                  finalChatObserved: finalEvents > 0,
-                  needsApproval: result?.needsApproval === true,
-                  systemAgentApprovalEvents: approvalEvents,
+                  if (
+                    typeof frame.event === "string" &&
+                    frame.event.startsWith("openclaw.approval.")
+                  ) {
+                    approvalEvents.push(frame.event);
+                  }
+                  if (
+                    frame.event === "chat" &&
+                    isRecord(frame.payload) &&
+                    frame.payload.sessionKey === sessionKey &&
+                    frame.payload.state === "final"
+                  ) {
+                    finalEvents += 1;
+                  }
+                });
+              });
+              await page.addInitScript(
+                ({ gatewayUrl, token }) => {
+                  (
+                    window as Window & {
+                      __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
+                    }
+                  )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
                 },
-                null,
-                2,
-              )}\n`,
-            );
-          },
-        );
-      } catch (error) {
-        errors.push(error);
-      }
-      const stopped = await owner.stop({ preserveToDir: path.join(proofDir, "gateway") });
-      errors.push(...stopped.errors);
-      if (errors.length > 0) {
-        throw new AggregateError(errors, `Full Access delegation proof failed (${mode})`);
-      }
+                { gatewayUrl: gateway.wsUrl, token: gateway.token },
+              );
+              await page.goto(controlUiSessionUrl(fullAccessSuite.server.baseUrl, sessionKey));
+              const composer = page.locator(".agent-chat__composer-combobox textarea");
+              await composer.fill(prompt);
+              if (captureUiProof) {
+                await page.screenshot({ path: path.join(proofDir, "01-request.png") });
+              }
+              await page.getByRole("button", { name: "Send message" }).click();
+
+              await expect.poll(() => finalEvents, { timeout: 60_000 }).toBeGreaterThan(0);
+              const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
+              const result = readDelegationResult(history);
+              expect(result).toBeDefined();
+              expect(result?.needsApproval).not.toBe(true);
+              expect(result?.proposalId).toBeUndefined();
+              expect(result?.reply).toContain("Updated logging.level");
+              expect(approvalEvents).toEqual([]);
+
+              const savedConfig: unknown = JSON.parse(await readFile(gateway.configPath, "utf8"));
+              expect(loggingLevel(savedConfig)).toBe("info");
+              const configSnapshot = await gateway.call("config.get", {});
+              expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
+              await page
+                .locator(".chat-work-group > .chat-activity-group__summary")
+                .first()
+                .click();
+              const toolSummaries = page.locator(".chat-tool-msg-summary");
+              await toolSummaries.first().waitFor();
+              for (const summary of await toolSummaries.all()) {
+                await summary.click();
+              }
+              const appliedResult = page.getByText(/Updated logging\.level/u).first();
+              await appliedResult.waitFor();
+              await appliedResult.scrollIntoViewIfNeeded();
+              expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(
+                0,
+              );
+              if (captureUiProof) {
+                await page.screenshot({ path: path.join(proofDir, "02-applied.png") });
+              }
+              // Keep public proof independent of runtime tokens, paths, model metadata, and run ids.
+              await writeFile(
+                path.join(proofDir, "verdict.json"),
+                `${JSON.stringify(
+                  {
+                    mode,
+                    initialLoggingLevel: "debug",
+                    savedLoggingLevel: loggingLevel(savedConfig),
+                    finalDelegateResultObserved: true,
+                    finalChatObserved: finalEvents > 0,
+                    needsApproval: result?.needsApproval === true,
+                    systemAgentApprovalEvents: approvalEvents,
+                  },
+                  null,
+                  2,
+                )}\n`,
+              );
+            },
+          );
+          completed = true;
+        },
+        close: async () => {
+          if (completed && !context.signal.aborted) {
+            return;
+          }
+          // Failed or cancelled cases close admission before another case can reuse state.
+          const stopped = await fullAccessOwner.stop({
+            preserveToDir: path.join(fullAccessProofDir, "gateway"),
+          });
+          if (stopped.errors.length > 0) {
+            throw new AggregateError(stopped.errors, `Full Access cleanup failed (${mode})`);
+          }
+        },
+      });
     },
   );
 });

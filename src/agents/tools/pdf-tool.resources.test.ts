@@ -223,8 +223,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                 skipCredentials: true,
                 runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
               },
-              undefined,
-              "static",
+              { catalogMode: "static" },
             );
             try {
               await test();

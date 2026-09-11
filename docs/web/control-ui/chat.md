@@ -17,7 +17,7 @@ While you watch a running session, the Gateway shows the model's latest safe pre
 
 Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset or deletion, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
 
-Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
@@ -56,6 +56,13 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+When you open an existing session, you can start typing as soon as its identity
+is resolved, while the transcript still shows its loading skeleton. The same
+composer keeps your draft and focus when the conversation appears. Send shows
+**Loading chat** until the initial history is ready; text typed during that wait
+stays in the composer and is not queued for automatic sending. Existing `/stop`
+and `/approve` controls remain available while history loads.
+
 On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. At rest, all marks are identical 8 × 2px strokes at 12px spacing. They stay faint; marks for messages currently visible in the transcript light up together as you scroll. Hovering a mark grows it to 32px and lights only that mark in text color, with progressively shorter strokes across three neighbors on either side. The other marks keep their resting colors. Outside that hover range, widths stay fixed. An empty message preview shows “Preview unavailable.” Every message keeps its own mark. Long rails scroll internally within 45% of the viewport height, with fades only at ends that hide more messages. Scrolling the transcript keeps the current mark visible; you can also scroll the rail to explore other messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. A jump briefly tints the target message with a soft background, fading over 1.2 seconds without a border or ring. Reduced motion disables mark transitions and shows the target tint statically for one second.
 
 Session dashboards and the Background tasks rail follow the selected conversation's agent, including when multiple agents each use a `global` session. Split panes keep their owners separate; panes showing the same agent and conversation share dashboard updates.
@@ -65,7 +72,7 @@ They are generated separately from the agent's work, so a title is not a complet
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 
-Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details to read the full formatted transcript.
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
 
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
@@ -311,6 +318,13 @@ change to stored history. Live turns, search results, and turns without an answe
 stay expanded. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 
+On wide desktop panes, the conversation position rail provides keyboard shortcuts
+to messages. Tab enters at the current message, or the first marker if no message
+is current. ArrowUp and ArrowDown move focus; Home and End go to the first and last
+markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves the
+rail in one step, and Escape closes the preview and returns focus to the transcript.
+Focusing a marker also shows its preview without jumping to the message.
+
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.
@@ -323,6 +337,11 @@ Subagents use the same task transcript view, including subagents run by the
 Codex harness. Select a task to read its messages, thinking, and tool calls;
 select **Show earlier** to load older history. Task activity refreshes the view
 while the subagent runs. The generic fallback label is **Subagent**.
+
+For tasks with a child session, capped assistant replies load their complete text
+automatically. The preview stays visible while loading. If recovery fails three
+times, the panel keeps the preview and offers **Retry**. Task transcripts without
+a session address keep the text supplied by their runtime.
 
 The viewer reads history from the runtime that owns it. New native subagent
 tasks retain their original history source when later turns replace the parent's

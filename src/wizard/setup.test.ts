@@ -12,6 +12,7 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
@@ -224,11 +225,11 @@ function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
 }
 
-function modelConfigWithApiKey(apiKey: string): OpenClawConfig {
+function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true } },
+      entries: { main: { default: true, agentDir } },
     },
     auth: {
       profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
@@ -263,9 +264,18 @@ function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, ke
     "selected credential profile",
   );
   expect(profileId).toMatch(/^openai:setup-/);
-  expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual(
-    openAiAuthProfile(key).credential,
+  const { setup, ...credential } = expectDefined(
+    readAuthProfileStoreForTest(agentDir).profiles[profileId],
+    "saved credential profile",
   );
+  expect(credential).toEqual(openAiAuthProfile(key).credential);
+  if (setup) {
+    expect(setup).toMatchObject({
+      modelRef: "openai/gpt-5.5",
+      replacement: expect.any(Boolean),
+      configJson: expect.any(String),
+    });
+  }
   return profileId;
 }
 
@@ -285,12 +295,7 @@ function prepareMockAuthProfilesIn(agentDir: string): void {
       ...result,
       authProfiles: [profile],
       persistAuthProfiles: async (profiles) => {
-        for (const candidate of profiles ?? [profile]) {
-          const updated = await upsertAuthProfileWithLock({ ...candidate, agentDir });
-          if (!updated) {
-            throw new Error("test auth profile write failed");
-          }
-        }
+        await persistAuthProfileBatch({ profiles: profiles ?? [profile], agentDir });
       },
     };
   });
@@ -359,9 +364,10 @@ vi.mock("../commands/onboard-remote.js", () => ({
   validateGatewayWebSocketUrl,
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore,
-}));
+vi.mock("../agents/auth-profiles.js", async () => {
+  const persistence = await import("../agents/auth-profiles/upsert-with-lock.js");
+  return { ensureAuthProfileStore, persistAuthProfileBatch: persistence.persistAuthProfileBatch };
+});
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
@@ -3106,7 +3112,7 @@ describe("runSetupWizard", () => {
     const agentDir = path.join(stateDir, "agent");
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice.mockResolvedValueOnce({
-      config: modelConfigWithApiKey("test-cancelled-key"),
+      config: modelConfigWithApiKey("test-cancelled-key", agentDir),
     });
     verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
       expectSavedSetupCredential(config, agentDir, "test-cancelled-key");
@@ -3135,9 +3141,14 @@ describe("runSetupWizard", () => {
       ).rejects.toThrow("cancelled");
 
       expect(replaceConfigFile).not.toHaveBeenCalled();
-      expect(Object.values(readAuthProfileStoreForTest(agentDir).profiles)).toContainEqual(
-        openAiAuthProfile("test-cancelled-key").credential,
-      );
+      expect(Object.values(readAuthProfileStoreForTest(agentDir).profiles)).toContainEqual({
+        ...openAiAuthProfile("test-cancelled-key").credential,
+        setup: expect.objectContaining({
+          replacement: false,
+          modelRef: "openai/gpt-5.5",
+          configJson: expect.any(String),
+        }),
+      });
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -3145,18 +3156,18 @@ describe("runSetupWizard", () => {
 
   it("saves each retry credential before verification while failed candidates leave config unchanged", async () => {
     const stateDir = await makeCaseDir("failed-auth-profile-retry-");
-    const agentDir = path.join(stateDir, "agent");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
     await upsertAuthProfileWithLock({ ...openAiAuthProfile("test-original-key"), agentDir });
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-invalid-key"),
+        config: modelConfigWithApiKey("test-retry-invalid-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-still-invalid-key"),
+        config: modelConfigWithApiKey("test-retry-still-invalid-key", agentDir),
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
@@ -3230,10 +3241,10 @@ describe("runSetupWizard", () => {
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-retry-valid-key"),
+        config: modelConfigWithApiKey("test-retry-valid-key", agentDir),
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
@@ -3279,10 +3290,10 @@ describe("runSetupWizard", () => {
     prepareMockAuthProfilesIn(agentDir);
     applyAuthChoice
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-original-key"),
+        config: modelConfigWithApiKey("test-original-key", agentDir),
       })
       .mockResolvedValueOnce({
-        config: modelConfigWithApiKey("test-kept-retry-key"),
+        config: modelConfigWithApiKey("test-kept-retry-key", agentDir),
       });
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("demo-provider")

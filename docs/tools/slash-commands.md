@@ -163,6 +163,13 @@ the channel's allowlists and pairing state. Access-group entries referenced by
 channel allowlists are resolved automatically. There is no command-level
 access-group toggle.
 
+For Gateway users with verified login identity, both command allowlists can
+match the user's profile ID. A shared owner profile used only for attribution
+does not grant this access. Internal synthetic callers cannot borrow a human's
+profile. Non-UI Gateway clients also retain application-ID matches such as
+`cli`; operator UI clients do not receive application-ID matches. Existing
+operator scopes and command enablement still apply.
+
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only
 commands, even when those senders are not in `commands.ownerAllowFrom`.
@@ -240,7 +247,7 @@ plugins, and installed skills.
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
-    | `/login [codex\|openai]` | Pair a Codex or OpenAI login from a private chat or Control UI session. Owner/admin only |
+    | `/login [provider]` | Show sign-in providers, then choose a connection method when several are available. Owner/admin only |
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
@@ -583,7 +590,9 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
-    - **`/login codex`** sends device pairing codes only through private chat or Control UI response paths. Telegram group/topic invocations ask the owner to DM the bot instead.
+    - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
+    - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
+    - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way. A catalog refresh failure is reported separately from saving the credential.
     - **`/stop`** targets the active chat session to abort the current run.
 
   </Accordion>

@@ -47,6 +47,7 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, unsafe symbolic links, and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - Full archives include the active config and its required `$include` files, including dependencies outside the state directory. They preserve authored bytes, comments, and environment placeholders; resolved secrets are not written into the config copy. These additional files may contain sensitive data, so protect the archive accordingly.
+- AppleDouble metadata named `._*.sqlite`, such as `._cron.sqlite`, is excluded from state and agent database roots only when its file signature confirms the format. Real SQLite files and hardlink aliases with these names still require verified snapshots.
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
@@ -341,6 +342,17 @@ fails closed. A plugin-owned database that requires unavailable owner-defined
 SQLite capabilities also fails closed rather than falling back to a direct file
 copy. Other workspace SQLite files outside configured agent roots remain raw
 workspace files and do not receive the SQLite snapshot or compaction guarantee.
+
+Hardlinks to a generic SQLite database share one captured image, stored as a
+separate regular archive entry for each name. Every hardlink must be an included
+`.sqlite` file under the state directory or a configured agent root. If exactly
+one name has a nonempty write-ahead log (WAL), that
+name supplies the committed data. Closed databases without a nonempty WAL remain
+supported. Multiple nonempty WALs, a nonempty rollback journal, or hardlinks
+outside the backup inventory cause an explicit refusal with no archive. Close
+the database writers cleanly and include every hardlink in those roots before retrying.
+Canonical OpenClaw database aliases retain their existing owner validation and
+sanitization.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 

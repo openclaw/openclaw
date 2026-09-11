@@ -95,6 +95,10 @@ internal object AndroidScreenshotFixture {
           chatMetadata()
         }
 
+        "models.list" -> {
+          modelCatalog()
+        }
+
         "tasks.list" -> {
           backgroundTasks(paramsJson)
         }
@@ -766,6 +770,10 @@ internal object AndroidScreenshotFixture {
           }
         },
       )
+    }.toString()
+
+  private fun modelCatalog(): String =
+    buildJsonObject {
       put(
         "models",
         buildJsonArray {
@@ -776,6 +784,21 @@ internal object AndroidScreenshotFixture {
               put("provider", JsonPrimitive("openai"))
               put("available", JsonPrimitive(true))
               put("reasoning", JsonPrimitive(true))
+              put("supportsFastMode", JsonPrimitive(true))
+              put("thinkingDefault", JsonPrimitive("medium"))
+              put(
+                "thinkingLevels",
+                buildJsonArray {
+                  for (level in listOf("off", "low", "medium", "high")) {
+                    add(
+                      buildJsonObject {
+                        put("id", JsonPrimitive(level))
+                        put("label", JsonPrimitive(level.replaceFirstChar { it.uppercase() }))
+                      },
+                    )
+                  }
+                },
+              )
               put("contextWindow", JsonPrimitive(200_000))
               put(
                 "input",

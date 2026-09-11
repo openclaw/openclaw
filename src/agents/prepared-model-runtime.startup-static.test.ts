@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     pluginIds: [],
     index: { plugins: [{ pluginId: "openai", enabled: true }] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    registryDiagnostics: [],
     declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
@@ -142,6 +143,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
       const catalog = await mocks.runPreparedModelCatalogWorker();
       // Real worker replies pair every catalog with its observed auth generation.
       setPreparedModelFullCatalogAuth(catalog, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });

@@ -51,6 +51,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 
@@ -743,6 +744,7 @@ describe("update-cli", () => {
       profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
     );
   let fixtureCount = 0;
+  let tempHome: TempHomeEnv | undefined;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
 
@@ -1930,6 +1932,9 @@ describe("update-cli", () => {
   };
 
   beforeEach(async () => {
+    // Clear the helper's state selector below so HOME and profile overrides keep their semantics.
+    const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
+    tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
     const executorTmp = tempDirs.make("update-cli-owner-");
     absentServicePort = await getFreePort();
     const gatewayEntrypoint = await import("../daemon/gateway-entrypoint.js");
@@ -2184,6 +2189,8 @@ describe("update-cli", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    await tempHome?.restore();
+    tempHome = undefined;
     if (tempDirsToCleanup.size === 0) {
       return;
     }
@@ -6059,6 +6066,30 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+  });
+
+  it("previews a same-version package override as an explicit artifact update", async () => {
+    await mockPackageInstallAtCaseDir("openclaw-same-version-override-preview");
+    readPackageVersion.mockResolvedValue("1.0.0");
+    primeNpmChannelTag("latest", "1.0.0");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ target: "1.0.0", version: "1.0.0" }),
+    );
+    const packageSpec = "file:/owned/openclaw-current.tgz";
+
+    await withEnvAsync({ OPENCLAW_UPDATE_PACKAGE_SPEC: packageSpec }, async () => {
+      await updateCommand({ dryRun: true, json: true, restart: false });
+    });
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      dryRun: true,
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      tag: packageSpec,
+      actions: expect.arrayContaining([
+        `Run global package manager update with spec ${packageSpec}`,
+      ]),
+    });
   });
 
   it("previews the resolved package owner without probing for another manager", async () => {

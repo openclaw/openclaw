@@ -485,12 +485,20 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       SELECTED_SHA: "a".repeat(40),
       SHARED_IMAGE_POLICY: "no-push-artifact",
     };
+    const steps = requiredJob(definition, "plan_release_workflow_matrices").steps;
+    const setup = expectDefined(
+      steps.find((entry) => entry.name === "Setup admission Node.js"),
+      "matrix planner Node setup",
+    );
+    expect(setup.if).toBeUndefined();
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
+    expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
     const planner = expectDefined(
-      requiredJob(definition, "plan_release_workflow_matrices").steps.find(
-        (entry) => entry.name === "Plan shared live image plugins",
-      ),
+      steps.find((entry) => entry.name === "Plan shared live image plugins"),
       "live image planner step",
     );
+    expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(planner));
     const planned = spawnSync("bash", ["-c", expectDefined(planner.run, "planner command")], {
       cwd: outputDir,
       encoding: "utf8",

@@ -2074,6 +2074,56 @@ describe("model-selection", () => {
   });
 
   describe("resolveModelRefFromString", () => {
+    it.each<{
+      raw: string;
+      alias?: string;
+      expected: { provider: string; model: string } | null;
+    }>([
+      { raw: "/", expected: null },
+      { raw: "provider/", expected: null },
+      { raw: "//model", expected: null },
+      { raw: "literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider/literal", expected: { provider: "provider", model: "literal" } },
+      { raw: "provider//literal", expected: { provider: "provider", model: "/literal" } },
+      {
+        raw: "provider/provider/literal",
+        expected: { provider: "provider", model: "provider/literal" },
+      },
+      { raw: "team/quick", expected: { provider: "provider", model: "literal" } },
+      { raw: "/", alias: "/", expected: { provider: "provider", model: "literal" } },
+      { raw: "openrouter:auto", expected: { provider: "openrouter", model: "openrouter/auto" } },
+    ])(
+      "keeps configured reference syntax and alias priority for $raw",
+      ({ raw, alias, expected }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { models: { "provider/literal": { alias: alias ?? "team/quick" } } },
+          },
+          models: {
+            providers: {
+              provider: {
+                api: "openai-completions",
+                baseUrl: "https://provider.example/v1",
+                models: [],
+              },
+            },
+          },
+        };
+        const resolved = resolveModelRefFromString({
+          cfg,
+          raw,
+          defaultProvider: "provider",
+          aliasIndex: buildModelAliasIndex({
+            cfg,
+            defaultProvider: "provider",
+            manifestPlugins: [],
+          }),
+          manifestPlugins: [],
+        });
+        expect(resolved?.ref ?? null).toEqual(expected);
+      },
+    );
+
     it("should resolve from string with alias", () => {
       const index = {
         byAlias: new Map([

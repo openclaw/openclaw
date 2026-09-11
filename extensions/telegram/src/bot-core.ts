@@ -32,7 +32,7 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
+import { createTelegramHandlers } from "./bot-handlers.runtime.js";
 import {
   createTelegramMessageProcessor,
   resolveTelegramMessageTurnSettings,
@@ -408,26 +408,7 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
-    bot,
-    cfg,
-    runtime,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    resolveTelegramGroupConfig,
-    shouldSkipUpdate,
-    opts: runtimeOpts,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
-
-  registerTelegramHandlers({
+  const handlers = createTelegramHandlers({
     cfg,
     accountId: account.accountId,
     ownerAgentId,
@@ -464,8 +445,29 @@ export function createTelegramBotCore(
       ),
     logger,
     telegramDeps,
-    nativeCommandCallbackDispatcher,
   });
+
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
+    cancelPendingInbound: handlers.cancelPending,
+    bot,
+    cfg,
+    runtime,
+    accountId: account.accountId,
+    telegramCfg,
+    mediaMaxBytes,
+    nativeEnabled,
+    nativeSkillsEnabled,
+    resolveGroupPolicy,
+    resolveTelegramGroupConfig,
+    shouldSkipUpdate,
+    opts: runtimeOpts,
+    telegramDeps: {
+      ...telegramDeps,
+      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+    },
+  });
+
+  handlers.register(nativeCommandCallbackDispatcher);
 
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {

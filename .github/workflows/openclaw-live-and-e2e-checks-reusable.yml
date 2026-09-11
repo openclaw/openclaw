@@ -651,6 +651,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .release-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
       - name: Validate selected ref
         id: validate
         env:
@@ -1107,6 +1115,14 @@ jobs:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
+
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Checkout selected live plugin metadata
         if: inputs.include_live_suites

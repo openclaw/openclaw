@@ -263,6 +263,7 @@ describe("plugin embedded-agent runtime admission", () => {
     "preparedRunAdmission",
     "onDeferredLifecycleOwner",
     "onDeferredLifecycleAbort",
+    "onRetryWait",
     "compactionCountOwner",
     "onCompactionAccounting",
     "onContextAccountingEvent",

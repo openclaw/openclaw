@@ -16,6 +16,7 @@ import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervi
 import { tryReadJson } from "../../infra/json-files.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
 
 export type ManagedServiceRootRedirect = {
@@ -358,4 +359,44 @@ export async function resolveUpdatedGatewayRestartPort(params: {
     }).readBestEffortConfig();
   }
   return resolveGatewayPort(config, env);
+}
+
+/** Describe the selected plan without changing roots, runtime, or service authority. */
+export function formatManagedServicePackageUpdatePlan(params: {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  nodeRunner?: string;
+}): Array<{ level: "muted" | "warn"; message: string }> {
+  const { rootRedirect, nodeRunner } = params;
+  if (rootRedirect) {
+    return [
+      {
+        level: "muted",
+        message: `Targeting managed gateway service package root: ${rootRedirect.root}`,
+      },
+      {
+        level: "warn",
+        message: `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      },
+      {
+        level: "muted",
+        message: `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+      },
+      ...(nodeRunner
+        ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
+        : []),
+    ];
+  }
+  return nodeRunner
+    ? [
+        {
+          level: "warn",
+          message: `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
+        },
+        {
+          level: "muted",
+          message:
+            "Using the managed service Node for this update so the gateway can start after the upgrade.",
+        },
+      ]
+    : [];
 }

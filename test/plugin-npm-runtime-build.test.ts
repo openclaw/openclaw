@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildPluginNpmRuntime,
@@ -37,6 +38,46 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("builds a private worker without registering it as a plugin entry", async () => {
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
+    mkdirSync(path.join(packageDir, "src"));
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/worker-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          compat: { pluginApi: "1.0.0" },
+          build: { workerEntries: ["./src/store.worker.ts"] },
+        },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "index.ts"), 'export default { id: "worker-fixture" };\n');
+    writeFileSync(
+      path.join(packageDir, "src/store.worker.ts"),
+      'import { parentPort, isMainThread } from "node:worker_threads";\n' +
+        "const value: number = 42; parentPort!.postMessage({ value, isMainThread });\n",
+    );
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+    );
+    expect(plan.runtimeExtensions).toEqual(["./dist/index.js"]);
+    const worker = new Worker(path.join(packageDir, "dist/src/store.worker.js"));
+    try {
+      const result = await new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`Worker exited before replying: ${code}`)));
+      });
+      expect(result).toEqual({ value: 42, isMainThread: false });
+    } finally {
+      await worker.terminate();
+    }
+  });
+
   it.each(["index.tsx", "src/index.tsx"])(
     "builds an executable %s package entry",
     async (entry) => {

@@ -455,6 +455,39 @@ describe("gateway bonjour advertiser", () => {
     }
   });
 
+  it("suppresses transient ciao ENODEV MDNS socket warnings while advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleWarn = console.warn;
+    const baseConsoleWarn = vi.fn();
+    console.warn = baseConsoleWarn as typeof console.warn;
+
+    try {
+      const started = await startAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      // A Docker bridge disappears between ciao's interface polls; the send to
+      // the removed interface fails with ENODEV, which ciao does not silence.
+      console.warn(
+        "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
+      );
+      console.warn("ordinary warning line");
+
+      expect(baseConsoleWarn).toHaveBeenCalledTimes(1);
+      expect(baseConsoleWarn).toHaveBeenCalledWith("ordinary warning line");
+
+      await started.stop();
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
   it("does not monkey-patch responder methods during shutdown", async () => {
     enableAdvertiserUnitMode();
 

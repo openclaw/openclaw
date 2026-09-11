@@ -26,8 +26,10 @@ import {
   normalizeGitHubToken as normalizeManagedGitHubToken,
   readNativeGitHubToken,
   runGitHubIdentityCommand as runIdentityCommand,
+  startGitHubIdentityOperation,
   type GitHubIdentityPreparation,
   type GitHubReadIdentityPreparation,
+  type GitHubReadIdentityStarter,
   type PreparedGitHubReadIdentity,
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
@@ -493,6 +495,7 @@ export function matchesPreparedGitHubPublicationIdentity(params: {
 async function prepareSharedGitHubIdentity(
   params: GitHubIdentityPreparation & {
     assertCurrent?: () => void;
+    startCurrent?: GitHubReadIdentityStarter;
     allowAnonymous?: boolean;
   },
 ) {
@@ -507,29 +510,30 @@ async function prepareSharedGitHubIdentity(
     managed
       ? readManagedGitHubToken(identity.profileDir)
       : readNativeGitHubToken(currentEnvironment(), params.allowAnonymous === true);
-  params.assertCurrent?.();
-  const token = await readToken();
-  params.assertCurrent?.();
+  const token = await startGitHubIdentityOperation(readToken, params);
   if (!token) {
-    if (!managed && params.allowAnonymous) {
-      return { prepared: undefined, token: undefined, readToken };
+    return startGitHubIdentityOperation(() => {
+      if (!managed && params.allowAnonymous) {
+        return { prepared: undefined, token: undefined, readToken };
+      }
+      throw new GitHubIdentityError("unavailable");
+    }, params);
+  }
+  const probe = await startGitHubIdentityOperation(() => verifyGitHubCredential(token), params);
+  return startGitHubIdentityOperation(() => {
+    if (probe.status !== "available") {
+      throw new GitHubIdentityError(probe.status);
     }
-    throw new GitHubIdentityError("unavailable");
-  }
-  const probe = await verifyGitHubCredential(token);
-  params.assertCurrent?.();
-  if (probe.status !== "available") {
-    throw new GitHubIdentityError(probe.status);
-  }
-  const prepared: PreparedGitHubPublicationIdentity = Object.freeze({
-    source: identity.source,
-    ...(managed ? { profileId: identity.config.profileId } : {}),
-    account: probe.account,
-    // Broker children and worker launches receive this fixed snapshot. Profile
-    // retirement cannot redirect an already-admitted operation.
-    env: Object.freeze({ ...env, GH_TOKEN: token, GITHUB_TOKEN: undefined }),
-  });
-  return { prepared, token, readToken };
+    const prepared: PreparedGitHubPublicationIdentity = Object.freeze({
+      source: identity.source,
+      ...(managed ? { profileId: identity.config.profileId } : {}),
+      account: probe.account,
+      // Broker children and worker launches receive this fixed snapshot. Profile
+      // retirement cannot redirect an already-admitted operation.
+      env: Object.freeze({ ...env, GH_TOKEN: token, GITHUB_TOKEN: undefined }),
+    });
+    return { prepared, token, readToken };
+  }, params);
 }
 
 /** Publication owns a fixed credential snapshot for its already-admitted operation. */
@@ -567,16 +571,17 @@ export async function prepareGitHubReadIdentity(
       throw new GitHubIdentityError("changed");
     }
   };
-  assertSelected();
-  await params.refresh();
+  const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
+  await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();
   const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
     ...params,
-    assertCurrent: assertSelected,
+    ...caller,
   });
   assertSelected();
   return createGitHubReadIdentity({
     assertSelected,
+    startActive: params.startActive,
     readToken,
     ...(!prepared || token === undefined
       ? { token: undefined, selection: { source: "anonymous" as const } }

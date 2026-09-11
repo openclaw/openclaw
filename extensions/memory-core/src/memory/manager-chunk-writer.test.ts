@@ -126,11 +126,13 @@ describe("memory chunk publication", () => {
           [
             "memory_index_sources",
             ...CHUNK_WRITE_TABLES,
-            "memory_embedding_cache",
             "memory_index_chunks_fts",
             "memory_index_state",
           ].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
         const before = snapshot();
+        const cacheSnapshot = () =>
+          db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
+        const cacheBefore = cacheSnapshot();
         expect(before[1]?.some((row) => String(row.text).includes("Alpha memory line."))).toBe(
           true,
         );
@@ -158,9 +160,16 @@ describe("memory chunk publication", () => {
           prepare.mockRestore();
         }
         expect(snapshot()).toEqual(before);
+        // Completed provider work is durable even when index publication rolls back.
+        const retainedCache = cacheSnapshot();
+        expect(retainedCache).toEqual(expect.arrayContaining(cacheBefore));
+        expect(retainedCache).toHaveLength(cacheBefore.length + 1);
+        const completedRequests = fixture.provider.embedBatchCalls;
 
         db.exec("DROP TRIGGER fail_chunk_publication");
         await manager.sync({ reason: "retry" });
+        expect(fixture.provider.embedBatchCalls).toBe(completedRequests);
+        expect(cacheSnapshot()).toEqual(retainedCache);
         expect(
           db
             .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")

@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
-  fingerprintAuthProfileCredential,
-  fingerprintAuthProfileOwnerShape,
-} from "../agents/execution-auth-binding.js";
+  loadAuthProfileStoreWithoutExternalProfiles,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profiles/store.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -18,14 +21,13 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   prepareAuthChoiceLoadedPluginProvider,
-  runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
+import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
@@ -49,47 +51,8 @@ import {
   throwIfSetupInferenceCancelled,
   waitForProviderAuth,
 } from "./setup-inference-core.js";
+import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
 import { projectSetupInferenceConfig } from "./setup-model-selection.js";
-
-type SavedCandidate = {
-  candidate: StagedCandidate;
-  choice?: ProviderAuthChoiceMetadata;
-  credentialFingerprint: string;
-};
-// This projection keeps provider preparation across retries. Credentials and their
-// current identity remain owned by the auth store; no successful verdict is cached.
-const savedCandidates = new Map<string, Map<string, SavedCandidate>>();
-
-function credentialFingerprint(
-  profileId: string,
-  credential: AuthProfileCredential,
-): string | undefined {
-  return (
-    fingerprintAuthProfileCredential({ profileId, credential }) ??
-    fingerprintAuthProfileOwnerShape({ profileId, credential })
-  );
-}
-
-export function forgetSavedSetupCandidate(agentDir: string, profileId: string): void {
-  const candidates = savedCandidates.get(agentDir);
-  candidates?.delete(profileId);
-  if (candidates?.size === 0) {
-    savedCandidates.delete(agentDir);
-  }
-}
-
-export function currentSavedCandidate(
-  agentDir: string,
-  profileId: string,
-  credential: AuthProfileCredential,
-): SavedCandidate | undefined {
-  const saved = savedCandidates.get(agentDir)?.get(profileId);
-  if (saved && saved.credentialFingerprint !== credentialFingerprint(profileId, credential)) {
-    forgetSavedSetupCandidate(agentDir, profileId);
-    return undefined;
-  }
-  return saved;
-}
 
 export async function loadProviderAuthMethod(params: {
   cfg: OpenClawConfig;
@@ -150,26 +113,102 @@ export function selectSetupCredential(
   );
 }
 
+export function isSetupCredentialReplacement(params: {
+  provider: string;
+  baseConfig: OpenClawConfig;
+  agentDir: string;
+}): boolean {
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const provider = resolveProviderIdForAuth(params.provider, {
+    config: params.baseConfig,
+    storedCredential: true,
+  });
+  return (
+    Object.values(store.profiles).some(
+      (credential) =>
+        !credential.setup &&
+        resolveProviderIdForAuth(credential.provider, {
+          config: params.baseConfig,
+          storedCredential: true,
+        }) === provider,
+    ) ||
+    Boolean(params.baseConfig.models?.providers?.[provider]?.apiKey) ||
+    parseInferenceRef(
+      resolveAgentEffectiveModelPrimary(
+        params.baseConfig,
+        resolveAmbientOwnerAgentId(params.baseConfig),
+      ) ?? "",
+    ).provider === provider
+  );
+}
+
 export async function saveSetupCredential(params: {
   profile: ProviderAuthResult["profiles"][number];
   config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
   agentDir: string;
+  modelRef: string;
+  authChoice?: string;
+  pluginId?: string;
+  agentRuntimeId?: string;
   beforePersistentEffect?: () => void | Promise<void>;
   /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
   persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
 }): Promise<{ profile: ProviderAuthResult["profiles"][number]; config: OpenClawConfig }> {
+  const replacement = isSetupCredentialReplacement({
+    ...params,
+    provider: params.profile.credential.provider,
+  });
   const candidate = {
     ...params.profile,
     profileId: `${normalizeProviderId(params.profile.credential.provider)}:setup-${randomUUID()}`,
+    credential: {
+      ...params.profile.credential,
+    },
   };
   const prepared = applyProviderPluginAuthMethodResultConfig({
     config: params.config,
     result: { profiles: [candidate] },
   });
+  const retryConfig = projectSetupInferenceConfig({
+    base: {},
+    prepared,
+    modelRef: params.modelRef,
+    agentId: resolveAmbientOwnerAgentId(params.baseConfig),
+    profileId: candidate.profileId,
+    credential: candidate.credential,
+    pluginId: params.pluginId,
+  });
+  if (prepared.plugins?.installs) {
+    (retryConfig.plugins ??= {}).installs = prepared.plugins.installs;
+  }
+  const providerConfig =
+    retryConfig.models?.providers?.[parseInferenceRef(params.modelRef).provider];
+  const apiKeyHeader = Boolean(providerConfig?.headers?.["api-key"]);
+  if (apiKeyHeader && providerConfig?.headers) {
+    delete providerConfig.headers["api-key"];
+  }
+  candidate.credential.setup = {
+    replacement,
+    modelRef: params.modelRef,
+    configJson: JSON.stringify(retryConfig),
+    authChoice: params.authChoice,
+    pluginId: params.pluginId,
+    agentRuntimeId: params.agentRuntimeId,
+    ...(apiKeyHeader ? { apiKeyHeader: true as const } : {}),
+  };
   await params.beforePersistentEffect?.();
   if (params.persistAuthProfiles) {
     await params.persistAuthProfiles([candidate]);
-    return { profile: candidate, config: prepared };
+    const credential = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir).profiles[
+      candidate.profileId
+    ];
+    if (!credential) {
+      throw new Error(
+        "The saved setup credential could not be read. Check Model Setup before retrying.",
+      );
+    }
+    return { profile: { ...candidate, credential }, config: prepared };
   }
   const profiles = await persistProviderAuthProfilesAfterLogin({
     profiles: [candidate],
@@ -177,6 +216,34 @@ export async function saveSetupCredential(params: {
     agentDir: params.agentDir,
   });
   return { profile: profiles[0]!, config: prepared };
+}
+
+export async function activateSavedSetupCredential(params: {
+  agentDir: string;
+  profileId: string;
+  credential: AuthProfileCredential;
+  beforeWrite?: () => void;
+}): Promise<void> {
+  if (!params.credential.setup) {
+    return;
+  }
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir: resolvePersistedAuthProfileOwnerAgentDir(params),
+    updater: (store) => {
+      params.beforeWrite?.();
+      const current = store.profiles[params.profileId];
+      if (!current || !isDeepStrictEqual(current, params.credential)) {
+        throw new Error(
+          "The saved sign-in changed before activation. Test it again in Model Setup.",
+        );
+      }
+      delete current.setup;
+      return true;
+    },
+  });
+  if (!updated) {
+    throw new Error("The saved sign-in is still inactive. Retry activation in Model Setup.");
+  }
 }
 
 async function stagePreparedCandidate(
@@ -190,6 +257,7 @@ async function stagePreparedCandidate(
     pluginId?: string;
     modelRef?: string;
     pendingPluginInstalls?: Record<string, PluginInstallRecord>;
+    agentRuntimeId?: string;
   },
 ): Promise<StagedCandidate | StageFailure> {
   const resolvedModel = resolveSetupModel({
@@ -215,11 +283,16 @@ async function stagePreparedCandidate(
       error: `${params.provider?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
     };
   }
+  const pluginId = params.pluginId ?? params.choice?.pluginId ?? params.provider?.pluginId;
   let preparedConfig = params.config;
   if (profile && params.credentialState === "new") {
     const saved = await saveSetupCredential({
       profile,
       config: preparedConfig,
+      baseConfig: ctx.cfg,
+      modelRef,
+      pluginId,
+      authChoice: params.choice?.choiceId,
       agentDir: ctx.agentDir,
       beforePersistentEffect: () => ctx.beforePersistentEffect("credential"),
     });
@@ -227,7 +300,6 @@ async function stagePreparedCandidate(
     profile = saved.profile;
     preparedConfig = saved.config;
   }
-  const pluginId = params.pluginId ?? params.choice?.pluginId ?? params.provider?.pluginId;
   const projection = {
     base: ctx.cfg,
     prepared: preparedConfig,
@@ -243,34 +315,18 @@ async function stagePreparedCandidate(
     modelRef,
     config,
     agentRuntimeId:
+      params.agentRuntimeId ??
       resolveModelRuntimePolicy({
         config,
         provider: ref.provider,
         modelId: parseInferenceRef(modelRef).model,
         agentId: ctx.routeAgentId,
-      }).policy?.id ?? "openclaw",
+      }).policy?.id ??
+      "openclaw",
     authProfileId: profile?.profileId,
     pluginId,
     pendingPluginInstalls: params.pendingPluginInstalls,
   };
-  if (profile) {
-    const fingerprint = credentialFingerprint(profile.profileId, profile.credential);
-    if (fingerprint) {
-      let candidates = savedCandidates.get(ctx.agentDir);
-      if (!candidates) {
-        candidates = new Map();
-        savedCandidates.set(ctx.agentDir, candidates);
-      }
-      candidates.set(profile.profileId, {
-        candidate: {
-          ...candidate,
-          config: projectSetupInferenceConfig({ ...projection, base: {} }),
-        },
-        choice: params.choice,
-        credentialFingerprint: fingerprint,
-      });
-    }
-  }
   return candidate;
 }
 
@@ -281,13 +337,11 @@ export async function stageSavedAuthCandidate(
   const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
-    forgetSavedSetupCandidate(ctx.agentDir, profileId);
     return {
       error: "That saved sign-in is no longer available. Open Model Setup and choose again.",
     };
   }
-  const saved = currentSavedCandidate(ctx.agentDir, profileId, credential);
-  const savedChoice = saved?.choice;
+  const saved = credential.setup;
   const choices = (
     ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
   )({
@@ -296,13 +350,12 @@ export async function stageSavedAuthCandidate(
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
   });
-  const choice = savedChoice
+  const choice = saved?.authChoice
     ? choices.find(
-        (entry) =>
-          entry.choiceId === savedChoice.choiceId && entry.pluginId === savedChoice.pluginId,
+        (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
       )
     : choices.find((entry) => choiceMatchesCredential(entry, credential));
-  if (saved?.choice && !choice) {
+  if (saved?.authChoice && !choice) {
     return {
       error: "The saved sign-in's provider is no longer available. Review installed providers.",
     };
@@ -319,11 +372,28 @@ export async function stageSavedAuthCandidate(
         "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
     };
   }
-  const modelRef = saved?.candidate.modelRef ?? loaded?.method.starterModel;
+  const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
+  const { validateConfigObjectRaw } = await import("../config/validation-core.js");
+  const storedConfig = saved
+    ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
+    : undefined;
+  if (storedConfig && !storedConfig.ok) {
+    return {
+      error:
+        "The saved connection settings are no longer valid. Choose the provider settings again.",
+    };
+  }
   const config = applyProviderPluginAuthMethodResultConfig({
-    config: saved?.candidate.config ?? loaded?.config ?? ctx.cfg,
+    config: storedConfig?.ok ? storedConfig.config : (loaded?.config ?? ctx.cfg),
     result: { profiles: [{ profileId, credential }] },
   });
+  if (saved?.apiKeyHeader && credential.type === "api_key") {
+    const providerConfig = config.models?.providers?.[parseInferenceRef(saved.modelRef).provider];
+    const key = credential.keyRef ?? credential.key;
+    if (providerConfig && key) {
+      (providerConfig.headers ??= {})["api-key"] = key;
+    }
+  }
   ctx.credentialsSaved = true;
   return await stagePreparedCandidate(ctx, {
     result: { profiles: [{ profileId, credential }], defaultModel: modelRef },
@@ -331,8 +401,9 @@ export async function stageSavedAuthCandidate(
     credentialState: "saved",
     choice,
     provider: loaded?.provider,
-    pluginId: saved?.candidate.pluginId,
-    pendingPluginInstalls: saved?.candidate.pendingPluginInstalls,
+    pluginId: saved?.pluginId,
+    agentRuntimeId: saved?.agentRuntimeId,
+    pendingPluginInstalls: config.plugins?.installs,
   });
 }
 
@@ -423,34 +494,7 @@ export async function stageProviderAuthCandidate(
       params.signal,
     );
     throwIfSetupInferenceCancelled(params);
-    const provider = prepared.config.models?.providers?.[prepared.providerId];
-    const key = provider?.apiKey;
-    const profiles: ProviderAuthResult["profiles"] = key
-      ? [
-          {
-            profileId: buildAuthProfileId({ providerId: prepared.providerId }),
-            credential: buildApiKeyCredential(prepared.providerId, key, undefined, {
-              config: prepared.config,
-              secretInputMode: "plaintext",
-            }),
-          },
-        ]
-      : [];
-    const profile = profiles[0];
-    if (
-      provider?.headers?.["api-key"] &&
-      profile?.credential.type === "api_key" &&
-      profile.credential.key
-    ) {
-      profile.secretStorage = { kind: "store", namePrefix: "CUSTOM_API_KEY" };
-    }
-    if (provider) {
-      delete provider.apiKey;
-    }
-    const config = applyProviderPluginAuthMethodResultConfig({
-      config: prepared.config,
-      result: { profiles },
-    });
+    const { config, profiles } = prepareCustomSetupCredentials(prepared);
     return await stagePreparedCandidate(ctx, {
       result: { profiles, defaultModel: `${prepared.providerId}/${prepared.modelId}` },
       config,

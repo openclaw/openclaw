@@ -165,6 +165,8 @@ export const PluginCatalogEntrySchema = closedObject({
   order: Type.Optional(Type.Number()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),
+  /** Channel identities declared by this installed plugin. */
+  channelIds: Type.Optional(Type.Array(NonEmptyString)),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
   /** Ordered package or registry categories; the first category is primary. */
@@ -363,6 +365,10 @@ export const PluginDiscoveryCatalogFactsSchema = closedObject({
   downloads: Type.Optional(Type.Number({ minimum: 0 })),
   installs: Type.Optional(Type.Number({ minimum: 0 })),
   verificationTier: Type.Optional(NonEmptyString),
+  featured: Type.Optional(Type.Boolean()),
+  trending: Type.Optional(Type.Boolean()),
+  featuredRank: Type.Optional(Type.Integer({ minimum: 0 })),
+  trendingRank: Type.Optional(Type.Integer({ minimum: 0 })),
   publishedToClawHub: Type.Optional(Type.Boolean()),
 });
 
@@ -404,6 +410,7 @@ export const PluginsCatalogBrowseParamsSchema = closedObject({
 
 export const PluginsCatalogBrowseResultSchema = closedObject({
   items: Type.Array(PluginDiscoveryEntrySchema),
+  categories: Type.Optional(Type.Array(PluginDiscoveryCategorySchema)),
   nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
   remoteError: Type.Optional(Type.String()),
 });

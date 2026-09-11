@@ -12,7 +12,6 @@ import {
   scheduleCommittedChatScroll,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
@@ -550,7 +549,7 @@ describe("chat transcript controller", () => {
     const viewportChanged = vi.fn();
     const main = new ChatTranscriptController(host, { onViewportResize: viewportChanged });
     const detail = new ChatTranscriptController(host);
-    // Task tabs may precede main chat in DOM order; neither observer nor
+    // Another pane may precede main chat in DOM order; neither observer nor
     // scroll commands may rediscover the first thread under the shared host.
     const detailPanel = host.appendChild(document.createElement("div"));
     const mainPanel = host.appendChild(document.createElement("div"));
@@ -558,16 +557,7 @@ describe("chat transcript controller", () => {
     const detailProps = threadProps("pane-geometry-detail", "agent:main:geometry-detail");
     const renderTranscripts = () => {
       render(renderChatThread(mainProps, main), mainPanel);
-      render(
-        renderReadOnlyTranscript({
-          chat: detailProps,
-          messages: detailProps.messages,
-          paneId: detailProps.paneId,
-          sessionKey: detailProps.sessionKey,
-          transcript: detail,
-        }),
-        detailPanel,
-      );
+      render(renderChatThread(detailProps, detail), detailPanel);
       main.hostUpdated();
       detail.hostUpdated();
     };

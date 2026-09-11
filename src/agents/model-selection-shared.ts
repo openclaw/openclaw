@@ -489,7 +489,7 @@ function parseModelRefWithCompatAlias(
   } & ModelManifestNormalizationContext,
 ): ModelRef | null {
   const exactConfiguredProviderRef = resolveExactConfiguredProviderRef(params);
-  const exactDefaultProviderRef = hasSlashFormModelRef(params.raw)
+  const exactDefaultProviderRef = params.raw.includes("/")
     ? null
     : resolveExactConfiguredProviderRef({
         ...params,
@@ -889,7 +889,9 @@ export function resolveConfiguredModelRef(
       getLog().warn(
         `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
       );
-      return { provider: params.defaultProvider, model: trimmed };
+      if (inferredProviderManifestPlugins === undefined) {
+        return { provider: params.defaultProvider, model: trimmed };
+      }
     }
 
     const resolved = resolveModelRefFromString({

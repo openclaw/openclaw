@@ -186,6 +186,8 @@ describe("listGatewayMethods", () => {
       "tasks.history",
       "environments.prepare",
       "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -212,6 +214,8 @@ describe("listGatewayMethods", () => {
       "tasks.history",
       "environments.prepare",
       "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ]);
   });
 
@@ -365,6 +369,8 @@ describe("listGatewayMethods", () => {
       "tasks.history",
       "environments.prepare",
       "models.authRefresh",
+      "models.authLogin",
+      "models.authSetApiKey",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -416,6 +422,16 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("plugins.catalog.get")).toBe(
       methods.indexOf("plugins.catalog.categories") + 1,
     );
+  });
+
+  it("advertises API-key saving as an administrator control-plane write", () => {
+    expect(listGatewayMethods()).toContain("models.authSetApiKey");
+    expect(coreGatewayHandlers["models.authSetApiKey"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "models.authSetApiKey",
+      ),
+    ).toMatchObject({ scope: "operator.admin", controlPlaneWrite: true });
   });
 
   it("advertises the versioned Talk session RPCs", () => {

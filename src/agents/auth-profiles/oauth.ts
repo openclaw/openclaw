@@ -47,6 +47,7 @@ import {
   hasRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { isSetupCredentialAccessible } from "./setup-access.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
   findPersistedAuthProfileCredential,
@@ -283,7 +284,11 @@ async function tryResolveOAuthProfile(
     return null;
   }
   const cred = store.profiles[profileId];
-  if (!cred || cred.type !== "oauth") {
+  if (
+    !cred ||
+    cred.type !== "oauth" ||
+    !isSetupCredentialAccessible({ profileId, credential: cred, agentDir: params.agentDir })
+  ) {
     return null;
   }
   if (
@@ -411,7 +416,14 @@ export async function resolveApiKeyForProfile(
   const storedProfile = isUserModelAuthProfileId(profileId)
     ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
     : store.profiles[profileId];
-  if (!storedProfile) {
+  if (
+    !storedProfile ||
+    !isSetupCredentialAccessible({
+      profileId,
+      credential: storedProfile,
+      agentDir: params.agentDir,
+    })
+  ) {
     return null;
   }
   // Claude owns this native login slot. Legacy persisted copies must never

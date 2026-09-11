@@ -5743,7 +5743,7 @@ async function prepareLiveGatewayWorkspace(workspaceDir: string): Promise<void> 
   // retired JSON markers or empty initialized workspaces block the first turn.
   await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
   await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
-  mergeWorkspaceSetupState(workspaceDir, { setupCompletedAt: new Date().toISOString() });
+  await mergeWorkspaceSetupState(workspaceDir, { setupCompletedAt: new Date().toISOString() });
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {

@@ -25,13 +25,23 @@ import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-tas
 const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
+  serviceState: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
+  revalidateService:
+    vi.fn<
+      typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+    >(),
   reachable: vi.fn(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
 vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: mocks.serviceState,
+}));
 vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
   createWindowsTaskAutoStartGuard: () => async () => {},
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
@@ -97,6 +107,25 @@ describe("verified package rollback", () => {
       `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
     );
     vi.resetAllMocks();
+    mocks.serviceState.mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      env: {},
+      command: {
+        programArguments: [
+          process.execPath,
+          path.join(previousRoot, "dist", "index.js"),
+          "gateway",
+        ],
+      },
+    });
+    mocks.revalidateService.mockResolvedValue({
+      kind: "owned",
+      root: previousRoot,
+      fingerprint: "fixture",
+      refreshDefinition: true,
+    });
     mocks.reachable.mockResolvedValue({ reachable: true });
     mocks.stop.mockResolvedValue({
       stopped: true,
@@ -667,7 +696,7 @@ describe("verified package rollback", () => {
           resolveUpdateResultNextAction({ result: outcome.result, env: process.env }),
         ).toContain(configPath);
       }
-      expect(outcome.rolledBack).toBe(restored);
+      expect(outcome.rolledBack, JSON.stringify(outcome)).toBe(restored);
       expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
         change === "none" ||
           change === "readonly-config" ||

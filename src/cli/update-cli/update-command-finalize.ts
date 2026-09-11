@@ -51,8 +51,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 

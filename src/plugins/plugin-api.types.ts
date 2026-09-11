@@ -183,6 +183,8 @@ export type OpenClawPluginApi = {
   version?: string;
   description?: string;
   source: string;
+  /** Selected runtime entrypoint, independent of setup; absent without runtime artifact selection. */
+  readonly runtimeSource?: string;
   rootDir?: string;
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;

@@ -17,6 +17,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -355,6 +356,8 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
+      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      turn.operation.setPhase("running");
       const execute = () =>
         executeAgentTurn({
           completionSource:

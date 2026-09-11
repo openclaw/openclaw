@@ -644,7 +644,6 @@ export async function prepareReplyAgentPayloads(state: {
     kind: "continue" as const,
     activeSessionEntry,
     completedSourceReplyDelivery,
-    didLogHeartbeatStrip,
     guardedReplyPayloads,
     responseUsageLine,
   };

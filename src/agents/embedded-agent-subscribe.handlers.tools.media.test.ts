@@ -629,6 +629,53 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/meeting.wav"]);
   });
+  it("queues dir_fetch local paths once the run supplies its trusted set", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      toolResultFormat: "plain",
+      trustedLocalMediaToolNames: new Set(["dir_fetch"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "dir_fetch",
+      toolCallId: "tc-dir-1",
+      isError: false,
+      result: {
+        content: [
+          { type: "text", text: "Fetched 2 files. Saved paths are available under rootDir." },
+        ],
+        details: { media: { mediaUrls: ["/tmp/run/a.png", "/tmp/run/b.png"] } },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/run/a.png", "/tmp/run/b.png"]);
+  });
+
+  it("drops dir_fetch local paths when the run supplies no trusted set", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      toolResultFormat: "plain",
+      trustedLocalMediaToolNames: new Set(),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "dir_fetch",
+      toolCallId: "tc-dir-2",
+      isError: false,
+      result: {
+        content: [
+          { type: "text", text: "Fetched 2 files. Saved paths are available under rootDir." },
+        ],
+        details: { media: { mediaUrls: ["/tmp/run/a.png", "/tmp/run/b.png"] } },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+  });
+
   it("queues structured media once for markdown verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("markdown");
 
@@ -786,19 +833,16 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 
-  it("queues trusted TTS local media when the exact built-in name is absent", async () => {
-    const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
-      builtinToolNames: new Set(["web_search"]),
-    });
+  it.each([true, false])(
+    "admits omitted-name TTS media only with core provenance (%s)",
+    async (owned) => {
+      const ctx = createMockContext({
+        shouldEmitToolOutput: false,
+        onToolResult: vi.fn(),
+        builtinToolNames: new Set(["web_search"]),
+      });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "tts",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
+      const result = {
         content: [{ type: "text", text: "(spoken) hello" }],
         details: {
           media: {
@@ -807,12 +851,23 @@ describe("handleToolExecutionEnd media emission", () => {
             trustedLocalMedia: true,
           },
         },
-      },
-    });
+      };
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "tts",
+        toolCallId: "tc-1",
+        isError: false,
+        result: owned ? markCoreTtsToolResult(result, ["/tmp/reply.opus"]) : result,
+      });
 
-    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
-    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
-    expect(ctx.state.toolAutoDeliveryMediaUrls).toEqual(new Set());
-  });
+      expect(ctx.state.pendingToolMediaUrls).toEqual(owned ? ["/tmp/reply.opus"] : []);
+      expect(ctx.state.pendingToolAudioAsVoice).toBe(owned);
+      expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(
+        owned ? true : undefined,
+      );
+      expect(ctx.state.toolAutoDeliveryMediaUrls).toEqual(
+        new Set(owned ? ["/tmp/reply.opus"] : []),
+      );
+    },
+  );
 });

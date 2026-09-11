@@ -1,10 +1,11 @@
 // Respawn child runner tests cover signal forwarding and process-tree cleanup.
 import type { ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
+const processKillMock = vi.fn<typeof process.kill>(() => true);
 
 vi.mock("./kill-tree.js", () => ({
   signalProcessTree: signalProcessTreeMock,
@@ -27,6 +28,12 @@ function createChild(pid?: number): { child: ChildProcess; kill: ReturnType<type
 describe("runRespawnChildWithSignalBridge", () => {
   beforeEach(() => {
     signalProcessTreeMock.mockReset();
+    processKillMock.mockClear();
+    vi.spyOn(process, "kill").mockImplementation(processKillMock);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("spawns POSIX respawn children detached for process-group cleanup", () => {
@@ -55,9 +62,26 @@ describe("runRespawnChildWithSignalBridge", () => {
   });
 
   it.each([
-    { signal: "SIGINT" as const, laterSignal: "SIGTERM" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, laterSignal: "SIGINT" as const, exitCode: 143 },
-  ])("exits $exitCode when the child exits by forwarded $signal", (testCase) => {
+    {
+      signal: "SIGINT" as const,
+      firstSignal: "SIGINT" as const,
+      laterSignal: "SIGTERM" as const,
+      exitCode: 130,
+    },
+    {
+      signal: "SIGTERM" as const,
+      firstSignal: "SIGTERM" as const,
+      laterSignal: "SIGINT" as const,
+      exitCode: 143,
+    },
+    {
+      signal: "SIGTERM" as const,
+      firstSignal: "SIGINT" as const,
+      laterSignal: undefined,
+      exitCode: 1,
+    },
+    { signal: "SIGKILL" as const, firstSignal: undefined, laterSignal: undefined, exitCode: 1 },
+  ])("preserves child $signal termination after first signal $firstSignal", (testCase) => {
     const { child } = createChild(2345);
     const exit = vi.fn<RespawnChildRuntime["exit"]>();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
@@ -77,11 +101,21 @@ describe("runRespawnChildWithSignalBridge", () => {
       onError: vi.fn(),
     });
 
-    onSignal?.(testCase.signal);
-    onSignal?.(testCase.laterSignal);
+    if (testCase.firstSignal) {
+      onSignal?.(testCase.firstSignal);
+    }
+    if (testCase.laterSignal) {
+      onSignal?.(testCase.laterSignal);
+    }
     child.emit("exit", null, testCase.signal);
 
-    expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+    if (process.platform === "win32") {
+      expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+      expect(processKillMock).not.toHaveBeenCalled();
+    } else {
+      expect(processKillMock).toHaveBeenCalledWith(process.pid, testCase.signal);
+      expect(exit).not.toHaveBeenCalled();
+    }
   });
 
   it("signals detached respawn process groups after forwarded signal grace", () => {
@@ -133,7 +167,12 @@ describe("runRespawnChildWithSignalBridge", () => {
       }
 
       child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledWith(1);
+      if (process.platform === "win32") {
+        expect(exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(processKillMock).toHaveBeenCalledWith(process.pid, "SIGKILL");
+        expect(exit).not.toHaveBeenCalled();
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -327,7 +366,12 @@ describe("runRespawnChildWithSignalBridge", () => {
       expect(kill).toHaveBeenNthCalledWith(2, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
 
       child.emit("exit", null, "SIGKILL");
-      expect(exit).toHaveBeenCalledWith(1);
+      if (process.platform === "win32") {
+        expect(exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(processKillMock).toHaveBeenCalledWith(process.pid, "SIGKILL");
+        expect(exit).not.toHaveBeenCalled();
+      }
     } finally {
       vi.useRealTimers();
     }

@@ -1,23 +1,26 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   getPreparedModelFullCatalogAuth,
+  hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthLabels,
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
   type PreparedModelCatalogAuth,
@@ -170,23 +173,11 @@ export function prepareModelCatalogPublication(
       ) {
         return [];
       }
-      const providerProfiles = (value: PreparedModelCatalogAuth) =>
-        Object.fromEntries(
-          Object.entries(value.authStore.profiles).filter(
-            ([, profile]) => normalizeProvider(profile.provider) === provider,
-          ),
-        );
-      const providerCredentials = (
-        credentials: NonNullable<PreparedModelCatalogAuth["credentials"]>,
-      ) =>
-        Object.entries(credentials)
-          .filter(([candidate]) => normalizeProvider(candidate) === provider)
-          .map(([, credential]) => credential);
-      return isDeepStrictEqual(providerProfiles(previousAuth), providerProfiles(auth)) &&
-        isDeepStrictEqual(
-          providerCredentials(previousAuth.credentials),
-          providerCredentials(auth.credentials),
-        )
+      return hasSamePreparedModelCatalogAuth(
+        previousAuth,
+        auth,
+        (candidate) => normalizeProvider(candidate) === provider,
+      )
         ? [provider]
         : [];
     }),
@@ -374,6 +365,25 @@ export function createPreparedModelRuntimeSnapshot(
     createStores,
     routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
+  setPreparedModelRuntimeAuthLabels(
+    snapshot,
+    withPluginRuntimeGenerationScope(
+      { metadataSnapshot: pluginMetadataSnapshot, pluginRegistry },
+      () =>
+        prepareModelCatalogAuthLabels({
+          config: input.config,
+          agentDir: input.agentDir,
+          workspaceDir: input.workspaceDir,
+          env: agentFacts.env,
+          store: agentFacts.authStore,
+          providers: [
+            ...agentFacts.providerIds,
+            ...modelCatalog.entries.map((entry) => entry.provider),
+            ...Object.values(agentFacts.authStore.profiles).map((profile) => profile.provider),
+          ],
+        }),
+    ),
+  );
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
   setPreparedModelRuntimeAuthMaterializations(

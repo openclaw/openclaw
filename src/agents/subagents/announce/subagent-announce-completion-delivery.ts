@@ -13,6 +13,7 @@ import {
   hasUnaccountedMessagingToolAggregateEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
+import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   SourceOwnerChangedError,
@@ -66,29 +67,19 @@ function resolveTextCompletionDirectFallback(
     if (event.status !== "ok") {
       continue;
     }
+    // Placeholder copy for an absent child result is not deliverable content.
+    if (!hasVisibleCompletionResult(event)) {
+      continue;
+    }
     const result =
       typeof event.result === "string"
         ? sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(event.result))
         : "";
-    if (result && result !== "(no output)") {
+    if (result) {
       return result;
     }
   }
   return undefined;
-}
-
-export function hasFailedSubagentNoOutputCompletion(
-  events: readonly AgentInternalEvent[] | undefined,
-) {
-  return (
-    events?.some(
-      (event) =>
-        event.type === "task_completion" &&
-        event.source === "subagent" &&
-        event.status !== "ok" &&
-        event.result.trim() === "(no output)",
-    ) === true
-  );
 }
 
 export async function deliverCompletionDirect(params: {

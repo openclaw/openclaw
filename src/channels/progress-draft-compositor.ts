@@ -26,6 +26,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLineForStreaming,
   normalizeChannelProgressDraftLineIdentity,
+  removeChannelProgressDraftLineForStreaming,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
@@ -420,8 +421,8 @@ export function createChannelProgressDraftCompositor(params: {
           toolProgress: !quietProgress,
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         })
-      : typeof line === "object" && line.id
-        ? removeChannelProgressDraftLine(lines, line.id)
+      : typeof progressLine === "object"
+        ? removeChannelProgressDraftLineForStreaming(lines, progressLine)
         : lines;
     const lineChanged = nextLines !== lines;
     const hasUnconfirmedRender = formatDraftText(nextLines) !== lastRenderedText;

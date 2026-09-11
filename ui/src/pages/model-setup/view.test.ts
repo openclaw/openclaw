@@ -936,6 +936,46 @@ describe("renderModelSetup", () => {
     expect(container.querySelector(".wizard-step__progress button")).toBeNull();
   });
 
+  it("shows the browser sign-in link during gateway progress without requiring an answer", () => {
+    const onWizardAnswer = vi.fn();
+    const onWizardCancel = vi.fn();
+    const destination = "https://provider.example/oauth?state=state-1";
+    const container = mount(
+      props({
+        wizard: {
+          phase: "step",
+          authChoice: "provider-auth",
+          step: {
+            id: "browser-sign-in",
+            type: "progress",
+            executor: "gateway",
+            externalUrl: destination,
+            message: "Waiting for sign-in",
+          },
+          busy: false,
+          validationError: null,
+        },
+        onWizardAnswer,
+        onWizardCancel,
+      }),
+    );
+
+    const wizard = container.querySelector(".model-setup-wizard")!;
+    const link = wizard.querySelector<HTMLAnchorElement>("a");
+    expect(link?.href).toBe(destination);
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noreferrer");
+    expect(link?.textContent?.trim()).toBe("Open sign-in page");
+    expect(wizard.querySelector('[role="status"]')?.textContent).toContain("Waiting for sign-in");
+    expect(
+      [...wizard.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["Cancel"]);
+    expect(onWizardAnswer).not.toHaveBeenCalled();
+    wizard.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onWizardCancel).toHaveBeenCalledOnce();
+    expect(onWizardAnswer).not.toHaveBeenCalled();
+  });
+
   it("keeps a Continue action for client progress", () => {
     const container = wizardStep({
       id: "client-progress",

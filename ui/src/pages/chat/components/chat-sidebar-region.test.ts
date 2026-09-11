@@ -269,6 +269,7 @@ describe("chat sidebar region", () => {
         themeMode: "dark",
         agentId: "main",
         browserPresented: false,
+        companionPresented: false,
         browserRefreshOnPresentation: false,
         desktopPresented: false,
         desktopRefreshOnPresentation: false,

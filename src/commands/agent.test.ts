@@ -842,6 +842,7 @@ describe("agentCommand", () => {
         vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
           async (params) => {
             params.deferredLifecycle?.adopt({
+              beginRetryWait: () => undefined,
               complete: async () => {
                 if (fault === "rejection") {
                   throw failure;

@@ -55,6 +55,8 @@ vi.mock("./config-reload.js", async () => {
         hoisted.onConfigCandidateCommitted = options.onConfigCandidateCommitted;
         hoisted.onRuntimeConfigCommitted = options.onRuntimeConfigCommitted;
         return {
+          ready: Promise.resolve(),
+          isReady: () => true,
           stop: hoisted.stop,
           hotReloadStatus: () => hoisted.hotReloadStatus.current,
           notifyPluginMetadataChanged: hoisted.notifyPluginMetadataChanged,
@@ -138,6 +140,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       acceptTerminalConfig: vi.fn(),
       clients: [],
     });
+    await reloader.ready;
 
     expect(reloader.hotReloadStatus).toBeTypeOf("function");
     expect(reloader.hotReloadStatus?.()).toBe("active");

@@ -250,10 +250,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         new WizardSession(
           async (prompter, signal, runnerSession) => {
             await runSystemAgentGatewayTask(async () => {
-              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
-                import("../../plugins/provider-auth-choice.js"),
-                import("../../wizard/setup.shared.js"),
-              ]);
+              const [{ prepareAuthChoiceLoadedPluginProvider }, setupShared, authConfig] =
+                await Promise.all([
+                  import("../../plugins/provider-auth-choice.js"),
+                  import("../../wizard/setup.shared.js"),
+                  import("../../plugins/provider-auth-config.js"),
+                ]);
               const snapshot = await setupShared.readSetupConfigFileSnapshot();
               if (!snapshot.valid) {
                 throw new Error(
@@ -295,10 +297,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               signal.throwIfAborted();
               runnerSession.lockCancellation();
               await prepared.persistAuthProfiles();
-              await setupShared.writeWizardConfigFile(prepared.config, {
-                allowConfigSizeDrop: false,
-                baseSnapshot: snapshot,
-                ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+              await authConfig.writeProviderAuthConfig({
+                config: baseConfig,
+                configSnapshot: snapshot,
+                configPatch: authConfig.createProviderAuthConfigPatch(baseConfig, prepared.config),
+                credentialsSaved: prepared.authProfiles.length > 0,
+                writeOptions: { allowConfigSizeDrop: false },
               });
               if (prepared.agentModelOverride) {
                 runnerSession.setPreparedModelRef(prepared.agentModelOverride);

@@ -6,6 +6,7 @@ import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
 import { controlUiBuildDiffersFrom } from "../build-info.ts";
+import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
@@ -422,8 +423,10 @@ export function createApplicationUpdateOverlays(
       ...(connectedSourceChanged || helloChanged
         ? projectConnectedUpdateSnapshot(snapshot, next.hello)
         : {}),
+      // Vite owns this document; reloading cannot adopt its proxied Gateway's build.
       controlUiRefreshRequired: connectedSourceChanged
-        ? (Boolean(serverBuildIdentity.buildId?.trim()) || connectedEpoch > 1) &&
+        ? !isConfiguredUiDevGateway(gateway.connection.gatewayUrl) &&
+          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedEpoch > 1) &&
           controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };

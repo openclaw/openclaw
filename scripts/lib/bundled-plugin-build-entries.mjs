@@ -150,6 +150,11 @@ export function collectPluginSourceEntries(packageJson, manifest = {}) {
       ...CATALOG_ENTRY_FIELDS.map((field) => manifest[field]).filter(
         (entry) => typeof entry === "string" && entry.trim().length > 0,
       ),
+      ...(Array.isArray(packageJson?.openclaw?.build?.workerEntries)
+        ? packageJson.openclaw.build.workerEntries.filter(
+            (entry) => typeof entry === "string" && entry.trim().length > 0,
+          )
+        : []),
     ]),
   ];
 }
