@@ -11,7 +11,6 @@ import {
   createGatewaySession,
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
-import { workboardTestHost } from "../../test/host.setup.ts";
 import { mountPage } from "./workboard-page.test-support.ts";
 
 type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
