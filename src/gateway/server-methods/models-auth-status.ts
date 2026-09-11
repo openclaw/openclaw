@@ -38,15 +38,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import {
-  modelsAuthRefreshHandlers,
-  refreshModelAuthStateAfterMutation,
-} from "./models-auth-refresh.js";
+import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import {
@@ -420,7 +418,7 @@ async function refreshAfterCredentialMutation(
   agentId: string,
 ): Promise<string | undefined> {
   try {
-    await refreshModelAuthStateAfterMutation(context, operation, agentId);
+    await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, operation, agentId);
     return undefined;
   } catch (error) {
     log.warn(`credential change saved but auth refresh failed: ${formatForLog(error)}`);

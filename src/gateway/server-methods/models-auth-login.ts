@@ -16,10 +16,10 @@ import {
 import { createNonExitingRuntime } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { WizardSession } from "../../wizard/session.js";
+import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { bindWizardLoginOwner } from "../server-wizard-sessions.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
-import { refreshModelAuthStateAfterMutation } from "./models-auth-refresh.js";
 import {
   createAdmittedWizardSession,
   respondSetupAdmissionBusy,
@@ -138,7 +138,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 runner.lockCancellationForPreparation();
               },
               refreshAfterLogin: (agentId) =>
-                refreshModelAuthStateAfterMutation(context, "login", agentId),
+                refreshModelAuthStateAfterMutation(context.getRuntimeConfig, "login", agentId),
             });
             if (result.profiles.length === 0) {
               throw new Error(`${choice.choiceLabel} did not return a credential profile.`);

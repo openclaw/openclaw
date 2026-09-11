@@ -3,6 +3,7 @@ import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -71,7 +72,7 @@ describe("handleLoginCommand", () => {
       true,
     );
     expect(result?.reply?.text).toBe(
-      "OpenAI credentials were saved, but sign-in did not finish. Send `/login openai/openai-device-code` to retry.",
+      "Some OpenAI sign-in details were saved, but setup is incomplete. Open Models to review the saved connection and finish setup.",
     );
     expect(patchSessionEntryMock).not.toHaveBeenCalled();
   });
@@ -160,7 +161,7 @@ describe("handleLoginCommand", () => {
 
     const result = await handleLoginCommand(params, true);
 
-    expect(result?.reply?.text).toContain("login completed, but this session could not switch");
+    expect(result?.reply?.text).toContain("login complete. This chat kept its previous account");
     expect(persisted).toBe(previous);
     expect(params.sessionEntry).toBe(previous);
   });
@@ -428,11 +429,11 @@ describe("handleLoginCommand", () => {
   it.each([
     [
       "gateway-rejected",
-      "OpenAI credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models.",
+      "OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.",
     ],
     [
       "gateway-unreachable",
-      "OpenAI credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.",
+      "OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.",
     ],
   ])("reports saved credentials when auth refresh is %s", async (outcome, message) => {
     mockSuccessfulLoginFlow("openai:owner", outcome);
@@ -452,7 +453,7 @@ describe("handleLoginCommand", () => {
       true,
     );
     expect(result?.reply?.text).toBe(
-      "OpenAI credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again.",
+      "OpenAI credentials are saved, but the connection settings could not be applied. Open Models to review the connection settings and try again.",
     );
   });
 
@@ -570,7 +571,7 @@ describe("handleLoginCommand", () => {
     );
 
     expect(result?.reply?.text).toBe(
-      "OpenAI login completed, but this session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
     );
   });
 
@@ -686,7 +687,7 @@ describe("handleLoginCommand", () => {
     const result = await handleLoginCommand(params, true);
 
     expect(result?.reply?.text).toBe(
-      "OpenAI login completed, but this session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      'OpenAI login complete. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:new-owner@example.com" -s`.',
     );
     expect(params.sessionEntry).toBe(previousEntry);
     expect(sessionStore["agent:main:slack:channel:C123"]).toBe(previousEntry);
@@ -729,7 +730,7 @@ describe("handleLoginCommand", () => {
     const result = await handleLoginCommand(params, true);
 
     expect(result?.reply?.text).toBe(
-      "OpenAI login completed, but this session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      'OpenAI login complete. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:new-owner@example.com" -s`.',
     );
     expect(params.sessionEntry).toBe(previousEntry);
     expect(sessionStore["agent:main:slack:channel:C123"]).toBe(previousEntry);
@@ -765,43 +766,49 @@ describe("handleLoginCommand", () => {
     const result = await handleLoginCommand(params, true);
 
     expect(result?.reply?.text).toBe(
-      "OpenAI login completed, but this session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      'OpenAI login complete. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:owner@example.com" -s`.',
     );
     expect(params.sessionEntry).toBe(previousEntry);
   });
 
-  it("dedupes an active flow for the same channel thread and provider", async () => {
-    let resolveLogin!: () => void;
-    runModelsAuthLoginFlowMock.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveLogin = () =>
-            resolve({
-              providerId: "openai",
-              methodId: "device-code",
-              authRefresh: "refreshed",
-              profiles: [],
-            });
-        }),
-    );
-
-    const first = handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
-    const second = await handleLoginCommand(
-      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
-      true,
-    );
-
-    expect(second).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "A provider login is already active for this chat. Complete it, or send `/login cancel` before requesting a new one.",
-      },
+  it("names the pending provider and lets the owner cancel before another sign-in", async () => {
+    const started = createDeferredCore<void>();
+    const finish = createDeferredCore<void>();
+    runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
+      started.resolve();
+      await finish.promise;
+      opts.signal?.throwIfAborted();
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        authRefresh: "refreshed",
+        profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
+      };
     });
-    resolveLogin();
-    await first;
+    const command = (body: string) =>
+      handleLoginCommand(buildLoginParams(body, { opts: blockReplyOpts() }), true);
+    const first = command("/login codex");
+    await started.promise;
+    try {
+      const blocked = await command("/login openrouter/openrouter-oauth");
+      expect(blocked?.reply?.text).toContain("OpenAI");
+      expect(blocked?.reply?.text).toContain("/login cancel");
+      expect(blocked?.reply?.text).not.toContain("OpenRouter");
+      expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
+      const cancelled = await command("/login cancel");
+      expect(cancelled?.reply?.text).toContain("cancelled");
+    } finally {
+      finish.resolve();
+      await first;
+    }
+    runModelsAuthLoginFlowMock.mockResolvedValueOnce({
+      providerId: "openrouter",
+      methodId: "oauth",
+      authRefresh: "refreshed",
+      profiles: [{ profileId: "openrouter:default", provider: "openrouter", mode: "api_key" }],
+    });
+    const restarted = await command("/login openrouter/openrouter-oauth");
+    expect(restarted?.reply?.text).toContain("OpenRouter login complete");
   });
 
   it("cancels only the initiating Control UI session when chats have no delivery target", async () => {
@@ -908,7 +915,9 @@ describe("handleLoginCommand", () => {
         text: "OpenAI login did not complete. Send `/login openai/openai-device-code` to try again.",
       },
     });
-    expect(second?.reply?.text).toContain("could not switch");
+    expect(second?.reply?.text).toBe(
+      "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
+    );
     now.mockRestore();
   });
 
@@ -923,7 +932,7 @@ describe("handleLoginCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
+        text: "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
       },
     });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
@@ -946,7 +955,7 @@ describe("handleLoginCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
+        text: "No chat owner is configured. Ask the OpenClaw owner to add your chat account to `commands.ownerAllowFrom` in the OpenClaw configuration, then send `/login` again.",
       },
     });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
@@ -955,7 +964,7 @@ describe("handleLoginCommand", () => {
   it("returns a friendly error for unsupported providers", async () => {
     const result = await handleLoginCommand(buildLoginParams("/login unavailable-provider"), true);
 
-    expect(result?.reply?.text).toContain("Unsupported login provider");
+    expect(result?.reply?.text).toContain("No provider matched that name. Available connections:");
     expect(result?.shouldContinue).toBe(false);
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });

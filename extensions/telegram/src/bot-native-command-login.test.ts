@@ -3,6 +3,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type ModelsAuthLoginFlowOptions,
   ProviderAuthConfigApplyError,
+  createProviderLoginFlowRegistry,
+  offerProviderLoginModelAccess,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -21,6 +23,7 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { buildTelegramPresentationButtons } from "./button-types.js";
 
 const loginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -83,6 +86,33 @@ function resetLoginCommandMocks() {
 
 describe("registerTelegramNativeCommands /login", () => {
   beforeEach(resetLoginCommandMocks);
+
+  it("keeps both model-access buttons within Telegram's callback limit for a long provider name", () => {
+    const reply = offerProviderLoginModelAccess({
+      flows: createProviderLoginFlowRegistry(),
+      flowKey: "long-provider",
+      terminalMessage: "Credentials saved.",
+      prepared: {
+        provider: "ux-catalog-fixture",
+        providerLabel: "Fixture",
+        agentId: "main",
+        policy: { path: "agents.defaults.modelPolicy.allow", refs: ["other/current"] },
+        prompt: {
+          message: "Choose which Fixture models to show.",
+          options: [
+            { value: "all", label: "Show all Fixture models" },
+            { value: "keep", label: "Keep current restrictions" },
+          ],
+        },
+      },
+    });
+    const buttons = buildTelegramPresentationButtons(reply.presentation)?.flat();
+    expect(buttons?.map((button) => button.text)).toEqual([
+      "Show all Fixture models",
+      "Keep current restrictions",
+    ]);
+    expect(buttons?.[0]?.callback_data).toContain(" ux-catalog-fixture");
+  });
 
   it("delivers the core provider menu and its method continuation without starting login", async () => {
     const loginFlow = vi.fn();
@@ -164,12 +194,12 @@ describe("registerTelegramNativeCommands /login", () => {
     {
       authRefresh: "gateway-rejected",
       message:
-        "OpenAI credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models.",
+        "OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.",
     },
     {
       authRefresh: "gateway-unreachable",
       message:
-        "OpenAI credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.",
+        "OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again.",
     },
   ] as const)(
     "reports saved credentials without immediate retry guidance when refresh is $authRefresh",
@@ -364,11 +394,11 @@ describe("registerTelegramNativeCommands /login", () => {
 
     expect(loginFlow).not.toHaveBeenCalled();
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-      "Only a configured OpenClaw owner/admin can start provider login from this channel.",
+      "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.",
     );
   });
 
-  it("dedupes active /login flows for the same Telegram thread", async () => {
+  it("names the active provider when another provider is requested in the same Telegram thread", async () => {
     const deferred = createDeferred<void>();
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
       await params.prompter.deviceCode?.({
@@ -386,7 +416,9 @@ describe("registerTelegramNativeCommands /login", () => {
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    await handler(
+      createPrivateCommandContext({ match: "openrouter/openrouter-oauth", userId: 200 }),
+    );
     deferred.resolve();
     await vi.waitFor(() =>
       expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
@@ -396,7 +428,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
     expect(loginFlow).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-      "OpenAI login is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
+      "OpenAI sign-in is already in progress. Finish it, or send /login cancel to cancel.",
     );
   });
 
@@ -518,7 +550,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
     expect(store["agent:main:main"]).toBe(previous);
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-      "OpenAI login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
     );
   });
 
@@ -560,7 +592,7 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toContain("Code: <code>SAVED-CODE</code>");
     expect(sendMessage).toHaveBeenLastCalledWith(
       100,
-      "OpenAI credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again.",
+      "OpenAI credentials are saved, but the connection settings could not be applied. Open Models to review the connection settings and try again.",
       {},
     );
     expect(loginSessionMocks.patchSessionEntry).not.toHaveBeenCalled();
@@ -834,7 +866,7 @@ describe("registerTelegramNativeCommands /login", () => {
     await vi.waitFor(() =>
       expect(sendMessage).toHaveBeenCalledWith(
         100,
-        "OpenAI login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+        "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
         {},
       ),
     );
@@ -903,17 +935,17 @@ describe("registerTelegramNativeCommands /login", () => {
     {
       authRefresh: "refreshed",
       message:
-        "OpenAI login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+        'OpenAI login complete. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:new-owner@example.com" -s`.',
     },
     {
       authRefresh: "gateway-rejected",
       message:
-        "OpenAI credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models. Also, this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+        'OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:new-owner@example.com" -s`.',
     },
     {
       authRefresh: "gateway-unreachable",
       message:
-        "OpenAI credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models. Also, this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+        'OpenAI credentials are saved. Sign-in status could not be confirmed. Send /login refresh to update it; you do not need to sign in again. This chat kept its previous account. To use the new sign-in, send `/model "openai/test-model"@"openai:new-owner@example.com" -s`.',
     },
   ] as const)(
     "preserves $authRefresh when Telegram cannot persist the returned session profile",
@@ -921,6 +953,7 @@ describe("registerTelegramNativeCommands /login", () => {
       loginSessionMocks.loadSessionStore.mockReturnValue({
         "agent:main:main": {
           authProfileOverride: "openai:old-owner@example.com",
+          modelOverride: "test-model",
           sessionId: "sess-main",
           updatedAt: 1,
         },
@@ -943,7 +976,7 @@ describe("registerTelegramNativeCommands /login", () => {
       expect(sendMessage).toHaveBeenCalledWith(100, message, {});
       expect(sendMessage).toHaveBeenCalledWith(
         100,
-        expect.stringContaining("could not switch"),
+        expect.stringContaining("kept its previous account"),
         {},
       );
       expect(sendMessage).not.toHaveBeenCalledWith(
@@ -974,7 +1007,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       100,
-      "OpenAI login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
       {},
     );
     expect(sendMessage).not.toHaveBeenCalledWith(
@@ -1020,7 +1053,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       100,
-      "OpenAI login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login openai/openai-device-code`, or select the profile manually.",
+      "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
       {},
     );
     expect(sendMessage).not.toHaveBeenCalledWith(

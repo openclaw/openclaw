@@ -173,6 +173,58 @@ describe("extractModelDirective", () => {
       expect(result.rawProfile).toBe("myprofile");
     });
 
+    it.each([
+      [
+        '/model openai/test-model@"openai:owner+work@example.com" -s',
+        "openai:owner+work@example.com",
+      ],
+      ['/model openai/test-model@"openai:Work account" -s', "openai:Work account"],
+      [
+        String.raw`/model openai/test-model@"openai:Work \"account\"\\primary" -s`,
+        'openai:Work "account"\\primary',
+      ],
+      ['/model openai/test-model@"openai:Work --global" -s', "openai:Work --global"],
+      ['/model openai/test-model@"openai:team/work" -s', "openai:team/work"],
+      ['/model openai/test-model@"20260101" -s', "20260101"],
+    ])("keeps the complete quoted account and external session scope: %s", (command, profile) => {
+      const result = extractModelDirective(command);
+      expect(result.rawModel).toBe("openai/test-model");
+      expect(result.rawProfile).toBe(profile);
+      expect(result.scope).toBe("session");
+      expect(result.scopeConflict).toBe(false);
+      expect(result.cleaned).toBe("");
+    });
+
+    it("decodes model and profile separately without losing a model version", () => {
+      const result = extractModelDirective(
+        '/model "sample/model name@20260101"@"sample:team/work" -s',
+      );
+      expect(result.rawModel).toBe("sample/model name@20260101");
+      expect(result.rawProfile).toBe("sample:team/work");
+      expect(result.scope).toBe("session");
+      expect(result.cleaned).toBe("");
+    });
+
+    it.each([
+      String.raw`openai/test@"work\N"`,
+      String.raw`openai/test@"work\U0041"`,
+      String.raw`openai/test@"work\v"`,
+      'openai/test@"unfinished',
+      String.raw`"sample/model\N"@"work"`,
+      '"unfinished',
+    ])(
+      "leaves malformed quoted profiles unconsumed without selecting an alias: %s",
+      (reference) => {
+        const command = `/model ${reference} -s /opus -g`;
+        const result = extractModelDirective(command, { aliases: ["opus"] });
+        expect(result.rawModel).toBeUndefined();
+        expect(result.rawProfile).toBeUndefined();
+        expect(result.scope).toBeUndefined();
+        expect(result.hasDirective).toBe(false);
+        expect(result.cleaned).toBe(command);
+      },
+    );
+
     it("keeps OpenRouter preset paths that include @ in the model name", () => {
       const result = extractModelDirective("/model openrouter/@preset/kimi-2-5");
       expect(result.hasDirective).toBe(true);

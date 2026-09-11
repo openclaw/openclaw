@@ -20,6 +20,10 @@ import {
 const resolveChoice = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-login-options.js").resolveProviderChannelLoginChoice>(),
 );
+const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
+vi.mock("../gateway/model-auth-refresh.js", () => ({
+  refreshModelAuthStateAfterMutation: refreshAuthRuntime,
+}));
 vi.mock("../plugins/provider-login-options.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-login-options.js")>()),
   resolveProviderChannelLoginChoice: resolveChoice,
@@ -47,13 +51,44 @@ const loginParams = {
 describe("provider channel login runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    refreshAuthRuntime.mockReset();
     resolveChoice.mockReturnValue({ status: "resolved", choice });
+  });
+
+  it("waits for the running Gateway to apply saved credentials before completing chat login", async () => {
+    const refreshing = Promise.withResolvers<"refreshing">();
+    const applied = Promise.withResolvers<void>();
+    refreshAuthRuntime.mockImplementation(async () => {
+      refreshing.resolve("refreshing");
+      await applied.promise;
+    });
+    const saved = {
+      providerId: "acme-cloud",
+      methodId: "device-code",
+      authRefresh: "refreshed",
+      profiles: [{ profileId: "acme-cloud:saved", provider: "acme-cloud", mode: "oauth" }],
+    };
+    const completion = runProviderChannelLoginFlow({
+      ...loginParams,
+      runLoginFlow: async (opts) => {
+        await opts.refreshAfterLogin?.("main");
+        return saved;
+      },
+    });
+    try {
+      expect(await Promise.race([refreshing.promise, completion.then(() => "completed")])).toBe(
+        "refreshing",
+      );
+    } finally {
+      applied.resolve();
+    }
+    await expect(completion).resolves.toEqual(saved);
   });
 
   it("authorizes private cancellation and leaves other conversations active", async () => {
     const flows = createProviderLoginFlowRegistry();
-    const first = reserveProviderLoginFlow({ flows, flowKey: "first" });
-    const other = reserveProviderLoginFlow({ flows, flowKey: "other" });
+    const first = reserveProviderLoginFlow({ flows, flowKey: "first", providerLabel: "Acme" });
+    const other = reserveProviderLoginFlow({ flows, flowKey: "other", providerLabel: "Other" });
     const params = {
       commandText: "/login cancel",
       commandAuthorized: true,
@@ -61,12 +96,13 @@ describe("provider channel login runtime", () => {
       isPrivateChat: true,
       config: { commands: { ownerAllowFrom: ["owner"] } },
       agentId: "main",
+      refreshAuth: async () => {},
       cancelLogin: () => cancelProviderLoginFlow({ flows, flowKey: "first" }),
     };
     await prepareProviderChannelLogin({ ...params, senderIsOwner: false });
     await prepareProviderChannelLogin({ ...params, commandAuthorized: false });
     await prepareProviderChannelLogin({ ...params, isPrivateChat: false });
-    expect(flows.size).toBe(2);
+    expect(flows.logins.size).toBe(2);
     expect(await prepareProviderChannelLogin(params)).toMatchObject({
       status: "reply",
       reply: { text: "Provider login cancelled for this chat." },
@@ -78,6 +114,27 @@ describe("provider channel login runtime", () => {
       reply: { text: "No provider login is active in this chat." },
     });
     cancelProviderLoginFlow({ flows, flowKey: "other" });
+  });
+
+  it("refreshes saved sign-in status only for the authorized private chat", async () => {
+    const refreshAuth = vi.fn(async () => {});
+    const params = {
+      commandText: "/login refresh",
+      commandAuthorized: true,
+      senderIsOwner: true,
+      isPrivateChat: true,
+      config: { commands: { ownerAllowFrom: ["owner"] } },
+      agentId: "main",
+      refreshAuth,
+    };
+    await prepareProviderChannelLogin({ ...params, senderIsOwner: false });
+    await prepareProviderChannelLogin({ ...params, isPrivateChat: false });
+    expect(refreshAuth).not.toHaveBeenCalled();
+    expect(await prepareProviderChannelLogin(params)).toMatchObject({
+      status: "reply",
+      reply: { text: "Sign-in status refreshed. Send /models to see available models." },
+    });
+    expect(refreshAuth).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -106,12 +163,9 @@ describe("provider channel login runtime", () => {
         throw new Error("Expected restricted-provider consent");
       }
       const flows = createProviderLoginFlowRegistry();
-      const reservation = reserveProviderLoginFlow({ flows, flowKey: "private-owner" });
-      if (reservation.status !== "reserved") {
-        throw new Error("Expected a new login");
-      }
       const reply = offerProviderLoginModelAccess({
-        record: reservation.record,
+        flows,
+        flowKey: "private-owner",
         prepared,
         terminalMessage: "Credentials saved, but the Gateway could not apply the auth update.",
       });
@@ -125,6 +179,8 @@ describe("provider channel login runtime", () => {
         flows,
         flowKey: "private-owner",
         command: button.action.command,
+        agentId: "main",
+        readConfig: () => config,
         runtime: loginParams.runtime,
       };
       await expect(
@@ -142,10 +198,17 @@ describe("provider channel login runtime", () => {
       const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
       expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
       expect(saved.agents?.defaults?.model).toBe("other/current");
-      expect(flows.size).toBe(0);
+      expect(flows.modelAccess.size).toBe(0);
+      resolveChoice.mockReturnValue({
+        status: "ambiguous",
+        choices: [choice, { ...choice, choiceId: "browser", methodId: "browser" }],
+      });
+      const beforeReplay = await fs.readFile(state.configPath, "utf8");
       expect(
         await answerProviderLoginModelAccess({ ...request, assertCurrent: () => {} }),
-      ).toBeUndefined();
+      ).toHaveProperty("presentation");
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeReplay);
+      cancelProviderLoginFlow({ flows, flowKey: "private-owner" });
     });
   });
 

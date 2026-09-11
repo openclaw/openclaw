@@ -49,6 +49,7 @@ async function fixture(
     authMethod?: "oauth" | "api_key";
     profiles?: ProviderAuthResult["profiles"];
     restartRequired?: boolean;
+    addProviderDuringLogin?: boolean;
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -92,6 +93,10 @@ async function fixture(
       },
     },
   };
+  const providerModels = config.models;
+  if (options.addProviderDuringLogin) {
+    delete config.models;
+  }
   const before = `${JSON.stringify(config, null, 2)}\n`;
   await fs.writeFile(configPath, before);
   clearConfigCache();
@@ -110,6 +115,7 @@ async function fixture(
   const login = vi.fn(async () => ({
     profiles: options.profiles ?? [{ profileId: "openai:fixture", credential }],
     defaultModel: modelRef,
+    ...(options.addProviderDuringLogin ? { configPatch: { models: providerModels } } : {}),
   }));
   const provider: ProviderPlugin = {
     id: "openai",
@@ -298,10 +304,14 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
-  it.each([false, true])(
-    "saves the credential before one tool-free turn and commits after success (local service: %s)",
-    async (localService) => {
-      const setup = await fixture({ localService });
+  it.each([
+    { name: "existing provider", localService: false, addProviderDuringLogin: false },
+    { name: "local service", localService: true, addProviderDuringLogin: false },
+    { name: "new provider", localService: false, addProviderDuringLogin: true },
+  ])(
+    "saves the credential before one tool-free turn and commits after success ($name)",
+    async ({ localService, addProviderDuringLogin }) => {
+      const setup = await fixture({ localService, addProviderDuringLogin });
       setup.run.mockImplementation(async (params) => {
         expect(setup.readProfile()?.[1]).toMatchObject(credential);
         expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
@@ -314,6 +324,7 @@ describe("setup activation credentials and configuration", () => {
 
       const result = await setup.activate();
       expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+      expect(setup.readProfile()?.[1]).not.toHaveProperty("setup");
 
       expect(setup.run).toHaveBeenCalledOnce();
       expect(setup.login).toHaveBeenCalledOnce();

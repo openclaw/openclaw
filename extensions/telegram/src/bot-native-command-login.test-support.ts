@@ -201,15 +201,13 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
           await fresh.handler(createPrivateCommandContext({ match: "cancel", userId: 200 }));
           expect(fresh.sendMessage).toHaveBeenLastCalledWith(
             100,
-            "Provider login cancelled for this chat.",
+            "Model-access choice cancelled. Your saved connection is unchanged. Send /models to choose a model.",
             {},
           );
+          const deliveriesBeforeRecovery = delivery.mock.calls.length;
           await click(100);
-          expect(fresh.sendMessage).toHaveBeenLastCalledWith(
-            100,
-            expect.stringContaining("This model access choice is no longer available."),
-            {},
-          );
+          expect(delivery.mock.calls).toHaveLength(deliveriesBeforeRecovery + 1);
+          expect(delivery.mock.calls.at(-1)?.[0].replies[0]?.presentation).toBeDefined();
           expect(await readPolicy()).toEqual(["openai/gpt-5.4"]);
           expect(loginFlow).toHaveBeenCalledOnce();
           return;
@@ -229,10 +227,8 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
         );
         const logsAfterChoice = runtime.log.mock.calls.length;
         await click(100);
-        expect(fresh.sendMessage).toHaveBeenLastCalledWith(
-          100,
-          expect.stringContaining("This model access choice is no longer available."),
-          {},
+        expect(await readPolicy()).toEqual(
+          choice === "all" ? ["openai/gpt-5.4", "openai/*"] : ["openai/gpt-5.4"],
         );
         expect(runtime.log).toHaveBeenCalledTimes(logsAfterChoice);
         expect(loginFlow).toHaveBeenCalledOnce();

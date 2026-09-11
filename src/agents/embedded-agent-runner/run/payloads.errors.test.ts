@@ -140,7 +140,7 @@ describe("buildEmbeddedRunPayloads", () => {
                 buttons: [
                   {
                     label: "Sign in",
-                    action: { type: "command", command: "/login" },
+                    action: { type: "command", command: `/login ${provider}` },
                   },
                 ],
               },
@@ -150,6 +150,19 @@ describe("buildEmbeddedRunPayloads", () => {
       ]);
     },
   );
+
+  it("does not offer OAuth sign-in for an API-key failure with a known provider", () => {
+    const payloads = buildPayloads({
+      provider: "openai",
+      authMode: "api_key",
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "401 invalid API key",
+        content: [],
+      }),
+    });
+    expect(payloads[0]?.presentation).toBeUndefined();
+  });
 
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
     const payloads = buildPayloads({
