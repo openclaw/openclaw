@@ -11,17 +11,17 @@ import { resolveConfiguredModelEntries } from "../../agents/configured-model-ent
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import {
-  buildProviderConfigModelCatalogForBrowse,
-  type ModelCatalogBrowseView,
-} from "../../agents/model-catalog-browse.js";
+import type { ModelCatalogBrowseView } from "../../agents/model-catalog-browse.js";
 import {
   createModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
 import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
-import { createModelCatalogView } from "../../agents/model-catalog-view.js";
+import {
+  createModelCatalogView,
+  loadPreparedModelCatalogView,
+} from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
   prepareLogicalVisibleModelCatalog,
@@ -60,11 +60,6 @@ import { resolveChatAccountSelection } from "./chat-account-selection.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import {
-  listConfiguredRuntimeDiscoveryProviderIds,
-  resolveProviderConfigInventoryEntries,
-} from "./models-list-configured-static.js";
-import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
   projectProviderCatalogOutcomes,
@@ -346,7 +341,8 @@ export async function prepareModelsListResult(
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
-  const preparedCatalog = await prepareModelsListHarnessCatalog({
+  const preparedCatalog = await loadPreparedModelCatalogView({
+    kind: "prepared",
     cfg,
     agentId,
     agentDir: sourceOwner?.agentDir,
@@ -357,7 +353,7 @@ export async function prepareModelsListResult(
     pluginRegistry: preparedPluginRegistry,
     isCurrent,
     observationConfig: preparedProjectionOwner?.observationConfig,
-    allowHarnessDiscovery: refresh && params.preloadedOnly !== true,
+    refreshNative: refresh && params.preloadedOnly !== true,
     ...(source.kind === "gateway"
       ? {
           onError: (error: unknown) =>
@@ -466,19 +462,8 @@ export async function prepareModelsListResult(
   }).byKey;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
-    const authoredEntries = buildProviderConfigModelCatalogForBrowse({
-      cfg: sourceConfig,
-      workspaceDir,
-    });
     const inventorySnapshot = {
-      entries: resolveProviderConfigInventoryEntries({
-        authoredEntries,
-        canonicalEntries: catalog,
-        discoveryOnlyProviderIds: listConfiguredRuntimeDiscoveryProviderIds(
-          sourceConfig,
-          metadataSnapshot,
-        ),
-      }),
+      entries: preparedCatalog.providerInventory(sourceConfig, catalog),
       routeVariants,
       ...(providerOutcomes?.length ? { providerOutcomes } : {}),
     };

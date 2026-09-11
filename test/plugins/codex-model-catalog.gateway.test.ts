@@ -9,8 +9,8 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import codexPlugin from "../../extensions/codex/index.js";
-import { createAgentHarnessCatalogEvaluator } from "../../src/agents/harness/model-catalog-readiness.js";
 import type { AgentHarness } from "../../src/agents/harness/types.js";
+import { prepareModelCatalogView } from "../../src/agents/model-catalog-view.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -358,8 +358,14 @@ describe("models.list native account catalog", () => {
               }
               await expect.poll(() => readiness()).toBeUndefined();
               expect((await configured()).models[0]?.available).toBe(false);
+              const nativeView = prepareModelCatalogView({
+                ...scope,
+                cfg: config,
+                snapshot,
+                metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+              });
               expect(
-                createAgentHarnessCatalogEvaluator(scope)(rows[0]!, {
+                nativeView.evaluateNative(rows[0]!, {
                   availability: true,
                   selectedAuthMode: "oauth",
                   evidence: "runtime",
@@ -374,9 +380,7 @@ describe("models.list native account catalog", () => {
                 evidence: "runtime" as const,
                 routeResolution: null,
               };
-              expect(createAgentHarnessCatalogEvaluator(scope)(hostRow, hostEvidence)).toBe(
-                hostEvidence,
-              );
+              expect(nativeView.evaluateNative(hostRow, hostEvidence)).toBe(hostEvidence);
               const replacement = createEmptyPluginRegistry();
               setActivePluginRegistry(replacement);
               expect((await configured()).models[0]?.available).toBe(false);
