@@ -240,8 +240,8 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
               ? [{ databaseOptions, sessionId, beforeMs: options.beforeMs, snapshot }]
               : [];
           });
-          // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
           const freePages = Number(
+            // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
             database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
           );
           return {

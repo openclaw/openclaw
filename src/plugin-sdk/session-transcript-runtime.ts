@@ -325,7 +325,10 @@ export async function readVisibleSessionTranscriptMessageEntries(
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  return readLatestTranscriptAssistantText(bindSessionTranscriptStoreScope(params));
+  const scope = bindSessionTranscriptStoreScope(params);
+  const { readRestoredSessionTranscript } =
+    await import("../config/sessions/session-cold-storage-read.js");
+  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
 }
 
 /**
