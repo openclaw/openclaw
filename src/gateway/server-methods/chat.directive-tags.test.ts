@@ -23,6 +23,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
@@ -111,6 +112,7 @@ const mockState = vi.hoisted(() => {
       reason: "command-metadata";
     }>,
     triggerAgentRunStart: false,
+    replyDispatchRun: undefined as ReplyDispatchRun | undefined,
     triggerUserMessagePersisted: false,
     runtimeUserMessagePersistencePending: null as Promise<void> | null,
     onAfterAgentRunStart: null as (() => void) | null,
@@ -345,7 +347,11 @@ dispatchInboundMessageMock.mockImplementation(
       await mockState.dispatchWait;
     }
     if (mockState.triggerAgentRunStart) {
-      params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
+      params.replyOptions?.onAgentRunStart?.(
+        mockState.agentRunId,
+        undefined,
+        mockState.replyDispatchRun,
+      );
       mockState.onAfterAgentRunStart?.();
     }
     if (mockState.triggerUserMessagePersisted) {
@@ -3426,6 +3432,38 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "persists a reply beside the WebChat user turn (runtime owns source=%s)",
+    async (ownsSource) => {
+      await createReadyChatTranscript("openclaw-chat-acp-transcript-owner-");
+      const idempotencyKey = "acp-source-reply";
+      if (ownsSource) {
+        await appendSourceReplyMirrorEntry({ text: "ok", idempotencyKey });
+      }
+      mockState.triggerAgentRunStart = true;
+      mockState.replyDispatchRun = {
+        completionSource: "reply-dispatch",
+        getResult: () => ({
+          assistantTranscript: {
+            agentId: ownsSource ? "main" : "claude",
+            sessionKey: ownsSource ? "main" : "agent:claude:acp:bound",
+            sessionId: ownsSource ? mockState.sessionId : "bound-session",
+            storePath: mockState.storePath,
+            messageId: "runtime-message",
+            idempotencyKey,
+          },
+        }),
+      };
+      await createChatRequestFixture().send({
+        idempotencyKey,
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages.map((message) => message.idempotencyKey)).toEqual([idempotencyKey]);
+    },
+  );
+
   it("persists agent-run audio replies emitted as media-bearing block payloads", async () => {
     const { audioPath } = await createAudioTranscriptFixture(
       "openclaw-chat-send-agent-audio-",
@@ -5854,9 +5892,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expectBroadcast: false,
       });
 
+      const internalSessionKey = sessionKey === "main" ? "agent:main:main" : sessionKey;
       expectDispatchContextFields({
         OriginatingChannel: options.external ? delivery.channel : "webchat",
-        OriginatingTo: options.external ? delivery.to : undefined,
+        OriginatingTo: options.external ? delivery.to : internalSessionKey,
         ExplicitDeliverRoute: Boolean(options.external && options.deliver),
         AccountId: options.external ? delivery.accountId : undefined,
         ...(options.external && delivery.threadId !== undefined

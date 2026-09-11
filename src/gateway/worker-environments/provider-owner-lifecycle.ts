@@ -94,7 +94,9 @@ export function createWorkerProviderOwnerLifecycle(
     }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
-    store.revokeEnvironmentCredential(record.environmentId);
+    // The fence flag aborts in-flight workspace transfers immediately, before the tunnel
+    // stop completes; revocations that are followed by a re-mint (rotation) never fence.
+    store.revokeEnvironmentCredential(record.environmentId, { fenceWorkspaceTransfers: true });
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
     await tunnels?.stop(

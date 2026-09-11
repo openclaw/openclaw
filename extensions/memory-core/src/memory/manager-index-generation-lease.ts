@@ -41,10 +41,10 @@ async function acquireCrossProcessLease(
   ): Promise<MemorySqliteLeaseHandle> => {
     while (true) {
       throwIfGenerationLeaseAborted(signal);
-      const lease = tryAcquireMemorySqliteLease(location, mode);
+      const lease = await tryAcquireMemorySqliteLease(location, mode);
       if (lease) {
         if (signal?.aborted) {
-          lease.release();
+          await lease.release();
           throw createGenerationLeaseAbortError(signal);
         }
         return lease;
@@ -76,28 +76,28 @@ async function acquireCrossProcessLease(
       kind === "read" ? "shared" : "exclusive",
     );
   } catch (err) {
-    admission.release();
+    await admission.release();
     throw err;
   }
   if (kind === "read") {
     try {
-      admission.release();
+      await admission.release();
     } catch (err) {
-      generation.release();
+      await generation.release();
       throw err;
     }
     if (signal?.aborted) {
-      generation.release();
+      await generation.release();
       throw createGenerationLeaseAbortError(signal);
     }
     return generation;
   }
   return {
-    release: () => {
+    release: async () => {
       try {
-        generation.release();
+        await generation.release();
       } finally {
-        admission.release();
+        await admission.release();
       }
     },
   };
@@ -205,7 +205,7 @@ async function acquire(
   databasePath: string,
   kind: Waiter["kind"],
   signal?: AbortSignal,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   const key = resolveUserPath(databasePath);
   const releaseLocal = await acquireLocal(key, kind, signal);
   let crossProcess: MemorySqliteLeaseHandle;
@@ -213,16 +213,16 @@ async function acquire(
     throwIfGenerationLeaseAborted(signal);
     crossProcess = await acquireCrossProcessLease(key, kind, signal);
     if (signal?.aborted) {
-      crossProcess.release();
+      await crossProcess.release();
       throw createGenerationLeaseAbortError(signal);
     }
   } catch (err) {
     releaseLocal();
     throw err;
   }
-  return () => {
+  return async () => {
     try {
-      crossProcess.release();
+      await crossProcess.release();
     } finally {
       releaseLocal();
     }
@@ -234,14 +234,14 @@ async function withLease<T>(key: string, kind: Waiter["kind"], run: () => Promis
   try {
     return await run();
   } finally {
-    release();
+    await release();
   }
 }
 
 export async function acquireMemoryIndexReadGeneration(
   databasePath: string,
   signal?: AbortSignal,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   return await acquire(databasePath, "read", signal);
 }
 

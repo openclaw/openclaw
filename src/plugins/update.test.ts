@@ -2829,6 +2829,129 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it.each([
+    { spec: "@acme/demo@2.0.0", updateChannel: "stable", stderr: "E404 No matching version" },
+    { spec: "@acme/demo@^2.0.0", updateChannel: "stable", stderr: "E404 No matching version" },
+    { spec: "@acme/demo", updateChannel: "stable", stderr: "ECONNREFUSED registry unreachable" },
+    { spec: "@acme/demo", updateChannel: "beta", stderr: "ECONNREFUSED registry unreachable" },
+  ] as const)(
+    "retains the installed plugin during core sync when $spec on $updateChannel fails: $stderr",
+    async ({ spec, updateChannel, stderr }) => {
+      const warn = vi.fn();
+      const installPath = createInstalledPackageDir({
+        name: "@acme/demo",
+        version: "1.0.0",
+        runnable: true,
+      });
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: ["demo"],
+          entries: { demo: { enabled: true, config: { preserved: true } } },
+          slots: { memory: "demo" },
+          installs: {
+            demo: {
+              source: "npm",
+              spec,
+              installPath,
+              version: "1.0.0",
+              resolvedName: "@acme/demo",
+              resolvedSpec: "@acme/demo@1.0.0",
+              resolvedVersion: "1.0.0",
+            },
+          },
+        },
+      };
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 1, stdout: "", stderr });
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        code: stderr.startsWith("E404") ? "npm_package_not_found" : "npm_metadata_failure",
+        error: stderr,
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["demo"],
+        syncOfficialPluginInstalls: true,
+        disableOnFailure: true,
+        updateChannel,
+        coreVersion: "2026.9.4",
+        logger: { warn },
+      });
+
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "demo",
+          status: "unchanged",
+          code: "plugin-target-unavailable",
+          currentVersion: "1.0.0",
+          message: expect.stringContaining('Retained "demo" at 1.0.0'),
+        },
+      ]);
+      const message = result.outcomes[0]?.message ?? "";
+      expect(message).toContain(spec);
+      expect(message).toContain("2026.9.4");
+      expect(message).toContain(stderr.startsWith("E404") ? "Package not found" : "ECONNREFUSED");
+      expect(message).toContain("openclaw plugins update demo");
+      expect(warn).toHaveBeenCalledWith(message);
+      expect(result.config).toBe(config);
+      expect(result.changed).toBe(false);
+      expect(fs.readFileSync(path.join(installPath, "index.js"), "utf8")).toBe(
+        "export default function register() {}\n",
+      );
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["damaged", "incompatible"] as const)(
+    "does not retain a %s installed plugin when a core-sync target is unavailable",
+    async (payload) => {
+      const installPath = createInstalledPackageDir({
+        name: "@acme/demo",
+        version: "1.0.0",
+        runnable: true,
+      });
+      if (payload === "damaged") {
+        fs.rmSync(path.join(installPath, "index.js"));
+      } else {
+        fs.writeFileSync(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: "@acme/demo",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.js"], compat: { pluginApi: "<2020.1.1" } },
+          }),
+        );
+      }
+      runCommandWithTimeoutMock.mockResolvedValue({
+        code: 1,
+        stdout: "",
+        stderr: "E404 No matching version",
+      });
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "Package not found",
+      });
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: { demo: { source: "npm", spec: "@acme/demo@2.0.0", installPath } },
+        },
+      };
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["demo"],
+        syncOfficialPluginInstalls: true,
+        disableOnFailure: true,
+        coreVersion: "2026.9.4",
+      });
+
+      expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+      expect(result.outcomes[0]?.status).toBe("skipped");
+    },
+  );
+
   it("disables a corrupt installed payload when metadata probing also fails", async () => {
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({

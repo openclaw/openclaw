@@ -8,7 +8,7 @@ import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 function hoverDetails(row: Element | null | undefined) {
   if (row?.getAttribute("data-value") === "auto-device") {
-    return row.getAttribute("title") ?? "";
+    return row.getAttribute("aria-description") ?? "";
   }
   return [
     ...(row
@@ -86,7 +86,7 @@ function renderPicker(
       onPopoverHide: vi.fn(),
       onPopoverAfterHide: vi.fn(),
       onSelectDevice: vi.fn(),
-      onToggleAutoDevice: vi.fn(),
+      onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
       ...presentation,
@@ -264,9 +264,9 @@ describe("Where chip", () => {
 
   it("describes eligible-order automatic placement accurately", () => {
     const container = renderPicker(true, "eligible-order");
-    expect(container.querySelector('[data-value="auto-device"]')?.getAttribute("title")).toBe(
-      "Chooses the first eligible connected device",
-    );
+    expect(
+      container.querySelector('[data-value="auto-device"]')?.getAttribute("aria-description"),
+    ).toBe("Chooses the first eligible connected device");
   });
 
   it("uses the full paired-device count for Auto while search narrows the rows", () => {
@@ -275,11 +275,23 @@ describe("Where chip", () => {
     expect(container.querySelectorAll('[data-value^="device:"]')).toHaveLength(1);
   });
 
-  it("places Auto in the devices header with its accessible help", () => {
+  it("places Auto first in the device list with separate touch-accessible help", () => {
     const container = renderPicker(true);
-    const toggle = container.querySelector('[data-value="auto-device"]');
-    expect(toggle?.closest(".new-session-page__devices-heading")).not.toBeNull();
-    expect(toggle?.getAttribute("title")).toContain("Chooses the least-busy connected device");
+    const row = container.querySelector('[data-value="auto-device"]');
+    const choices = [
+      ...container.querySelectorAll('[data-value="auto-device"], [data-value^="device:"]'),
+    ];
+    expect(choices[0]).toBe(row);
+    expect(row?.closest(".new-session-page__devices-heading")).toBeNull();
+    expect(row?.getAttribute("aria-description")).toContain(
+      "Chooses the least-busy connected device",
+    );
+    expect(
+      container
+        .querySelector(".new-session-page__auto-info")
+        ?.closest("openclaw-tooltip")
+        ?.hasAttribute("open-on-click"),
+    ).toBe(true);
   });
 
   it("explains the checkout requirement instead of provider details", () => {
@@ -413,24 +425,24 @@ describe("Where chip", () => {
     expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
   });
 
-  it.each([false, true])("toggles automatic placement from %s", (autoDevice) => {
+  it.each([false, true])("selects automatic placement when currently %s", (autoDevice) => {
     const onSelectDevice = vi.fn();
-    const onToggleAutoDevice = vi.fn();
+    const onSelectAutoDevice = vi.fn();
     const container = renderPicker(
       true,
       undefined,
       { autoDevice },
-      { onSelectDevice, onToggleAutoDevice },
+      { onSelectDevice, onSelectAutoDevice },
     );
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]')!;
 
-    expect(automatic.getAttribute("role")).toBe("switch");
-    expect(automatic.getAttribute("aria-checked")).toBe(String(autoDevice));
+    expect(automatic.getAttribute("data-popover")).toBe("close");
+    expect(automatic.getAttribute("aria-pressed")).toBe(String(autoDevice));
     expect(hoverDetails(automatic)).toContain("Chooses the least-busy connected device");
     expect(automatic.querySelector(".session-menu__description")).toBeNull();
     automatic.click();
 
-    expect(onToggleAutoDevice).toHaveBeenCalledExactlyOnceWith(!autoDevice);
+    expect(onSelectAutoDevice).toHaveBeenCalledOnce();
     expect(onSelectDevice).not.toHaveBeenCalled();
   });
 
@@ -529,15 +541,15 @@ describe("Where chip", () => {
     { submitting: true, pendingPlacement: false, disabled: true },
     { submitting: false, pendingPlacement: true, disabled: true },
   ])("keeps Auto hidden with no devices regardless of pending submission: %j", (presentation) => {
-    const onToggleAutoDevice = vi.fn();
+    const onSelectAutoDevice = vi.fn();
     const container = renderPicker(
       true,
       undefined,
       { environments: [], autoDevice: true },
-      { ...presentation, onToggleAutoDevice },
+      { ...presentation, onSelectAutoDevice },
     );
     expect(container.querySelector('[data-value="auto-device"]')).toBeNull();
-    expect(onToggleAutoDevice).not.toHaveBeenCalled();
+    expect(onSelectAutoDevice).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -714,9 +726,11 @@ describe("Where chip", () => {
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
-    expect(autoRow?.getAttribute("aria-label")).toBe("Choose a device automatically");
-    expect(autoRow?.getAttribute("role")).toBe("switch");
-    expect(autoRow?.getAttribute("aria-checked")).toBe("false");
+    expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe(
+      "Choose automatically",
+    );
+    expect(autoRow?.tagName).toBe("BUTTON");
+    expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
     const remoteExec = renderPicker(false, "eligible-order");
     expect(hoverDetails(remoteExec.querySelector('[data-value="auto-device"]'))).toContain(
@@ -777,7 +791,7 @@ describe("Where chip", () => {
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
         onSelectDevice: () => undefined,
-        onToggleAutoDevice: () => undefined,
+        onSelectAutoDevice: () => undefined,
         onSelectCloudProfile: () => undefined,
         onConnectMachine: () => undefined,
       }),
@@ -819,7 +833,7 @@ describe("Where chip", () => {
         onPopoverHide: vi.fn(),
         onPopoverAfterHide: vi.fn(),
         onSelectDevice: vi.fn(),
-        onToggleAutoDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
         onSelectCloudProfile: vi.fn(),
         onConnectMachine: vi.fn(),
       }),
@@ -883,7 +897,7 @@ describe("Where chip", () => {
         onPopoverHide: vi.fn(),
         onPopoverAfterHide: vi.fn(),
         onSelectDevice: vi.fn(),
-        onToggleAutoDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
         onSelectCloudProfile: vi.fn(),
         onConnectMachine: vi.fn(),
       }),
@@ -1002,7 +1016,7 @@ describe("Where chip", () => {
           onPopoverHide: vi.fn(),
           onPopoverAfterHide: vi.fn(),
           onSelectDevice: vi.fn(),
-          onToggleAutoDevice: vi.fn(),
+          onSelectAutoDevice: vi.fn(),
           onSelectCloudProfile: vi.fn(),
           onConnectMachine: vi.fn(),
         }),

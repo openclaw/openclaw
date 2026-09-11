@@ -191,6 +191,12 @@ Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operati
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
+Service cleanup retains the owning plugin's cleanup context so `stop()` can
+release resources after ordinary call admission closes. Keep the resources and
+unsubscribe functions acquired by that startup attempt, and release those exact
+handles. Cleanup failures do not imply that native resources were terminated;
+see [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup).
+
 Use the service's `start()` and `stop()` methods to own recurring reconciliation.
 They run for service or plugin replacement as well as Gateway startup and shutdown;
 `gateway_start` and `gateway_stop` do not replay on plugin-only reload.

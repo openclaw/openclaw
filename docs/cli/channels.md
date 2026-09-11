@@ -55,6 +55,8 @@ default account. A blank value is rejected instead of falling back to the defaul
 the dead-letter commands, so an unset shell variable cannot silently select an account you
 did not name.
 
+With `--json`, every channel entry includes `label` alongside its accounts, install state, and origin. Entries also include `docsPath` when verified official channel metadata provides a validated root-relative docs path. Automation can join this path with `https://docs.openclaw.ai` without trusting plugin-supplied URLs. Untracked or inconsistent installed-plugin provenance omits `docsPath`; repair verified legacy provenance with `openclaw doctor --fix` or reinstall the official package.
+
 ## Status / capabilities / resolve / logs
 
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`

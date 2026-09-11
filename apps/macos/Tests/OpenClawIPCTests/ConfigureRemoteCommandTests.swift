@@ -177,10 +177,18 @@ struct ConfigureRemoteCommandTests {
         try body()
     }
 
-    @Test @MainActor func `configure remote writes ssh config and app defaults`() async throws {
+    @Test(arguments: [nil, 18790])
+    @MainActor func `configure remote writes ssh config and app defaults preserving the local gateway port`(
+        localGatewayPort: Int?) async throws
+    {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-\(UUID().uuidString).json")
         defer { try? FileManager().removeItem(at: configURL) }
+
+        if let localGatewayPort {
+            let initial = ["gateway": ["mode": "local", "port": localGatewayPort]] as [String: Any]
+            try JSONSerialization.data(withJSONObject: initial).write(to: configURL)
+        }
 
         let defaultSuites = [
             "ConfigureRemoteCommandTests.release.\(UUID().uuidString)",
@@ -219,7 +227,7 @@ struct ConfigureRemoteCommandTests {
             let gateway = try #require(root["gateway"] as? [String: Any])
             let remote = try #require(gateway["remote"] as? [String: Any])
             #expect(gateway["mode"] as? String == "remote")
-            #expect(gateway["port"] as? Int == 19089)
+            #expect(gateway["port"] as? Int == localGatewayPort)
             #expect(remote["transport"] as? String == "ssh")
             #expect(remote["url"] as? String == "ws://127.0.0.1:19089")
             #expect(remote["remotePort"] as? Int == 18789)

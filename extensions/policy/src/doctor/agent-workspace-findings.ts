@@ -2,6 +2,7 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
+import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedWorkspaceAgentMatches } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
@@ -69,17 +70,16 @@ function agentWorkspaceAccessFindings(
         ? `sandbox mode '${entry.sandboxMode ?? "off"}'`
         : `sandbox workspaceAccess '${entry.value ?? ""}'`;
       const ocPath = sandboxDisabled ? (entry.sandboxModeSource ?? entry.source) : entry.source;
-      return {
-        checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
-        severity: "error",
-        message: `${label} ${observed} is not allowed by policy.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath,
-        target: ocPath,
-        requirement: `oc://${policyDocName}/${requirementPath}`,
-        fixHint: "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
-      };
+      return policyEvidenceFinding(
+        { source: ocPath },
+        {
+          checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+          message: `${label} ${observed} is not allowed by policy.`,
+          requirement: `oc://${policyDocName}/${requirementPath}`,
+          fixHint:
+            "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
+        },
+      );
     });
 }
 
@@ -106,18 +106,13 @@ function agentWorkspaceToolDenyFindings(
     )
     .map((entry): HealthFinding => {
       const label = entry.agentId === undefined ? "agents.defaults" : `agent '${entry.agentId}'`;
-      return {
+      return policyEvidenceFinding(entry, {
         checkId: CHECK_IDS.policyAgentsToolNotDenied,
-        severity: "error",
         message: `${label} does not deny required tool '${entry.tool ?? ""}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
         requirement: `oc://${policyDocName}/${requirementPath}`,
         fixHint:
           "Add the tool to tools.deny or agents.entries.<id>.tools.deny, or update policy after review.",
-      };
+      });
     });
 }
 

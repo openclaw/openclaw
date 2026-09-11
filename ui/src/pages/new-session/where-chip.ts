@@ -1,7 +1,8 @@
 import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { html, nothing } from "lit";
+import { html, nothing, svg } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { deviceIcons } from "../../components/icons-devices.ts";
+import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
@@ -22,6 +23,12 @@ import {
   type DraftOperatingSystem,
 } from "./discovery.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
+
+const shuffleIcon = strokeIcon(svg`<path d="m18 14 4 4-4 4" />
+  <path d="m18 2 4 4-4 4" />
+  <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" />
+  <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" />
+  <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" />`);
 
 type WhereChipState = Readonly<{
   kind: "local" | "device" | "auto-device" | "cloud";
@@ -162,7 +169,7 @@ export function renderWhereChip(params: {
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;
   onSelectDevice: (deviceId: string) => void;
-  onToggleAutoDevice: (enabled: boolean) => void;
+  onSelectAutoDevice: () => void;
   onSelectCloudProfile: (profileId: string, useDefaults?: boolean) => void;
   onSelectCloudOs?: (osId: string) => void;
   onSelectCloudMachine?: (machineId: string) => void;
@@ -225,6 +232,16 @@ export function renderWhereChip(params: {
     Boolean(params.cloudProfileId) &&
     !params.state.cloudProfiles.some((profile) => profile.id === params.cloudProfileId) &&
     matches(t("newSession.cloud"), params.cloudProfileId);
+  const showAuto =
+    params.state.devices.length > 1 &&
+    (devices.length > 0 || matches(t("newSession.autoDeviceChoose"), t("newSession.autoDevice")));
+  const autoHelp =
+    params.state.autoDeviceDisabledReason ??
+    t(
+      params.autoPlacementMode === "eligible-order"
+        ? "newSession.autoDeviceHintEligible"
+        : "newSession.autoDeviceHint",
+    );
   const busy = params.submitting || params.pendingPlacement;
   const destinationDisabled = busy;
   let cleanupScrollFade: (() => void) | undefined;
@@ -355,31 +372,44 @@ export function renderWhereChip(params: {
             }
             ${
               devices.length ||
-              params.autoDevice ||
+              showAuto ||
               (params.isAdmin && params.state.devices.length === 0 && !query)
                 ? html`<div
                     class="new-session-page__environment-heading new-session-page__devices-heading"
                   >
-                    <span>${t("newSession.yourDevices")}</span>
-                    ${
-                      params.state.devices.length > 1
-                        ? html`<label class="new-session-page__header-auto">
-                            <span>${t("newSession.autoDevice")}</span>
-                            <button
-                              id="new-session-auto-device-switch"
-                              type="button"
-                              class="new-session-page__auto-switch"
-                              data-value="auto-device"
-                              role="switch"
-                              aria-checked=${String(params.autoDevice === true)}
-                              aria-label=${t("newSession.autoDeviceChoose")}
-                              title=${params.state.autoDeviceDisabledReason ?? t(params.autoPlacementMode === "eligible-order" ? "newSession.autoDeviceHintEligible" : "newSession.autoDeviceHint")}
-                              ?disabled=${busy || (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))}
-                              @click=${() => params.onToggleAutoDevice(!params.autoDevice)}
-                            ></button>
-                          </label>`
-                        : nothing
-                    }
+                    ${t("newSession.yourDevices")}
+                  </div>`
+                : nothing
+            }
+            ${
+              showAuto
+                ? html`<div class="new-session-page__auto-row">
+                    <button
+                      type="button"
+                      class="session-menu__item new-session-page__environment-option"
+                      data-value="auto-device"
+                      data-popover="close"
+                      aria-pressed=${String(params.autoDevice === true)}
+                      aria-description=${autoHelp}
+                      ?disabled=${busy || (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))}
+                      @click=${params.onSelectAutoDevice}
+                    >
+                      <span class="session-menu__icon" aria-hidden="true">${shuffleIcon}</span>
+                      <span class="session-menu__text">${t("newSession.autoDeviceChoose")}</span>
+                      <span class="session-menu__check" aria-hidden="true"
+                        >${params.autoDevice ? icons.check : nothing}</span
+                      >
+                    </button>
+                    <openclaw-tooltip open-on-click placement="right-start">
+                      <button
+                        type="button"
+                        class="new-session-page__auto-info"
+                        aria-label=${t("newSession.autoDeviceInfo")}
+                      >
+                        ${icons.info}
+                      </button>
+                      <span slot="content">${autoHelp}</span>
+                    </openclaw-tooltip>
                   </div>`
                 : nothing
             }

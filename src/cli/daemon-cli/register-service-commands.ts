@@ -24,11 +24,13 @@ function resolveInstallOptions(
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   const parentPort = inheritOptionFromParent<string>(command, "port");
   const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentAllowUnconfigured = inheritOptionFromParent<boolean>(command, "allowUnconfigured");
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    allowUnconfigured: cmdOpts.allowUnconfigured ?? parentAllowUnconfigured,
     json: resolveJsonOption(cmdOpts, command),
   };
 }
@@ -96,6 +98,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
+    .option("--allow-unconfigured", "Allow the service to start without gateway.mode=local")
     .option("--force", "Reinstall if already installed (may restart a running Gateway)", false)
     .option("--json", "Output JSON", false)
     .addOption(

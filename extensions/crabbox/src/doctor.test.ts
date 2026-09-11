@@ -58,7 +58,7 @@ describe("Crabbox worker doctor", () => {
   it("accepts a supported configured executable without downloading", async () => {
     const probe = vi
       .spyOn(managedBinary, "probeCrabboxVersion")
-      .mockResolvedValue({ status: "supported", version: "0.55.0" });
+      .mockResolvedValue({ status: "supported", version: "0.56.0" });
     const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
     await expect(captureCrabboxDoctorCheck().detect(context())).resolves.toEqual([]);
     expect(probe).toHaveBeenCalledOnce();
@@ -77,7 +77,7 @@ describe("Crabbox worker doctor", () => {
         expect.objectContaining({
           severity: "warning",
           target: "worker",
-          requirement: "Crabbox 0.55.0 or newer",
+          requirement: "Crabbox 0.56.0 or newer",
           fixHint: expect.stringContaining("openclaw doctor --fix"),
         }),
       ]);
@@ -89,7 +89,7 @@ describe("Crabbox worker doctor", () => {
     vi.spyOn(managedBinary, "resolveManagedCrabboxBinaryPath").mockReturnValue(process.execPath);
     vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
       status: "supported",
-      version: "0.55.0",
+      version: "0.56.0",
     });
     const ctx = context();
     ctx.cfg.cloudWorkers!.profiles!.worker!.settings = { binary: "/nonexistent/crabbox" };
@@ -115,7 +115,7 @@ describe("Crabbox worker doctor", () => {
       .spyOn(managedBinary, "ensureManagedCrabboxBinary")
       .mockImplementation(async ({ binary } = {}) => ({
         binary: binary ?? "crabbox",
-        version: "0.55.0",
+        version: "0.56.0",
       }));
     const check = captureCrabboxDoctorCheck();
     const findings = [{ checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID }] as never;

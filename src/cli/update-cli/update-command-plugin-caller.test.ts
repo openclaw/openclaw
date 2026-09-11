@@ -201,7 +201,10 @@ describe("connected in-process plugin finalization authority", () => {
           { json: true, yes: true, run },
           { root: state.root, env: targetEnv },
           async () => {
-            await withUpdateCommandTerminalResult(run, execution);
+            await withUpdateCommandTerminalResult((registerRun) => {
+              registerRun(run);
+              return execution();
+            });
           },
         );
         if (scenario === "healthy") {

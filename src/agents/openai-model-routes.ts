@@ -11,6 +11,7 @@ import type {
 import {
   createProviderModelRoutesResolver,
   resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
 } from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -74,11 +75,32 @@ export const openAIModelCatalogRoutePolicy =
 export function resolveModelCatalogIdentityKey(
   entry: Pick<ModelCatalogEntry, "provider" | "id">,
 ): string {
+  return resolveModelCatalogIdentityKeyWithPolicies(entry);
+}
+
+/** Reuses each provider policy only for one synchronous catalog operation. */
+export function createModelCatalogIdentityKeyResolver() {
+  const policies = new Map<string, ReturnType<typeof resolveProviderModelPolicySurface>>();
+  return (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+    resolveModelCatalogIdentityKeyWithPolicies(entry, policies);
+}
+
+function resolveModelCatalogIdentityKeyWithPolicies(
+  entry: Pick<ModelCatalogEntry, "provider" | "id">,
+  policies?: Map<string, ReturnType<typeof resolveProviderModelPolicySurface>>,
+): string {
   const provider = normalizeProviderId(entry.provider);
+  const modelId = splitTrailingAuthProfile(entry.id).model;
+  let surface = policies?.get(provider);
+  if (policies && surface === undefined) {
+    surface = resolveProviderModelPolicySurface(provider);
+    policies.set(provider, surface);
+  }
   const id =
     resolveProviderModelCatalogId({
       provider,
-      modelId: splitTrailingAuthProfile(entry.id).model,
+      modelId,
+      surface,
     }) ?? entry.id;
   return JSON.stringify([provider, id]);
 }

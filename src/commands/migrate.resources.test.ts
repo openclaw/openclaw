@@ -71,7 +71,12 @@ describe("migration command resources", () => {
           } else {
             expect(outcome.error).toBeUndefined();
             expect(outcome.result?.summary.migrated).toBe(1);
-            expect(outcome.result?.metadata).toBe(fixture.state.planned?.metadata);
+            expect(() => {
+              const read = outcome.result?.metadata?.read;
+              if (typeof read === "function") {
+                read();
+              }
+            }).toThrow("reloaded or disabled");
             expect(logs).toHaveLength(1);
             expect(JSON.parse(logs[0] ?? "{}").summary.migrated).toBe(1);
           }

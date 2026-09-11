@@ -577,7 +577,7 @@ export class NewSessionModelControl {
       thinkingDefault: defaultThinkingProfile?.thinkingDefault,
     };
     return renderChatModelControls({
-      renderAccountControl: (model) =>
+      renderAccountSection: (model) =>
         renderChatModelAccountControl({
           owner: this,
           client,
@@ -599,7 +599,6 @@ export class NewSessionModelControl {
             : undefined,
           onManage: () => options.context?.navigate("profile"),
           onRequestUpdate: this.notify,
-          hint: t("chat.modelAccounts.draftHint"),
         }),
       activeRunId: null,
       agentDefaultModel,

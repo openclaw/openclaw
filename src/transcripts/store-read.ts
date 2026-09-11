@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asSafeIntegerInRange,
+  parseDateStringTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { expressionBuilder, type Expression, type SqlBool } from "kysely";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES,
@@ -10,6 +14,7 @@ import {
   TRANSCRIPTS_RESULT_MAX_BYTES,
   type TranscriptUtterance,
   type TranscriptsListParams,
+  type TranscriptsGetParams,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -34,6 +39,35 @@ export class TranscriptLibraryError extends Error {
   ) {
     super(message);
   }
+}
+
+export function cursorScope(values: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(values)).digest("hex");
+}
+
+export function encodeCursor(scope: string, position: [string, string] | [number]): string {
+  return Buffer.from(JSON.stringify([1, scope, ...position])).toString("base64url");
+}
+
+export function decodeCursor(cursor: string | undefined, scope: string): unknown[] | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+  try {
+    if (cursor.length > TRANSCRIPTS_RESULT_MAX_BYTES || !/^[A-Za-z0-9_-]+$/u.test(cursor)) {
+      throw new Error();
+    }
+    const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (Array.isArray(value) && value[0] === 1 && value[1] === scope) {
+      return value.slice(2);
+    }
+  } catch {
+    /* Invalid or cross-query cursors are never used as selectors. */
+  }
+  throw new TranscriptLibraryError(
+    "transcript_invalid_cursor",
+    "Invalid transcript cursor; restart pagination with the current filters.",
+  );
 }
 
 function transcriptPageLimit(limit = TRANSCRIPTS_PAGE_DEFAULT, max = TRANSCRIPTS_PAGE_MAX): number {
@@ -491,7 +525,7 @@ function transcriptReadUtteranceFromRow(
   };
 }
 
-export function readTranscriptUtterancePage(
+function readTranscriptUtterancePage(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
   options: { limit?: number; after?: number; query?: string },
@@ -574,7 +608,7 @@ export function readStoredTranscriptNotes(
 }
 
 /** Iterate canonical rows for downloads without materializing export files or an unbounded array. */
-export function* iterateTranscriptUtterances(
+function* iterateTranscriptUtterances(
   database: DatabaseSync,
   session: TranscriptSessionDescriptor,
 ): Generator<TranscriptUtterance> {
@@ -585,4 +619,64 @@ export function* iterateTranscriptUtterances(
     assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
     yield transcriptReadUtteranceFromRow(row);
   }
+}
+
+function requireTranscriptReadEntry(
+  database: DatabaseSync,
+  selector: string,
+  purpose: TranscriptReadPurpose,
+) {
+  const entry = readTranscriptEntry(database, selector, purpose);
+  if (!entry) {
+    throw new TranscriptLibraryError(
+      "transcript_session_not_found",
+      "Transcript not found; refresh the library and use its full selector.",
+    );
+  }
+  return entry;
+}
+
+export function readTranscriptLibraryEntry(database: DatabaseSync, params: TranscriptsGetParams) {
+  const purpose: "legacy" | "page" =
+    params.limit === undefined && params.cursor === undefined && params.query === undefined
+      ? "legacy"
+      : "page";
+  const entry = requireTranscriptReadEntry(database, params.selector, purpose);
+  const scope = cursorScope(["get", entry.selector, params.query]);
+  const position = decodeCursor(params.cursor, scope);
+  const after = asSafeIntegerInRange(position?.[0], { min: 0 });
+  if (position && (position.length !== 1 || after === undefined)) {
+    throw new TranscriptLibraryError(
+      "transcript_invalid_cursor",
+      "Invalid transcript reader cursor.",
+    );
+  }
+  const page = params.includeUtterances
+    ? readTranscriptUtterancePage(
+        database,
+        entry.session,
+        { limit: params.limit, query: params.query, after },
+        purpose,
+      )
+    : undefined;
+  const notes = readStoredTranscriptNotes(database, entry.session, purpose);
+  return { entry, page, notes, purpose, scope };
+}
+
+export type TranscriptExportRead = {
+  entry: TranscriptReadEntry;
+  notes: ReturnType<typeof readStoredTranscriptNotes> | undefined;
+};
+
+export function* iterateTranscriptExport(
+  database: DatabaseSync,
+  selector: string,
+  includeNotes: boolean,
+): Generator<TranscriptUtterance, TranscriptExportRead> {
+  const entry = requireTranscriptReadEntry(database, selector, "export");
+  yield* iterateTranscriptUtterances(database, entry.session);
+  const notes = includeNotes
+    ? readStoredTranscriptNotes(database, entry.session, "export")
+    : undefined;
+  return { entry, notes };
 }

@@ -163,6 +163,8 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   });
   seedTranscriptState(storePath);
 
+  // Client setup prepares reply runtime before the deletion responsiveness window.
+  const { ws } = await openClient();
   const samples: number[] = [];
   let previous = performance.now();
   const heartbeat = setInterval(() => {
@@ -170,7 +172,6 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     samples.push(current - previous);
     previous = current;
   }, 10);
-  const { ws } = await openClient();
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{

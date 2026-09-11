@@ -21,12 +21,6 @@ function resolveEntryFreshTotalTokens(
   return normalizeTokenCount(resolveFreshSessionTotalTokens(entry));
 }
 
-function resolveEntryGoalStartTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
-): number {
-  return resolveEntryFreshTotalTokens(entry) ?? 0;
-}
-
 function normalizeTokenBudget(value: number | undefined): number | undefined {
   const normalized = normalizeTokenCount(value);
   return normalized && normalized > 0 ? normalized : undefined;
@@ -86,7 +80,7 @@ export function buildCreatedSessionGoal(
     throw new SessionGoalTransitionError("goal already exists");
   }
   const tokenBudget = normalizeTokenBudget(options.tokenBudget);
-  const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
+  const tokenStart = resolveEntryFreshTotalTokens(entry);
   return {
     schemaVersion: 1,
     id: crypto.randomUUID(),
@@ -94,8 +88,8 @@ export function buildCreatedSessionGoal(
     status: "active",
     createdAt: now,
     updatedAt: now,
-    tokenStart: resolveEntryGoalStartTokens(entry),
-    tokenStartFresh,
+    tokenStart: tokenStart ?? 0,
+    tokenStartFresh: tokenStart !== undefined,
     tokensUsed: 0,
     ...(tokenBudget ? { tokenBudget } : {}),
     continuationTurns: 0,

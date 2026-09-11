@@ -808,37 +808,39 @@ describe("prepared model runtime scoped refresh", () => {
       maxTokens: 4096,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }));
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "fixture-native",
-      source: "fixture",
-      harness: {
-        id: "fixture-native",
-        label: "Fixture native",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("catalog-only fixture");
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture-native",
+        source: "fixture",
+        harness: {
+          id: "fixture-native",
+          label: "Fixture native",
+          supports: () => ({ supported: true }),
+          async runAttempt() {
+            throw new Error("catalog-only fixture");
+          },
+          async loadModelCatalog({ config: currentConfig }) {
+            if (holdNative) {
+              nativeStarted.resolve();
+              await releaseNative.promise;
+            }
+            return [
+              {
+                provider: "demo",
+                id:
+                  currentConfig.agents?.defaults?.model === "demo/old-configured"
+                    ? "native-old"
+                    : "native-new",
+                name: "Native",
+                nativeRuntime: "fixture-native",
+              },
+            ];
+          },
         },
-        async loadModelCatalog({ config: currentConfig }) {
-          if (holdNative) {
-            nativeStarted.resolve();
-            await releaseNative.promise;
-          }
-          return [
-            {
-              provider: "demo",
-              id:
-                currentConfig.agents?.defaults?.model === "demo/old-configured"
-                  ? "native-old"
-                  : "native-new",
-              name: "Native",
-              nativeRuntime: "fixture-native",
-            },
-          ];
-        },
-      },
+      });
+      return registry;
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     const config: OpenClawConfig = {
       models: {
         providers: {
@@ -939,7 +941,7 @@ describe("prepared model runtime scoped refresh", () => {
         },
       },
     };
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(createEmptyPluginRegistry);
     await refreshModelRuntimeAfterHotReload({
       config: retiredConfig,
       agentIds: undefined,

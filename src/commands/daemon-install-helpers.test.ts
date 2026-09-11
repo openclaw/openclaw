@@ -400,6 +400,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
       port: 3000,
+      allowUnconfigured: false,
       dev: false,
       runtime: "bun",
       runtimePath: bunPath,
@@ -411,36 +412,51 @@ describe("buildGatewayInstallPlan", () => {
     );
   });
 
-  it("passes override ownership to heap resolution without persisting operator options", async () => {
-    mockNodeGatewayPlanFixture();
-    const managedDefinition = {
-      programArguments: ["node", "--max-heap-size=24576", "cli.js", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
-    };
-    const existingCommand = {
-      ...managedDefinition,
-      environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
+  it.each([
+    { mode: "remote" as const, allowUnconfigured: undefined, expectedOverride: true },
+    { mode: "local" as const, allowUnconfigured: undefined, expectedOverride: false },
+    { mode: "remote" as const, allowUnconfigured: false, expectedOverride: false },
+  ])(
+    "preserves managed launch options through repair: $mode $allowUnconfigured",
+    async ({ mode, allowUnconfigured, expectedOverride }) => {
+      mockNodeGatewayPlanFixture();
+      const managedDefinition = {
+        programArguments: [
+          "node",
+          "--max-heap-size=24576",
+          "cli.js",
+          "gateway",
+          "--allow-unconfigured",
+        ],
+        environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
+      };
+      const existingCommand = {
+        ...managedDefinition,
+        environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
 
-    await buildGatewayInstallPlan({
-      env: {
-        HOME: isolatedHome,
-        NODE_OPTIONS: "--max-old-space-size=16384",
-      },
-      port: 3000,
-      runtime: "node",
-      existingCommand,
-    });
+      await buildGatewayInstallPlan({
+        env: {
+          HOME: isolatedHome,
+          NODE_OPTIONS: "--max-old-space-size=16384",
+        },
+        port: 3000,
+        runtime: "node",
+        existingCommand,
+        config: { gateway: { mode } },
+        allowUnconfigured,
+      });
 
-    expect(
-      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
-    ).toBe("--max-old-space-size=6144");
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({ existingCommand }),
-    );
-  });
+      expect(
+        firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
+      ).toBe("--max-old-space-size=6144");
+      expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+        expect.objectContaining({ existingCommand, allowUnconfigured: expectedOverride }),
+      );
+    },
+  );
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     mockNodeGatewayPlanFixture();

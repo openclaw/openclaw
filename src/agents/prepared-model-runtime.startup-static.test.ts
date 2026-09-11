@@ -245,7 +245,7 @@ beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
-    .mockReturnValue(createEmptyPluginRegistry());
+    .mockImplementation(() => createEmptyPluginRegistry());
   vi.clearAllMocks();
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);

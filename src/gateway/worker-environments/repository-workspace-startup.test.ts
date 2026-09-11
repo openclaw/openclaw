@@ -401,6 +401,12 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   try {
     const initial = await f.start({ recovery: true, preparedRepository });
     expect(initial.manifestRef).toBe(completed.manifestRef);
+    expect(await requireWorkspaceResultGit(f.remote, ["config", "--local", "user.name"])).toBe(
+      gitAuthor.name,
+    );
+    expect(await requireWorkspaceResultGit(f.remote, ["config", "--local", "user.email"])).toBe(
+      gitAuthor.email,
+    );
     const initialCheckpoint = f.store.get(f.repository.workspaceId)!;
     await fs.writeFile(path.join(f.remote, "tracked.txt"), "accepted session edit\n");
     const edited = await readActualWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });

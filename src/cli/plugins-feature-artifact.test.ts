@@ -12,10 +12,11 @@ import {
   resolvePackageSetupSource,
 } from "../plugins/package-entry-resolution.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import {
+  collectPluginsValidationResult,
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
@@ -121,12 +122,12 @@ describe("plugin artifact authoring", () => {
     expect(await fs.readFile(path.join(packageRoot, manifest.controlUi.entry), "utf8")).toContain(
       "Draft composer",
     );
-    const loaded = await loadToolPlugin({
-      rootDir: packageRoot,
-      entryPath: path.join(packageRoot, "dist/index.js"),
+    expect(await collectPluginsValidationResult({ root: packageRoot })).toEqual({
+      valid: true,
+      pluginId: "draft-review",
+      errors: [],
     });
-    expect(loaded.metadata.id).toBe("draft-review");
-    expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["draft_review_analyze"]);
+    expect(manifest.contracts.tools).toEqual(["draft_review_analyze"]);
     const sourceExtracted = path.join(parent, "source-extracted");
     await fs.mkdir(sourceExtracted);
     await extract({ file: archive, cwd: sourceExtracted, strict: true });
@@ -135,9 +136,8 @@ describe("plugin artifact authoring", () => {
     // A separate extraction keeps Node's module cache from masking the source
     // loader's SDK aliases, even when the host also has built SDK artifacts.
     const sourceLoaded = withPluginCache(createPluginCache(), () =>
-      getCachedPluginSourceModuleLoader({
+      getCachedPluginModuleLoader({
         modulePath: sourceEntryPath,
-        rootDir: sourcePackageRoot,
         importerUrl: import.meta.url,
         aliasMap: buildPluginLoaderAliasMap(
           sourceEntryPath,
@@ -146,6 +146,7 @@ describe("plugin artifact authoring", () => {
           "src",
         ),
         transformOpenClawDependencies: true,
+        tryNative: false,
       })(sourceEntryPath),
     );
     expect(sourceLoaded).toMatchObject({
@@ -291,9 +292,8 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         const setupPath = resolvePackageSetupSource(sourceResolution);
         expect(setupPath).toBeTruthy();
         withPluginCache(createPluginCache(), () => {
-          const load = getCachedPluginSourceModuleLoader({
+          const load = getCachedPluginModuleLoader({
             modulePath: sourceEntryPath!,
-            rootDir: sourcePackageDir,
             importerUrl: import.meta.url,
             aliasMap: buildPluginLoaderAliasMap(
               sourceEntryPath!,
@@ -302,6 +302,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
               "src",
             ),
             transformOpenClawDependencies: true,
+            tryNative: false,
           });
           expect(load(sourceEntryPath!)).toMatchObject({ default: { shared: { ready: true } } });
           expect(load(setupPath!)).toMatchObject({
@@ -456,11 +457,11 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         path.join(rootDir, "dist/index.js"),
         `\nimport { resource } from "./runtime/${file}"; if (resource !== "required template") throw new Error("Backend resource failed");\n`,
       );
-      const loaded = await loadToolPlugin({
-        rootDir,
-        entryPath: path.join(rootDir, "dist/index.js"),
+      expect(await collectPluginsValidationResult({ root: rootDir })).toEqual({
+        valid: true,
+        pluginId: "draft-review",
+        errors: [],
       });
-      expect(loaded.metadata.id).toBe("draft-review");
       const archive = path.join(parent, "runtime-resource.tgz");
       await expect(runPluginsPackCommand({ root: rootDir, out: archive })).rejects.toThrow(
         "module-relative runtime files",

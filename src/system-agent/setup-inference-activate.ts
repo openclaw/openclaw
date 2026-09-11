@@ -26,6 +26,7 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -447,10 +448,12 @@ async function verifyAndActivateCandidate(
   const candidate = buildCandidate(cfg);
   const sourceCandidate = buildCandidate(source);
   const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
+  await using cache = createPluginCache();
   const generation =
     staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
       ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
           loadSetupInferencePluginGeneration({
+            cache,
             config: candidate,
             workspaceDir: ctx.workspace,
             selection: {

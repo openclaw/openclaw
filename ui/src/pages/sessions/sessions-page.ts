@@ -1463,7 +1463,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
     const cloudWorkerStopAllowed = Boolean(
       cloudWorkerStopAction &&
-      (cloudWorkerStopAction.method !== "sessions.reclaim" || row.hasActiveRun !== true) &&
+      (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
       isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
     );
     const pinnable = isPinnableUiSessionRow(row);

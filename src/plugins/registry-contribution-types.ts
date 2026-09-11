@@ -250,6 +250,14 @@ export type MemoryPluginRuntime = {
     workspaceDir: string;
     relativePaths: string[];
   }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
+  /** Fence and drain managers consuming these exact retiring capability objects. */
+  prepareReload?(change: {
+    retireRuntime: boolean;
+    retiringEmbeddingProviders: readonly MemoryEmbeddingProviderAdapter[];
+  }): {
+    drain(): Promise<void | { errors: readonly unknown[] }>;
+    resume(): void;
+  };
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

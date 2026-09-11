@@ -34,7 +34,10 @@ import {
   reattachTerminalSessionHosts,
   updateTerminalSessionTheme,
 } from "./terminal-panel-session-rendering.ts";
-import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
+import type {
+  TerminalPanelSessionTab,
+  TerminalRouteTarget,
+} from "./terminal-panel-session-types.ts";
 import { terminalPanelStyles } from "./terminal-panel-styles.ts";
 import { terminalPanelUploadStyles } from "./terminal-panel-upload-styles.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -68,8 +71,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** Main-route terminal owns its queue and restore state independently of docks. */
+  @property({ type: Boolean }) page = false;
+  @property({ attribute: false }) routeTarget: TerminalRouteTarget = null;
 
-  @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
   @state() private pickerSessions: TerminalSessionInfo[] = [];
 
@@ -96,7 +101,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     isCurrent: (tab) =>
       this.terminalSessions.tabs.includes(tab as TerminalPanelSessionTab) && tab.status === "live",
     fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
-    setError: (message) => (this.terminalPanelErrorText = message),
+    setError: (message) => this.terminalSessions.setError(message),
     requestUpdate: () => this.requestUpdate(),
   });
   createTerminalController = createIsolatedGhosttyTerminal;
@@ -223,30 +228,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.closeTerminalPanel();
       return;
     }
-    if (detail?.catalogStart) {
-      event.stopImmediatePropagation();
-      this.dockLayout.setOpen(true);
-      detail.catalogStart.respondWith(
-        this.terminalSessions.startCatalogSession(
-          detail.catalogStart.params,
-          detail.catalogStart.isCurrent,
-        ),
-      );
-      return;
-    }
-    if (detail?.terminalSessionId || detail?.catalog || detail?.open === true) {
+    if (detail?.terminalSessionId || detail?.open === true) {
       if (!this.available) {
         return;
       }
-      if (detail.catalog) {
-        this.dockLayout.setDock("main");
-      }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
-        ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
-        : detail.catalog
-          ? this.terminalSessions.openCatalogSession(detail.catalog)
-          : this.terminalSessions.restoreSessions());
+        ? this.terminalSessions.attachSessionById(detail.terminalSessionId, true)
+        : this.terminalSessions.restoreSessions());
       return;
     }
     this.toggle();
@@ -381,11 +370,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.renderRoot.querySelector(".tp-viewport");
   }
 
-  private retryTerminalOpen(): void {
-    this.terminalPanelErrorText = null;
-    this.terminalSessions.openRetry.run();
-  }
-
   override render() {
     if (!this.terminalPanelOpen) {
       return nothing;
@@ -404,11 +388,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
-    const terminalError = this.terminalPanelErrorText
+    const terminalError = this.terminalSessions.error
       ? {
-          text: this.terminalPanelErrorText,
-          retry: this.terminalSessions.openRetry.available
-            ? () => this.retryTerminalOpen()
+          text: this.terminalSessions.error.text,
+          retry: this.terminalSessions.error.retryAction
+            ? () => this.terminalSessions.retryOpen()
             : undefined,
         }
       : null;

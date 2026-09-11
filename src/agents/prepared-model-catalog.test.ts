@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   prepareScopedCatalog: vi.fn(),
   refreshStaleCatalog: vi.fn(),
   isFullCatalog: vi.fn(),
-  releaseSnapshot: vi.fn(),
-  releasePublishedSnapshot: vi.fn(),
+  releaseSnapshot: vi.fn(async () => {}),
+  releasePublishedSnapshot: vi.fn(async () => {}),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -43,12 +43,12 @@ vi.mock("./prepared-model-runtime.js", () => {
     PreparedModelRuntimeOwnerNotPublishedError,
     acquireAgentRunPreparedModelRuntime: async (input: Record<string, unknown>) => ({
       snapshot: await mocks.acquireSnapshot(input),
-      release: mocks.releaseSnapshot,
+      [Symbol.asyncDispose]: mocks.releaseSnapshot,
     }),
     activateStandalonePreparedModelRuntime: (...args: unknown[]) => mocks.activateSnapshot(...args),
     acquireReadOnlyPreparedModelRuntime: async (input: Record<string, unknown>) => ({
       snapshot: await mocks.loadSnapshot({ ...input, readOnly: true }),
-      release: mocks.releaseSnapshot,
+      [Symbol.asyncDispose]: mocks.releaseSnapshot,
     }),
     getPreparedModelRuntimeSnapshot: (...args: unknown[]) => mocks.getSnapshot(...args),
     loadPreparedModelRuntimeSnapshot: (...args: unknown[]) => mocks.loadSnapshot(...args),
@@ -57,7 +57,7 @@ vi.mock("./prepared-model-runtime.js", () => {
     prepareModelRuntimeSnapshot: (...args: unknown[]) => mocks.prepareSnapshot(...args),
     acquirePreparedModelRuntimeSnapshot: async (...args: unknown[]) => ({
       snapshot: await mocks.prepareSnapshot(...args),
-      release: mocks.releasePublishedSnapshot,
+      [Symbol.asyncDispose]: mocks.releasePublishedSnapshot,
     }),
     refreshPreparedModelRuntimeCatalog: (...args: unknown[]) => mocks.refreshStaleCatalog(...args),
   };
@@ -208,7 +208,7 @@ describe("prepared model catalog access", () => {
       mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
       mocks.loadSnapshot.mockResolvedValue(snapshot);
       mocks.acquireSnapshot.mockResolvedValue(snapshot);
-      mocks.releaseSnapshot.mockImplementation(() => {
+      mocks.releaseSnapshot.mockImplementation(async () => {
         current = false;
       });
 

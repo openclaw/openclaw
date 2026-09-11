@@ -256,4 +256,67 @@ describe("channel plugin catalog", () => {
       "After official update",
     );
   });
+  it.each([
+    { name: "bundled", origin: "bundled", trusted: false, expected: "/channels/fixture" },
+    { name: "official npm global", origin: "global", trusted: true, expected: "/channels/fixture" },
+    { name: "official config", origin: "config", trusted: true, expected: "/channels/fixture" },
+    { name: "untracked official identity", origin: "global", trusted: false },
+    { name: "workspace shadow", origin: "workspace", trusted: true },
+    {
+      name: "third-party package shadow",
+      origin: "global",
+      trusted: true,
+      packageName: "@vendor/fixture",
+    },
+    { name: "different plugin owner", origin: "global", trusted: true, pluginId: "other-owner" },
+  ] as const)("binds docs to official metadata for $name", (scenario) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-docs-")));
+    tempDirs.push(root);
+    const officialPath = path.join(root, "official.json");
+    writeChannelCatalog(officialPath, "fixture", "Fixture");
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: ("pluginId" in scenario ? scenario.pluginId : undefined) ?? "fixture",
+        origin: scenario.origin,
+        rootDir: root,
+        packageName: "packageName" in scenario ? scenario.packageName : "@example/fixture",
+        trustedOfficialInstall: scenario.trusted,
+        channel: {
+          id: "fixture",
+          label: "Installed Fixture",
+          docsPath:
+            scenario.origin === "bundled" ? "/channels/fixture" : "/unverified-installed-guide",
+          blurb: "fixture",
+        },
+        install: { npmSpec: "@example/fixture" },
+      },
+    ]);
+    const entry = getChannelPluginCatalogEntry("fixture", {
+      officialCatalogPaths: [officialPath],
+      catalogPaths: [path.join(root, "none.json")],
+      env: {},
+    });
+    expect(entry?.officialDocsPath).toBe("expected" in scenario ? scenario.expected : undefined);
+    expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
+  });
+
+  it.each([
+    "https://attacker.example/setup",
+    "//attacker.example/setup",
+    "/x/..//attacker.example/setup",
+    "/\\attacker.example/setup",
+    "relative/path",
+  ])("omits unsafe official docs path %s", (docsPath) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "fixture",
+        origin: "bundled",
+        rootDir: "/tmp/fixture",
+        packageName: "@example/fixture",
+        channel: { id: "fixture", label: "Fixture", docsPath, blurb: "fixture" },
+        install: { npmSpec: "@example/fixture" },
+      },
+    ]);
+    expect(getChannelPluginCatalogEntry("fixture", { env: {} })?.officialDocsPath).toBeUndefined();
+  });
 });

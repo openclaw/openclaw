@@ -514,23 +514,52 @@ describe("Gateway ACP completion ownership", () => {
             .toBe(true);
         }
         if (scenario.bound) {
-          // Source custody precedes ACP effects; the bound transcript owns the reply.
-          expect
-            .soft(
-              readTranscriptMessages({
-                agentId: "main",
-                sessionId: `source-${sessionId}`,
-                sessionKey,
-                storePath,
-              }),
-            )
-            .toMatchObject(
-              ["cold", "warm"].slice(0, index + 1).map((turn) => ({
+          // The bound target owns ACP history; the dashboard retains each delivered reply too.
+          const sourceMessages = readTranscriptMessages({
+            agentId: "main",
+            sessionId: `source-${sessionId}`,
+            sessionKey,
+            storePath,
+          });
+          expect.soft(sourceMessages).toMatchObject(
+            ["cold", "warm"].slice(0, index + 1).flatMap((turn) => [
+              {
                 role: "user",
                 content: `request ${turn}`,
                 idempotencyKey: `acp-completion-${suffix}-${turn}:user`,
-              })),
-            );
+              },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "same accepted reply" }],
+                idempotencyKey: `acp-completion-${suffix}-${turn}`,
+              },
+            ]),
+          );
+          for (const [transcript, ownerKey] of [
+            [sourceMessages, sessionKey],
+            [messages, targetSessionKey],
+          ] as const) {
+            // Media is copied into each transcript owner's namespace, not shared by URL.
+            const mediaPrefix = `/api/chat/media/outgoing/${encodeURIComponent(ownerKey)}/`;
+            expect
+              .soft(
+                readAssistantDisplayContent(
+                  transcript.findLast((message) => message.role === "assistant"),
+                ),
+              )
+              .toMatchObject([
+                { type: "text", text: "same accepted reply" },
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  sizeBytes: 68,
+                  width: 1,
+                  height: 1,
+                  url: expect.stringContaining(mediaPrefix),
+                  openUrl: expect.stringContaining(mediaPrefix),
+                },
+              ]);
+          }
         }
       }
     } finally {

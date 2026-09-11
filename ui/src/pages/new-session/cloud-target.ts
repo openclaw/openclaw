@@ -86,6 +86,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   const unavailableReason = params.disabled ? params.title || params.description : undefined;
   const description = params.compact ? undefined : params.description;
   const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
+  const touchDetails = params.compact && !params.disabled && !params.hideDetails;
   const row = html`
     <button
       type="button"
@@ -154,9 +155,23 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
     ? html`<openclaw-tooltip
         class="new-session-page__environment-details"
         placement="right-start"
-        ?open-on-click=${accessibleBlocker}
+        ?open-on-click=${accessibleBlocker || touchDetails}
       >
-        ${row}
+        ${
+          touchDetails
+            ? html`<div class="new-session-page__environment-detail-trigger">
+                ${row}
+                <button
+                  type="button"
+                  class="new-session-page__touch-details"
+                  aria-label=${t("newSession.environmentDetails", { name: params.label })}
+                  ?disabled=${submitting}
+                >
+                  ${icons.info}
+                </button>
+              </div>`
+            : row
+        }
         <div slot="content" class="new-session-page__environment-card">
           ${
             unavailableReason

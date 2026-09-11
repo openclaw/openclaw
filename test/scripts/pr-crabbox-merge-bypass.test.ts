@@ -392,6 +392,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
   }
   const prefix = "repos/openclaw/openclaw/";
   if (endpoint === prefix + "pulls/131091") out(value.pullRequest);
+  else if (endpoint === prefix + "commits/" + value.headSha && args.includes("--jq")) out({name:"Fixture Contributor",email:"fixture@example.com",user:{login:"fixture-contributor",type:"User"}});
   else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});
@@ -423,7 +424,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
       fetch|cat-file|merge-base) exit 0;;
       merge-tree) echo candidate-tree;;
       rev-parse) echo main-tree;;
-      log) echo fixture@example.com;;
+      log) echo '${headSha}';;
       # The trailer parser writes stdin; drain it before exit to avoid EPIPE.
       -c) cat >/dev/null; exit 0;;
       *) echo "unexpected fixture git: $*" >&2; exit 19;;

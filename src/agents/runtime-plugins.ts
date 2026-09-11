@@ -5,6 +5,7 @@ import {
   listRuntimePluginIdsFromRegistry,
   registryContainsRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
   acquirePluginRegistryForInspection,
@@ -12,9 +13,14 @@ import {
   type PluginLoadOptions,
 } from "../plugins/loader.js";
 import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
@@ -128,9 +134,12 @@ function adoptAgentRuntimeRegistrations(pluginRegistry: PluginRegistry): {
   if (!activeRegistry) {
     return { registry: pluginRegistry };
   }
-  const registry = adoptRuntimeWidgetPresenterRegistrations(
-    adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
-    activeRegistry,
+  const registry = bindPluginRegistryResourceOwner(
+    adoptRuntimeWidgetPresenterRegistrations(
+      adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
+      activeRegistry,
+    ),
+    pluginRegistry,
   );
   return { registry, ...(registry !== pluginRegistry ? { donor: activeRegistry } : {}) };
 }
@@ -153,7 +162,10 @@ export async function acquireAgentRuntimePluginRegistry(
   if (reusable) {
     return { registry: reusable, primaryRegistry: reusable };
   }
-  const acquired = await acquirePluginRegistryForInspection(loadOptions);
+  const acquire = () => acquirePluginRegistryForInspection(loadOptions);
+  const acquired = await (params.metadataSnapshot
+    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, acquire)
+    : acquire());
   try {
     const { registry, donor } = adoptAgentRuntimeRegistrations(acquired.registry);
     const primaryResources = getPluginRegistryInspectionResources(acquired.registry);
@@ -163,9 +175,8 @@ export async function acquireAgentRuntimePluginRegistry(
     if (registry !== acquired.registry) {
       primaryResources.attach(registry);
     }
-    const donorResources = donor && getPluginRegistryInspectionResources(donor);
-    if (donorResources) {
-      primaryResources.retainDependency(donorResources);
+    if (donor) {
+      primaryResources.adoptInvocations(registry, donor);
     }
     return {
       registry,
@@ -200,7 +211,11 @@ export function loadAgentRuntimePluginRegistryHandle(
   }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.
-  const pluginRegistry = loadPluginRegistryHandle({ ...loadOptions, activate: false });
+  // Prepared metadata outlives a transient caller's install or reload lease.
+  const load = () => loadPluginRegistryHandle(loadOptions);
+  const pluginRegistry = params.metadataSnapshot
+    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
+    : load();
   // Media providers remain owned by this source when full-only donors require a copy.
   onPrimaryRegistry?.(pluginRegistry);
   return adoptAgentRuntimeRegistrations(pluginRegistry).registry;
@@ -249,5 +264,11 @@ export async function withAgentPluginRegistry<T>(params: {
       ? adoptRuntimeMemoryRegistrations(pluginRegistry, activeRegistry, context.config)
       : pluginRegistry;
   setPluginRuntimeLoadContext(scopedRegistry, context);
-  return await withPluginRuntimeRegistryScope(scopedRegistry, () => params.run(scopedRegistry));
+  const invocations = new PluginInvocationScope(
+    scopedRegistry,
+    collectRegistryInvocationInstances(scopedRegistry),
+  );
+  return await withPluginRuntimeRegistryScope(scopedRegistry, () =>
+    invocations.run(() => params.run(scopedRegistry)),
+  );
 }

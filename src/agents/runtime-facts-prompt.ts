@@ -23,17 +23,22 @@ type RuntimeFactsParams = {
 };
 
 /** Shared by embedded carriers and CLI current-turn context. */
-export function buildMediaTaskRuntimeContext(
+export async function buildMediaTaskRuntimeContext(
   params: Pick<RuntimeFactsParams, "capabilityToolNames" | "sessionKey" | "agentId">,
-): string | undefined {
+): Promise<string | undefined> {
   const sections = [
     ["image_generate", buildActiveImageGenerationTaskPromptContextForSession],
     ["music_generate", buildActiveMusicGenerationTaskPromptContextForSession],
     ["video_generate", buildActiveVideoGenerationTaskPromptContextForSession],
   ] as const;
-  const facts = sections
-    .filter(([tool]) => params.capabilityToolNames.has(tool))
-    .map(([tool, build]) => build(params.sessionKey, params.agentId) ?? `- tool=${tool}; none`);
+  const facts = await Promise.all(
+    sections
+      .filter(([tool]) => params.capabilityToolNames.has(tool))
+      .map(
+        async ([tool, build]) =>
+          (await build(params.sessionKey, params.agentId)) ?? `- tool=${tool}; none`,
+      ),
+  );
   return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }
 
@@ -74,7 +79,9 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
   }
 }
 
-export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeContextFragment[] {
+export async function buildRuntimeFactsContext(
+  params: RuntimeFactsParams,
+): Promise<RuntimeContextFragment[]> {
   const sections: string[] = [];
   if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
     sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
@@ -107,7 +114,7 @@ export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeCon
       }) ?? "## Active Subagents\nnone",
     );
   }
-  const media = buildMediaTaskRuntimeContext(params);
+  const media = await buildMediaTaskRuntimeContext(params);
   if (media) {
     sections.push(media);
   }

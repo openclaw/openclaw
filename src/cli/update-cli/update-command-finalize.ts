@@ -266,6 +266,12 @@ async function updateFinalizeCommandInternal(
     (result) => pluginOutcome(result.pluginUpdate),
   );
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  lifecycle.recordWarnings(
+    (pluginUpdate.warnings ?? [])
+      .filter((warning) => warning.reason === "plugin-target-unavailable")
+      .map((warning) => warning.message),
+    "plugins",
+  );
   configSnapshot = completedPluginUpdate.configSnapshot;
   const completionBudget = lifecycle.budget("completionCache");
   // Leave shutdown time inside the phase deadline so optional cache failures can settle.

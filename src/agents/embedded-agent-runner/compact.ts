@@ -345,7 +345,7 @@ export async function compactEmbeddedAgentSessionDirect(
       : (requestedParams.abortSignal ?? parentSignal);
   const work = new AsyncWorkScope();
   let context = work.run(() => AsyncLocalStorage.snapshot());
-  let releasePreparedRuntime: (() => void) | undefined;
+  let releasePreparedRuntime: (() => Promise<void>) | undefined;
   const runPreparedCompaction = async () => {
     const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
       {
@@ -410,7 +410,7 @@ export async function compactEmbeddedAgentSessionDirect(
         },
       },
     );
-    releasePreparedRuntime = () => preparedModelRuntimeLease.release();
+    releasePreparedRuntime = () => preparedModelRuntimeLease[Symbol.asyncDispose]();
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
@@ -583,7 +583,7 @@ export async function compactEmbeddedAgentSessionDirect(
         );
       } finally {
         try {
-          releasePreparedRuntime?.();
+          await releasePreparedRuntime?.();
         } finally {
           cancellationSignal?.removeEventListener("abort", closeWork);
         }

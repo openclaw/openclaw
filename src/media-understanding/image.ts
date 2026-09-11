@@ -24,6 +24,7 @@ import {
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
+import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
@@ -435,7 +436,7 @@ async function describeImagesWithModelInternal(
     let model: Model | undefined;
     const resolutionTask = trackAsyncWork(() =>
       resolveImageRuntime({ ...params, signal: requestSignal }, (resources) => {
-        onAcquired(resources);
+        onAcquired({ release: async () => await resources[Symbol.asyncDispose]() });
         assertResourcesOpen = resources.assertResourcesOpen;
       }),
     );
@@ -536,12 +537,14 @@ async function describeImagesWithModelInternal(
         ...(headers ? { headers } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
-      const task: Promise<AssistantMessage> = trackAsyncWork(() =>
-        providerStreamFn
-          ? (async () =>
-              await (await providerStreamFn(requestModel, context, streamOptions)).result())()
-          : complete(requestModel, context, streamOptions),
-      );
+      const task: Promise<AssistantMessage> = trackAsyncWork(() => {
+        if (!providerStreamFn) {
+          return complete(requestModel, context, streamOptions);
+        }
+        const stream = providerStreamFn(requestModel, context, streamOptions);
+        // Acquire consumption before yielding so retirement cannot strand the returned stream.
+        return runPluginStreamConsumer(stream, async () => await (await stream).result());
+      });
       return await withImageDescriptionTimeout({
         controller,
         signal: params.signal,

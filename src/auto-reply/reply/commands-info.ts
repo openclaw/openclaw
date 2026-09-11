@@ -210,7 +210,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         return commandReply(buildToolsMessage(result, { verbose }));
       });
     } finally {
-      acquired.release();
+      await acquired[Symbol.asyncDispose]();
     }
   } catch {
     // Inventory resolves in-process after sender authorization; this path cannot receive

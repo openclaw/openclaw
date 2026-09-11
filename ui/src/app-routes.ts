@@ -18,6 +18,7 @@ import {
   INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
+  INTERNAL_TERMINAL_PATH_PARAM,
   INTERNAL_WORKBOARD_PATH_PARAM,
   isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
@@ -31,6 +32,7 @@ import {
   sessionRouteNamespaceFromPath,
   setPluginTabSlugs,
   workboardBoardIdFromPath,
+  terminalSessionIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
@@ -70,6 +72,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as tasksPage } from "./pages/tasks/route.ts";
+import { page as terminalPage } from "./pages/terminal/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
@@ -96,6 +99,7 @@ const APP_ROUTE_TREE = [
   ...chatPages,
   custodianPage,
   newSessionPage,
+  terminalPage,
   activityPage,
   meetingsPage,
   dashboardsPage,
@@ -182,6 +186,9 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  if (terminalSessionIdFromPath(pathname, basePath)) {
+    return ["terminal", INTERNAL_TERMINAL_PATH_PARAM, pathname];
+  }
   if (pluginTabSlugFromPath(pathname, basePath)) {
     return ["plugin", INTERNAL_PLUGIN_PATH_PARAM, pathname];
   }

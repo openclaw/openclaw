@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum PrimaryGatewayControlError: LocalizedError {
     case invalidURL
@@ -7,6 +8,7 @@ enum PrimaryGatewayControlError: LocalizedError {
     case unavailable
     case conflictingEdits
     case persistenceFailed
+    case localHostingRequiresRestart
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +24,8 @@ enum PrimaryGatewayControlError: LocalizedError {
             "Resolve the connection settings conflict in the app before changing the primary Gateway."
         case .persistenceFailed:
             "The app could not save the primary Gateway configuration."
+        case .localHostingRequiresRestart:
+            "Restart OpenClaw, then enable local Gateway hosting again to use the repaired local port."
         }
     }
 }
@@ -44,13 +48,6 @@ enum PrimaryGatewayControlConfiguration: Sendable {
         let root: [String: Any]
         let clearsTargetDefaults: Bool
         let removesGatewayMode: Bool
-    }
-
-    var requestedLocalPort: Int? {
-        switch self {
-        case let .ssh(_, _, localPort, _, _, _, _): localPort
-        case .local, .clear, .direct: nil
-        }
     }
 
     func replacingRoot(_ current: [String: Any], effectiveLocalPort: Int) throws -> Replacement {
@@ -94,16 +91,15 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             clearsTargetDefaults = GatewayRemoteConfig.resolveTransport(root: current) != .ssh ||
                 (previousRemote["sshTarget"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) != target
             var remote = Self.replacingRemoteRoute(previousRemote)
-            guard (1...65535).contains(effectiveLocalPort) else { throw PrimaryGatewayControlError.invalidPort }
-            let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: effectiveLocalPort,
-                for: parsedTarget.host,
-                root: current) ?? effectiveLocalPort
+            let tunnelPort = localPort ?? effectiveLocalPort
+            guard (1...65535).contains(tunnelPort) else { throw PrimaryGatewayControlError.invalidPort }
+            let previousRemotePort = clearsTargetDefaults ? nil : RemotePortTunnel.ports(
+                root: current, sshHost: parsedTarget.host).remote
             let resolvedRemotePort = remotePort ?? previousRemotePort ?? 18789
             let previousPolicy = (previousRemote["sshHostKeyPolicy"] as? String)
                 .flatMap(CommandResolver.SSHHostKeyPolicy.init(rawValue:))
             remote["transport"] = "ssh"
-            remote["url"] = "ws://127.0.0.1:\(effectiveLocalPort)"
+            remote["url"] = "ws://127.0.0.1:\(tunnelPort)"
             remote["remotePort"] = resolvedRemotePort
             remote["sshTarget"] = target
             remote["sshIdentity"] = identity.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ??
@@ -113,7 +109,6 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             remote["token"] = Self.nonempty(token)
             remote["password"] = Self.nonempty(password)
             gateway["mode"] = "remote"
-            if let localPort { gateway["port"] = localPort }
             gateway["remote"] = remote
         }
         if gateway.isEmpty {
@@ -125,6 +120,42 @@ enum PrimaryGatewayControlConfiguration: Sendable {
             root: root,
             clearsTargetDefaults: clearsTargetDefaults,
             removesGatewayMode: removesGatewayMode)
+    }
+
+    static func separatingLocalGatewayPort(
+        _ current: [String: Any],
+        preferredLocalPort: Int = 18789,
+        legacyPort: Int? = nil,
+        sshHost: String? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Replacement
+    {
+        var root = current
+        guard GatewayRemoteConfig.resolveTransport(root: root) == .ssh,
+              var gateway = root["gateway"] as? [String: Any]
+        else { return Replacement(root: root, clearsTargetDefaults: false, removesGatewayMode: false) }
+        let legacyPort = legacyPort ?? OpenClawConfigFile.gatewayPort(root: root) ?? preferredLocalPort
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        let host = sshHost ?? CommandResolver.parseSSHTarget(remote["sshTarget"] as? String ?? "")?.host ?? ""
+        let ports = RemotePortTunnel.ports(
+            root: root, sshHost: host, legacyPort: legacyPort, environment: environment)
+        let url = GatewayRemoteConfig.resolveGatewayUrl(root: root)
+        if url?.host.map(LoopbackHost.isLoopbackHost) != true {
+            guard var tunnelURL = URLComponents(string: url?.absoluteString ?? "ws://127.0.0.1") else {
+                throw PrimaryGatewayControlError.invalidURL
+            }
+            tunnelURL.host = "127.0.0.1"
+            tunnelURL.port = ports.local
+            guard let localizedURL = tunnelURL.url else { throw PrimaryGatewayControlError.invalidURL }
+            remote["url"] = localizedURL.absoluteString
+        }
+        if GatewayRemoteConfig.resolveRemotePort(root: root) == nil { remote["remotePort"] = ports.remote }
+        gateway["remote"] = remote
+        if (OpenClawConfigFile.gatewayPort(root: root) ?? legacyPort) == ports.local {
+            gateway["port"] = preferredLocalPort == ports.local
+                ? (preferredLocalPort == 65535 ? 65534 : preferredLocalPort + 1) : preferredLocalPort
+        }
+        root["gateway"] = gateway
+        return Replacement(root: root, clearsTargetDefaults: false, removesGatewayMode: false)
     }
 
     private static func replacingRemoteRoute(_ previous: [String: Any]) -> [String: Any] {

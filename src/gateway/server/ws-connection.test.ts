@@ -458,6 +458,39 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.terminate).toHaveBeenCalledTimes(1);
   });
 
+  it.each([true, false])("gives a flushed ping a full pong window (pong=%s)", async (pong) => {
+    vi.useFakeTimers();
+    const socket = createGatewayWsTestSocket({ ping: true });
+    let flush: ((error?: Error) => void) | undefined;
+    socket.ping?.mockImplementation((_data, _mask, callback) => {
+      flush = callback;
+    });
+    const { passed, clients } = await connectTestWs({ socket });
+    const handler = passed as { setClient: (client: unknown) => boolean };
+    handler.setClient({
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "congested",
+      usesSharedGatewayAuth: false,
+    });
+    vi.advanceTimersByTime(25_000);
+    socket.bufferedAmount = 4 * 1024 * 1024;
+    vi.advanceTimersByTime(24_000);
+    socket.bufferedAmount = 0;
+    flush?.();
+    vi.advanceTimersByTime(1_000);
+    expect(socket.terminate).not.toHaveBeenCalled();
+    expect(clients.size).toBe(1);
+    vi.advanceTimersByTime(23_000);
+    if (pong) {
+      socket.emit("pong");
+    }
+    vi.advanceTimersByTime(2_000);
+    expect(socket.terminate).toHaveBeenCalledTimes(pong ? 0 : 1);
+    expect(socket.ping).toHaveBeenCalledTimes(pong ? 2 : 1);
+    socket.emit("close", 1000, Buffer.from("done"));
+  });
+
   it("closes slow consumers before writing direct response frames", async () => {
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({ socket });

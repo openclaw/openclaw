@@ -368,7 +368,11 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }
 
-/** Opens a sync plugin-state namespace for a non-core plugin id. */
+/**
+ * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
+ * @deprecated Plugin runtimes should use api.runtime.state.openKeyedStore and
+ * await its operations. This sync adapter remains through the next Plugin SDK major.
+ */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
