@@ -1,5 +1,7 @@
 // Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
+import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -30,6 +32,8 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import { createExtensionTeamReportsVitestConfig } from "./vitest/vitest.extension-team-reports.config.ts";
+import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
@@ -489,6 +493,25 @@ describe("projects vitest config", () => {
     expect(testConfig.fileParallelism).toBe(false);
     expect(testConfig.maxWorkers).toBe(1);
     expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
+  });
+
+  it("runs Team Reports database owners in main-thread hosts across focused and full suites", () => {
+    const project = "test/vitest/vitest.extension-team-reports.config.ts";
+    const testConfig = requireTestConfig(createExtensionTeamReportsVitestConfig({}));
+    expect(resolveExtensionTestConfig("extensions/team-reports")).toBe(project);
+    expect(
+      buildVitestRunPlans(["extensions/team-reports/src/store.test.ts"]).map((plan) => plan.config),
+    ).toEqual([project]);
+    expect(rootVitestProjects).toContain(project);
+    expect(fullSuiteVitestShards.find((shard) => shard.name === "extensions")?.projects).toContain(
+      project,
+    );
+    expect(testConfig.pool).toBe("forks");
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.include).toEqual(["team-reports/**/*.test.ts"]);
+    expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+      "team-reports/**",
+    );
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

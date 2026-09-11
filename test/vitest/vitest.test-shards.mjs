@@ -165,6 +165,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-providers.config.ts",
       "test/vitest/vitest.extension-signal.config.ts",
       "test/vitest/vitest.extension-slack.config.ts",
+      "test/vitest/vitest.extension-team-reports.config.ts",
       "test/vitest/vitest.extension-telegram.config.ts",
       "test/vitest/vitest.extension-voice-call.config.ts",
       "test/vitest/vitest.extension-whatsapp.config.ts",
