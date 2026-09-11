@@ -200,6 +200,53 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
+  it("prepares the catalog when a tentative prose model candidate rides along", async () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const preparedModelCatalog = {
+      entries: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+      routeVariants: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+      authoritative: true,
+    } as ModelCatalogSnapshot;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+      hasTentativeModelDirective: true,
+      preparedModelCatalog,
+    });
+
+    // Without the candidate the unrestricted-policy turn would skip the catalog
+    // entirely and leave the resolver with no picker keys to match against.
+    expect(state.allowedModelKeys.has("openai/gpt-4o")).toBe(true);
+  });
+
+  it("still skips the catalog for unrestricted turns without a candidate", async () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const preparedModelCatalog = {
+      entries: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+      routeVariants: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+      authoritative: true,
+    } as ModelCatalogSnapshot;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      hasModelDirective: false,
+      preparedModelCatalog,
+    });
+
+    expect(state.allowedModelKeys.size).toBe(0);
+  });
+
   it.each(["high", "ultra"] as const)(
     "prefers per-model params.thinking=%s over global thinkingDefault",
     async (thinking) => {

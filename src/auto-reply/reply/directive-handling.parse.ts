@@ -2,7 +2,11 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
-import { extractModelDirective, type ModelSelectionScope } from "../model.js";
+import {
+  extractModelDirective,
+  type ModelSelectionScope,
+  type ProseModelCandidate,
+} from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
@@ -94,6 +98,12 @@ export type InlineDirectives = {
   invalidExecNode: boolean;
   hasStatusDirective: boolean;
   hasModelDirective: boolean;
+  /**
+   * Bare mid-message `/model <token>` treated as prose by the parser. The
+   * apply layer promotes it to a real directive only when model resolution
+   * names a model; parse-time syntax cannot make that call (#137197).
+   */
+  proseModelCandidate?: ProseModelCandidate;
   rawModelDirective?: string;
   rawModelProfile?: string;
   rawModelRuntime?: string;
@@ -231,6 +241,7 @@ export function parseInlineSessionDirectives(
     invalidExecNode: exec.invalidNode,
     hasStatusDirective,
     hasModelDirective: model.hasDirective,
+    ...(model.proseModelCandidate ? { proseModelCandidate: model.proseModelCandidate } : {}),
     rawModelDirective: model.rawModel,
     rawModelProfile: model.rawProfile,
     rawModelRuntime: model.rawRuntime,

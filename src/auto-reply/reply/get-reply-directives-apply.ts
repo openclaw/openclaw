@@ -12,6 +12,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { ProseModelCandidate } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -25,6 +26,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
+import { resolveModelDirectiveSelection } from "./model-selection.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { ReplyPreRunRejectionCode } from "./reply-operation-run-state.js";
 import type { TypingController } from "./typing.js";
@@ -113,6 +115,8 @@ type ApplyDirectiveResult =
       model: string;
       contextTokens: number;
       directiveAck?: ReplyPayload;
+      /** Set when the prose candidate was promoted; the caller must strip its span from the prompt text. */
+      promotedProseModelCandidate?: ProseModelCandidate;
       perMessageQueueMode?: InlineDirectives["queueMode"];
       perMessageQueueOptions?: {
         debounceMs?: number;
@@ -194,8 +198,8 @@ export async function applyInlineDirectiveOverrides(params: {
     resolvedElevatedLevel,
     defaultActivation,
     typing,
-    effectiveModelDirective,
   } = params;
+  let effectiveModelDirective = params.effectiveModelDirective;
   const requesterProfileId = readSessionInputProfileId(ctx);
   let { directives } = params;
   let { provider, model } = params;
@@ -232,6 +236,7 @@ export async function applyInlineDirectiveOverrides(params: {
   });
 
   let directiveAck: ReplyPayload | undefined;
+  let promotedProseModelCandidate: ProseModelCandidate | undefined;
   let selectionCatalog = modelState.allowedModelCatalog;
 
   // Fire on the reason, not the boolean: a temporarily-unavailable override
@@ -254,6 +259,48 @@ export async function applyInlineDirectiveOverrides(params: {
 
   if (!command.isAuthorizedSender) {
     directives = clearInlineDirectives(directives.cleaned);
+  }
+
+  // A bare mid-message `/model <token>` stays prose unless model resolution can
+  // actually name a model (exact picker membership, configured alias, or a
+  // fuzzy hit above the resolver threshold): the parse layer has no catalog
+  // access, so the prose/directive decision happens here under the effective
+  // model policy (#137197). Everything else flows to the model as ordinary
+  // text; qualified refs and aliases keep their directive behavior at parse
+  // time and are never candidates.
+  if (directives.proseModelCandidate && !directives.hasModelDirective) {
+    const candidate = directives.proseModelCandidate;
+    const candidateResolution = resolveModelDirectiveSelection({
+      raw: candidate.directive.rawModelDirective,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      modelPolicy: modelState.modelPolicy,
+      cfg,
+      agentId,
+      rawRuntime: candidate.directive.rawModelRuntime,
+    });
+    const selection = candidateResolution.selection;
+    // Only promote when resolution names a real model: picker membership or a
+    // configured alias. Under an unrestricted policy the resolver's permitted
+    // fallback also constructs selections for synthetic refs, and those must
+    // stay prose instead of switching the session to a fabricated model.
+    const selectionNamed =
+      selection !== undefined &&
+      (selection.alias !== undefined ||
+        modelState.allowedModelKeys.has(modelKey(selection.provider, selection.model)));
+    if (selection && selectionNamed) {
+      directives = {
+        ...directives,
+        ...candidate.directive,
+        hasModelDirective: true,
+        modelDirectiveSource: "model",
+        proseModelCandidate: undefined,
+      };
+      effectiveModelDirective = candidate.directive.rawModelDirective;
+      promotedProseModelCandidate = candidate;
+    }
   }
 
   // Derive the persistent write target from the directives that survived the
@@ -610,6 +657,7 @@ export async function applyInlineDirectiveOverrides(params: {
     model,
     contextTokens,
     directiveAck,
+    ...(promotedProseModelCandidate ? { promotedProseModelCandidate } : {}),
     perMessageQueueMode,
     perMessageQueueOptions,
   };

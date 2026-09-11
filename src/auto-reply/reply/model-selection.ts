@@ -130,6 +130,8 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  /** A prose model candidate rides along; resolution needs the same catalog an accepted directive would. */
+  hasTentativeModelDirective?: boolean;
   hasOneTurnModelOverride?: boolean;
   skipStoredModelOverride?: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
@@ -203,6 +205,7 @@ export async function createModelSelectionState(params: {
   });
   const needsModelCatalog =
     params.hasModelDirective ||
+    params.hasTentativeModelDirective === true ||
     (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
 
   let allowedModelKeys = new Set<string>();
