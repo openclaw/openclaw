@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 352531,
-  "reason": "Plugin discovery shell adds the canonical /plugins workspace route and navigation metadata; measured 352531 B startup gzip on Linux-equivalent local build. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-09"
+  "startupJsGzipBytes": 353110,
+  "reason": "Codex cyber safety notices plus automatic Daybreak escalation: six composer notice states, their precedence projection, and thirteen strings on the startup path. Measured 353110 B by ui:check-performance:base against f2ce1992, a 579 B increase over the previous baseline where the growth allowance plus build variance permits 576 B. Trimming was attempted and measured: removing roughly 40 characters of notice copy moves the gzip total by 1 byte, and a deslop pass over the diff moved 0 B, so the growth is feature code rather than comments.",
+  "updatedAt": "2026-09-11"
 }
