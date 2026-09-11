@@ -86,7 +86,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private probeEpochs = new Map<string, number>();
   private readonly core = new ModelProviderCoreLoader(this, {
     onStart: (reason) => {
-      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+      if (reason !== "publication") {
+        this.catalogDiscovery.reset();
+      }
       this.supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
         this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach(
@@ -94,10 +96,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         );
       }
     },
-    onComplete: ({ client, data, reason }) => {
-      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+    onComplete: ({ client, data }) => {
+      this.catalogDiscovery.reset();
       this.supplemental.adoptCoreData(client, data);
     },
+    isCatalogLoading: () => this.catalogDiscovery.discovering,
     refreshPublication: () => void this.refresh("publication"),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
@@ -126,6 +129,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getData: () => this.data,
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
+    cancelCoreRefresh: () => this.cancelCoreRefresh(),
+    onSettled: () => this.core.flushPublication(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -175,7 +180,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh("forced"),
+    refresh: () => this.refresh("replacement"),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -648,7 +653,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
-      catalogDiscovering: this.catalogDiscovery.discovering,
+      catalogDiscovering:
+        this.catalogDiscovery.discovering || Boolean(data.pendingProviders?.length),
       catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
       configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
@@ -713,7 +719,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
       onFastModeChange: (mode) => stageDefaults({ fastMode: mode, fastModeOverridden: true }),
       onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
-      onModelPickerOpen: () => this.catalogDiscovery.openPicker(),
       onCatalogRetry: () => this.catalogDiscovery.retry(),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
       ...this.login.providerActions,

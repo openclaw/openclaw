@@ -8515,6 +8515,7 @@ public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
     public let defaultmodels: [String: AnyCodable]?
     public let refreshfailed: Bool?
+    public let pendingproviders: [String]?
     public let accountselection: ChatAccountSelection?
     public let provideroutcomes: [[String: AnyCodable]]?
 
@@ -8522,12 +8523,14 @@ public struct ModelsListResult: Codable, Sendable {
         models: [ModelChoice],
         defaultmodels: [String: AnyCodable]? = nil,
         refreshfailed: Bool? = nil,
+        pendingproviders: [String]? = nil,
         accountselection: ChatAccountSelection? = nil,
         provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
         self.defaultmodels = defaultmodels
         self.refreshfailed = refreshfailed
+        self.pendingproviders = pendingproviders
         self.accountselection = accountselection
         self.provideroutcomes = provideroutcomes
     }
@@ -8536,6 +8539,7 @@ public struct ModelsListResult: Codable, Sendable {
         case models
         case defaultmodels = "defaultModels"
         case refreshfailed = "refreshFailed"
+        case pendingproviders = "pendingProviders"
         case accountselection = "accountSelection"
         case provideroutcomes = "providerOutcomes"
     }

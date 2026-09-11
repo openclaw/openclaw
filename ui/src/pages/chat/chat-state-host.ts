@@ -78,6 +78,7 @@ export type ChatPageHost = ChatHost &
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
     chatModelCatalogRefreshFailed?: boolean;
+    chatModelCatalogPendingProviders?: readonly string[];
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;

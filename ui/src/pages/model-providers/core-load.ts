@@ -14,6 +14,7 @@ type CoreRequest = {
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
   onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
+  isCatalogLoading: () => boolean;
   refreshPublication: () => void;
 };
 
@@ -49,7 +50,7 @@ export class ModelProviderCoreLoader {
   }
 
   refresh(client: GatewayBrowserClient, agentId: string, reason: ModelProviderRefreshReason) {
-    if (reason === "publication" && this.active) {
+    if (reason === "publication" && (this.active || this.options.isCatalogLoading())) {
       this.publicationPending = true;
       return Promise.resolve();
     }
@@ -69,9 +70,13 @@ export class ModelProviderCoreLoader {
 
   private settle(): void {
     this.active = false;
+    this.flushPublication();
+  }
+
+  flushPublication(): void {
     // Task commits its status and value after onComplete/onError returns.
     queueMicrotask(() => {
-      if (this.publicationPending && !this.active) {
+      if (this.publicationPending && !this.active && !this.options.isCatalogLoading()) {
         this.publicationPending = false;
         this.options.refreshPublication();
       }

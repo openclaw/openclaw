@@ -5476,6 +5476,7 @@ export const en: TranslationMap & {
       loadingModels: "Loading models…",
       modelsUnavailable: "Models unavailable",
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
+      checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",

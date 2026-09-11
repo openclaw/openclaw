@@ -1,10 +1,4 @@
-// Demand-driven catalog discovery for the Models settings page.
-//
-// The initial page load uses the fast prepared catalog
-// so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; the first open for this core-data snapshot and explicit retries
-// refresh the Gateway-owned catalog. Completed reopens read its current publication.
-// Pending opens share this page's request without disturbing the saved selection.
+// Picker reads consume the Gateway publication; only an explicit retry starts discovery.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -23,12 +17,10 @@ export type CatalogDiscoveryController = {
   readonly discovering: boolean;
   /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
-  /** Fired when a default-model picker opens. */
-  openPicker: () => void;
   /** Retries a failed discovery. */
   retry: () => void;
-  /** Retires pending results; same-owner publication preserves discovery history. */
-  reset: (options?: { preserveHistory?: boolean }) => void;
+  /** Retires pending results and errors when core data or its owner changes. */
+  reset: () => void;
 };
 
 type CreateOptions = {
@@ -38,6 +30,8 @@ type CreateOptions = {
   getData: () => ModelProvidersData | null;
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
+  cancelCoreRefresh: () => void;
+  onSettled: () => void;
 };
 
 export function createCatalogDiscoveryController(
@@ -45,7 +39,6 @@ export function createCatalogDiscoveryController(
 ): CatalogDiscoveryController {
   let pending: AbortController | null = null;
   let error: string | null = null;
-  let requestedDiscovery = false;
 
   const controller: CatalogDiscoveryController = {
     get discovering() {
@@ -54,25 +47,19 @@ export function createCatalogDiscoveryController(
     get error() {
       return error;
     },
-    openPicker() {
-      void discover(!requestedDiscovery);
-    },
     retry() {
-      void discover(true);
+      void discover();
     },
-    reset({ preserveHistory = false } = {}) {
+    reset() {
       const retired = pending;
       pending = null;
       error = null;
-      if (!preserveHistory) {
-        requestedDiscovery = false;
-      }
       retired?.abort();
       options.requestUpdate();
     },
   };
 
-  async function discover(refresh: boolean): Promise<void> {
+  async function discover(): Promise<void> {
     const agentId = options.getAgentId();
     if (!agentId || pending) {
       return;
@@ -82,6 +69,7 @@ export function createCatalogDiscoveryController(
     if (!gateway.connected || !client) {
       return;
     }
+    options.cancelCoreRefresh();
     const agentEpoch = options.getAgentEpoch();
     const clientEpoch = gateway.epoch;
     const request = new AbortController();
@@ -92,13 +80,12 @@ export function createCatalogDiscoveryController(
       options.getAgentEpoch() === agentEpoch;
     pending = request;
     error = null;
-    requestedDiscovery = true;
     options.requestUpdate();
     try {
       const result = await loadModelCatalog(client, {
         agentId,
         includeDefaultModels: true,
-        ...(refresh ? { refresh: true } : {}),
+        refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {
@@ -110,6 +97,7 @@ export function createCatalogDiscoveryController(
             models: result.models,
             automaticUtilityModel: result.defaultModels?.automaticUtilityModel,
             providerOutcomes: result.providerOutcomes ?? [],
+            pendingProviders: result.pendingProviders,
             catalogError: null,
           });
         }
@@ -122,6 +110,7 @@ export function createCatalogDiscoveryController(
       if (pending === request) {
         pending = null;
         options.requestUpdate();
+        options.onSettled();
       }
     }
   }
