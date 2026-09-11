@@ -14,7 +14,6 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
-  stripTargetTopicSuffix,
 } from "../../../infra/outbound/channel-target-prefix.js";
 import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
 import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue-storage.js";
@@ -42,26 +41,42 @@ import {
 } from "./subagent-announce-delivery.runtime.js";
 export type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
-function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
+function normalizeAnnounceRouteTarget(
+  context?: DeliveryContext,
+  fallbackChannel?: string,
+): { id: string; threadId?: string } | undefined {
   const rawTo = normalizeOptionalString(context?.to);
   if (!rawTo) {
     return undefined;
   }
-  const channel = normalizeOptionalString(context?.channel);
+  const channel = normalizeOptionalString(context?.channel ?? fallbackChannel);
   const messaging = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
-  const route = stripTargetTopicSuffix(
-    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), [
+  const stripPrefixes = (value: string) =>
+    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(value, channel ?? ""), [
       "group",
       "channel",
-    ]),
-  );
-  const normalized = messaging?.normalizeTarget?.(route) ?? route;
-  return normalized || undefined;
+    ]);
+  const target = stripPrefixes(rawTo);
+  const normalized = messaging?.normalizeTarget?.(target) ?? target;
+  // Target normalizers can add prefixes; conversation IDs use the unqualified domain.
+  const rawId = stripPrefixes(normalized);
+  if (!rawId) {
+    return undefined;
+  }
+  const conversation = messaging?.resolveSessionConversation?.({
+    kind: inferDeliveryTargetChatType({ channel, to: rawTo }) === "group" ? "group" : "channel",
+    rawId,
+  });
+  const id = normalizeOptionalString(conversation?.id);
+  return {
+    id: id ?? (messaging?.targetIdComparison === "lowercase" ? rawId.toLowerCase() : rawId),
+    threadId: id ? normalizeOptionalString(conversation?.threadId) : undefined,
+  };
 }
 
-function shouldStripThreadFromAnnounceEntry(
+function shouldStripThreadFromAnnounceFallback(
   normalizedRequester?: DeliveryContext,
   normalizedEntry?: DeliveryContext,
 ): boolean {
@@ -72,12 +87,36 @@ function shouldStripThreadFromAnnounceEntry(
   ) {
     return false;
   }
-  const requesterTarget = normalizeAnnounceRouteTarget(normalizedRequester);
-  const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry);
+  const requesterTarget = normalizeAnnounceRouteTarget(
+    normalizedRequester,
+    normalizedEntry?.channel,
+  );
+  const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry, normalizedRequester.channel);
   if (requesterTarget && entryTarget) {
-    return requesterTarget !== entryTarget;
+    return (
+      requesterTarget.id !== entryTarget.id ||
+      (requesterTarget.threadId !== undefined &&
+        requesterTarget.threadId !== stringifyRouteThreadId(normalizedEntry.threadId))
+    );
   }
   return false;
+}
+
+function mergeAnnounceDeliveryContext(
+  primary?: DeliveryContext,
+  fallback?: DeliveryContext,
+): DeliveryContext | undefined {
+  const normalizedPrimary = normalizeDeliveryContext(primary);
+  const normalizedFallback = normalizeDeliveryContext(fallback);
+  if (
+    normalizedFallback &&
+    shouldStripThreadFromAnnounceFallback(normalizedPrimary, normalizedFallback)
+  ) {
+    // A stored thread only applies to the same normalized route target.
+    const { threadId: _ignore, ...rest } = normalizedFallback;
+    return mergeDeliveryContext(normalizedPrimary, rest);
+  }
+  return mergeDeliveryContext(normalizedPrimary, normalizedFallback);
 }
 
 /** Resolve the delivery origin for a subagent completion announcement. */
@@ -96,15 +135,7 @@ export function resolveAnnounceOrigin(
       normalizedEntry,
     );
   }
-  const entryForMerge =
-    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
-      ? (() => {
-          // A stored thread only applies to the same normalized route target.
-          const { threadId: _ignore, ...rest } = normalizedEntry;
-          return rest;
-        })()
-      : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
+  return mergeAnnounceDeliveryContext(normalizedRequester, normalizedEntry);
 }
 
 function resolveBoundConversationOrigin(params: {
@@ -120,17 +151,12 @@ function resolveBoundConversationOrigin(params: {
   const boundTarget = deliveryContextFromConversation(conversation);
   const inferredThreadId =
     boundTarget?.threadId ??
-    (parentConversationId && parentConversationId !== conversationId
-      ? conversationId
-      : undefined) ??
-    (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
-      ? stringifyRouteThreadId(params.requesterOrigin.threadId)
-      : undefined);
+    (parentConversationId && parentConversationId !== conversationId ? conversationId : undefined);
   if (
     requesterTo &&
     conversationId &&
     requesterConversationId &&
-    conversationId.toLowerCase() === requesterConversationId.toLowerCase()
+    conversationId === requesterConversationId
   ) {
     return {
       channel: conversation.channel,
@@ -177,7 +203,7 @@ export async function resolveSubagentCompletionOrigin(params: {
       failClosed: true,
     });
     if (route.mode === "bound" && route.binding) {
-      return mergeDeliveryContext(
+      return mergeAnnounceDeliveryContext(
         resolveBoundConversationOrigin({
           bindingConversation: route.binding.conversation,
           requesterConversation,
@@ -211,7 +237,7 @@ export async function resolveSubagentCompletionOrigin(params: {
     const hookOrigin = normalizeDeliveryContext(result?.origin);
     return !hookOrigin || (hookOrigin.channel && isInternalMessageChannel(hookOrigin.channel))
       ? requesterOrigin
-      : mergeDeliveryContext(hookOrigin, requesterOrigin);
+      : mergeAnnounceDeliveryContext(hookOrigin, requesterOrigin);
   } catch {
     return requesterOrigin;
   }
@@ -239,12 +265,15 @@ export function resolveCompletionDeliveryOrigins(params: {
 }) {
   const directOrigin = normalizeDeliveryContext(params.directOrigin);
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
-  const completionFallbackOrigin = mergeDeliveryContext(directOrigin, requesterSessionOrigin);
+  const completionFallbackOrigin = mergeAnnounceDeliveryContext(
+    directOrigin,
+    requesterSessionOrigin,
+  );
   return {
     directOrigin,
     requesterSessionOrigin,
     effectiveDirectOrigin: params.expectsCompletionMessage
-      ? mergeDeliveryContext(
+      ? mergeAnnounceDeliveryContext(
           stripNonDeliverableChannel(params.completionDirectOrigin),
           completionFallbackOrigin,
         )
