@@ -144,13 +144,14 @@ function appendCachedChatMessage(
   );
 }
 
-function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) {
+function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
+  if (!incoming) {
     return null;
   }
-  if (payload.state === "aborted" && payload.stopReason === "auth-revoked") {
-    payload = { ...payload, errorMessage: t("chat.providerAccessRemoved") };
-  }
+  const payload =
+    incoming.state === "aborted" && incoming.stopReason === "auth-revoked"
+      ? { ...incoming, errorMessage: t("chat.providerAccessRemoved") }
+      : incoming;
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;

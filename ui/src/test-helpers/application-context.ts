@@ -76,7 +76,7 @@ export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publishEvent(event: GatewayEventFrame) {
+    publishEvent: (event: GatewayEventFrame) => {
       for (const listener of eventListeners) {
         listener(event);
       }

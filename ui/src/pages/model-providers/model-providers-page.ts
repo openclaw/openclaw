@@ -400,11 +400,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private async patchConfig(
     params: ModelProviderConfigMutation,
   ): Promise<ModelProviderConfigMutationResult> {
-    if (!this.canMutate() || this.busy[params.key]) {
-      return { ok: false };
-    }
     const client = this.context.gateway.snapshot.client;
-    if (!client) {
+    if (!client || !this.canMutate() || this.busy[params.key]) {
       return { ok: false };
     }
     const clientEpoch = this.gateway.epoch;
