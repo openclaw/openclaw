@@ -9,6 +9,7 @@ type DialogProps = Parameters<Components["mountDialog"]>[1];
 type PickerProps = Parameters<Components["mountAgentPicker"]>[1];
 type AvatarProps = Parameters<Components["mountAgentAvatar"]>[1];
 type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
+type AppearancePickerProps = Parameters<Components["mountAppearancePicker"]>[1];
 type AppearanceGlyphProps = Parameters<Components["mountAppearanceGlyph"]>[1];
 type DashboardProps = Parameters<Components["mountDashboard"]>[1];
 function createHostComponent<Props extends object>(
@@ -84,6 +85,9 @@ const mountAgentAvatar = createHostComponent((container, props: AvatarProps) =>
 const mountSelectPicker = createHostComponent((container, props: SelectPickerProps) =>
   workboardHost().components.mountSelectPicker(container, props),
 );
+const mountAppearancePicker = createHostComponent((container, props: AppearancePickerProps) =>
+  workboardHost().components.mountAppearancePicker(container, props),
+);
 const mountAppearanceGlyph = createHostComponent((container, props: AppearanceGlyphProps) =>
   workboardHost().components.mountAppearanceGlyph(container, props),
 );
@@ -105,6 +109,10 @@ export function renderAgentAvatar(props: AvatarProps) {
 
 export function renderSelectPicker(props: SelectPickerProps, className = "") {
   return html`<div class=${className} ${mountSelectPicker(props)}></div>`;
+}
+
+export function renderAppearancePicker(props: AppearancePickerProps, className = "") {
+  return html`<div class=${className} ${mountAppearancePicker(props)}></div>`;
 }
 
 export function renderAppearanceGlyph(props: AppearanceGlyphProps, className = "") {
