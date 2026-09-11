@@ -125,6 +125,99 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it.each([
+    {
+      family: "llamacpp-gbnf",
+      normalize: normalizeLlamacppGbnfToolSchemas,
+      schema: { type: "string", pattern: "^value$" },
+      expected: { type: "string" },
+    },
+    {
+      family: "deepseek",
+      normalize: normalizeDeepSeekToolSchemas,
+      schema: { anyOf: [{ type: "string" }, { type: "null" }] },
+      expected: { type: "string", nullable: true },
+    },
+  ])("preserves copy-on-write tool identities for $family", ({ normalize, schema, expected }) => {
+    const stable = { type: "string" };
+    const parameters = objectSchema({ stable, changed: schema });
+    const originalParameters = structuredClone(parameters);
+    const requiredClientCaps = ["fixture-capability"];
+    const execute = async () => ({ content: [], details: {} });
+    const changedTool = Object.assign(tool(parameters, "changed"), {
+      requiredClientCaps,
+      execute,
+    });
+    const tools = [tool(undefined, "absent"), tool(7, "primitive"), tool(stable), changedTool];
+
+    const normalized = normalize(providerContext(tools));
+
+    expect(normalized).not.toBe(tools);
+    expect(normalized).toHaveLength(tools.length);
+    for (let index = 0; index < 3; index++) {
+      expect(normalized[index]).toBe(tools[index]);
+    }
+    const normalizedTool = expectDefined(normalized[3], "normalized changed tool");
+    expect(normalizedTool).not.toBe(changedTool);
+    expect(normalizedTool.parameters).not.toBe(parameters);
+    expect(normalizedTool.parameters).toEqual(objectSchema({ stable, changed: expected }));
+    const normalizedParameters = normalizedTool.parameters as typeof parameters;
+    expect(normalizedParameters.properties.stable).toBe(stable);
+    expect(normalizedTool.requiredClientCaps).toBe(requiredClientCaps);
+    expect(normalizedTool.execute).toBe(execute);
+    expect(parameters).toEqual(originalParameters);
+  });
+
+  it.each([
+    {
+      family: "gemini",
+      inspect: inspectGeminiToolSchemas,
+      violations: [
+        "duplicate.parameters.properties.nested.items[0].oneOf[0].format",
+        "duplicate.parameters.properties.nested.items[1].pattern",
+        "duplicate.parameters.anyOf[0].pattern",
+        "duplicate.parameters.pattern",
+      ],
+      lastViolation: "duplicate.parameters.pattern",
+    },
+    {
+      family: "deepseek",
+      inspect: inspectDeepSeekToolSchemas,
+      violations: [
+        "duplicate.parameters.properties.nested.items[0].oneOf",
+        "duplicate.parameters.anyOf",
+      ],
+      lastViolation: "duplicate.parameters.anyOf",
+    },
+  ])(
+    "preserves diagnostic paths and tool indices for $family",
+    ({ inspect, violations, lastViolation }) => {
+      const parameters = {
+        anyOf: [{ pattern: "^outer$" }],
+        pattern: "^root$",
+        properties: {
+          anyOf: { type: "string" },
+          nested: {
+            type: "array",
+            items: [{ oneOf: [{ type: "string", format: "date" }] }, { pattern: "^inner$" }],
+          },
+        },
+      };
+      const tools = [
+        tool(parameters, "duplicate"),
+        tool(objectSchema({ pattern: { type: "string" }, anyOf: { type: "string" } }), "clean"),
+        tool({ pattern: "^last$", anyOf: [] }, "duplicate"),
+      ];
+      const originalTools = structuredClone(tools);
+
+      expect(inspect(providerContext(tools))).toEqual([
+        { toolName: "duplicate", toolIndex: 0, violations },
+        { toolName: "duplicate", toolIndex: 2, violations: [lastViolation] },
+      ]);
+      expect(tools).toEqual(originalTools);
+    },
+  );
+
   it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
     const tools = [

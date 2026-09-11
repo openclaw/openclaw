@@ -3234,7 +3234,7 @@ src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	9
+src/plugin-sdk/provider-tools.ts	8
 src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
