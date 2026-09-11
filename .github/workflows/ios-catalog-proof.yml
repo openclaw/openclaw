@@ -55,10 +55,39 @@ jobs:
           done
           xcodebuild -version
           swift --version
-          brew install xcodegen swiftformat swiftlint
+          brew install xcodegen
+          brew tap-new --no-git openclaw/catalog-proof
+          tap_root="$(brew --repo openclaw/catalog-proof)"
+          cat > "$tap_root/Formula/ios-proof-swiftformat.rb" <<'RUBY'
+          class IosProofSwiftformat < Formula
+            url "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat.zip"
+            version "0.63.0"
+            sha256 "28c7802e11fa5ae113d903066439c6bb1be20a8ac1ad9709c42616a7e273fb0f"
+            keg_only :versioned_formula
+            def install
+              bin.install "swiftformat"
+            end
+          end
+          RUBY
+          cat > "$tap_root/Formula/ios-proof-swiftlint.rb" <<'RUBY'
+          class IosProofSwiftlint < Formula
+            url "https://github.com/realm/SwiftLint/releases/download/0.65.1/portable_swiftlint.zip"
+            version "0.65.1"
+            sha256 "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0"
+            keg_only :versioned_formula
+            def install
+              bin.install "swiftlint"
+            end
+          end
+          RUBY
+          brew install openclaw/catalog-proof/ios-proof-swiftformat openclaw/catalog-proof/ios-proof-swiftlint
+          echo "$(brew --prefix ios-proof-swiftformat)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix ios-proof-swiftlint)/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.cargo/bin:$PATH"
           watch_toolchain="$(awk -F '\"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+      - name: Prepare package resources
+        run: node scripts/prepare-apple-mermaid.mjs
       - name: Swift package tests
         id: swift
         continue-on-error: true
@@ -114,6 +143,12 @@ jobs:
           if [ -f "$RUNNER_TEMP/catalog-proof/gateway.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/catalog-proof/gateway.pid")" || true
           fi
+      - name: Retain compiled products
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/catalog-ios/Build/Products" ]; then
+            tar -czf "$RUNNER_TEMP/catalog-proof/ios-products.tgz" -C "$RUNNER_TEMP/catalog-ios/Build" Products
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
@@ -123,6 +158,7 @@ jobs:
             ${{ runner.temp }}/catalog-proof/*.json
             ${{ runner.temp }}/catalog-proof/*-sha.txt
             ${{ runner.temp }}/catalog-proof/catalog.xcresult
+            ${{ runner.temp }}/catalog-proof/ios-products.tgz
           retention-days: 14
       - name: Require both proofs
         if: always()
