@@ -100,9 +100,11 @@ function visibleToast(container: Element) {
 
 function sessionPicker(container: Element) {
   type SelectProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-  return [...container.querySelectorAll<HTMLElement & SelectProps>(
-    ".workboard-draft [data-test-select-picker]",
-  )].find((picker) => picker.accessibleLabel === "Session");
+  return [
+    ...container.querySelectorAll<HTMLElement & SelectProps>(
+      ".workboard-draft [data-test-select-picker]",
+    ),
+  ].find((picker) => picker.accessibleLabel === "Session");
 }
 
 function observeSessions(page: ReturnType<typeof mountPage>, result: ControlUiSessionListResult) {
@@ -378,9 +380,7 @@ it.each(["global", "unknown"] as const)(
     page.fixture.notify();
 
     await vi.waitFor(() =>
-      expect(page.container.querySelector(".workboard-card")?.textContent).toContain(
-        "Unknown",
-      ),
+      expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
     );
     expect(page.container.querySelector('button[aria-label="Open session"]')).toBeNull();
     expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
@@ -463,9 +463,7 @@ it.each([
     const select = expectDefined(sessionPicker(page.container), "session picker");
     expect(select.value).toBe(localKey);
     for (const owner of owners) {
-      expect(select.options.map((option) => option.value)).toContain(
-        `agent:${owner}:${localKey}`,
-      );
+      expect(select.options.map((option) => option.value)).toContain(`agent:${owner}:${localKey}`);
     }
   },
 );
@@ -810,5 +808,4 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftOpen).toBe(true);
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
-
 });
