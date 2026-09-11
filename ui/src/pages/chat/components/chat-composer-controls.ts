@@ -49,6 +49,7 @@ export type ChatRunControlsProps = {
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
+  clickToDictate?: boolean;
 };
 
 type MicrophonePickerProps = {
@@ -313,6 +314,7 @@ type ComposerVoiceButtonProps = {
   isBusy: boolean;
   dictation?: ComposerDictationController;
   microphonePicker?: TemplateResult | typeof nothing;
+  clickToDictate?: boolean;
   /**
    * What the control offers at rest. The chat composer's microphone also starts
    * Talk, so it promises voice input; a surface that only dictates says so
@@ -330,7 +332,8 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const finalizing = props.dictation?.finalizing === true;
   const holding = props.dictation?.locksComposer === true;
   const startsDictationDirectly =
-    props.dictation !== undefined && props.onToggleVoice === undefined;
+    props.dictation !== undefined &&
+    (props.clickToDictate === true || props.onToggleVoice === undefined);
   const label = active
     ? t("chat.composer.dictationStopAndKeep")
     : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
@@ -550,6 +553,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             sending: props.sending,
             isBusy: props.isBusy,
             dictation: props.dictation,
+            clickToDictate: props.clickToDictate,
             idleLabel: t("chat.composer.dictationCapability"),
           })}
         </span>

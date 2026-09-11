@@ -23,6 +23,7 @@ import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
+  DictationSchema,
   LoggingLevelSchema,
   McpConfigSchema,
   MemorySchema,
@@ -448,6 +449,8 @@ export const OpenClawSchemaShape = {
     })
     .optional(),
   talk: TalkSchema.optional(),
+  /** Standalone dictation add-on. Independent of the realtime Talk voice path. */
+  dictation: DictationSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
   desktop: DesktopConfigSchema,

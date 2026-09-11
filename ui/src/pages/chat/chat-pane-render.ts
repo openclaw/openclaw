@@ -451,6 +451,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      composerClickToDictate: state.settings.composerClickToDictate,
       realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
       onComposerHoldToRecordChange: (enabled) => {
         state.settings = patchSettings({ composerHoldToRecord: enabled });

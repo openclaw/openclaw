@@ -62,6 +62,7 @@ const SECTION_DOCS_URLS = {
   mcp: "https://docs.openclaw.ai/tools/mcp",
   memory: "https://docs.openclaw.ai/concepts/memory",
   talk: "https://docs.openclaw.ai/nodes/talk",
+  dictation: "https://docs.openclaw.ai/nodes/talk",
   gateway: "https://docs.openclaw.ai/gateway/configuration",
   browser: "https://docs.openclaw.ai/tools/browser",
   nodeHost: "https://docs.openclaw.ai/nodes",

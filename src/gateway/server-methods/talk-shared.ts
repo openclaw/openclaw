@@ -11,10 +11,16 @@ import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import {
+  canonicalizeRealtimeTranscriptionProviderId,
   getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
+import {
+  assertSecretOwnerAvailable,
+  isSecretOwnerAvailable,
+} from "../../secrets/runtime-degraded-state.js";
+import { runtimeDictationSecretOwnerId } from "../../secrets/runtime-dictation-secret-owner.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
@@ -25,6 +31,7 @@ import type {
 } from "../../talk/provider-types.js";
 import type { TalkBrain, TalkEvent, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import {
+  findVoiceProviderConfigKey,
   getVoiceProviderConfig,
   providerMatchesId,
   resolveSupportedVoiceModelRefs,
@@ -165,7 +172,7 @@ function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   return getVoiceCallProviderConfig(config, "streaming");
 }
 
-export function listTalkTranscriptionProviders(
+function listTalkTranscriptionProviders(
   config: OpenClawConfig,
   configuredProviderIds: Iterable<string | undefined>,
 ) {
@@ -197,6 +204,7 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   providerConfigs: Record<string, TConfig>;
   providers: readonly RealtimeProviderWithConfig<TConfig>[];
   requestedModel?: string;
+  isProviderConfigAvailable?: (providerConfigKey: string | undefined) => boolean;
 }): { provider: string; model: string } | undefined {
   const configuredProvider = normalizeOptionalString(params.provider);
   const refs = resolveSupportedVoiceModelRefs({
@@ -210,6 +218,13 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
       continue;
     }
     if (!configuredProvider) {
+      const providerConfigKey = findVoiceProviderConfigKey({
+        providerConfigs: params.providerConfigs,
+        provider,
+      });
+      if (params.isProviderConfigAvailable?.(providerConfigKey) === false) {
+        continue;
+      }
       const rawConfig = getVoiceProviderConfig({
         providerConfigs: params.providerConfigs,
         provider,
@@ -299,26 +314,48 @@ export function buildTalkRealtimeConfig(
   };
 }
 
-export function buildTalkTranscriptionConfig(
+/**
+ * Resolve the standalone dictation config: reads from the top-level
+ * `dictation.*` config block. Used by the dictation session path
+ * (talk.session.create with mode="transcription") and the dictation
+ * catalog endpoint, not the realtime Talk voice path.
+ */
+export function buildDictationConfig(
   config: OpenClawConfig,
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const streamingConfig = getVoiceCallStreamingConfig(config);
-  const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
-  const providerConfigs = streamingConfig.providers ?? {};
+  // Existing installations keep their voice-call streaming selection until
+  // they explicitly configure the standalone dictation surface.
+  const dictation = config.dictation ?? getVoiceCallStreamingConfig(config);
+  const explicitModel =
+    normalizeOptionalString(requestedModel) ?? normalizeOptionalString(config.dictation?.model);
+  const provider =
+    normalizeOptionalString(requestedProvider) ?? normalizeOptionalString(dictation?.provider);
+  const providerConfigs = dictation?.providers ?? {};
+  const effectiveProviderConfigs = explicitModel
+    ? Object.fromEntries(
+        Object.entries(providerConfigs).map(([id, providerConfig]) => [
+          id,
+          { ...providerConfig, model: explicitModel },
+        ]),
+      )
+    : providerConfigs;
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
   const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
     config,
     provider,
-    providerConfigs,
+    providerConfigs: effectiveProviderConfigs,
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
-    requestedModel: normalizeOptionalString(requestedModel),
+    requestedModel: explicitModel,
+    isProviderConfigAvailable: (providerConfigKey) =>
+      !providerConfigKey ||
+      isSecretOwnerAvailable("capability", runtimeDictationSecretOwnerId(providerConfigKey)),
   });
   return {
     provider: provider ?? voiceModelDefault?.provider,
-    providers: providerConfigs,
-    model: voiceModelDefault?.model,
+    providers: effectiveProviderConfigs,
+    model: explicitModel ?? voiceModelDefault?.model,
   };
 }
 
@@ -327,6 +364,20 @@ export function configuredOrFalse(callback: () => boolean): boolean {
     return callback();
   } catch {
     return false;
+  }
+}
+
+export function resolveCatalogProviderSelection(
+  configuredProvider: string | undefined,
+  resolveAutomaticProvider: () => string,
+): { activeProvider?: string; ready: boolean } {
+  try {
+    return { activeProvider: resolveAutomaticProvider(), ready: true };
+  } catch {
+    return {
+      ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
+      ready: false,
+    };
   }
 }
 
@@ -349,6 +400,20 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
     ? providers
     : providers.toSorted((a, b) => (a.autoSelectOrder ?? 1000) - (b.autoSelectOrder ?? 1000));
   for (const provider of orderedProviders) {
+    const providerConfigKey = findVoiceProviderConfigKey({
+      providerConfigs: params.providerConfigs,
+      provider,
+      configuredProviderId: params.configuredProviderId,
+    });
+    if (
+      providerConfigKey &&
+      !isSecretOwnerAvailable("capability", runtimeDictationSecretOwnerId(providerConfigKey))
+    ) {
+      if (normalizedConfigured) {
+        assertSecretOwnerAvailable("capability", runtimeDictationSecretOwnerId(providerConfigKey));
+      }
+      continue;
+    }
     const rawConfig = getVoiceProviderConfig({
       providerConfigs: params.providerConfigs,
       provider,
@@ -507,4 +572,85 @@ export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserS
   // Google browser WebRTC sessions are exposed in provider types but not usable
   // through the current client-owned Talk flow.
   return provider === "google" && transport === "webrtc";
+}
+
+/**
+ * Build the standalone dictation catalog payload served by `dictation.catalog`.
+ * Reads the top-level `dictation.*` config and lists registered realtime
+ * transcription providers (bundled and installed) with their configured state.
+ */
+export function buildDictationCatalog(config: OpenClawConfig) {
+  const dictationConfig = buildDictationConfig(config);
+  const configuredProviderId = normalizeOptionalLowercaseString(dictationConfig.provider);
+  const selection = resolveCatalogProviderSelection(
+    canonicalizeRealtimeTranscriptionProviderId(configuredProviderId, config),
+    () =>
+      resolveConfiguredRealtimeTranscriptionProvider({
+        config,
+        configuredProviderId: dictationConfig.provider,
+        providerConfigs: dictationConfig.providers,
+        defaultModel: dictationConfig.model,
+      }).provider.id,
+  );
+  return {
+    ready: selection.ready,
+    ...(selection.activeProvider ? { activeProvider: selection.activeProvider } : {}),
+    providers: listTalkTranscriptionProviders(config, [
+      dictationConfig.provider,
+      ...Object.keys(dictationConfig.providers),
+    ]).map((provider) => {
+      const providerConfigKey = findVoiceProviderConfigKey({
+        providerConfigs: dictationConfig.providers,
+        provider,
+        configuredProviderId:
+          selection.activeProvider &&
+          normalizeOptionalLowercaseString(provider.id) ===
+            normalizeOptionalLowercaseString(selection.activeProvider)
+            ? dictationConfig.provider
+            : undefined,
+      });
+      const secretOwnerAvailable =
+        !providerConfigKey ||
+        isSecretOwnerAvailable("capability", runtimeDictationSecretOwnerId(providerConfigKey));
+      const rawConfig = getVoiceProviderConfig({
+        providerConfigs: dictationConfig.providers,
+        provider,
+        configuredProviderId:
+          selection.activeProvider &&
+          normalizeOptionalLowercaseString(provider.id) ===
+            normalizeOptionalLowercaseString(selection.activeProvider)
+            ? dictationConfig.provider
+            : undefined,
+      });
+      const rawConfigWithModel =
+        dictationConfig.model && rawConfig.model === undefined
+          ? { ...rawConfig, model: dictationConfig.model }
+          : rawConfig;
+      const entry: Record<string, unknown> = {
+        id: provider.id,
+        label: provider.label,
+        configured:
+          secretOwnerAvailable &&
+          configuredOrFalse(() => {
+            const providerConfig =
+              provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
+              rawConfigWithModel;
+            return provider.isConfigured({ cfg: config, providerConfig });
+          }),
+        modes: ["transcription"],
+        transports: ["gateway-relay"],
+        brains: ["none"],
+      };
+      if (provider.models?.length) {
+        entry.models = [...provider.models];
+      }
+      if (provider.defaultModel) {
+        entry.defaultModel = provider.defaultModel;
+      }
+      if (provider.aliases?.length) {
+        entry.aliases = [...provider.aliases];
+      }
+      return entry;
+    }),
+  };
 }

@@ -409,6 +409,8 @@ export {
   TalkEventSchema,
   TalkCatalogParamsSchema,
   TalkCatalogResultSchema,
+  DictationCatalogParamsSchema,
+  DictationCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
   TalkClientCloseParamsSchema,

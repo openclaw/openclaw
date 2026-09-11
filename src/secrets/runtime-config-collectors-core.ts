@@ -7,6 +7,7 @@ import {
   resolveConfiguredTalkSpeechProviderId,
 } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
@@ -19,6 +20,7 @@ import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-
 import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
 import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
+import { runtimeDictationSecretOwnerId } from "./runtime-dictation-secret-owner.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
   runtimeMediaModelSecretOwnerId,
@@ -274,6 +276,54 @@ function collectTalkAssignments(params: {
         },
       });
     }
+  }
+}
+
+/** Collect SecretRefs from the standalone dictation provider map. */
+function collectDictationAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const dictation = isRecord(params.config.dictation) ? params.config.dictation : undefined;
+  const providers = dictation && isRecord(dictation.providers) ? dictation.providers : undefined;
+  if (!providers) {
+    return;
+  }
+  const configuredProvider = normalizeOptionalLowercaseString(
+    isRecord(dictation) ? dictation.provider : undefined,
+  );
+  const providerIds = Object.keys(providers);
+  const selectedProvider =
+    configuredProvider ??
+    (providerIds.length === 1 ? normalizeOptionalLowercaseString(providerIds[0]) : undefined);
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!isRecord(providerConfig)) {
+      continue;
+    }
+    collectRuntimeSecretInputAssignment({
+      value: providerConfig.apiKey,
+      path: `dictation.providers.${providerId}.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active:
+        selectedProvider === undefined ||
+        normalizeOptionalLowercaseString(providerId) === selectedProvider,
+      inactiveReason: "Dictation provider is not selected.",
+      owner: {
+        ownerKind: "capability",
+        ownerId: runtimeDictationSecretOwnerId(providerId),
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: providerConfig,
+      },
+      apply: (resolved) => {
+        if (typeof resolved === "string" || isSecretRef(resolved)) {
+          providerConfig.apiKey = resolved;
+        }
+      },
+    });
   }
 }
 
@@ -595,6 +645,7 @@ export function collectCoreConfigAssignments(params: {
 
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
+  collectDictationAssignments(params);
   collectGatewayAssignments(params);
   collectAgentSandboxAssignments(params);
   collectMessagesTtsAssignments(params);

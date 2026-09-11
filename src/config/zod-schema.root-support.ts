@@ -240,6 +240,44 @@ export const TalkSchema = z
     }
   });
 
+/**
+ * Standalone dictation add-on. Streams microphone audio to a realtime STT
+ * provider (raw PCM over WebSocket for the bundled universal OpenAI-compatible
+ * provider) and commits partial / final transcripts back to the composer.
+ * Independent of the realtime Talk voice path.
+ */
+export const DictationSchema = z
+  .strictObject({
+    /** Active realtime transcription provider id, e.g. "openai-compatible-stt". */
+    provider: z.string().optional(),
+    /** Per-provider dictation config keyed by provider id. */
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    /** Optional model override for dictation sessions. */
+    model: z.string().optional(),
+  })
+  .superRefine((dictation, ctx) => {
+    const provider = normalizeLowercaseStringOrEmpty(dictation.provider ?? "");
+    const providers = dictation.providers ? Object.keys(dictation.providers) : [];
+    const normalizedProviders = providers.map((id) => normalizeLowercaseStringOrEmpty(id));
+
+    if (provider && providers.length > 0 && !normalizedProviders.includes(provider)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `dictation.provider must match a key in dictation.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          "dictation.provider is required when dictation.providers defines multiple providers",
+      });
+    }
+  });
+
 const RESERVED_MCP_SERVER_NAME = "__proto__";
 const RESERVED_MCP_SERVER_NAME_ERROR = 'MCP server name "__proto__" is reserved; rename the server';
 

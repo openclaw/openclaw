@@ -51,21 +51,110 @@ export type TalkCatalogState =
       providers: readonly TalkRealtimeProviderOption[];
     };
 
+export type DictationProviderOption = {
+  id: string;
+  label: string;
+  configured: boolean;
+  aliases: readonly string[];
+  models: readonly string[];
+  defaultModel: string | null;
+};
+
+export type DictationCatalogState =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | {
+      kind: "ready";
+      ready: boolean;
+      activeProvider: string | null;
+      providers: readonly DictationProviderOption[];
+    };
+
+export type DictationSelection = {
+  provider: string | null;
+  model: string | null;
+  endpoint: string | null;
+  providerEntries: Readonly<Record<string, { endpoint?: string; model?: string }>>;
+};
+
 type TalkViewProps = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  dictationSelection: DictationSelection;
+  dictationCatalog: DictationCatalogState;
   modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
+  onDictationProviderChange: (providerId: string | null) => void;
+  onDictationModelChange: (model: string | null) => void;
+  onDictationEndpointChange: (endpoint: string | null) => void;
   /** Embedded schema editor for the full `talk` section. */
   editor: TemplateResult;
 };
 
 const TALK_PICKER_UNSET = "";
+const DICTATION_PICKER_UNSET = "";
+
+function findDictationProviderOption(
+  providers: readonly DictationProviderOption[],
+  providerId: string | null,
+): DictationProviderOption | undefined {
+  if (!providerId) {
+    return undefined;
+  }
+  return providers.find(
+    (provider) => provider.id === providerId || provider.aliases.includes(providerId),
+  );
+}
+
+export function selectedDictationProviderOption(
+  catalog: DictationCatalogState,
+  selection: DictationSelection,
+): DictationProviderOption | undefined {
+  if (catalog.kind !== "ready") {
+    return undefined;
+  }
+  if (selection.provider) {
+    return findDictationProviderOption(catalog.providers, selection.provider);
+  }
+  return findDictationProviderOption(catalog.providers, catalog.activeProvider);
+}
+
+export function dictationProviderConfigKeys(
+  selection: DictationSelection,
+  option: DictationProviderOption | undefined,
+): string[] {
+  const candidates = [selection.provider, option?.id, ...(option?.aliases ?? [])];
+  const keys: string[] = [];
+  for (const candidate of candidates) {
+    if (
+      typeof candidate === "string" &&
+      !keys.includes(candidate) &&
+      candidate in selection.providerEntries
+    ) {
+      keys.push(candidate);
+    }
+  }
+  return keys;
+}
+
+function effectiveDictationValues(
+  selection: DictationSelection,
+  option: DictationProviderOption | undefined,
+): { model: string | null; endpoint: string | null } {
+  let model = selection.model;
+  let endpoint = selection.endpoint;
+  for (const key of dictationProviderConfigKeys(selection, option)) {
+    const entry = selection.providerEntries[key];
+    model ??= entry?.model ?? null;
+    endpoint ??= entry?.endpoint ?? null;
+  }
+  return { model, endpoint };
+}
 
 /** Config may name a provider by alias; pickers always speak canonical ids. */
 function findProviderOption(
@@ -305,6 +394,125 @@ function renderGptLiveRow(props: TalkViewProps) {
   });
 }
 
+function renderDictationStatusRow(props: TalkViewProps) {
+  const catalog = props.dictationCatalog;
+  if (catalog.kind === "loading") {
+    return renderSettingsRow({
+      title: t("talkPage.dictation.statusTitle"),
+      control: renderSettingsStatus({ kind: "muted", label: t("common.loading") }),
+    });
+  }
+  if (catalog.kind === "unavailable") {
+    return renderSettingsRow({
+      title: t("talkPage.dictation.statusTitle"),
+      description: t("talkPage.dictation.unavailableHint"),
+      control: renderSettingsStatus({ kind: "muted", label: t("talkPage.status.unavailable") }),
+    });
+  }
+  return renderSettingsRow({
+    title: t("talkPage.dictation.statusTitle"),
+    description: catalog.activeProvider
+      ? t("talkPage.dictation.activeProvider", { provider: catalog.activeProvider })
+      : t("talkPage.dictation.noProvider"),
+    control: catalog.ready
+      ? renderSettingsStatus({ kind: "ok", label: t("talkPage.status.ready") })
+      : renderSettingsStatus({ kind: "warn", label: t("talkPage.status.notReady") }),
+  });
+}
+
+function renderDictationProviderRow(props: TalkViewProps) {
+  const selection = props.dictationSelection;
+  const catalog = props.dictationCatalog;
+  if (catalog.kind !== "ready" || catalog.providers.length === 0) {
+    return renderSettingsRow({
+      title: t("talkPage.dictation.providerTitle"),
+      description: t("talkPage.dictation.providerDescription"),
+      control: renderSettingsValue(selection.provider ?? t("talkPage.provider.auto"), {
+        mono: true,
+      }),
+    });
+  }
+  const selected = findDictationProviderOption(catalog.providers, selection.provider);
+  const unknownConfigured = selection.provider && !selected ? selection.provider : null;
+  return renderSettingsRow({
+    title: t("talkPage.dictation.providerTitle"),
+    description: t("talkPage.dictation.providerDescription"),
+    stacked: true,
+    control: renderSettingsSegmented({
+      value: selected?.id ?? unknownConfigured ?? DICTATION_PICKER_UNSET,
+      options: [
+        ...catalog.providers.map((provider) => ({ value: provider.id, label: provider.label })),
+        ...(unknownConfigured ? [{ value: unknownConfigured, label: unknownConfigured }] : []),
+        ...(Object.keys(props.dictationSelection.providerEntries).length <= 1
+          ? [{ value: DICTATION_PICKER_UNSET, label: t("talkPage.provider.auto") }]
+          : []),
+      ],
+      disabled: props.configBusy,
+      ariaLabel: t("talkPage.dictation.providerTitle"),
+      onChange: (value) => props.onDictationProviderChange(value || null),
+    }),
+  });
+}
+
+function renderDictationModelRow(props: TalkViewProps) {
+  const option = selectedDictationProviderOption(props.dictationCatalog, props.dictationSelection);
+  const { model } = effectiveDictationValues(props.dictationSelection, option);
+  if (!option) {
+    return renderSettingsRow({
+      title: t("talkPage.dictation.modelTitle"),
+      description: t("talkPage.dictation.modelDescription"),
+      control: renderSettingsValue(model ?? t("talkPage.model.default"), { mono: true }),
+    });
+  }
+  const models = option.models.length
+    ? option.models
+    : option.defaultModel
+      ? [option.defaultModel]
+      : [];
+  return renderSettingsSelectRow({
+    title: t("talkPage.dictation.modelTitle"),
+    description: t("talkPage.dictation.modelDescription"),
+    value: model ?? DICTATION_PICKER_UNSET,
+    options: [
+      {
+        value: DICTATION_PICKER_UNSET,
+        label: option.defaultModel
+          ? t("talkPage.model.defaultNamed", { model: option.defaultModel })
+          : t("talkPage.model.default"),
+      },
+      ...models.map((value) => ({ value, label: value })),
+      ...(model && !models.includes(model) ? [{ value: model, label: model }] : []),
+    ],
+    disabled: props.configBusy,
+    onChange: (value) => props.onDictationModelChange(value || null),
+  });
+}
+
+function renderDictationEndpointRow(props: TalkViewProps) {
+  const option = selectedDictationProviderOption(props.dictationCatalog, props.dictationSelection);
+  const { endpoint } = effectiveDictationValues(props.dictationSelection, option);
+  return renderSettingsRow({
+    title: t("talkPage.dictation.endpointTitle"),
+    description: t("talkPage.dictation.endpointDescription"),
+    control: html`<input
+      class="settings-input"
+      type="url"
+      spellcheck="false"
+      aria-label=${t("talkPage.dictation.endpointTitle")}
+      .value=${endpoint ?? ""}
+      placeholder=${t("talkPage.dictation.endpointPlaceholder")}
+      ?disabled=${props.configBusy || option === undefined}
+      @change=${(event: Event) => {
+        if (!(event.currentTarget instanceof HTMLInputElement)) {
+          return;
+        }
+        const value = event.currentTarget.value.trim();
+        props.onDictationEndpointChange(value || null);
+      }}
+    />`,
+  });
+}
+
 export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
@@ -319,6 +527,16 @@ export function renderTalk(props: TalkViewProps) {
           html`
             ${renderStatusRow(props)} ${renderProviderRow(props)} ${renderModelRow(props)}
             ${renderVoiceRow(props)} ${renderGptLiveRow(props)}
+          `,
+        )}
+        ${renderSettingsSection(
+          {
+            title: t("talkPage.dictation.sectionTitle"),
+            description: t("talkPage.dictation.sectionDescription"),
+          },
+          html`
+            ${renderDictationStatusRow(props)} ${renderDictationProviderRow(props)}
+            ${renderDictationModelRow(props)} ${renderDictationEndpointRow(props)}
           `,
         )}
       </div>

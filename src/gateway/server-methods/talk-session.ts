@@ -54,10 +54,10 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
+  buildDictationConfig,
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
-  buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
   normalizeTalkSessionBrain,
   normalizeTalkSessionMode,
@@ -375,7 +375,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const runtimeConfig = context.getRuntimeConfig();
-        const transcriptionConfig = buildTalkTranscriptionConfig(
+        // Dictation reads from the top-level `dictation.*` config (standalone,
+        // not coupled to the realtime Talk voice path).
+        const transcriptionConfig = buildDictationConfig(
           runtimeConfig,
           params.provider,
           params.model,

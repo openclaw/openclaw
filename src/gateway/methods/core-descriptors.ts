@@ -107,6 +107,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["wizard.cancel", "wizard", "operator.admin", "<=2026.7"],
   ["wizard.status", "wizard", "operator.admin", "<=2026.7"],
   ["talk.catalog", "talk", "operator.read", "<=2026.7"],
+  ["dictation.catalog", "talk", "operator.read", "2026.9"],
   // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
   ["talk.config", "talk", "dynamic", "<=2026.7"],
   ["talk.client.create", "talk", "operator.talk", "<=2026.7"],

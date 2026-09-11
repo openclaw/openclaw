@@ -773,6 +773,31 @@ describe("talk transcription gateway relay", () => {
     expect(provider.createSession).not.toHaveBeenCalled();
   });
 
+  it("rejects a passthrough provider that labels relay audio as 16 kHz", () => {
+    const provider = createTranscriptionProvider(createSttSessionMock());
+    const { context } = createBroadcastContext();
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: { encoding: "g711_ulaw", sampleRate: 16000 },
+      }),
+    ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("allows an adapter to declare 8 kHz relay input while producing 16 kHz output", async () => {
+    const sttSession = createSttSessionMock();
+    const { provider } = await createStartedRelaySession(sttSession, {
+      relayInputSampleRate: 8000,
+      sampleRate: 16000,
+    });
+
+    expect(provider.createSession).toHaveBeenCalledOnce();
+  });
+
   it("rejects session creation when transcription expiry would exceed Date range", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));

@@ -120,6 +120,7 @@ type ConfigPageSetting =
   | "chatFollowUpMode"
   | "catalogOpenTarget"
   | "composerHoldToRecord"
+  | "composerClickToDictate"
   | "openLinksInControlUiBrowser";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
@@ -1277,6 +1278,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       },
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
       setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
+      composerClickToDictate: this.settings.composerClickToDictate !== false,
+      setComposerClickToDictate: (enabled) => this.setSetting("composerClickToDictate", enabled),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {

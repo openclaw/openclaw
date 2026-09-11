@@ -82,6 +82,7 @@ function pointer(type: string, pointerId = 7, x = 50, y = 50): Event {
 function createHarness(
   overrides: {
     enabled?: boolean;
+    holdToDictate?: boolean;
     realtimeTalkActive?: boolean;
     dictationAvailable?: boolean;
   } = {},
@@ -95,6 +96,7 @@ function createHarness(
     client: createClient(),
     connected: true,
     enabled: overrides.enabled ?? true,
+    holdToDictate: overrides.holdToDictate,
     dictationAvailable: overrides.dictationAvailable,
     realtimeTalkActive: overrides.realtimeTalkActive ?? false,
     onCommit,
@@ -838,6 +840,18 @@ describe("ComposerDictationController", () => {
     expect(settingOff.onTap).toHaveBeenCalledOnce();
     expect(request).not.toHaveBeenCalled();
     settingOff.controller.dispose();
+  });
+
+  it("allows click-to-dictate when hold-to-dictate is disabled", async () => {
+    const clickOnly = createHarness({ holdToDictate: false });
+    expect(clickOnly.controller.startDirect()).toBe(true);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
+    );
+    expect(clickOnly.target.dispatchEvent(pointer("pointerdown"))).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(request).toHaveBeenCalledTimes(1);
+    clickOnly.controller.dispose();
   });
 });
 

@@ -6239,6 +6239,30 @@ public struct DeviceTokenRotateResult: Codable, Sendable {
     }
 }
 
+public struct DictationCatalogParams: Codable, Sendable {}
+
+public struct DictationCatalogResult: Codable, Sendable {
+    public let ready: Bool?
+    public let activeprovider: String?
+    public let providers: [[String: AnyCodable]]
+
+    public init(
+        ready: Bool? = nil,
+        activeprovider: String? = nil,
+        providers: [[String: AnyCodable]])
+    {
+        self.ready = ready
+        self.activeprovider = activeprovider
+        self.providers = providers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ready
+        case activeprovider = "activeProvider"
+        case providers
+    }
+}
+
 public struct EnvironmentSummary: Codable, Sendable {
     public let id: String
     public let type: String

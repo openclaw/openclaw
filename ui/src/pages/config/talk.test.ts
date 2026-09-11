@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type { DictationCatalogResult, TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -22,6 +22,7 @@ type TalkPageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   changeModel: (model: string | null) => void;
   changeProvider: (providerId: string | null) => void;
+  changeDictationEndpoint: (endpoint: string | null) => void;
 };
 
 type TalkMutationHarnessOptions = {
@@ -34,6 +35,8 @@ type TalkMutationHarnessOptions = {
     requestIndex: number,
     catalog: TalkCatalogResult,
   ) => Promise<TalkCatalogResult> | TalkCatalogResult;
+  dictationCatalog?: DictationCatalogResult;
+  dictation?: Record<string, unknown>;
   configSnapshot?: { hash?: string | null; configRevisionHash?: string | null };
   activeProvider?: string | null;
   activeVoiceSelectionPolicy?: "allowlist-default";
@@ -95,6 +98,9 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     if (options.unavailable) {
       throw new Error("talk.catalog unavailable");
     }
+    if (method === "dictation.catalog") {
+      return options.dictationCatalog ?? { ready: false, providers: [] };
+    }
     catalogRequestIndex += 1;
     return await (options.catalogRequest?.(catalogRequestIndex, catalog) ?? catalog);
   });
@@ -133,6 +139,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
           : undefined,
       },
     },
+    ...(options.dictation ? { dictation: options.dictation } : {}),
   };
   const runtimeConfigListeners = new Set<() => void>();
   const runtimeConfig = {
@@ -184,7 +191,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
 }
 
 function readVoiceOptions(page: HTMLElement): string[] {
-  return [...page.querySelectorAll("select option")].map(
+  return [...(page.querySelector("select")?.querySelectorAll("option") ?? [])].map(
     (option) => option.getAttribute("value") ?? "",
   );
 }
@@ -198,10 +205,25 @@ function expectVoiceState(page: TalkPageElement, options: string[], unsupported:
   expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(unsupported);
 }
 
+function talkCatalogRequestCount(request: ReturnType<typeof vi.fn>): number {
+  return request.mock.calls.filter(([method]) => method === "talk.catalog").length;
+}
+
+async function waitForTalkCatalogReady(
+  page: TalkPageElement,
+  request: ReturnType<typeof vi.fn>,
+): Promise<void> {
+  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+  await vi.waitFor(() => expect(readVoiceOptions(page).length).toBeGreaterThan(0));
+}
+
 async function selectModel(model: string, options: TalkMutationHarnessOptions = {}) {
   const harness = createTalkMutationHarness(options);
-  await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
-  await harness.page.updateComplete;
+  if (options.unavailable) {
+    await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
+  } else {
+    await waitForTalkCatalogReady(harness.page, harness.request);
+  }
   harness.page.changeModel(model);
   expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(
     ["talk", "realtime", "model"],
@@ -212,8 +234,11 @@ async function selectModel(model: string, options: TalkMutationHarnessOptions = 
 
 async function selectProvider(providerId: string, options: TalkMutationHarnessOptions = {}) {
   const harness = createTalkMutationHarness(options);
-  await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
-  await harness.page.updateComplete;
+  if (options.unavailable) {
+    await vi.waitFor(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
+  } else {
+    await waitForTalkCatalogReady(harness.page, harness.request);
+  }
   harness.page.changeProvider(providerId);
   expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(
     ["talk", "realtime", "provider"],
@@ -669,6 +694,57 @@ describe("Talk device and voice wake settings", () => {
   });
 });
 
+describe("TalkSettingsPage standalone dictation", () => {
+  const dictationCatalog = {
+    ready: true,
+    activeProvider: "openai-compatible-stt",
+    providers: [
+      {
+        id: "openai-compatible-stt",
+        label: "Standalone STT",
+        configured: true,
+        aliases: ["local-stt"],
+        models: ["whisper-1"],
+        defaultModel: "whisper-1",
+      },
+    ],
+  } satisfies DictationCatalogResult;
+
+  it("requests the standalone catalog without Gateway feature advertisement", async () => {
+    const { page, request } = createTalkMutationHarness({ dictationCatalog });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("dictation.catalog", {}));
+    await vi.waitFor(() => expect(page.textContent).toContain("Standalone STT"));
+  });
+
+  it("edits the selected configured alias instead of creating a canonical sibling", async () => {
+    const { page, request, runtimeConfig } = createTalkMutationHarness({
+      dictationCatalog,
+      dictation: {
+        provider: "local-stt",
+        providers: {
+          "local-stt": { endpoint: "ws://old.example.test/transcribe" },
+        },
+      },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("dictation.catalog", {}));
+
+    page.changeDictationEndpoint("ws://new.example.test/transcribe");
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["dictation", "providers", "local-stt", "endpoint"],
+      "ws://new.example.test/transcribe",
+    );
+
+    page.changeDictationEndpoint(null);
+    expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith([
+      "dictation",
+      "providers",
+      "local-stt",
+      "endpoint",
+    ]);
+  });
+});
+
 describe("TalkSettingsPage realtime transport mutation", () => {
   it.each([
     ["allowlist-default", true],
@@ -680,7 +756,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         activeVoiceSelectionPolicy,
         model: null,
       });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await waitForTalkCatalogReady(page, request);
       setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
       await page.updateComplete;
 
@@ -703,7 +779,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       catalogRequest: (requestIndex, catalog) =>
         requestIndex === 3 ? hashCatalog.promise.then(() => catalog) : catalog,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await waitForTalkCatalogReady(page, request);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     await page.updateComplete.then(() => expectVoiceState(page, ACTIVE_VOICES, true));
 
@@ -719,19 +795,19 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(2));
     await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     Object.assign(runtimeConfig.state.configSnapshot, { configRevisionHash: "revision-2" });
     setConfigHash(null);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(3));
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(4));
     await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
     hashCatalog.resolve();
-    await request.mock.results[2]?.value;
+    await hashCatalog.promise;
     expectVoiceState(page, ACTIVE_VOICES, true);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(talkCatalogRequestCount(request)).toBe(4);
   });
 
   it("retains a reset without revisions across stale reads, then clears it on reconnect", async () => {
@@ -748,18 +824,19 @@ describe("TalkSettingsPage realtime transport mutation", () => {
             ? failedCatalog.promise.then(() => expect.fail("catalog refresh failed"))
             : catalog,
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(1));
+    await vi.waitFor(() => expect(readVoiceOptions(page).length).toBeGreaterThan(0));
     page.changeModel(null);
     setTalkRealtimeConfig(page, { provider: "openai", speakerVoice: "custom-voice" });
     await page.updateComplete;
 
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(2));
     expectVoiceState(page, DEFAULT_VOICES, false);
     setConfigHash("hash-2");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(3));
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(4));
     staleCatalog.resolve();
     await page.updateComplete.then(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
@@ -768,7 +845,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expectVoiceState(page, DEFAULT_VOICES, false);
     failedCatalog.resolve();
     setGatewayConnection(true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(5));
     await vi.waitFor(() => expectVoiceState(page, ACTIVE_VOICES, true));
   });
 
@@ -781,7 +858,8 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         "gpt-realtime-alt": ["verse"],
       },
     });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(1));
+    await vi.waitFor(() => expect(readVoiceOptions(page).length).toBeGreaterThan(0));
 
     page.changeModel(null);
     page.changeModel("gpt-realtime-alt");
@@ -799,7 +877,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     await page.updateComplete;
     expect(readVoiceOptions(page)).toEqual(["", "ara"]);
     setGatewayConnection(true, "wss://replacement.example.test");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(talkCatalogRequestCount(request)).toBe(2));
     await vi.waitFor(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
   });
 

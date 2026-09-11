@@ -3598,7 +3598,7 @@ src/tts/tts-provider-resolution.ts	2
 src/tts/tts-request.ts	2
 src/tts/tts-settings.ts	4
 src/tts/tts-telephony.ts	1
-src/tts/voice-models.ts	4
+src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	2
 src/tui/embedded-backend.ts	5
 src/tui/gateway-chat.ts	2
@@ -3843,7 +3843,7 @@ ui/src/pages/chat/components/session-diff-menus.ts	1
 ui/src/pages/chat/components/session-diff-panel.ts	2
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
-ui/src/pages/chat/composer-dictation.ts	2
+ui/src/pages/chat/composer-dictation.ts	1
 ui/src/pages/chat/connect-error.ts	1
 ui/src/pages/chat/critical-observer-notice.ts	1
 ui/src/pages/chat/export.ts	1
@@ -3868,7 +3868,6 @@ ui/src/pages/config/memory-page.ts	2
 ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
-ui/src/pages/config/talk-page.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-appearance.ts	1
 ui/src/pages/config/view-diff.ts	6

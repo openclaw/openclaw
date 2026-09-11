@@ -2,7 +2,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -12,6 +11,7 @@ import {
   normalizeUiAppearancePreference,
   type TalkSpeakParams,
   UI_APPEARANCE_PREFERENCE_KEYS,
+  validateDictationCatalogParams,
   validateTalkCatalogParams,
   validateTalkConfigParams,
   validateTalkSpeakParams,
@@ -32,7 +32,6 @@ import type {
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoicePublicClientHints } from "../../plugins/provider-policy-surface.js";
-import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
 import {
   assertSecretOwnerAvailable,
   isSecretOwnerAvailable,
@@ -70,7 +69,7 @@ import {
   resolveTtsConfig,
   type TtsDirectiveOverrides,
 } from "../../tts/tts.js";
-import { getVoiceProviderConfig, providerMatchesId } from "../../tts/voice-models.js";
+import { providerMatchesId } from "../../tts/voice-models.js";
 import { ADMIN_SCOPE, READ_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
 import { respondUnavailable } from "./response.js";
@@ -78,11 +77,10 @@ import { inferSpeechMimeType } from "./speech-mime.js";
 import { talkClientHandlers } from "./talk-client.js";
 import { talkSessionHandlers } from "./talk-session.js";
 import {
+  buildDictationCatalog,
   buildTalkRealtimeConfig,
-  buildTalkTranscriptionConfig,
   configuredOrFalse,
-  listTalkTranscriptionProviders,
-  resolveConfiguredRealtimeTranscriptionProvider,
+  resolveCatalogProviderSelection,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -98,25 +96,6 @@ type TalkSpeakErrorDetails = {
   reason: TalkSpeakReason;
   fallbackEligible: boolean;
 };
-
-function resolveCatalogProviderSelection(
-  configuredProvider: string | undefined,
-  resolveAutomaticProvider: () => string,
-): { activeProvider?: string; ready: boolean } {
-  // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
-  try {
-    const resolvedProvider = resolveAutomaticProvider();
-    return {
-      activeProvider: resolvedProvider,
-      ready: true,
-    };
-  } catch {
-    return {
-      ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
-      ready: false,
-    };
-  }
-}
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -255,18 +234,6 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const realtimeAgentId = resolveTalkSessionAgentId(config);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
-  const transcriptionConfig = buildTalkTranscriptionConfig(config);
-  const transcriptionSelection = resolveCatalogProviderSelection(
-    canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
-    () =>
-      resolveConfiguredRealtimeTranscriptionProvider({
-        config,
-        configuredProviderId: transcriptionConfig.provider,
-        providerConfigs: transcriptionConfig.providers,
-        defaultModel: transcriptionConfig.model,
-      }).provider.id,
-  );
-  const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
   const realtimeProviderIds = Object.keys(realtimeConfig.providers);
   const realtimeSurface =
@@ -299,6 +266,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
     modes: ["realtime", "stt-tts", "transcription"],
     transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
     brains: ["agent-consult", "direct-tools", "none"],
+    transcription: buildDictationCatalog(config),
     speech: {
       ...(activeSpeechProvider ? { activeProvider: activeSpeechProvider } : {}),
       providers: listSpeechProviders(config).map((provider) => {
@@ -333,52 +301,6 @@ function buildTalkCatalog(config: OpenClawConfig) {
         }
         if (provider.voices) {
           entry.voices = [...provider.voices];
-        }
-        return entry;
-      }),
-    },
-    transcription: {
-      ready: transcriptionSelection.ready,
-      ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
-      providers: listTalkTranscriptionProviders(config, [
-        transcriptionConfig.provider,
-        ...Object.keys(transcriptionConfig.providers),
-      ]).map((provider) => {
-        const rawConfig = getVoiceProviderConfig({
-          providerConfigs: transcriptionConfig.providers,
-          provider,
-          configuredProviderId:
-            activeTranscriptionProvider &&
-            normalizeOptionalLowercaseString(provider.id) ===
-              normalizeOptionalLowercaseString(activeTranscriptionProvider)
-              ? transcriptionConfig.provider
-              : undefined,
-        });
-        const rawConfigWithModel =
-          transcriptionConfig.model && rawConfig.model === undefined
-            ? { ...rawConfig, model: transcriptionConfig.model }
-            : rawConfig;
-        const providerConfig =
-          provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-          rawConfigWithModel;
-        const entry: Record<string, unknown> = {
-          id: provider.id,
-          label: provider.label,
-          configured: configuredOrFalse(() =>
-            provider.isConfigured({ cfg: config, providerConfig }),
-          ),
-          modes: ["transcription"],
-          transports: ["gateway-relay"],
-          brains: ["none"],
-        };
-        if (provider.models?.length) {
-          entry.models = [...provider.models];
-        }
-        if (provider.defaultModel) {
-          entry.defaultModel = provider.defaultModel;
-        }
-        if (provider.aliases?.length) {
-          entry.aliases = [...provider.aliases];
         }
         return entry;
       }),
@@ -835,6 +757,41 @@ export const talkHandlers: GatewayRequestHandlers = {
 
     try {
       respond(true, buildTalkCatalog(context.getRuntimeConfig()), undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          err instanceof AgentSelectionRequiredError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+        ),
+      );
+    }
+  },
+  /**
+   * Standalone dictation catalog: lists available realtime transcription
+   * providers with their configured state, returns the active provider id when
+   * the dictation.* config selects one. Distinct from `talk.catalog` so the
+   * Control UI's Dictation page can render this without dragging in the
+   * realtime Talk voice payload.
+   */
+  "dictation.catalog": async ({ params, respond, context }) => {
+    const catalogParams = params ?? {};
+    if (
+      !assertValidParams(
+        catalogParams,
+        validateDictationCatalogParams,
+        "dictation.catalog",
+        respond,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      respond(true, buildDictationCatalog(context.getRuntimeConfig()), undefined);
     } catch (err) {
       respond(
         false,

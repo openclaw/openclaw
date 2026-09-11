@@ -185,12 +185,12 @@ export function resolvePrimaryVoiceProviderCandidate(params: {
   return voiceModel ? { provider, voiceModel } : { provider };
 }
 
-/** Read provider config by configured id, canonical id, or alias. */
-export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(params: {
+/** Find the exact configured key matching a provider id, canonical id, or alias. */
+export function findVoiceProviderConfigKey<TConfig extends Record<string, unknown>>(params: {
   providerConfigs: Record<string, TConfig | undefined>;
   provider: VoiceModelProvider;
   configuredProviderId?: string;
-}): TConfig {
+}): string | undefined {
   const candidates = [
     normalizeString(params.configuredProviderId),
     params.provider.id,
@@ -199,15 +199,28 @@ export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(
   const configuredKeys = Object.keys(params.providerConfigs);
   for (const candidate of candidates) {
     if (Object.hasOwn(params.providerConfigs, candidate)) {
-      return params.providerConfigs[candidate] ?? ({} as TConfig);
+      return candidate;
     }
     const normalizedCandidate = normalizeLowercaseString(candidate);
     const matchingKey = configuredKeys.find(
       (key) => normalizeLowercaseString(key) === normalizedCandidate,
     );
     if (matchingKey) {
-      return params.providerConfigs[matchingKey] ?? ({} as TConfig);
+      return matchingKey;
     }
+  }
+  return undefined;
+}
+
+/** Read provider config by configured id, canonical id, or alias. */
+export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(params: {
+  providerConfigs: Record<string, TConfig | undefined>;
+  provider: VoiceModelProvider;
+  configuredProviderId?: string;
+}): TConfig {
+  const key = findVoiceProviderConfigKey(params);
+  if (key) {
+    return params.providerConfigs[key] ?? ({} as TConfig);
   }
   return {} as TConfig;
 }

@@ -256,8 +256,14 @@ describe("opt-in extension package boundaries", () => {
       expect(tsconfig.include).toBeUndefined();
       expect(tsconfig.exclude).toBeUndefined();
 
-      const packageJson = readJsonFile<PackageJson>(`extensions/${extensionName}/package.json`);
-      expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
+      const packageJsonPath = `extensions/${extensionName}/package.json`;
+      // Manifest-only extensions (openclaw.plugin.json without a package.json)
+      // are valid bundled plugins; the sdk devDep contract applies only when a
+      // package manifest exists.
+      if (fs.existsSync(resolve(REPO_ROOT, packageJsonPath))) {
+        const packageJson = readJsonFile<PackageJson>(packageJsonPath);
+        expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
+      }
     }
   });
 

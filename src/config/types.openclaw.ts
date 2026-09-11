@@ -13,7 +13,12 @@ import type { ChannelsConfig } from "./types.channels.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DesktopConfig } from "./types.desktop.js";
-import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
+import type {
+  DictationConfig,
+  DiscoveryConfig,
+  GatewayConfig,
+  TalkConfig,
+} from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
@@ -236,6 +241,13 @@ export type OpenClawConfig = {
   discovery?: DiscoveryConfig;
   /** Voice/talk mode configuration. */
   talk?: TalkConfig;
+  /**
+   * Standalone dictation add-on. Streams microphone audio to a realtime STT
+   * provider (raw PCM over WebSocket for the bundled universal OpenAI-compatible
+   * provider) and commits partial / final transcripts back to the composer.
+   * Independent of the realtime Talk voice path.
+   */
+  dictation?: DictationConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
   /** Opt-in cloud-worker provider profiles. */

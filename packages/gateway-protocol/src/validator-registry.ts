@@ -368,6 +368,7 @@ export const validateWizardCancelParams = compile(S.WizardCancelParamsSchema);
 export const validateWizardStatusParams = compile(S.WizardStatusParamsSchema);
 export const validateTalkModeParams = compile(S.TalkModeParamsSchema);
 export const validateTalkCatalogParams = compile(S.TalkCatalogParamsSchema);
+export const validateDictationCatalogParams = compile(S.DictationCatalogParamsSchema);
 export const validateTalkConfigParams = compile(S.TalkConfigParamsSchema);
 export const validateTalkConfigResult = compile(S.TalkConfigResultSchema);
 export const validateTalkClientCreateParams = compile(S.TalkClientCreateParamsSchema);

@@ -357,6 +357,9 @@ export const TalkSessionCloseParamsSchema = closedObject({
 /** Empty request payload for reading configured Talk provider capabilities. */
 export const TalkCatalogParamsSchema = closedObject({});
 
+/** Empty request payload for the standalone dictation catalog. */
+export const DictationCatalogParamsSchema = closedObject({});
+
 /** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = closedObject({
   id: NonEmptyString,
@@ -395,6 +398,13 @@ const TalkCatalogProviderSchema = closedObject({
   supportsToolCalls: Type.Optional(Type.Boolean()),
   supportsVideoFrames: Type.Optional(Type.Boolean()),
   supportsSessionResumption: Type.Optional(Type.Boolean()),
+});
+
+/** Standalone dictation capabilities use the same provider contract as Talk. */
+export const DictationCatalogResultSchema = closedObject({
+  ready: Type.Optional(Type.Boolean()),
+  activeProvider: Type.Optional(Type.String()),
+  providers: Type.Array(TalkCatalogProviderSchema),
 });
 
 /** Active provider plus all candidates for a Talk capability family. */
@@ -771,6 +781,8 @@ export type TalkEvent = Static<typeof TalkEventSchema>;
 export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
 export type TalkCatalogParams = Static<typeof TalkCatalogParamsSchema>;
 export type TalkCatalogResult = Static<typeof TalkCatalogResultSchema>;
+export type DictationCatalogParams = Static<typeof DictationCatalogParamsSchema>;
+export type DictationCatalogResult = Static<typeof DictationCatalogResultSchema>;
 export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
 export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
 export type TalkClientCreateParams = Static<typeof TalkClientCreateParamsSchema>;

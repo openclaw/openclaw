@@ -2784,7 +2784,7 @@ export const en: TranslationMap & {
     mtls: "mTLS",
   },
   talkPage: {
-    intro: "Configure realtime voice providers, models, and speaker voices.",
+    intro: "Configure realtime voice and optional standalone dictation providers.",
     voiceSection: {
       title: "Realtime voice",
       description:
@@ -2822,6 +2822,22 @@ export const en: TranslationMap & {
       title: "GPT-Live",
       hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
+    },
+    dictation: {
+      sectionTitle: "Dictation add-on",
+      sectionDescription:
+        "Optional speech-to-text input using a self-hosted or OpenAI-compatible transcription server. It is separate from realtime voice and remains inactive until configured.",
+      statusTitle: "Status",
+      unavailableHint: "Connect to the Gateway to check dictation provider readiness.",
+      activeProvider: "Active provider: {provider}",
+      noProvider: "No dictation provider is configured yet.",
+      providerTitle: "Provider",
+      providerDescription: "Choose a configured transcription add-on or let OpenClaw select one.",
+      modelTitle: "Model",
+      modelDescription: "Model name sent to the transcription server, if it requires one.",
+      endpointTitle: "Endpoint URL",
+      endpointDescription: "OpenAI-compatible WebSocket endpoint for the selected provider.",
+      endpointPlaceholder: "https://stt.example.test/ws/transcribe",
     },
   },
   memoryPage: {
@@ -5804,6 +5820,9 @@ export const en: TranslationMap & {
       holdToDictate: "Hold to start dictation",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
+      clickToDictateSetting: "Click microphone button to start dictation",
+      clickToDictateSettingDescription:
+        "Use a click to start dictation instead of holding the microphone button. Hold-to-dictate remains available when enabled.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
       dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",

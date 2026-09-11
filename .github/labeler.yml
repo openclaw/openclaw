@@ -600,6 +600,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lmstudio/**"
+"extensions: openai-compatible-stt":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openai-compatible-stt/**"
 "extensions: litellm":
   - changed-files:
       - any-glob-to-any-file:

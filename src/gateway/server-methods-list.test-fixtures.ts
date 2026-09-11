@@ -15,7 +15,7 @@ question.list plugin.approval.list plugin.approval.request plugin.approval.waitD
 plugin.approval.resolve plugins.uiDescriptors plugins.sessionAction openclaw.chat
 openclaw.chat.history openclaw.changes.list openclaw.approval.list openclaw.setup.detect
 openclaw.setup.activate openclaw.setup.activate.start openclaw.setup.auth.start
-openclaw.setup.prepare.start wizard.start wizard.next wizard.cancel wizard.status talk.catalog
+openclaw.setup.prepare.start wizard.start wizard.next wizard.cancel wizard.status talk.catalog dictation.catalog
 talk.config talk.client.create talk.client.transcript talk.client.close talk.client.toolCall
 talk.client.steer talk.session.create talk.session.appendAudio talk.session.cancelOutput
 talk.session.acknowledgeMark talk.session.submitToolResult talk.session.steer talk.session.close

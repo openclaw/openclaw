@@ -2,15 +2,14 @@ import { consume } from "@lit/context";
 // Controller for the curated Talk settings page. Owns the talk.catalog read
 // that feeds the provider/model/voice pickers; all writes go through the shared
 // config form draft so the embedded schema editor below stays in sync.
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type { DictationCatalogResult, TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { VoiceWakeEditorState } from "./talk-device.ts";
 import {
   isTalkGptLiveModel,
   resolveTalkRealtimeSelection,
@@ -19,11 +18,17 @@ import {
 import {
   effectiveTalkValues,
   renderTalk,
+  dictationProviderConfigKeys,
+  selectedDictationProviderOption,
   selectedTalkProviderOption,
   talkProviderConfigKeys,
   type TalkCatalogState,
+  type DictationCatalogState,
+  type DictationSelection,
+  type DictationProviderOption,
   type TalkRealtimeProviderOption,
 } from "./talk.ts";
+import { voiceWakeOwner } from "./voice-wake-owner.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type ConfigSnapshot = ApplicationContext["runtimeConfig"]["state"]["configSnapshot"];
@@ -42,12 +47,6 @@ type CatalogConnection = {
   client: GatewayClient | null;
   connected: boolean;
   voiceWake: boolean;
-};
-
-type VoiceWakeWrite = {
-  connection: CatalogConnection;
-  text: string;
-  next: string | null;
 };
 
 type ModelDefaultResetIntent = {
@@ -80,6 +79,50 @@ function toProviderOption(
   };
 }
 
+function toDictationProviderOption(
+  provider: DictationCatalogResult["providers"][number],
+): DictationProviderOption {
+  return {
+    id: provider.id,
+    label: provider.label,
+    configured: provider.configured,
+    aliases: provider.aliases ?? [],
+    models: provider.models ?? [],
+    defaultModel: provider.defaultModel ?? null,
+  };
+}
+
+function resolveDictationSelection(configObject: Record<string, unknown>): DictationSelection {
+  const dictation = asOptionalRecord(configObject.dictation) ?? {};
+  const rawProviders = asOptionalRecord(dictation.providers);
+  const providerEntries: Record<string, { endpoint?: string; model?: string }> = {};
+  if (rawProviders) {
+    for (const [providerId, rawEntry] of Object.entries(rawProviders)) {
+      const entry = asOptionalRecord(rawEntry);
+      if (!entry) {
+        continue;
+      }
+      providerEntries[providerId] = {
+        ...(typeof entry.endpoint === "string" ? { endpoint: entry.endpoint } : {}),
+        ...(typeof entry.model === "string" ? { model: entry.model } : {}),
+      };
+    }
+  }
+  const provider = typeof dictation.provider === "string" ? dictation.provider : null;
+  let model = typeof dictation.model === "string" ? dictation.model : null;
+  let endpoint: string | null = null;
+  const selectedEntry = provider
+    ? providerEntries[provider]
+    : Object.keys(providerEntries).length === 1
+      ? Object.values(providerEntries)[0]
+      : undefined;
+  if (selectedEntry) {
+    model ??= selectedEntry.model ?? null;
+    endpoint ??= selectedEntry.endpoint ?? null;
+  }
+  return { provider, model, endpoint, providerEntries };
+}
+
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
 
@@ -88,220 +131,6 @@ function gptLiveRejectsTransport(model: string | null, transport: string): boole
 }
 
 // Drafts and write ordering belong to the application Gateway, not a route
-// element. Weak ownership retains them across navigation without durable storage.
-const voiceWakeOwners = new WeakMap<ApplicationContext["gateway"], VoiceWakeSettingsOwner>();
-
-class VoiceWakeSettingsOwner {
-  private value: VoiceWakeEditorState = { kind: "unavailable" };
-  private connection: CatalogConnection | null = null;
-  private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
-  private voiceWakeWrite: VoiceWakeWrite | null = null;
-  private readonly listeners = new Set<() => void>();
-
-  constructor(private readonly gateway: ApplicationContext["gateway"]) {
-    // This subscription shares the Gateway's lifetime, including route absences.
-    gateway.subscribe(() => this.sync());
-  }
-
-  get state() {
-    return this.value;
-  }
-
-  private update(nextState: VoiceWakeEditorState) {
-    this.value = nextState;
-    for (const notify of this.listeners) {
-      notify();
-    }
-  }
-
-  subscribe(notify: () => void) {
-    this.listeners.add(notify);
-    this.sync();
-    const connection = this.connection;
-    if (
-      connection?.connected &&
-      connection.voiceWake &&
-      this.state.kind !== "loading" &&
-      (this.state.kind !== "ready" || this.state.phase === "saved")
-    ) {
-      void this.loadVoiceWake(connection);
-    }
-    return () => {
-      this.listeners.delete(notify);
-    };
-  }
-
-  flush() {
-    if (this.voiceWakeTimer !== undefined) {
-      clearTimeout(this.voiceWakeTimer);
-      this.voiceWakeTimer = undefined;
-      void this.saveVoiceWake();
-    }
-  }
-
-  retry() {
-    if (this.state.kind === "ready") {
-      void this.saveVoiceWake();
-    } else if (this.connection) {
-      void this.loadVoiceWake(this.connection);
-    }
-  }
-
-  private sync() {
-    const snapshot = this.gateway.snapshot;
-    const gatewayUrl = this.gateway.connection.gatewayUrl;
-    const client = snapshot.client;
-    const connected = snapshot.phase === "connected";
-    const voiceWake =
-      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
-      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true;
-    if (
-      this.connection?.gatewayUrl === gatewayUrl &&
-      this.connection.client === client &&
-      this.connection.connected === connected &&
-      this.connection.voiceWake === voiceWake
-    ) {
-      return;
-    }
-    clearTimeout(this.voiceWakeTimer);
-    this.voiceWakeTimer = undefined;
-    if (this.voiceWakeWrite) {
-      this.voiceWakeWrite.next = null;
-      this.voiceWakeWrite = null;
-    }
-    // A reconnect changes request ownership, not draft ownership. A different
-    // Gateway drops the draft so its trigger words can never cross owners.
-    const draft =
-      this.connection?.gatewayUrl === gatewayUrl &&
-      this.state.kind === "ready" &&
-      this.state.phase !== "saved"
-        ? this.state
-        : null;
-    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
-    this.connection = connection;
-    this.update(
-      draft
-        ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
-        : { kind: "unavailable" },
-    );
-    if (client && connected && voiceWake && !draft && this.listeners.size > 0) {
-      void this.loadVoiceWake(connection);
-    }
-  }
-
-  private async loadVoiceWake(connection: CatalogConnection) {
-    if (!connection.client || !connection.voiceWake) {
-      return;
-    }
-    this.update({ kind: "loading" });
-    try {
-      const result = await connection.client.request<{ triggers: string[] }>("voicewake.get", {});
-      if (this.connection === connection) {
-        this.update({
-          kind: "ready",
-          text: result.triggers.join("\n"),
-          phase: "saved",
-          error: null,
-        });
-      }
-    } catch (error) {
-      if (this.connection === connection) {
-        this.update({
-          kind: "error",
-          error: t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }),
-        });
-      }
-    }
-  }
-
-  edit(text: string) {
-    if (this.state.kind !== "ready") {
-      return;
-    }
-    this.update({ kind: "ready", text, phase: "pending", error: null });
-    const write = this.voiceWakeWrite;
-    if (write?.connection === this.connection && write.next !== null) {
-      write.next = text === write.text ? null : text;
-    }
-    clearTimeout(this.voiceWakeTimer);
-    this.voiceWakeTimer = setTimeout(() => {
-      this.voiceWakeTimer = undefined;
-      void this.saveVoiceWake();
-    }, 400);
-  }
-
-  private async saveVoiceWake() {
-    const connection = this.connection;
-    const currentState = this.state;
-    if (currentState.kind !== "ready" || currentState.phase === "saved") {
-      return;
-    }
-    if (!connection?.client || !connection.connected || !connection.voiceWake) {
-      this.update({
-        ...currentState,
-        phase: "pending",
-        error: t("configPage.deviceTalk.triggerWordsDisconnected"),
-      });
-      return;
-    }
-    if (this.voiceWakeWrite?.connection === connection) {
-      this.voiceWakeWrite.next =
-        currentState.text === this.voiceWakeWrite.text ? null : currentState.text;
-      return;
-    }
-    const write: VoiceWakeWrite = { connection, text: currentState.text, next: currentState.text };
-    this.voiceWakeWrite = write;
-    // The editor remains writable. Coalesce elapsed debounces into one queued
-    // write, and drain a navigation flush against the same captured Gateway.
-    while (write.next !== null) {
-      write.text = write.next;
-      write.next = null;
-      const draft = this.state;
-      if (this.connection === connection && draft.kind === "ready" && draft.text === write.text) {
-        this.update({ ...draft, phase: "saving", error: null });
-      }
-      try {
-        const result = await connection.client.request<{ triggers: string[] }>("voicewake.set", {
-          triggers: write.text.split("\n"),
-        });
-        // The Gateway owns normalization; only apply its acknowledgment when
-        // the editable draft still matches the submitted text.
-        if (
-          this.connection === connection &&
-          this.state.kind === "ready" &&
-          this.state.text === write.text
-        ) {
-          this.update({
-            kind: "ready",
-            text: result.triggers.join("\n"),
-            phase: "saved",
-            error: null,
-          });
-        }
-      } catch (error) {
-        if (this.connection === connection && this.state.kind === "ready") {
-          this.update({
-            ...this.state,
-            phase: "pending",
-            error: t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
-          });
-        }
-      }
-    }
-    if (this.voiceWakeWrite === write) {
-      this.voiceWakeWrite = null;
-    }
-  }
-}
-
-function voiceWakeOwner(gateway: ApplicationContext["gateway"]): VoiceWakeSettingsOwner {
-  let owner = voiceWakeOwners.get(gateway);
-  if (!owner) {
-    owner = new VoiceWakeSettingsOwner(gateway);
-    voiceWakeOwners.set(gateway, owner);
-  }
-  return owner;
-}
 
 class TalkSettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -312,6 +141,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) buildEditor: TalkPageProps["buildEditor"] = () => html``;
 
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
+  @state() private dictationCatalog: DictationCatalogState = { kind: "unavailable" };
   @state() private modelDefaultResetIntent: ModelDefaultResetIntent | null = null;
 
   private connection: CatalogConnection | null = null;
@@ -387,13 +217,20 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
+    const connection: CatalogConnection = {
+      gatewayUrl,
+      client,
+      connected,
+      voiceWake,
+    };
     this.connection = connection;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
+      this.dictationCatalog = { kind: "unavailable" };
       return;
     }
     this.catalog = { kind: "loading" };
+    this.dictationCatalog = { kind: "loading" };
     void this.loadCatalog(client, connection);
   }
 
@@ -403,20 +240,36 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     // slow older response would overwrite a fresher one.
     const requestId = ++this.catalogRequestId;
     try {
-      const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      const applied = this.applyCatalog(connection, requestId, {
-        kind: "ready",
-        ready: result.realtime.ready === true,
-        activeProvider: result.realtime.activeProvider ?? null,
-        providers: result.realtime.providers.map(toProviderOption),
-      });
-      if (applied) {
-        this.acknowledgeModelDefaultReset(connection);
+      const [talkResult, dictationResult] = await Promise.allSettled([
+        client.request<TalkCatalogResult>("talk.catalog", {}),
+        client.request<DictationCatalogResult>("dictation.catalog", {}),
+      ]);
+      if (talkResult.status === "fulfilled") {
+        const applied = this.applyCatalog(connection, requestId, {
+          kind: "ready",
+          ready: talkResult.value.realtime.ready === true,
+          activeProvider: talkResult.value.realtime.activeProvider ?? null,
+          providers: talkResult.value.realtime.providers.map(toProviderOption),
+        });
+        if (applied) {
+          this.acknowledgeModelDefaultReset(connection);
+        }
+      } else {
+        this.applyCatalog(connection, requestId, { kind: "unavailable" });
+      }
+      if (dictationResult.status === "fulfilled") {
+        this.applyDictationCatalog(connection, requestId, {
+          kind: "ready",
+          ready: dictationResult.value.ready === true,
+          activeProvider: dictationResult.value.activeProvider ?? null,
+          providers: dictationResult.value.providers.map(toDictationProviderOption),
+        });
+      } else {
+        this.applyDictationCatalog(connection, requestId, { kind: "unavailable" });
       }
     } catch {
-      // The catalog only powers the pickers; the page still renders the raw
-      // configured values when it cannot be read.
       this.applyCatalog(connection, requestId, { kind: "unavailable" });
+      this.applyDictationCatalog(connection, requestId, { kind: "unavailable" });
     }
   }
 
@@ -433,6 +286,22 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       return false;
     }
     this.catalog = catalog;
+    return true;
+  }
+
+  private applyDictationCatalog(
+    connection: CatalogConnection,
+    requestId: number,
+    catalog: DictationCatalogState,
+  ): boolean {
+    if (
+      !this.isConnected ||
+      this.connection !== connection ||
+      this.catalogRequestId !== requestId
+    ) {
+      return false;
+    }
+    this.dictationCatalog = catalog;
     return true;
   }
 
@@ -548,9 +417,97 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    */
   private liveSelection() {
     const form = this.context.runtimeConfig.state.configForm;
-    const configObject =
-      form && typeof form === "object" ? (form as Record<string, unknown>) : this.configObject;
+    const configObject = asOptionalRecord(form) ?? this.configObject;
     return resolveTalkRealtimeSelection(configObject);
+  }
+
+  private liveDictationSelection(): DictationSelection {
+    const form = this.context.runtimeConfig.state.configForm;
+    const configObject = asOptionalRecord(form) ?? this.configObject;
+    return resolveDictationSelection(configObject);
+  }
+
+  private changeDictationProvider(providerId: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    const runtimeConfig = this.context.runtimeConfig;
+    const selection = this.liveDictationSelection();
+    const option =
+      providerId && this.dictationCatalog.kind === "ready"
+        ? this.dictationCatalog.providers.find(
+            (entry) => entry.id === providerId || entry.aliases.includes(providerId),
+          )
+        : undefined;
+    const configuredKey =
+      providerId &&
+      Object.keys(selection.providerEntries).find(
+        (key) =>
+          key === providerId ||
+          option?.aliases.includes(key) === true ||
+          key.toLowerCase() === providerId.toLowerCase(),
+      );
+    const nextProvider = configuredKey ?? providerId;
+    runtimeConfig.removeFormValue(["dictation", "model"]);
+    if (providerId === null) {
+      if (Object.keys(selection.providerEntries).length <= 1) {
+        runtimeConfig.removeFormValue(["dictation", "provider"]);
+      }
+    } else {
+      runtimeConfig.patchForm(["dictation", "provider"], nextProvider);
+      if (!configuredKey && Object.keys(selection.providerEntries).length > 0) {
+        runtimeConfig.patchForm(["dictation", "providers", providerId], {});
+      }
+    }
+  }
+
+  private changeDictationModel(model: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    if (model === null) {
+      this.context.runtimeConfig.removeFormValue(["dictation", "model"]);
+      // Reset to Default must also clear the selected provider's own model
+      // override: otherwise both the renderer and the Gateway keep using
+      // dictation.providers.<id>.model and the reset silently does nothing.
+      // Only the selected provider's entry is cleared; every other provider
+      // keeps its stored model (mirrors the endpoint reset below).
+      const selection = this.liveDictationSelection();
+      const option = selectedDictationProviderOption(this.dictationCatalog, selection);
+      const providerId =
+        dictationProviderConfigKeys(selection, option)[0] ?? selection.provider ?? option?.id;
+      if (providerId) {
+        this.context.runtimeConfig.removeFormValue(["dictation", "providers", providerId, "model"]);
+      }
+    } else {
+      this.context.runtimeConfig.patchForm(["dictation", "model"], model);
+    }
+  }
+
+  private changeDictationEndpoint(endpoint: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    const selection = this.liveDictationSelection();
+    const option = selectedDictationProviderOption(this.dictationCatalog, selection);
+    const providerId =
+      dictationProviderConfigKeys(selection, option)[0] ?? selection.provider ?? option?.id;
+    if (!providerId) {
+      return;
+    }
+    if (endpoint === null) {
+      this.context.runtimeConfig.removeFormValue([
+        "dictation",
+        "providers",
+        providerId,
+        "endpoint",
+      ]);
+    } else {
+      this.context.runtimeConfig.patchForm(
+        ["dictation", "providers", providerId, "endpoint"],
+        endpoint,
+      );
+    }
   }
 
   /**
@@ -627,6 +584,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       },
       selection: resolveTalkRealtimeSelection(this.configObject),
       catalog: this.catalog,
+      dictationSelection: resolveDictationSelection(this.configObject),
+      dictationCatalog: this.dictationCatalog,
       modelDefaultPending: this.modelDefaultResetIntent !== null,
       configBusy:
         this.mutationDisabled ||
@@ -636,6 +595,9 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       onProviderChange: (providerId) => this.changeProvider(providerId),
       onModelChange: (model) => this.changeModel(model),
       onVoiceChange: (voice) => this.changeVoice(voice),
+      onDictationProviderChange: (providerId) => this.changeDictationProvider(providerId),
+      onDictationModelChange: (model) => this.changeDictationModel(model),
+      onDictationEndpointChange: (endpoint) => this.changeDictationEndpoint(endpoint),
       editor: this.buildEditor(),
     });
   }

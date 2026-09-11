@@ -7081,6 +7081,20 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
+  it("keeps a qualified selection stable when a warm refresh has no display metadata", () => {
+    const { state } = createOpenAiHeaderState({
+      models: [{ id: "gpt-5.5", name: "", provider: "openai" }],
+    });
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: true, status: "loading" },
+      modelsLoading: true,
+    });
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.textContent).toContain("gpt-5.5");
+    expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
+  });
+
   it.each([100, 400])("prepares %i catalog rows without per-option catalog rescans", (size) => {
     let idReads = 0;
     const models: ModelCatalogEntry[] = Array.from({ length: size }, (_, index) => ({

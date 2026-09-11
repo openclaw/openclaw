@@ -2821,6 +2821,51 @@ describe("talk.session unified handlers", () => {
     });
   });
 
+  it("rejects an isolated dictation owner before normalizing provider config", async () => {
+    markTalkOwnerCold("dictation:local-stt");
+    const provider = {
+      id: "openai-compatible-stt",
+      aliases: ["local-stt"],
+      label: "OpenAI-compatible STT",
+      resolveConfig: vi.fn(({ rawConfig }) => ({
+        endpoint: rawConfig.endpoint,
+        apiKey: undefined,
+      })),
+      isConfigured: vi.fn(({ providerConfig }) => Boolean(providerConfig.endpoint)),
+      createSession: vi.fn(),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { mode: "transcription", transport: "gateway-relay", brain: "none" },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            dictation: {
+              provider: "local-stt",
+              providers: {
+                "local-stt": {
+                  endpoint: "ws://stt.example.test/transcribe",
+                  apiKey: { source: "env", provider: "default", id: "MISSING_STT_KEY" },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining(
+        "Secret owner capability:dictation:local-stt is configured but unavailable",
+      ),
+    });
+    expect(provider.resolveConfig).not.toHaveBeenCalled();
+    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
+  });
+
   it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
     const createRespond = vi.fn();
     const config: OpenClawConfig = { agents: { entries: { worker: {} } } };

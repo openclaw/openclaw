@@ -117,6 +117,16 @@ export type TalkConfigResponse = TalkConfig & {
   resolved?: ResolvedTalkConfig;
 };
 
+/** Top-level dictation config (standalone dictation add-on; not coupled to Talk). */
+export type DictationConfig = {
+  /** Active realtime transcription provider id, e.g. "openai-compatible-stt". */
+  provider?: string;
+  /** Per-provider dictation config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** Optional model override for dictation sessions. */
+  model?: string;
+};
+
 export type GatewayControlUiConfig = {
   /** @deprecated Doctor-only legacy input. */
   chatMessageMaxWidth?: string;

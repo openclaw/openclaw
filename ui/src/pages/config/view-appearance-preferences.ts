@@ -201,6 +201,13 @@ export function renderChatPreferencesSection(
     (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
+  // composerClickToDictate defaults to false (unlike hold-to-record), so the
+  // reset/default guidance must say Disabled.
+  const clickToDictateDefaultDescription = renderSettingsDefaultDescription(
+    t("common.disabled"),
+    (props.composerClickToDictate ?? UI_APPEARANCE_DEFAULTS.composerClickToDictate) !==
+      UI_APPEARANCE_DEFAULTS.composerClickToDictate,
+  );
   const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
     t("common.disabled"),
     props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
@@ -295,6 +302,18 @@ export function renderChatPreferencesSection(
                   ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
                 checked: props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
                 onChange: props.setComposerHoldToRecord,
+              })
+            : nothing
+        }
+        ${
+          props.setComposerClickToDictate
+            ? renderSettingsToggleRow({
+                title: t("chat.composer.clickToDictateSetting"),
+                description: html`${t("chat.composer.clickToDictateSettingDescription")}<br />
+                  ${clickToDictateDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+                checked:
+                  props.composerClickToDictate ?? UI_APPEARANCE_DEFAULTS.composerClickToDictate,
+                onChange: props.setComposerClickToDictate,
               })
             : nothing
         }

@@ -79,6 +79,45 @@ describe("legacy session typing config migrate", () => {
   });
 });
 
+describe("standalone dictation config migrate", () => {
+  it("moves talk.transcription to dictation", () => {
+    const res = migrateLegacyConfigForTest({
+      talk: {
+        transcription: {
+          provider: "openai-compatible-stt",
+          model: "whisper-1",
+          providers: {
+            "openai-compatible-stt": { endpoint: "ws://127.0.0.1:8000/transcribe" },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.dictation).toEqual({
+      provider: "openai-compatible-stt",
+      model: "whisper-1",
+      providers: {
+        "openai-compatible-stt": { endpoint: "ws://127.0.0.1:8000/transcribe" },
+      },
+    });
+    expect(res.config?.talk).toEqual({});
+    expect(res.changes).toContain("Moved talk.transcription → dictation.");
+  });
+
+  it("keeps the canonical dictation block when both shapes are present", () => {
+    const res = migrateLegacyConfigForTest({
+      dictation: { provider: "new-provider" },
+      talk: { transcription: { provider: "old-provider" } },
+    });
+
+    expect(res.config?.dictation).toEqual({ provider: "new-provider" });
+    expect(res.config?.talk).toEqual({});
+    expect(res.changes).toContain(
+      "Removed talk.transcription because the top-level dictation config is already set.",
+    );
+  });
+});
+
 describe("compatibility binding repair migrate", () => {
   it("migrates route and ACP dm peer kinds through validation and is idempotent", () => {
     const raw = {

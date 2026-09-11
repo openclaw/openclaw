@@ -134,6 +134,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  composerClickToDictate?: boolean;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;

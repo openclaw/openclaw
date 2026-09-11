@@ -173,6 +173,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
+  composerClickToDictate: false,
   lobsterPetVisits: true,
   lobsterPetSounds: false,
   sessionDeleteConfirm: true,
@@ -202,6 +203,7 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  composerClickToDictate?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
@@ -479,6 +481,7 @@ export function loadUiPreferences(
     showAdvancedSettings: false,
     pinnedAgentIds: [],
     composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
+    composerClickToDictate: UI_APPEARANCE_DEFAULTS.composerClickToDictate,
   };
 
   try {
@@ -548,6 +551,10 @@ export function loadUiPreferences(
         typeof parsed.composerHoldToRecord === "boolean"
           ? parsed.composerHoldToRecord
           : defaults.composerHoldToRecord,
+      composerClickToDictate:
+        typeof parsed.composerClickToDictate === "boolean"
+          ? parsed.composerClickToDictate
+          : defaults.composerClickToDictate,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -704,6 +711,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
       : {}),
     ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
+    ...(next.composerClickToDictate === true ? { composerClickToDictate: true } : {}),
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),

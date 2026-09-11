@@ -311,6 +311,20 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/chat-composer.test-support.ts",
+      "text": "No"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/chat-composer.test-support.ts",
+      "text": "Yes"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",

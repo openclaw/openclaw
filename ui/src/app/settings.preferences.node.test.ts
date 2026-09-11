@@ -439,6 +439,28 @@ describe("settings preference persistence", () => {
     expect(loadSettings().composerHoldToRecord).toBe(true);
   });
 
+  it("keeps click-to-dictate opt-in and persists only the enabled preference", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().composerClickToDictate).toBe(false);
+
+    saveSettings({ ...loadSettings(), composerClickToDictate: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").composerClickToDictate).toBe(true);
+    expect(loadSettings().composerClickToDictate).toBe(true);
+
+    saveSettings({ ...loadSettings(), composerClickToDictate: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "composerClickToDictate",
+    );
+    expect(loadSettings().composerClickToDictate).toBe(false);
+  });
+
   it("normalizes and persists the device-local talk camera preference", () => {
     setTestLocation({
       protocol: "https:",
@@ -659,16 +681,16 @@ describe("settings preference persistence", () => {
     });
     localStorage.setItem(
       "openclaw.control.user.v1",
-      JSON.stringify({ name: "Buns", avatar: "🦞" }),
+      JSON.stringify({ name: "Buns", avatar: "­ƒª×" }),
     );
 
     expect(loadLocalUserIdentity()).toEqual({
       name: "Buns",
-      avatar: "🦞",
+      avatar: "­ƒª×",
     });
     expect(JSON.parse(localStorage.getItem("openclaw.control.user.v1") ?? "{}")).toEqual({
       name: "Buns",
-      avatar: "🦞",
+      avatar: "­ƒª×",
     });
   });
 

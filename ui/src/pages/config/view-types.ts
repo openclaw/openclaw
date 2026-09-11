@@ -195,6 +195,8 @@ export type ConfigProps = {
   onCameraSelect?: (deviceId: string) => void;
   composerHoldToRecord?: boolean;
   setComposerHoldToRecord?: (enabled: boolean) => void;
+  composerClickToDictate?: boolean;
+  setComposerClickToDictate?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;

@@ -555,6 +555,7 @@ enum class GatewayMethod(
   WizardCancel("wizard.cancel"),
   WizardStatus("wizard.status"),
   TalkCatalog("talk.catalog"),
+  DictationCatalog("dictation.catalog"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
   TalkClientTranscript("talk.client.transcript"),
