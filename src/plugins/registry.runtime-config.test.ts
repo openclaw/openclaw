@@ -312,12 +312,41 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
+    expect(api.runtime.llm.acquireLocalService).toBe(api.runtime.llm.acquireLocalService);
+
     await api.runtime.llm.acquireLocalService({
       providerId: "gpu-host",
       baseUrl: "http://127.0.0.1:11434",
     });
 
     expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
+  });
+
+  it("keeps local service acquisition identities separate across plugins and hosts", () => {
+    const firstHost = createPluginRuntime();
+    const secondHost = createPluginRuntime();
+    firstHost.llm.acquireLocalService = vi.fn(async () => undefined);
+    secondHost.llm.acquireLocalService = vi.fn(async () => undefined);
+    const createScopedAcquire = (runtime: PluginRuntime, pluginId: string) => {
+      const pluginRegistry = createTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: pluginId,
+        source: `/plugins/${pluginId}/index.js`,
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      return pluginRegistry.createApi(record, { config: {} as OpenClawConfig }).runtime.llm
+        .acquireLocalService;
+    };
+
+    const first = createScopedAcquire(firstHost, "memory-provider");
+    const otherPlugin = createScopedAcquire(firstHost, "other-provider");
+    const otherHost = createScopedAcquire(secondHost, "memory-provider");
+
+    expect(createScopedAcquire(firstHost, "memory-provider")).toBe(first);
+    expect(otherPlugin).not.toBe(first);
+    expect(otherHost).not.toBe(first);
   });
 
   it.each(["materialized", "lazy"] as const)(

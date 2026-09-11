@@ -113,11 +113,14 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   };
 }
 
+// Runtime facades share one host-owned acquirer so consumers can safely use
+// callback identity when caching provider resources.
+const acquireRuntimeLocalService = createLazyRuntimeMethod(
+  () => import("../../agents/provider-local-service.js"),
+  (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
+);
+
 function createRuntimeLlmFacade(): PluginRuntime["llm"] {
-  const loadAcquireLocalService = createLazyRuntimeMethod(
-    () => import("../../agents/provider-local-service.js"),
-    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
-  );
   const loadLlm = createLazyRuntimeSurface(
     () => import("./runtime-llm.runtime.js"),
     (m) =>
@@ -129,7 +132,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
-    acquireLocalService: (...args) => loadAcquireLocalService(...args),
+    acquireLocalService: acquireRuntimeLocalService,
     complete: async (params) => {
       const llm = await loadLlm();
       return llm.complete(params);

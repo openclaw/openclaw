@@ -31,6 +31,29 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+const scopedLocalServiceAcquirers = new WeakMap<
+  PluginRuntime["llm"]["acquireLocalService"],
+  Map<string, PluginRuntime["llm"]["acquireLocalService"]>
+>();
+
+function getScopedLocalServiceAcquirer(
+  acquireLocalService: PluginRuntime["llm"]["acquireLocalService"],
+  pluginId: string,
+): PluginRuntime["llm"]["acquireLocalService"] {
+  let byPlugin = scopedLocalServiceAcquirers.get(acquireLocalService);
+  if (!byPlugin) {
+    byPlugin = new Map();
+    scopedLocalServiceAcquirers.set(acquireLocalService, byPlugin);
+  }
+  let scoped = byPlugin.get(pluginId);
+  if (!scoped) {
+    scoped = (...args) =>
+      withPluginRuntimePluginIdScope(pluginId, () => acquireLocalService(...args));
+    byPlugin.set(pluginId, scoped);
+  }
+  return scoped;
+}
+
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimeById = new Map<string, PluginRuntime>();
@@ -295,8 +318,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "llm") {
           const llm = getRuntimeProperty();
           return {
-            acquireLocalService: (...args) =>
-              withPluginRuntimePluginIdScope(pluginId, () => llm.acquireLocalService(...args)),
+            acquireLocalService: getScopedLocalServiceAcquirer(llm.acquireLocalService, pluginId),
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];

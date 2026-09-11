@@ -226,11 +226,14 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    const acquireLocalService: MemoryCoreAcquireLocalService = (...args) =>
-      api.runtime.llm.acquireLocalService(...args);
     const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options);
-    const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
+    const host = {
+      get acquireLocalService(): MemoryCoreAcquireLocalService {
+        return api.runtime.llm.acquireLocalService;
+      },
+      openKeyedStore,
+    } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);

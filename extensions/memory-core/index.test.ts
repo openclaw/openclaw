@@ -425,6 +425,17 @@ describe("memory-core plugin runtime registration", () => {
     });
   });
 
+  it("keeps the host local-service hook stable across plugin registration", async () => {
+    const firstRuntime = registerMemoryCoreRuntime();
+    await firstRuntime.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    const firstHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+    const secondRuntime = registerMemoryCoreRuntime();
+    await secondRuntime.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    const secondHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
+
+    expect(firstHost?.acquireLocalService).toBe(secondHost?.acquireLocalService);
+  });
+
   it("defers nested host runtime access until the injected operation runs", async () => {
     const acquireLocalService = vi.fn(async () => undefined);
     const openKeyedStore = vi.fn(() => ({}));
@@ -452,12 +463,13 @@ describe("memory-core plugin runtime registration", () => {
     expect(stateGetter).not.toHaveBeenCalled();
     await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
     const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
+    const injectedAcquireLocalService = injectedHost?.acquireLocalService;
+    if (!injectedAcquireLocalService || !injectedHost?.openKeyedStore) {
       throw new Error("expected memory-core host operations");
     }
 
     const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
-    await injectedHost.acquireLocalService(target);
+    await injectedAcquireLocalService(target);
     const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
     injectedHost.openKeyedStore(storeOptions);
 

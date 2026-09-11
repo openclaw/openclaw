@@ -488,6 +488,13 @@ describe("plugin runtime command execution", () => {
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
   });
 
+  it("keeps provider-service acquisition identity stable across runtime facades", () => {
+    const first = createPluginRuntime().llm.acquireLocalService;
+    const second = createPluginRuntime().llm.acquireLocalService;
+
+    expect(second).toBe(first);
+  });
+
   it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
     const runtime = createPluginRuntime();
     const model = {
