@@ -9,6 +9,7 @@ import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -475,7 +476,7 @@ describe("verified package rollback", () => {
             const io = createConfigIO({ env: process.env, pluginValidation: "skip" });
             const input = await io.readConfigFileSnapshot();
             if (change !== "doctor-unchanged") {
-              const nextConfig = {
+              const nextConfig: OpenClawConfig = {
                 ...(input.sourceConfigBeforeMigrations ?? input.sourceConfig),
                 meta: {
                   migrations: { modelPolicyAllowlist: true },
