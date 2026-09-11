@@ -2051,6 +2051,16 @@ describe("update-cli", () => {
           fsSync.mkdirSync(directoryPath, { mode: 0o700 });
         },
       );
+      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((filePath) =>
+        fsSync.openSync(
+          filePath,
+          fsSync.constants.O_RDWR |
+            fsSync.constants.O_CREAT |
+            fsSync.constants.O_EXCL |
+            fsSync.constants.O_NOFOLLOW,
+          0o600,
+        ),
+      );
     }
     // Native-service platform simulations do not change the actual SQLite VFS.
     vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
