@@ -244,9 +244,9 @@ export class SessionLinkTitler {
     anchor.classList.add("markdown-session-link--titled");
     // Keep a producer's label node so Lit can still update its text binding.
     const label =
-      anchor.querySelector<HTMLSpanElement>(":scope > .markdown-session-link__label") ??
+      anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??
       document.createElement("span");
-    label.className = "markdown-session-link__label";
+    label.className = "session-label";
     label.textContent = title;
     anchor.replaceChildren(label);
     anchor.title = target.sessionKey;

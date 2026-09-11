@@ -27,7 +27,7 @@ describe("session link presentation", () => {
       const host = document.createElement("div");
       host.id = "session-link-proof";
       host.className = "chat-text";
-      host.innerHTML = `<p>Open <a class="markdown-session-link markdown-session-link--titled" href="/chat/main/research"><span class="markdown-session-link__label">${title}</span></a> or <a class="markdown-session-link" href="/chat/main/unknown">an untitled session</a>.</p>`;
+      host.innerHTML = `<p>Open <a class="markdown-session-link markdown-session-link--titled" href="/chat/main/research"><span class="session-label">${title}</span></a> or <a class="markdown-session-link" href="/chat/main/unknown">an untitled session</a>.</p>`;
       document.body.append(host);
       const link = host.querySelector<HTMLAnchorElement>("a")!;
       const label = link.querySelector<HTMLSpanElement>("span")!;
@@ -62,7 +62,7 @@ describe("session link presentation", () => {
       const host = document.createElement("div");
       host.id = "session-link-proof";
       host.className = className;
-      host.innerHTML = `<a class="markdown-session-link markdown-session-link--titled"><span class="markdown-session-link__label">${title}</span></a><a class="markdown-session-link">untitled</a>`;
+      host.innerHTML = `<a class="markdown-session-link markdown-session-link--titled"><span class="session-label">${title}</span></a><a class="markdown-session-link">untitled</a>`;
       document.body.append(host);
       const [titled, untitled] = host.querySelectorAll("a");
       expect(getComputedStyle(titled!).color).toBe(getComputedStyle(untitled!).color);

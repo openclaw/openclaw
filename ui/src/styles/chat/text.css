@@ -620,7 +620,7 @@
    Empty generated content adds no accessible or copied text; em sizing and
    currentColor follow the surrounding link. */
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link::before {
-  --session-link-mark: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M8.2%2010%20A5.2%205.2%200%201%200%208.2%2020.4%20A5.2%205.2%200%200%200%208.2%2010%20Z%20M10.2%2020%20C14.5%2020.8%2019%2018.6%2022.3%2013.2%20C21%2012.9%2019.7%2012.7%2018.4%2012.8%20L17.5%2014.6%20L16%2012.9%20L14.3%2014.5%20L13.5%2013%20L11.5%2014.2%20Z%22%2F%3E%3Cpath%20d%3D%22M5.6%2012.2%20C5.2%205.6%2010.4%201.4%2015.6%202%20C19.4%202.6%2021.8%205.2%2022.6%208.2%20C20.9%207.7%2019.2%207.6%2017.6%207.9%20L16.9%206.3%20L15.2%208.5%20C13.6%209.4%2012.2%2010.9%2011.6%2012.4%20L6.8%2013%20Z%22%2F%3E%3C%2Fsvg%3E");
+  --session-link-mark: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M8.2 10A5.2 5.2 0 1 0 8.2 20.4 5.2 5.2 0 0 0 8.2 10ZM10.2 20c4.3.8 8.8-1.4 12.1-6.8-1.3-.3-2.6-.5-3.9-.4l-.9 1.8-1.5-1.7-1.7 1.6-.8-1.5-2 1.2ZM5.6 12.2C5.2 5.6 10.4 1.4 15.6 2c3.8.6 6.2 3.2 7 6.2-1.7-.5-3.4-.6-5-.3l-.7-1.6-1.7 2.2c-1.6.9-3 2.4-3.6 3.9l-4.8.6Z'/></svg>");
 
   content: "";
   position: absolute;
@@ -653,7 +653,7 @@
 /* The grid supplies the text baseline; only its label clips for ellipsis. */
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution)
   .markdown-session-link--titled
-  > .markdown-session-link__label {
+  > .session-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

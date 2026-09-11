@@ -58,7 +58,7 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
                 tabindex="0"
                 data-session-key=${linkableSourceKey}
                 ><span
-                  class="markdown-session-link__label"
+                  class="session-label"
                   .textContent=${sourceMainLabel ?? linkableSourceKey}
                 ></span
               ></a>`

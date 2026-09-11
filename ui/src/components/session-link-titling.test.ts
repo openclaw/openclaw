@@ -70,9 +70,7 @@ describe("SessionLinkTitler", () => {
     await titler.decorate(anchor);
 
     expect(anchor.textContent).toBe("Cached research");
-    expect(anchor.querySelector(":scope > .markdown-session-link__label")?.textContent).toBe(
-      "Cached research",
-    );
+    expect(anchor.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
     expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
     expect(anchor.title).toBe(SESSION_KEY);
     expect(anchor.getAttribute("href")).toBe("/chat/main/research");
@@ -90,9 +88,9 @@ describe("SessionLinkTitler", () => {
 
     expect(first.textContent).toBe("Research plan");
     expect(second.textContent).toBe("Research plan");
-    expect(first.querySelectorAll(":scope > .markdown-session-link__label")).toHaveLength(1);
+    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
     await titler.decorate(first, true);
-    expect(first.querySelectorAll(":scope > .markdown-session-link__label")).toHaveLength(1);
+    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
     expect(first.getAttribute("href")).toBe("/chat/main/research");
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
@@ -103,7 +101,7 @@ describe("SessionLinkTitler", () => {
     const { titler } = createTitler([], request);
     const anchor = sessionAnchor();
     const label = document.createElement("span");
-    label.className = "markdown-session-link__label";
+    label.className = "session-label";
     label.textContent = SESSION_KEY;
     anchor.replaceChildren(label);
 
