@@ -335,6 +335,77 @@ describe("question response custody through reply adoption", () => {
     },
   );
 
+  it("reports a rejected partial answer instead of failing the channel dispatch", async () => {
+    const key = "agent:main:question-partial-answer";
+    const run = createQueueTestRun({ prompt: text });
+    run.run.senderIsOwner = true;
+    run.run.traceAuthorized = true;
+    run.run.messageProvider = "webchat";
+    run.run.config = { tools: { toolsBySender: { "*": { allow: [] } } } };
+    await withQuestionCreator(key, run, async (operation) => {
+      const source = new AbortController();
+      const gatewayCall: AgentQuestionDispatcher = {
+        version: 2,
+        call: async ({ method, authority }) => {
+          expect(method).toBe("question.resolve");
+          expect(authority.kind).toBe("source-bound");
+          await Promise.resolve();
+          if (authority.kind === "source-bound") {
+            authority.assertCurrent();
+          }
+          // The wire rejection question.resolve returns for a question with no answer.
+          return Promise.reject(
+            Object.assign(new Error("question 'scope' requires an answer"), {
+              name: "GatewayClientRequestError",
+              gatewayCode: "INVALID_REQUEST",
+              details: { reason: "QUESTION_INVALID_ANSWER" },
+            }),
+          );
+        },
+      };
+      const claim = registerPendingAgentQuestion({
+        questionId: "ask_partial_answer",
+        sessionKey: key,
+        questions: [
+          { id: "format", header: "Format", question: "Which format?" },
+          { id: "scope", header: "Scope", question: "What scope?" },
+        ],
+        gatewayCall,
+        answer: Promise.resolve({ status: "pending" }),
+      });
+      claim.attachRegistration(Promise.resolve());
+      const adopted = vi.fn(async () => {});
+      const settled = vi.fn();
+      const state: ReplyOperationRunState = {};
+      const incoming: FollowupRun = {
+        ...run,
+        turnAdoptionLifecycle: { onAdopted: adopted, onSettled: settled },
+      };
+      try {
+        const result = await runReplyQuestionInput({
+          commandBody: "a plain line answering only the format question",
+          followupRun: incoming,
+          sessionKey: key,
+          sessionCtx: { Provider: "webchat" },
+          opts: { abortSignal: source.signal, [REPLY_OPERATION_RUN_STATE]: state },
+        });
+        expect(result).toMatchObject({ handled: true, payload: { isError: true } });
+        if (result.handled && result.payload) {
+          expect(result.payload.text).toContain("question 'scope' requires an answer");
+        }
+        expect(state.admission).toEqual({
+          status: "skipped",
+          reason: "question-response-refused",
+        });
+        expect(adopted).not.toHaveBeenCalled();
+        expect(settled).not.toHaveBeenCalled();
+        expect(claim.isResolving()).toBe(false);
+      } finally {
+        claim.dispose();
+      }
+    });
+  });
+
   it.each(["next-model", "tool-cap", "permission", "sender", "source-closure"] as const)(
     "uses creator policy and incoming source authority for %s",
     async (change) => {

@@ -107,6 +107,15 @@ function isTerminalAgentQuestionError(error: unknown): boolean {
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
+/**
+ * Resolve rejections for malformed or incomplete answers leave the question
+ * pending, so the same source can submit a corrected answer. Reply owners
+ * surface this rejection instead of failing the whole channel dispatch.
+ */
+export function isQuestionAnswerValidationError(error: unknown): boolean {
+  return readQuestionRejection(error)?.reason === "QUESTION_INVALID_ANSWER";
+}
+
 type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
 
 /** One reservation owns both dispatch refusal and the prompt's release notification. */
