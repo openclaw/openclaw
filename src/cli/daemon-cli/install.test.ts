@@ -7,7 +7,7 @@ import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
-import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
+import { createInstallPlanFixture, expectFields, nodeProbeOutput } from "./install.test-helpers.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
 
 type DaemonActionResponse = Parameters<
@@ -174,16 +174,6 @@ vi.mock("../../runtime.js", () => ({
 function expectFirstInstallPlanCallOmitsToken() {
   const firstArg = readFirstInstallPlanArg();
   expect("token" in firstArg).toBe(false);
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
 }
 
 function readFirstInstallPlanArg(): Record<string, unknown> {

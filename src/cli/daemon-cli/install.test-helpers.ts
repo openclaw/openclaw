@@ -1,3 +1,16 @@
+import { expect } from "vitest";
+
+/** Assert only the named fields, leaving unrelated keys of the value alone. */
+export function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 export async function createInstallPlanFixture(params?: {
   wrapperPath?: string;
   env?: Record<string, string | undefined>;
