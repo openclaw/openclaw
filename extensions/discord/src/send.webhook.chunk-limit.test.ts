@@ -90,6 +90,43 @@ describe("Discord webhook delivery", () => {
 
   it.each([
     {
+      label: "first",
+      replyTo: { messageId: "fixture-reply", scope: "first" as const },
+      expected: ["fixture-reply", undefined],
+    },
+    {
+      label: "all",
+      replyTo: { messageId: "fixture-reply", scope: "all" as const },
+      expected: ["fixture-reply", "fixture-reply"],
+    },
+    { label: "none", replyTo: undefined, expected: [undefined, undefined] },
+  ])("records physical $label reply references in each receipt", async ({ replyTo, expected }) => {
+    await withWebhookServer(
+      (_content, index) => ({ body: { id: String(index), channel_id: "thread-1" } }),
+      async (contents, references) => {
+        const delivered: Array<Awaited<ReturnType<typeof realWebhookSend>>> = [];
+        const result = await realWebhookSend("first\nsecond", {
+          cfg,
+          webhookId: "fixture",
+          webhookToken: "fixture-token",
+          replyTo,
+          chunking: { maxLines: 1 },
+          onDeliveryResult: (part) => {
+            delivered.push(part);
+          },
+        });
+        expect(contents).toEqual(["first", "second"]);
+        expect(references).toEqual(expected);
+        expect(result.receipt?.parts.map((part) => part.replyToId)).toEqual(expected);
+        expect(
+          delivered.flatMap((part) => part.receipt?.parts.map((entry) => entry.replyToId)),
+        ).toEqual(expected);
+      },
+    );
+  });
+
+  it.each([
+    {
       label: "CommonMark bold",
       text: "`__literal__` __Important__",
       expected: "`__literal__` **Important**",

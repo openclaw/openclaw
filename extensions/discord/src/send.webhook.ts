@@ -49,7 +49,7 @@ type DiscordWebhookSendOpts = {
   tableMode?: MarkdownTableMode;
   wait?: boolean;
   /** Opt into configured line limits; omission preserves character-only chunking. */
-  chunking?: { maxLines?: number };
+  chunking?: { maxChars?: number; maxLines?: number };
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
@@ -120,10 +120,11 @@ export async function sendWebhookMessageDiscord(
     cfg: opts.cfg,
     accountId: opts.accountId,
   });
-  const { textWithMentions } = prepareDiscordOutboundText(text, {
+  const { textWithMentions, textLimit } = prepareDiscordOutboundText(text, {
     cfg: opts.cfg,
     account,
     tableMode: opts.tableMode,
+    textLimit: opts.chunking?.maxChars,
   });
   const flags = resolveDiscordMessageFlags({
     suppressEmbeds: resolveDiscordSuppressEmbeds({ configured: account.config.suppressEmbeds }),
@@ -155,6 +156,7 @@ export async function sendWebhookMessageDiscord(
   // Alias expansion happens after the outer delivery planner. Bound the actual
   // wire text here, retaining each accepted part before another can fail.
   const chunks = chunkDiscordTextWithMode(textWithMentions, {
+    maxChars: textLimit,
     maxLines: opts.chunking
       ? (opts.chunking.maxLines ?? account.config.maxLinesPerMessage)
       : Number.MAX_SAFE_INTEGER,
@@ -222,7 +224,7 @@ export async function sendWebhookMessageDiscord(
         fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
         kind: "text",
         ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
-        ...(replyTo ? { replyToId: replyTo } : {}),
+        reply: createReusableDiscordReplyReference(replyTo),
       });
       const resultConversationId = result.channelId.trim();
       if (result.messageId && resultConversationId) {
