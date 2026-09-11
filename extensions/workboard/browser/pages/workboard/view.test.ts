@@ -3241,6 +3241,81 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("[data-test-session-summary]")).not.toBeNull();
   });
 
+  it.each(["title", "notes", "labels"] as const)(
+    "preserves an inline %s draft through lost connectivity and client availability",
+    async (field) => {
+      const card = createWorkboardCard({
+        title: "Original title",
+        notes: "Original notes",
+        labels: ["original"],
+      });
+      const value = field === "labels" ? "review, quality" : "Edited text";
+      const patch = field === "labels" ? { labels: ["review", "quality"] } : { [field]: value };
+      const client = createWorkboardTestClient(() => ({
+        card: { ...card, ...patch, updatedAt: card.updatedAt + 1 },
+      }));
+      const { state, container, renderView } = createWorkboardView({ client });
+      state.cards = [card];
+      state.detailCardId = card.id;
+      renderView();
+      const trigger = await waitForFast(() =>
+        expectDefined(
+          container.querySelector<HTMLButtonElement>(`.workboard-detail__text-trigger--${field}`),
+          "inline edit trigger",
+        ),
+      );
+      const owner = expectDefined(
+        trigger.closest<HTMLElement>("workboard-inline-text"),
+        "inline editor",
+      );
+      const popup = owner.querySelector<HTMLElement>("[popover]");
+      if (popup) {
+        popup.showPopover = vi.fn();
+        popup.hidePopover = vi.fn();
+      }
+      trigger.click();
+      const input = await waitForFast(() =>
+        expectDefined(
+          owner.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea"),
+          "inline input",
+        ),
+      );
+      input.value = value;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      const save = expectDefined(buttonByText(owner, "Save"), "save inline value");
+
+      for (const unavailable of [
+        { connected: false, client },
+        { connected: true, client: null },
+      ]) {
+        renderView(unavailable);
+        await waitForFast(() => {
+          expect(input.disabled).toBe(true);
+          expect(save.disabled).toBe(true);
+        });
+        expect(input.isConnected).toBe(true);
+        expect(input.value).toBe(value);
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+        );
+        expect(client.request).not.toHaveBeenCalled();
+      }
+
+      renderView({ connected: true, client });
+      await waitForFast(() => expect(save.disabled).toBe(false));
+      expect(input.value).toBe(value);
+      save.click();
+      await waitForFast(() =>
+        expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+          id: card.id,
+          expectedUpdatedAt: card.updatedAt,
+          patch,
+        }),
+      );
+      await waitForFast(() => expect(state.cards[0]).toMatchObject(patch));
+    },
+  );
+
   it("keeps label pills mounted while editing and preserves failed input until Escape", async () => {
     const card = createWorkboardCard({ title: "Label editing", labels: ["review"] });
     const client = createWorkboardTestClient(() => {

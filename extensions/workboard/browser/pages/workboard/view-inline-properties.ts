@@ -445,6 +445,6 @@ export function renderInlineText(
   disabled: boolean,
 ) {
   return html`<workboard-inline-text
-    .props=${{ owner, card, field, disabled }}
+    .props=${{ owner, card, field, disabled: disabled || !owner.connected || !owner.client }}
   ></workboard-inline-text>`;
 }
