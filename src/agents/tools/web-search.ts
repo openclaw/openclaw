@@ -39,15 +39,18 @@ const WebSearchSchema = {
     },
     freshness: {
       type: "string",
-      description: "Time filter: day/week/month/year.",
+      description:
+        "Time filter: day/week/month/year. For Perplexity, cannot be combined with date_after/date_before.",
     },
     date_after: {
       type: "string",
-      description: "Published after YYYY-MM-DD.",
+      description:
+        "Published after YYYY-MM-DD. For Perplexity, use this date range instead of freshness.",
     },
     date_before: {
       type: "string",
-      description: "Published before YYYY-MM-DD.",
+      description:
+        "Published before YYYY-MM-DD. For Perplexity, use this date range instead of freshness.",
     },
     search_lang: {
       type: "string",
@@ -99,7 +102,7 @@ export function createWebSearchTool(options?: {
     name: "web_search",
     resultContentSource: "network",
     description:
-      "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+      "Search current web; normalized provider results. Supports freshness or date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter). Perplexity cannot combine freshness with date_after/date_before.",
     parameters: WebSearchSchema,
     outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {

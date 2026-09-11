@@ -117,15 +117,15 @@ ISO 639-1 language code (e.g. `en`, `de`, `fr`).
 </ParamField>
 
 <ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
-Time filter - `day` is 24 hours.
+Time filter - `day` is 24 hours. Cannot be combined with `date_after` or `date_before`.
 </ParamField>
 
 <ParamField path="date_after" type="string">
-Only results published after this date (`YYYY-MM-DD`).
+Only results published after this date (`YYYY-MM-DD`). Use a date range instead of `freshness`.
 </ParamField>
 
 <ParamField path="date_before" type="string">
-Only results published before this date (`YYYY-MM-DD`).
+Only results published before this date (`YYYY-MM-DD`). Use a date range instead of `freshness`.
 </ParamField>
 
 <ParamField path="domain_filter" type="string[]">

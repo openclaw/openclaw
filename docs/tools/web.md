@@ -471,20 +471,20 @@ provider, OpenClaw does not show the `x_search` prompt.
 
 ## Tool parameters
 
-| Parameter             | Description                                                        |
-| --------------------- | ------------------------------------------------------------------ |
-| `query`               | Search query (required)                                            |
-| `count`               | Results to return (1-10, default: 5)                               |
-| `country`             | 2-letter ISO country code (e.g. "US", "DE")                        |
-| `language`            | ISO 639-1 language code (e.g. "en", "de")                          |
-| `search_lang`         | Search-language code (Brave only)                                  |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`                     |
-| `date_after`          | Results after this date (YYYY-MM-DD)                               |
-| `date_before`         | Results before this date (YYYY-MM-DD)                              |
-| `ui_lang`             | UI language code (Brave only)                                      |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)                  |
-| `max_tokens`          | Total content token budget, native Perplexity Search API only      |
-| `max_tokens_per_page` | Per-page extraction token limit, native Perplexity Search API only |
+| Parameter             | Description                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `query`               | Search query (required)                                                                                        |
+| `count`               | Results to return (1-10, default: 5)                                                                           |
+| `country`             | 2-letter ISO country code (e.g. "US", "DE")                                                                    |
+| `language`            | ISO 639-1 language code (e.g. "en", "de")                                                                      |
+| `search_lang`         | Search-language code (Brave only)                                                                              |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`; Perplexity cannot combine this with `date_after`/`date_before` |
+| `date_after`          | Results after this date (YYYY-MM-DD); for Perplexity, use instead of `freshness`                               |
+| `date_before`         | Results before this date (YYYY-MM-DD); for Perplexity, use instead of `freshness`                              |
+| `ui_lang`             | UI language code (Brave only)                                                                                  |
+| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)                                                              |
+| `max_tokens`          | Total content token budget, native Perplexity Search API only                                                  |
+| `max_tokens_per_page` | Per-page extraction token limit, native Perplexity Search API only                                             |
 
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
