@@ -23,7 +23,10 @@ openclaw update status --timeout 10
 | Flag                  | Default | Description                         |
 | --------------------- | ------- | ----------------------------------- |
 | `--json`              | `false` | Print machine-readable status JSON. |
-| `--timeout <seconds>` | `3`     | Timeout for checks.                 |
+| `--timeout <seconds>` | `300`   | Timeout for checks.                 |
+
+Explicit timeouts replace the default. Local installation discovery keeps its
+own inspection budget.
 
 For extended-stable package installs, status performs the same public selector
 and exact-package verification as foreground update. It can report

@@ -6,12 +6,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
-const MAX_SCAN_MS = 30_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
@@ -56,11 +56,9 @@ function unchanged(left: BigIntStats, right: BigIntStats): boolean {
 }
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
-export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
+export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
   const startedAtMonotonicMs = performance.now();
-  const budget = Number.isFinite(timeoutMs)
-    ? Math.min(MAX_SCAN_MS, Math.max(1, timeoutMs))
-    : MAX_SCAN_MS;
+  const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
   const deadline = Date.now() + budget;
   const timing = {
     readerId: `${process.pid}:${++readerSequence}`,

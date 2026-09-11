@@ -242,7 +242,7 @@ describe("checkUpdateStatus", () => {
   });
 
   it.each([
-    { name: "shared default", timeoutMs: undefined, expectedTimeoutMs: 120_000 },
+    { name: "shared default", timeoutMs: undefined, expectedTimeoutMs: 300_000 },
     { name: "explicit override", timeoutMs: 4321, expectedTimeoutMs: 4321 },
   ])("uses the $name for Git fetches", async ({ timeoutMs, expectedTimeoutMs }) => {
     await withTestDir({ prefix: "openclaw-update-check-fetch-timeout-" }, async (base) => {

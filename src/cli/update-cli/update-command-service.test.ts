@@ -64,7 +64,7 @@ const run = { runId: "00000000-0000-4000-8000-000000000001", env: {} };
 describe("maybeRestartService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
+    mocks.waitForGatewayHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
     const healthy = {
       runtime: { status: "running", pid: 8000 },
       portUsage: {

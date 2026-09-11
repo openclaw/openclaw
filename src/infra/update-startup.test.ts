@@ -969,7 +969,6 @@ describe("update-startup", () => {
     expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
     expect(resolveNpmChannelTag).toHaveBeenCalledWith({
       channel: "extended-stable",
-      timeoutMs: 2500,
     });
     expect(onUpdateAvailableChange).toHaveBeenCalledWith({
       currentVersion: "2026.6.33",
@@ -1188,7 +1187,6 @@ describe("update-startup", () => {
     expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
     expect(resolveNpmChannelTag).toHaveBeenCalledWith({
       channel: "extended-stable",
-      timeoutMs: 2500,
     });
   });
 

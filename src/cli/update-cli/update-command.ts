@@ -704,6 +704,7 @@ async function updateCommandInternal(
         candidateSchemaVersions: execution.candidateSchemaVersions,
         config: finalization.configSnapshot.config,
         env: ownedManagedUpdateContext?.env ?? run.env,
+        timeoutMs: updateStepTimeoutMs,
       });
   run.executorFence?.assertCurrent();
   if (opts.recovery || rollbackBlockedReason) {

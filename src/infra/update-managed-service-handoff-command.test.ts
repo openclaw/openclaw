@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
@@ -18,7 +19,7 @@ const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
 
-function createReadyChild(_command: string, args: string[]) {
+function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
   const child = Object.assign(new EventEmitter(), {
     pid: process.pid,
     exitCode: null,
@@ -28,11 +29,17 @@ function createReadyChild(_command: string, args: string[]) {
     unref: vi.fn(),
   });
   process.nextTick(() => {
-    signalMockManagedUpdateHandoffReady({
-      child,
-      paramsPath: args.at(-1) ?? "",
-      cleanups: mockedHandoffLeaseCleanups,
-    });
+    const ready = () =>
+      signalMockManagedUpdateHandoffReady({
+        child,
+        paramsPath: args.at(-1) ?? "",
+        cleanups: mockedHandoffLeaseCleanups,
+      });
+    if (readyDelayMs > 0) {
+      setTimeout(ready, readyDelayMs);
+    } else {
+      ready();
+    }
   });
   return child;
 }
@@ -75,7 +82,9 @@ beforeEach(async () => {
     .mockImplementation(
       (await vi.importActual<typeof import("node:child_process")>("node:child_process")).spawnSync,
     );
-  spawnMock.mockImplementation(createReadyChild);
+  spawnMock.mockImplementation((command: string, args: string[]) =>
+    createReadyChild(command, args),
+  );
 });
 
 afterEach(async () => {
@@ -154,6 +163,79 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it.each(
+    (["readiness", "park"] as const).flatMap((phase) =>
+      [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),
+    ),
+  )(
+    "waits for delayed $phase ACKs within the owning $budgetMs ms budget",
+    async ({ phase, budgetMs }) => {
+      const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
+      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+        const child = createReadyChild(command, args, phase === "readiness" ? 31_000 : 0);
+        tempDirs.add(path.dirname(args.at(-1)!));
+        spawned.resolve(child);
+        return child;
+      });
+      vi.useFakeTimers();
+      let child: ReturnType<typeof createReadyChild> | undefined;
+      try {
+        const starting = startManagedServiceUpdateHandoff({
+          root: MOCK_INSTALL_ROOT,
+          timeoutMs: phase === "readiness" ? budgetMs : 5_000,
+          restartDrainTimeoutMs: phase === "park" ? budgetMs - 30_000 : 300_000,
+          parentPid: process.pid,
+          execPath: "/usr/local/bin/node",
+          argv1: "/opt/openclaw/openclaw.mjs",
+          meta: {},
+        }).then(
+          (value) => ({ kind: "ready" as const, value }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        );
+        child = await spawned.promise;
+        if (phase === "readiness") {
+          await vi.advanceTimersByTimeAsync(31_000);
+        }
+        const started = await starting;
+        if (phase === "readiness" && budgetMs === 30_000) {
+          expect(started).toMatchObject({
+            kind: "rejected",
+            error: { message: "managed update handoff did not signal readiness within 30 seconds" },
+          });
+          expect(forceKillChildProcessTreeMock).toHaveBeenCalledExactlyOnceWith(child);
+          return;
+        }
+        expect(started.kind).toBe("ready");
+        if (started.kind !== "ready" || started.value.status !== "started") {
+          throw new Error("expected a ready owned helper");
+        }
+        if (phase === "park") {
+          const requested = createDeferredCore();
+          const output = child.stdout;
+          child.stdin.on("data", (chunk: Buffer) => {
+            if (chunk.toString() === "park\n") {
+              setTimeout(() => output.write("parked\n"), 31_000);
+              requested.resolve();
+            }
+          });
+          const parked = requestManagedServiceUpdateHandoffPark({
+            kind: "managed-update-handoff",
+            ...started.value,
+          });
+          await requested.promise;
+          await vi.advanceTimersByTimeAsync(31_000);
+          expect(await parked).toBe(budgetMs === 120_000);
+        }
+        expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
+      } finally {
+        child?.emit("exit", 0, null);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("stages automatic triage in a stop-linked scope with the installed entry", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-command-"));
     tempDirs.add(root);

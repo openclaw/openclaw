@@ -158,6 +158,7 @@ export async function executeMutableUpdate(
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
+  let observedGatewayStartupMs: number | undefined;
   let activationConfig: MutableUpdateExecutionResult["activationConfig"];
   const onConfigSnapshot: PackageInstallUpdateParams["onConfigSnapshot"] = (snapshot) => {
     activationConfig = snapshot;
@@ -434,6 +435,9 @@ export async function executeMutableUpdate(
         validatedConfigSnapshot = snapshot;
         candidateSchemaVersions = validation.candidateSchemaVersions;
         doctorConfigWrites = validation.doctorConfigWrites === true;
+        observedGatewayStartupMs = validation.steps.find(
+          (step) => step.name === "candidate gateway canary" && step.exitCode === 0,
+        )?.durationMs;
       }
       return validation;
     };
@@ -510,13 +514,29 @@ export async function executeMutableUpdate(
       await tryReadJson<unknown>(path.join(params.root, "package.json")),
     );
     schemaVersions = candidateSchemaVersions
-      ? await readUpdateStateSchemaVersions({ stateDir: resolveStateDir(env), config, env })
+      ? await readUpdateStateSchemaVersions({
+          stateDir: resolveStateDir(env),
+          config,
+          env,
+          timeoutMs: params.updateStepTimeoutMs,
+        })
       : undefined;
     if (
       preManagedServiceStop?.running &&
       preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
     ) {
-      previousVerified = await verifyPreviousGatewayForUpdate({ root: params.root, config, env });
+      previousVerified = await verifyPreviousGatewayForUpdate({
+        root: params.root,
+        config,
+        env,
+        opts,
+        timeoutMs: params.timeoutMs,
+        observedStartupMs: observedGatewayStartupMs,
+        assertCurrent: () => {
+          assertUpdateCommandRecovery(opts);
+          assertRequesterCurrent();
+        },
+      });
       if (opts.run) {
         recordUpdateRunStep(
           opts.run.runId,
