@@ -474,9 +474,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Active exec sessions:\nnone",
       );
-      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-        "Runtime room event",
-      );
+      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
       expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
       expect(fixture.report.currentTurn?.kind).toBe("room_event");
       expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
@@ -489,7 +487,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const runtimeEventFixture = createInput({
       attempt: createAttempt({
-        runtimeContextFragments: [{ kind: "runtime-instruction", text: "Subagent completed task 42" }],
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "Subagent completed task 42" },
+        ],
         currentInboundEventKind: "room_event",
       }),
       prompt: createPrompt({

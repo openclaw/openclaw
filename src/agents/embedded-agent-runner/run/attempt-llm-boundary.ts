@@ -68,7 +68,7 @@ export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
 }
 
 /** The model boundary renders producer facts; transcript content remains untouched. */
-export function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
+function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
   return fragments
     .map(({ kind, text }) => {
       const escaped = escapeInternalRuntimeContextDelimiters(text);
