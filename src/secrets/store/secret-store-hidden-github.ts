@@ -283,6 +283,9 @@ export function listHiddenGitHubSecretRecordNames(params: {
             .select(["name", "value", "created_at_ms", "updated_at_ms"])
             .where("scope_kind", "=", "team")
             .where("scope_id", "=", "")
+            // Bound the existing name index before materializing values; the classifier stays exact.
+            .where("name", ">=", `${params.prefix}-`)
+            .where("name", "<", `${params.prefix}.`)
             .where("kind", "=", "secret")
             .where("allowed_hosts", "is", null)
             .where("deleted_at_ms", "is", null)
