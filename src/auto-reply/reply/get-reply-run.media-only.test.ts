@@ -3385,6 +3385,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       "Reply target of current user message",
     );
+    expect(call?.followupRun.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: true,
+      replyChainPresent: false,
+    });
   });
 
   it("runs bare mention replies when the reply target is the current-turn context", async () => {
@@ -3432,6 +3437,11 @@ describe("runPreparedReply media-only handling", () => {
       "Reply target of current user message",
     );
     expect(call?.followupRun.currentInboundContext?.text).toContain("quoted status body");
+    expect(call?.followupRun.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: false,
+    });
   });
 
   it("runs room events as contextual events instead of direct user prompts", async () => {

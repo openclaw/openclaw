@@ -1874,6 +1874,16 @@ describe("Codex app-server native code mode config", () => {
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
       expect(request.additionalContext).toEqual({
+        openclaw_current_reply: {
+          kind: "application",
+          value: expect.stringContaining(
+            '{"replyTargetPresent":false,"quotePresent":false,"replyChainPresent":false}',
+          ),
+        },
+        openclaw_current_reply_identifiers: {
+          kind: "untrusted",
+          value: expect.stringContaining("{}"),
+        },
         openclaw_source_delivery: {
           kind: "application",
           value: expect.stringContaining("reply normally in your final assistant message"),

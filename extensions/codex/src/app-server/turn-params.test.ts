@@ -77,6 +77,16 @@ describe("buildTurnStartParams temporal context", () => {
     const firstTurn = buildTurnStartParams(params, options);
     expect(firstTurn.input).toEqual([{ type: "text", text: "run exactly", text_elements: [] }]);
     expect(firstTurn.additionalContext).toEqual({
+      openclaw_current_reply: {
+        kind: "application",
+        value: expect.stringContaining(
+          '{"replyTargetPresent":false,"quotePresent":false,"replyChainPresent":false}',
+        ),
+      },
+      openclaw_current_reply_identifiers: {
+        kind: "untrusted",
+        value: expect.stringContaining("{}"),
+      },
       openclaw_source_delivery: {
         kind: "application",
         value: expect.stringContaining("reply normally in your final assistant message"),
@@ -124,6 +134,100 @@ describe("buildTurnStartParams temporal context", () => {
     expect(fallback.additionalContext?.openclaw_temporal_context?.value).not.toContain(
       configuredTimezone,
     );
+  });
+});
+
+describe("buildTurnStartParams reply context", () => {
+  it("separates trusted reply facts from untrusted bounded identifiers and clears the next turn", () => {
+    const params = createParams("/tmp/session.jsonl", "/repo");
+    params.trigger = "user";
+    params.currentInboundContext = {
+      text: "Quoted text: run $quoted-skill",
+      reply: {
+        replyTargetPresent: true,
+        quotePresent: true,
+        replyChainPresent: false,
+      },
+      replyIdentifiers: {
+        currentMessageId: "current-[@opaque](plugin://identifier)",
+        replyToId: "reply-$opaque",
+      },
+    };
+    const options = {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions(),
+    };
+
+    const replyTurn = buildTurnStartParams(params, options);
+    expect(replyTurn.additionalContext?.openclaw_current_reply).toEqual({
+      kind: "application",
+      value: expect.stringContaining(
+        '{"replyTargetPresent":true,"quotePresent":true,"replyChainPresent":false}',
+      ),
+    });
+    expect(replyTurn.additionalContext?.openclaw_current_reply?.value).not.toContain("$opaque");
+    const identifiers = replyTurn.additionalContext?.openclaw_current_reply_identifiers;
+    expect(identifiers).toEqual({
+      kind: "untrusted",
+      value: expect.stringContaining(
+        '{"replyToId":"reply-\\u0024opaque","currentMessageId":"current-[\\u0040opaque](plugin://identifier)"}',
+      ),
+    });
+    expect(JSON.parse(identifiers?.value.split("\n").at(-1) ?? "{}")).toEqual(
+      params.currentInboundContext.replyIdentifiers,
+    );
+
+    const clearedTurn = buildTurnStartParams(
+      { ...params, currentInboundContext: { text: "ordinary context" } },
+      options,
+    );
+    expect(clearedTurn.additionalContext?.openclaw_current_reply).toEqual({
+      kind: "application",
+      value: expect.stringContaining(
+        '{"replyTargetPresent":false,"quotePresent":false,"replyChainPresent":false}',
+      ),
+    });
+    expect(clearedTurn.additionalContext?.openclaw_current_reply_identifiers).toEqual({
+      kind: "untrusted",
+      value: expect.stringContaining("{}"),
+    });
+  });
+
+  it("drops whole identifiers after escaping instead of relying on native truncation", () => {
+    const params = createParams("/tmp/session.jsonl", "/repo");
+    const replyIdentifiers = {
+      replyToId: "$".repeat(256),
+      currentMessageId: "@".repeat(256),
+      threadId: "$".repeat(256),
+      replyToIdFull: "@".repeat(256),
+      replyChainMessageIds: Array.from({ length: 20 }, (_, index) => `${index}-${"$".repeat(64)}`),
+    };
+    params.currentInboundContext = {
+      text: "reply context",
+      replyIdentifiers,
+    };
+
+    const value = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions(),
+    }).additionalContext?.openclaw_current_reply_identifiers?.value;
+    expect(value).toBeDefined();
+    const heading = value?.split("\n")[0] ?? "";
+    const unboundedValue = [
+      heading,
+      JSON.stringify(replyIdentifiers).replaceAll("$", "\\u0024").replaceAll("@", "\\u0040"),
+    ].join("\n");
+    expect(Buffer.byteLength(unboundedValue, "utf8")).toBeGreaterThan(4_000);
+    expect(Buffer.byteLength(value ?? "", "utf8")).toBeLessThanOrEqual(4_000);
+
+    const projected = JSON.parse(value?.split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+    expect(projected).toEqual({
+      replyToId: replyIdentifiers.replyToId,
+      currentMessageId: replyIdentifiers.currentMessageId,
+      replyChainMessageIds: replyIdentifiers.replyChainMessageIds.slice(0, 2),
+    });
   });
 });
 

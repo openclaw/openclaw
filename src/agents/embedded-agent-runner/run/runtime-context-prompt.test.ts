@@ -7,6 +7,7 @@ import {
   stripInternalRuntimeContext,
 } from "../../internal-runtime-context.js";
 import {
+  buildCurrentInboundReplyRuntimeFragments,
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -103,6 +104,31 @@ describe("runtime context prompt submission", () => {
     });
     expect(stripInternalMetadataForDisplay(message.content)).toBe("");
     expect(buildRuntimeContextCustomMessage(" ")).toBeUndefined();
+  });
+
+  it("projects reply presence as trusted facts and identifiers as conversation data", () => {
+    const fragments = buildCurrentInboundReplyRuntimeFragments({
+      text: "Quoted text stays on the untrusted surface",
+      reply: {
+        replyTargetPresent: true,
+        quotePresent: true,
+        replyChainPresent: false,
+      },
+      replyIdentifiers: { replyToId: "reply-$opaque" },
+    });
+
+    expect(fragments).toEqual([
+      {
+        kind: "runtime-instruction",
+        text: expect.stringContaining('"quotePresent":true'),
+      },
+      {
+        kind: "conversation-data",
+        text: expect.stringContaining('"replyToId":"reply-$opaque"'),
+      },
+    ]);
+    expect(fragments[0]?.text).not.toContain("$opaque");
+    expect(buildCurrentInboundReplyRuntimeFragments({ text: "ordinary context" })).toEqual([]);
   });
 });
 

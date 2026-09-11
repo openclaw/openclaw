@@ -68,6 +68,7 @@ import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
+  buildCurrentInboundReplyRuntimeFragments,
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   buildRuntimeContextMessageContent,
@@ -496,11 +497,13 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     context: inlineContext,
     prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
   });
+  const replyFragments = buildCurrentInboundReplyRuntimeFragments(attempt.currentInboundContext);
   const fragments: RuntimeContextFragment[] = [
     ...((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
       (attempt.currentInboundContext?.text
         ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
         : [])),
+    ...replyFragments,
     ...eventFragments,
   ];
   const currentUserTimestampOverride =
@@ -514,8 +517,10 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const runtimeSystemContext = promptSubmission.runtimeOnly
     ? buildRuntimeContextMessageContent({
         runtimeContext: escapedProjection
-          ? projectRuntimeContextFragments(eventFragments)
-          : (promptSubmission.runtimeContext ?? ""),
+          ? projectRuntimeContextFragments([...replyFragments, ...eventFragments])
+          : [projectRuntimeContextFragments(replyFragments), promptSubmission.runtimeContext ?? ""]
+              .filter(Boolean)
+              .join("\n\n"),
         kind: "runtime-event",
       })
     : undefined;

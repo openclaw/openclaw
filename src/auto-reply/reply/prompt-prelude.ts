@@ -21,6 +21,11 @@ const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
 ];
+const CURRENT_REPLY_IDENTIFIER_MAX_CHARS = 256;
+const CURRENT_REPLY_CHAIN_MAX_ENTRIES = 20;
+const CURRENT_REPLY_IDENTIFIERS_MAX_SERIALIZED_BYTES = 880;
+
+type CurrentReplyIdentifiers = NonNullable<CurrentInboundPromptContext["replyIdentifiers"]>;
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */
 function buildReplyPromptBodies(params: {
@@ -147,6 +152,103 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
   );
 }
 
+function normalizeRuntimeContextString(value: unknown): string | undefined {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeOptionalString(value);
+  return normalized?.replaceAll("\u0000", "") || undefined;
+}
+
+function normalizeCurrentReplyIdentifier(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > CURRENT_REPLY_IDENTIFIER_MAX_CHARS) {
+    return undefined;
+  }
+  const normalized = normalizeRuntimeContextString(value);
+  return normalized && normalized.length <= CURRENT_REPLY_IDENTIFIER_MAX_CHARS
+    ? normalized
+    : undefined;
+}
+
+function hasRuntimeContextValue(value: unknown): boolean {
+  if (typeof value === "string" && value.length > CURRENT_REPLY_IDENTIFIER_MAX_CHARS) {
+    return true;
+  }
+  return Boolean(normalizeRuntimeContextString(value));
+}
+
+function currentReplyIdentifiersFitBudget(identifiers: CurrentReplyIdentifiers): boolean {
+  return (
+    Buffer.byteLength(JSON.stringify(identifiers), "utf8") <=
+    CURRENT_REPLY_IDENTIFIERS_MAX_SERIALIZED_BYTES
+  );
+}
+
+function buildCurrentReplyMetadata(
+  ctx: TemplateContext,
+): Pick<CurrentInboundPromptContext, "reply" | "replyIdentifiers"> | undefined {
+  const replyChain = Array.isArray(ctx.ReplyChain) ? ctx.ReplyChain : [];
+  const replyChainPresent = replyChain.length > 0;
+  const quotePresent = ctx.ReplyToIsQuote === true || hasRuntimeContextValue(ctx.ReplyToQuoteText);
+  const replyTargetPresent =
+    hasRuntimeContextValue(ctx.ReplyToId) ||
+    hasRuntimeContextValue(ctx.ReplyToIdFull) ||
+    hasRuntimeContextValue(ctx.ReplyToBody) ||
+    quotePresent ||
+    hasRuntimeContextValue(ctx.ReplyToSender) ||
+    replyChainPresent;
+  if (!replyTargetPresent) {
+    return undefined;
+  }
+
+  let identifiers: CurrentReplyIdentifiers = {};
+  const scalarIdentifiers = [
+    ["replyToId", normalizeCurrentReplyIdentifier(ctx.ReplyToId)],
+    [
+      "currentMessageId",
+      normalizeCurrentReplyIdentifier(ctx.MessageSid) ??
+        normalizeCurrentReplyIdentifier(ctx.MessageSidFull),
+    ],
+    ["threadId", normalizeCurrentReplyIdentifier(ctx.MessageThreadId)],
+    ["replyToIdFull", normalizeCurrentReplyIdentifier(ctx.ReplyToIdFull)],
+  ] as const;
+  for (const [key, value] of scalarIdentifiers) {
+    if (!value) {
+      continue;
+    }
+    const candidate = { ...identifiers, [key]: value };
+    if (currentReplyIdentifiersFitBudget(candidate)) {
+      identifiers = candidate;
+    }
+  }
+
+  const replyChainMessageIds: string[] = [];
+  // Slice before normalization so channel/plugin input cannot force an unbounded scan.
+  for (const entry of replyChain.slice(0, CURRENT_REPLY_CHAIN_MAX_ENTRIES)) {
+    const messageId = normalizeCurrentReplyIdentifier(entry.messageId);
+    if (!messageId) {
+      continue;
+    }
+    const candidateIds = [...replyChainMessageIds, messageId];
+    if (!currentReplyIdentifiersFitBudget({ ...identifiers, replyChainMessageIds: candidateIds })) {
+      break;
+    }
+    replyChainMessageIds.push(messageId);
+  }
+  if (replyChainMessageIds.length > 0) {
+    identifiers.replyChainMessageIds = replyChainMessageIds;
+  }
+
+  return {
+    reply: {
+      replyTargetPresent: true,
+      quotePresent,
+      replyChainPresent,
+    },
+    ...(Object.keys(identifiers).length > 0 ? { replyIdentifiers: identifiers } : {}),
+  };
+}
+
 function resolvePerTurnDeliveryDirective(params: {
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -224,6 +326,7 @@ export function buildReplyPromptEnvelopeBase(
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
   const deliveryDirective = resolvePerTurnDeliveryDirective(params);
+  const currentReplyMetadata = buildCurrentReplyMetadata(params.sessionCtx);
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext
@@ -234,13 +337,14 @@ export function buildReplyPromptEnvelopeBase(
       : []),
   ];
   const currentInboundContext: CurrentInboundPromptContext | undefined =
-    !params.isBareSessionReset && currentInboundContextText
+    !params.isBareSessionReset && (currentInboundContextText || currentReplyMetadata)
       ? {
           text: currentInboundContextText,
           fragments,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
+          ...currentReplyMetadata,
         }
       : undefined;
 

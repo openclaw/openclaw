@@ -3363,7 +3363,15 @@ describe("followup queue collect routing", () => {
         key,
         {
           ...createRun({ prompt }),
-          currentInboundContext: { text: contextText },
+          currentInboundContext: {
+            text: contextText,
+            reply: {
+              replyTargetPresent: true,
+              quotePresent: prompt === "second",
+              replyChainPresent: false,
+            },
+            replyIdentifiers: { replyToId: `${prompt}-reply` },
+          },
         },
         settings,
       );
@@ -3376,6 +3384,14 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("second");
     expect(calls[0]?.currentInboundContext?.text).toContain("Queued #1 context:\ncontext one");
     expect(calls[0]?.currentInboundContext?.text).toContain("Queued #2 context:\ncontext two");
+    expect(calls[0]?.currentInboundContext?.reply).toEqual({
+      replyTargetPresent: true,
+      quotePresent: true,
+      replyChainPresent: false,
+    });
+    expect(calls[0]?.currentInboundContext?.replyIdentifiers).toEqual({
+      replyToId: "second-reply",
+    });
   });
 
   it("does not let one source cancel an admitted collected run", async () => {
