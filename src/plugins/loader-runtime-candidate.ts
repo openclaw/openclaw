@@ -42,9 +42,9 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
-  bindPluginRuntimeArtifactSelection,
   resolvePluginRuntimeExecutionArtifact,
   prefersBuiltPluginArtifacts,
 } from "./plugin-runtime-artifact-selection.js";
