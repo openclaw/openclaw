@@ -274,6 +274,85 @@ beforeEach(() => {
   mockLoadPluginManifestRegistry.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
 });
 
+describe("validateConfigObjectWithPlugins model metadata", () => {
+  it("does not discover plugins when materialization needs no metadata", () => {
+    expect(validateConfigObjectWithPlugins({ gateway: { mode: "local" } }).ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it.each(["full", "skip"] as const)(
+    "loads catalog defaults before materialization with %s plugin validation",
+    (pluginValidation) => {
+      const source = {
+        plugins: { enabled: true },
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://models.example/v1",
+              models: [{ id: "vision-model", name: "Authored model", contextWindow: 64_000 }],
+            },
+          },
+        },
+      };
+      const original = structuredClone(source);
+      const cost = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecord({
+            id: "fixture",
+            providers: ["fixture"],
+            modelCatalog: {
+              providers: {
+                fixture: {
+                  models: [
+                    {
+                      id: "vision-model",
+                      name: "Catalog model",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      cost,
+                      contextWindow: 128_000,
+                      maxTokens: 16_000,
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        ],
+      });
+
+      const result = validateConfigObjectWithPlugins(source, { pluginValidation });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                models: [
+                  {
+                    id: "vision-model",
+                    name: "Authored model",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    cost,
+                    contextWindow: 64_000,
+                    maxTokens: 16_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      });
+      expect(source).toEqual(original);
+      expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
   it("applies bundled channel defaults from plugin-owned schema metadata", () => {
     setupTelegramSchemaWithDefault();
