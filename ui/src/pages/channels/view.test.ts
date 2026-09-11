@@ -79,7 +79,7 @@ function createChannelPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
 }
 
 describe("channels plugin presentation metadata", () => {
-  it("uses matching plugins.list metadata for the gallery and setup modal", () => {
+  it("uses matching plugins.list metadata and package icons or placeholders throughout setup", () => {
     const props = createProps({
       ts: Date.now(),
       channelOrder: ["slack"],
@@ -116,6 +116,23 @@ describe("channels plugin presentation metadata", () => {
       "blob:slack-plugin-icon",
     );
     expect(container.textContent).not.toContain("Legacy channel subtitle");
+    for (const selector of [".channels-item", ".channels-detail__header", ".channels-wizard"]) {
+      const icon = container.querySelector(`${selector} img`)!;
+      icon.dispatchEvent(new Event("error"));
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+      expect(
+        container.querySelector(
+          `${selector} .channels-tile--fallback, ${selector} .channels-cover--fallback`,
+        )?.textContent,
+      ).toContain("SL");
+    }
+    props.pluginIconUrls = {};
+    props.pluginCatalog = {
+      ...props.pluginCatalog,
+      plugins: [createChannelPlugin({ hasIcon: false })],
+    };
+    render(renderChannels(props), container);
+    expect(container.querySelector(".channels-item img")).toBeNull();
   });
 });
 
