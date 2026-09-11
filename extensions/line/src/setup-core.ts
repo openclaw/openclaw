@@ -86,7 +86,11 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     // A credential resolves from the inline value first and only then from its
     // file, so writing one form has to retire the other. Leaving both behind
     // makes a rotation onto a file a silent no-op: the stale inline value keeps
-    // winning and setup still reports success.
+    // winning and setup still reports success. Both forms of the written family
+    // are retired (not only the complementary one) because a promoted
+    // accounts.default record can hold a stale same-form value that the
+    // resolver reads ahead of the channel root; the patch re-adds the written
+    // form after the clear.
     const credentials = [
       {
         fileKey: "tokenFile",
@@ -106,10 +110,10 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     for (const credential of credentials) {
       if (credential.file) {
         patch[credential.fileKey] = credential.file;
-        retired.push(credential.inlineKey);
+        retired.push(credential.fileKey, credential.inlineKey);
       } else if (credential.inline) {
         patch[credential.inlineKey] = credential.inline;
-        retired.push(credential.fileKey);
+        retired.push(credential.inlineKey, credential.fileKey);
       }
     }
     return patchLineAccountConfig({

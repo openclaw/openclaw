@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/setup";
 // Guards the shipped `--token` alias: released CLIs configured LINE through the
 // shared token envelope switch, which must keep writing channelAccessToken.
 import { describe, expect, it } from "vitest";
+import { resolveLineAccount } from "./accounts.js";
 import { lineSetupAdapter, patchLineAccountConfig } from "./setup-core.js";
 
 type LineChannelConfig = {
@@ -9,6 +13,10 @@ type LineChannelConfig = {
   channelSecret?: string;
   tokenFile?: string;
   secretFile?: string;
+  accounts?: Record<
+    string,
+    { channelAccessToken?: string; channelSecret?: string; tokenFile?: string; name?: string }
+  >;
 };
 
 function applyLineSetup(
@@ -137,5 +145,127 @@ describe("LINE credential rotation", () => {
     expect(rotated.tokenFile).toBe("/run/secrets/line-token");
     expect(rotated.channelSecret).toBe("inline-secret");
     expect(rotated.channelAccessToken).toBeUndefined();
+  });
+});
+
+// Regression coverage for rotation after single-account promotion: doctor's
+// single-account migration (singleAccountKeysToMove) moves root credentials
+// into accounts.default, and the resolver reads accounts.default ahead of the
+// channel root for the default account. A default-scope rotation must retire
+// the promoted stale credential or setup silently keeps the old identity.
+describe("LINE rotation after single-account promotion", () => {
+  function writeTempTokenFile(contents: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-rotation-"));
+    const file = path.join(dir, "token");
+    fs.writeFileSync(file, contents);
+    return file;
+  }
+
+  function promotedConfig(): OpenClawConfig {
+    // The shape doctor's single-account migration produces: credentials live in
+    // accounts.default and the channel root no longer carries them.
+    return {
+      channels: {
+        line: {
+          enabled: true,
+          accounts: {
+            default: {
+              name: "Main",
+              channelAccessToken: "STALE_PROMOTED_TOKEN",
+              channelSecret: "PROMOTED_SECRET",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+  }
+
+  function resolvedToken(cfg: OpenClawConfig): string {
+    return resolveLineAccount({ cfg, accountId: "default" }).channelAccessToken;
+  }
+
+  function promotedAccount(cfg: OpenClawConfig): LineChannelConfig["accounts"] {
+    return (cfg.channels?.line as LineChannelConfig)?.accounts;
+  }
+
+  it("retires a promoted inline token when a file replaces it", () => {
+    const newFile = writeTempTokenFile("FILE_TOKEN_B");
+
+    const rotated = applyLineSetup({ tokenFile: newFile }, promotedConfig());
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.channelAccessToken).toBeUndefined();
+    expect(promotedAccount(rotated)?.default?.channelAccessToken).toBeUndefined();
+    // The rotation touches the token family only; the promoted secret survives.
+    expect(promotedAccount(rotated)?.default?.channelSecret).toBe("PROMOTED_SECRET");
+    expect(resolvedToken(rotated)).toBe("FILE_TOKEN_B");
+  });
+
+  it("retires a promoted inline token when an inline token replaces it", () => {
+    const rotated = applyLineSetup({ channelAccessToken: "ROTATED_TOKEN" }, promotedConfig());
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.channelAccessToken).toBe("ROTATED_TOKEN");
+    expect(promotedAccount(rotated)?.default?.channelAccessToken).toBeUndefined();
+    expect(promotedAccount(rotated)?.default?.channelSecret).toBe("PROMOTED_SECRET");
+    expect(resolvedToken(rotated)).toBe("ROTATED_TOKEN");
+  });
+
+  it("retires a promoted token file when a file replaces it", () => {
+    const staleFile = writeTempTokenFile("STALE_FILE_TOKEN");
+    const newFile = writeTempTokenFile("NEW_FILE_TOKEN");
+    const promotedFile = {
+      channels: {
+        line: {
+          enabled: true,
+          accounts: {
+            default: { name: "Main", tokenFile: staleFile },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = applyLineSetup({ tokenFile: newFile }, promotedFile);
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.tokenFile).toBe(newFile);
+    expect(promotedAccount(rotated)?.default?.tokenFile).toBeUndefined();
+    expect(resolvedToken(rotated)).toBe("NEW_FILE_TOKEN");
+  });
+
+  it("retires the promoted credentials when switching to the environment", () => {
+    const rotated = applyLineSetup({ useEnv: true }, promotedConfig());
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.channelAccessToken).toBeUndefined();
+    expect(promotedAccount(rotated)?.default?.channelAccessToken).toBeUndefined();
+    expect(promotedAccount(rotated)?.default?.channelSecret).toBeUndefined();
+  });
+
+  it("control: a rotation with no promoted credential still resolves the new token", () => {
+    const fromRoot = applyLineSetup({ channelAccessToken: "ROOT_TOKEN_A" }, {} as OpenClawConfig);
+    const rotated = applyLineSetup({ channelAccessToken: "ROOT_TOKEN_C" }, fromRoot);
+
+    expect(resolvedToken(rotated)).toBe("ROOT_TOKEN_C");
+  });
+
+  it("control: named accounts are untouched by a default-account rotation", () => {
+    const withWork = {
+      channels: {
+        line: {
+          enabled: true,
+          channelAccessToken: "ROOT_TOKEN_A",
+          accounts: {
+            work: { name: "Work", channelAccessToken: "WORK_TOKEN" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const rotated = applyLineSetup({ channelAccessToken: "ROOT_TOKEN_C" }, withWork);
+    const channel = rotated.channels?.line as LineChannelConfig;
+
+    expect(channel.channelAccessToken).toBe("ROOT_TOKEN_C");
+    expect(channel.accounts?.work).toEqual({ name: "Work", channelAccessToken: "WORK_TOKEN" });
   });
 });

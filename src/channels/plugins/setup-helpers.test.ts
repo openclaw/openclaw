@@ -227,6 +227,60 @@ describe("patchScopedAccountConfig credential clearing", () => {
     });
   });
 
+  it("retires matching fields in a promoted accounts.default record on a default-scope write", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: true,
+            accounts: {
+              default: { name: "Main", token: "stale-promoted-token", webhookPath: "/keep" },
+              work: { token: "work-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token", "tokenFile"],
+      patch: { token: "new-token" },
+      ensureChannelEnabled: false,
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.token).toBe("new-token");
+    // Resolvers read accounts.default ahead of the channel root, so the
+    // promoted stale value must not survive the rotation; unrelated account
+    // fields and named accounts are preserved.
+    expect(accountRecord(channel, "default")).toEqual({ name: "Main", webhookPath: "/keep" });
+    expect(accountRecord(channel, "work")).toEqual({ token: "work-token" });
+  });
+
+  it("clears the promoted record under its authored key when casing differs", () => {
+    const next = patchScopedAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "demo-setup": {
+            enabled: true,
+            accounts: {
+              Default: { token: "stale-promoted-token" },
+            },
+          },
+        },
+      }),
+      channelKey: "demo-setup",
+      accountId: DEFAULT_ACCOUNT_ID,
+      clearFields: ["token"],
+      patch: { token: "new-token" },
+      ensureChannelEnabled: false,
+    });
+
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.token).toBe("new-token");
+    expect(accountRecord(channel, "Default")).toEqual({});
+    expect(channel.accounts && Object.keys(channel.accounts)).toEqual(["Default"]);
+  });
+
   it("clears only selected named-account credentials and preserves disabled siblings", () => {
     const next = patchScopedAccountConfig({
       cfg: asConfig({
