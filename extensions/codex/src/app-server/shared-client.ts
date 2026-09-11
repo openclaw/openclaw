@@ -57,6 +57,7 @@ import {
   resolveManagedCodexNativeCommand,
 } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   closeRetiredSharedClientEntry,
   closeRetiredSharedClientEntryIfIdle,
@@ -1482,6 +1483,7 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
       await Promise.allSettled(lifetime.pending);
     }
     await closing;
+    await nativeHookRelayUnregisterQueue.flush();
   } finally {
     if (state.startup === lifetime) {
       state.startup = createCodexAppServerStartupLifetime();

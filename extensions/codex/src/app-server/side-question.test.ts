@@ -573,8 +573,8 @@ async function runSideQuestionWithManagedWebSearchCall(
 describe("runCodexAppServerSideQuestion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(() => {
-    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+  beforeEach(async () => {
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -633,8 +633,8 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  afterEach(() => {
-    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+  afterEach(async () => {
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.unstubAllGlobals();
