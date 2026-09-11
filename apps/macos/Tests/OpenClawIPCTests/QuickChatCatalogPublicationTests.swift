@@ -147,7 +147,8 @@ struct QuickChatCatalogPublicationTests {
         #expect(model.modelChoices.map(\.name) == ["New choice"])
         #expect(model.activePresentationID == reopened)
         #expect(model.text == "New presentation draft")
-        print("Quick Chat late read: choices=\(model.modelChoices.map(\.name)), draft=\(model.text), currentPresentation=\(model.activePresentationID == reopened)")
+        print(
+            "Quick Chat late read: choices=\(model.modelChoices.map(\.name)), draft=\(model.text), currentPresentation=\(model.activePresentationID == reopened)")
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
