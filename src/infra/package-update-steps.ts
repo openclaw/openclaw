@@ -1141,8 +1141,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         stagedInstall &&
         !params.expectedGitCheckout &&
         requireStaging &&
-        !params.requirePackageReplacement &&
-        (registryTarget || sameArtifact) &&
+        (registryTarget ? !params.requirePackageReplacement : sameArtifact) &&
         candidateVersion &&
         candidateVersion === (await readPackageVersionIfPresent(originalPackageRoot))
       ) {

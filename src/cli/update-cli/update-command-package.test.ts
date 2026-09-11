@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
@@ -12,11 +13,19 @@ import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-com
 
 afterEach(() => vi.restoreAllMocks());
 
-async function createPackageInstallFixture(base: string, candidateVersion = "1.0.0") {
+async function createPackageInstallFixture(
+  base: string,
+  candidateVersion = "1.0.0",
+  buildId?: string,
+) {
   const globalRoot = path.join(base, "prefix", "lib", "node_modules");
   const target = createNpmTarget(globalRoot);
   const root = path.join(globalRoot, "openclaw");
   await writePackageRoot(root, "1.0.0");
+  if (buildId) {
+    await fs.writeFile(path.join(root, "dist", "build-info.json"), JSON.stringify({ buildId }));
+    await writePackageDistInventory(root);
+  }
   const launcher = path.join(base, "prefix", "bin", "openclaw");
   await fs.mkdir(path.dirname(launcher), { recursive: true });
   await fs.writeFile(launcher, "previous launcher\n");
@@ -37,6 +46,14 @@ async function createPackageInstallFixture(base: string, candidateVersion = "1.0
         path.join(prefix, "lib", "node_modules", "openclaw"),
         candidateVersion,
       );
+      if (buildId) {
+        const stagedRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+        await fs.writeFile(
+          path.join(stagedRoot, "dist", "build-info.json"),
+          JSON.stringify({ buildId }),
+        );
+        await writePackageDistInventory(stagedRoot);
+      }
       await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
       await fs.writeFile(path.join(prefix, "bin", "openclaw"), "candidate launcher\n");
     } else {
@@ -103,6 +120,39 @@ it.each([
     });
   },
 );
+
+it("skips an explicit artifact when its staged build identity matches the installed build", async () => {
+  await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
+    const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(
+      base,
+      "1.0.0",
+      "same-build",
+    );
+    const validateCandidate = vi.fn(async () => [
+      { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+    ]);
+    const beforeActivate = vi.fn(async () => {});
+
+    const result = await runPackageInstallUpdate({
+      root,
+      installKind: "package",
+      tag: "https://example.invalid/candidate.tgz",
+      timeoutMs: 1000,
+      startedAt: Date.now(),
+      progress: {},
+      jsonMode: true,
+      installEnv: {},
+      installTarget: target,
+      validateCandidate,
+      beforeActivate,
+      onTransaction: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
+    expect(validateCandidate).not.toHaveBeenCalled();
+    expect(beforeActivate).not.toHaveBeenCalled();
+    await expectOriginalInstallation();
+  });
+});
 
 it.each(["run", "close"] as const)(
   "retains the exact staged runtime without replacing the active installation before %s",
