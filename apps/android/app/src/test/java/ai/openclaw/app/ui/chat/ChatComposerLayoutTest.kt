@@ -3958,7 +3958,7 @@ class ChatComposerLayoutTest {
     var modelLabel = "GPT-5.6 Sol"
     val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
       val response = originalRequest(gatewayId, method, params)
-      if (method == "chat.metadata") {
+      if (method == "models.list") {
         val metadata = Json.parseToJsonElement(response).jsonObject
         val models =
           metadata.getValue("models").jsonArray.map { model ->

@@ -1674,7 +1674,7 @@ class MainViewModel private constructor(
 
   suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = ensureRuntime().switchChatSessionBranch(leafEntryId)
 
-  internal fun isCurrentChatBranchTarget(
+  internal fun isCurrentChatSelection(
     owner: ChatComposerOwner,
     selectionGeneration: Long,
   ): Boolean {
@@ -1687,7 +1687,7 @@ class MainViewModel private constructor(
     selectionGeneration: Long,
   ): Boolean {
     val runtime = runtimeRef.value ?: return false
-    return isCurrentChatBranchTarget(owner, selectionGeneration) && runtime.canSwitchChatSessionBranch(owner.sessionKey)
+    return isCurrentChatSelection(owner, selectionGeneration) && runtime.canSwitchChatSessionBranch(owner.sessionKey)
   }
 
   internal fun canSwitchChatSessionBranch(
@@ -1823,6 +1823,15 @@ class MainViewModel private constructor(
     (
       currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
     ) == expected
+
+  internal fun createProviderAuthController(owner: ChatComposerOwner): ProviderAuthController? {
+    val runtime = ensureRuntime()
+    if (!owner.routingVerified || !isCurrentChatComposerOwner(owner) || !runtime.operatorAdminScopeAvailable.value) return null
+    val selectionGeneration = runtime.chatSelectionGeneration.value
+    return runtime.createProviderAuthController(owner) {
+      runtimeRef.value === runtime && isCurrentChatSelection(owner, selectionGeneration) && runtime.operatorAdminScopeAvailable.value
+    }
+  }
 
   internal fun resolveChatComposerOwnerAliases(
     to: ChatComposerOwner,
