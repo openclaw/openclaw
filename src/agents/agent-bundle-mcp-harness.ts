@@ -88,7 +88,9 @@ function applyConfiguredMcpApproval(
 ): AnyAgentTool[] {
   return tools.flatMap((tool) => {
     const mcp = getPluginToolMeta(tool)?.mcp;
-    if (mcp?.operation !== "tool") {
+    // The requester connect tool is an OAuth sign-in bootstrap, not an MCP server
+    // capability call; it never dispatches into the server's tools.
+    if (mcp?.operation !== "tool" || mcp.toolName === "connect") {
       return [tool];
     }
     const projectedMode = resolveProjectedMcpCodexToolApprovalMode(
@@ -167,6 +169,12 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   /** Builds a capability profile when conversationCapabilityProfile is omitted. */
   policyContext?: Omit<ConversationCapabilityProfileParams, "runtimeToolAllowlist">;
+  /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
+  autoApproveCodexAppServerApprovals?: boolean;
+  /** Interactive turns request approval before the original MCP executor runs. */
+  requestInteractiveCodexApproval?: (
+    params: InteractiveConfiguredMcpApprovalRequest,
+  ) => Promise<void>;
   warn?: (message: string) => void;
 };
 
@@ -405,14 +413,28 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
 
     const filteredTools = applyHarnessToolPolicy(tools, params);
     const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, params);
-    // Policy must keep both lists aligned by name for fingerprint stability.
-    const allowedNames = new Set(filteredAdvertised.map((tool) => tool.name));
-    const executableTools = filteredTools.filter((tool) => allowedNames.has(tool.name));
+    // Requester-scoped tools run as dynamic tools, so prompt-required MCP calls must
+    // pass the same per-call approval gate as the configured path before the bridge
+    // dispatches them. Gated-out tools drop from the advertised surface too so both
+    // lists stay aligned by name for fingerprint stability.
+    const gatedExecutable = applyConfiguredMcpApproval(filteredTools, {
+      fullPermission: params.autoApproveCodexAppServerApprovals === true,
+      ...(params.requestInteractiveCodexApproval
+        ? { requestApproval: params.requestInteractiveCodexApproval }
+        : {}),
+      onOmitted: (message) => params.warn?.(message),
+    });
+    const gatedExecutableNames = new Set(gatedExecutable.map((tool) => tool.name));
+    const gatedAdvertised = filteredAdvertised.filter((tool) =>
+      gatedExecutableNames.has(tool.name),
+    );
+    const allowedNames = new Set(gatedAdvertised.map((tool) => tool.name));
+    const executableTools = gatedExecutable.filter((tool) => allowedNames.has(tool.name));
 
     let disposed = false;
     return {
       tools: executableTools,
-      advertisedTools: filteredAdvertised,
+      advertisedTools: gatedAdvertised,
       dispose: async () => {
         if (disposed) {
           return;

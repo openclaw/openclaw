@@ -3504,13 +3504,16 @@ process.on("SIGINT", shutdown);`,
         transport: "streamable-http" as const,
         url: "https://placeholder.invalid/mcp",
       };
-      const params = makeRequesterParams(
-        "session-real-requester-sweep",
-        {
-          mcp: { sessionIdleTtlMs: 600_000, servers: { "real-requester": declaredServer } },
-        },
-        "proof-requester",
-      );
+      const params = {
+        ...makeRequesterParams(
+          "session-real-requester-sweep",
+          {
+            mcp: { sessionIdleTtlMs: 600_000, servers: { "real-requester": declaredServer } },
+          },
+          "proof-requester",
+        ),
+        autoApproveCodexAppServerApprovals: true,
+      };
       const singletonStore = globalThis as Record<PropertyKey, unknown>;
       const hadRuntimeManager = Object.hasOwn(singletonStore, SESSION_MCP_RUNTIME_MANAGER_KEY);
       const previousRuntimeManager = singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
@@ -5467,6 +5470,7 @@ describe("requester-scoped MCP connection resolution", () => {
             workspaceDir: "/workspace",
             cfg: scopedConfig as never,
             requesterSenderId: "authed",
+            autoApproveCodexAppServerApprovals: true,
           });
           expect(first?.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
           await first?.dispose();

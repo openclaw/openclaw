@@ -378,6 +378,34 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
   };
   const hasRequester = Object.keys(requester).length > 0;
+  type HarnessMcpInteractiveApproval = NonNullable<
+    Parameters<
+      typeof materializeRequesterScopedMcpToolsForHarnessRun
+    >[0]["requestInteractiveCodexApproval"]
+  >;
+  // Shared per-call MCP approval callback for dynamic (bridge) tools. Requester-scoped
+  // tools must enter the same approval boundary as the configured path before any
+  // executor dispatch.
+  const requestInteractiveMcpApproval: HarnessMcpInteractiveApproval = async (approval) => {
+    const allowedDecisions: ExecApprovalDecision[] =
+      approval.mode === "prompt" ? ["allow-once", "deny"] : ["allow-once", "allow-always", "deny"];
+    const outcome = await requestPluginApprovalOutcome({
+      hostCapabilities: params.hostCapabilities,
+      signal: approval.signal,
+      title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
+      description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
+      allowedDecisions,
+      toolName: approval.safeToolName,
+      toolCallId: approval.toolCallId,
+      mcpTool: { server: approval.serverName, tool: approval.toolName },
+      isMcpToolApprovalActive: approval.isActive,
+    });
+    if (outcome !== "approved-once" && outcome !== "approved-session") {
+      throw new Error(
+        `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
+      );
+    }
+  };
   const configuredMcp = configuredMcpSurface
     ? await materializeStaticMcpToolsForHarnessRun({
         sessionId: params.sessionId,
@@ -395,30 +423,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ),
         projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
         ...(configuredMcpSurface === "transient"
-          ? {
-              requestInteractiveCodexApproval: async (approval) => {
-                const allowedDecisions: ExecApprovalDecision[] =
-                  approval.mode === "prompt"
-                    ? ["allow-once", "deny"]
-                    : ["allow-once", "allow-always", "deny"];
-                const outcome = await requestPluginApprovalOutcome({
-                  hostCapabilities: params.hostCapabilities,
-                  signal: approval.signal,
-                  title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
-                  description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
-                  allowedDecisions,
-                  toolName: approval.safeToolName,
-                  toolCallId: approval.toolCallId,
-                  mcpTool: { server: approval.serverName, tool: approval.toolName },
-                  isMcpToolApprovalActive: approval.isActive,
-                });
-                if (outcome !== "approved-once" && outcome !== "approved-session") {
-                  throw new Error(
-                    `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
-                  );
-                }
-              },
-            }
+          ? { requestInteractiveCodexApproval: requestInteractiveMcpApproval }
           : {}),
         policyContext,
         warn: (message) => embeddedAgentLog.warn(message),
@@ -453,6 +458,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cfg: params.config,
           manifestRegistry: bundleManifestRegistry,
           toolOverrides: codexMcpToolOverrides,
+          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+            connection.appServer,
+          ),
+          requestInteractiveCodexApproval: requestInteractiveMcpApproval,
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,

@@ -833,6 +833,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(authed).toBeDefined();
     const advertisedNames = authed!.advertisedTools.map((tool) => tool.name);
@@ -849,6 +850,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(guest).toBeDefined();
     expect(guest!.advertisedTools.map((tool) => tool.name)).toEqual(advertisedNames);
@@ -876,6 +878,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       sessionId: "session-policy",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
+      autoApproveCodexAppServerApprovals: true,
       policyContext: {
         conversationToolPolicy: { deny: ["user-mail__inbox"] },
       },
@@ -904,11 +907,13 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "alice",
+      autoApproveCodexAppServerApprovals: true,
     });
     const bob = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "bob",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(alice).toBeDefined();
     expect(bob).toBeDefined();
@@ -923,5 +928,87 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
 
     await alice!.dispose();
     await bob!.dispose();
+  });
+
+  it("gates prompt-required requester MCP before the original executor", async () => {
+    const runtime = makeRuntime({ sessionId: "session-gate", requesterSenderId: "authed" });
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "prompt";
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.setResolveImpl(async () => runtime);
+    const requestInteractiveCodexApproval = vi.fn(async (request) => {
+      if (request.toolCallId === "denied") {
+        throw new Error("operator denied");
+      }
+    });
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-gate",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      requestInteractiveCodexApproval,
+    });
+    expect(result).toBeDefined();
+    const tool = result!.tools[0]!;
+    expect(tool.name).toBe("user-mail__inbox");
+
+    await expect(tool.execute("denied", {})).rejects.toThrow("operator denied");
+    expect(callTool).not.toHaveBeenCalled();
+
+    await expect(tool.execute("allowed", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "live:inbox:authed" }],
+    });
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        safeToolName: "user-mail__inbox",
+        toolCallId: "allowed",
+        serverName: "user-mail",
+        toolName: "inbox",
+        mode: "prompt",
+      }),
+    );
+    expect(result!.advertisedTools.map((entry) => entry.name)).toEqual(["user-mail__inbox"]);
+    await result!.dispose();
+  });
+
+  it("omits prompt-required requester tools from both surfaces when no callback is available", async () => {
+    const runtime = makeRuntime({ sessionId: "session-failclosed", requesterSenderId: "authed" });
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "prompt";
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.setResolveImpl(async () => runtime);
+    const warnings: string[] = [];
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-failclosed",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.tools).toEqual([]);
+    expect(result!.advertisedTools).toEqual([]);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(warnings.join(" ")).toContain("requires interactive Codex approval");
+    await result!.dispose();
+  });
+
+  it("dispatches auto-mode requester tools under full-permission posture without approval", async () => {
+    const runtime = makeRuntime({ sessionId: "session-yolo", requesterSenderId: "authed" });
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.setResolveImpl(async () => runtime);
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-yolo",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      autoApproveCodexAppServerApprovals: true,
+    });
+
+    expect(result!.tools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+    expect(result!.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+    await expect(result!.tools[0]!.execute("c1", {})).resolves.toBeDefined();
+    expect(callTool).toHaveBeenCalledOnce();
+    await result!.dispose();
   });
 });
