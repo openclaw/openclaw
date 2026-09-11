@@ -197,7 +197,7 @@ async function collectStateDatabasePaths(input: StateInput): Promise<Map<string,
   for (const id of new Set(["main", ...directories])) {
     queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
   }
-  return new Map([...files.entries()].sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return new Map([...files.entries()].toSorted(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
