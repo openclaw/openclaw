@@ -13,16 +13,50 @@ import {
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { loadSessionEntry } from "../session-utils.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type ProgressCardSession = { sessionKey: string; agentId: string; scopeKey: string };
+
+export type ProgressCardRunActivity = (params: {
+  context: GatewayRequestContext;
+  requestedKey: string;
+  session: ProgressCardSession;
+}) => boolean;
+
+/** Fails closed: an unreadable session keeps its unfinished checklist protected. */
+const hasActiveProgressCardRun: ProgressCardRunActivity = ({ context, requestedKey, session }) => {
+  let sessionId: string | undefined;
+  try {
+    sessionId = loadSessionEntry(session.sessionKey, { agentId: session.agentId }).entry?.sessionId;
+  } catch {
+    return true;
+  }
+  return resolveVisibleActiveSessionRunState({
+    context,
+    requestedKey,
+    canonicalKey: session.sessionKey,
+    ...(sessionId ? { sessionId } : {}),
+    agentId: session.agentId,
+    defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
+      context.getRuntimeConfig(),
+      session.sessionKey,
+    ),
+  }).active;
+};
 
 function resolveProgressCardSession(
   params: ProgressCardGetParams,
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
-): { sessionKey: string; agentId: string; scopeKey: string } | undefined {
+): ProgressCardSession | undefined {
   const cfg = context.getRuntimeConfig();
   const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
@@ -48,6 +82,7 @@ function projectProgressCard(card: ProgressCard | null, scopeKey: string): Progr
 
 export function createProgressCardHandlers(
   store: ProgressCardStore = progressCardStore,
+  hasActiveRun: ProgressCardRunActivity = hasActiveProgressCardRun,
 ): GatewayRequestHandlers {
   return {
     "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
@@ -102,11 +137,18 @@ export function createProgressCardHandlers(
       }
       sessionMutationAuthorization?.assertCurrent();
       try {
+        // Durable progress can outlive an interrupted run. An unfinished checklist is
+        // dismissible once no run owns the session; the revision check rejects a clear
+        // that races a newer write.
+        const allowIncomplete =
+          params.expectedRevision !== undefined &&
+          !hasActiveRun({ context, requestedKey: params.sessionKey, session });
         const result = await store.put(
           session.sessionKey,
           {
             ...input,
             expectedRevision: params.expectedRevision,
+            ...(allowIncomplete ? { allowIncomplete } : {}),
             ...(sessionMutationAuthorization
               ? { assertCurrent: sessionMutationAuthorization.assertCurrent }
               : {}),

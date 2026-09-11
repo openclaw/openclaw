@@ -99,6 +99,8 @@ The composer and dashboard placements show the local time of the last progress u
 
 Without a matching terminal outcome, unfinished steps appear paused when the Gateway reports no active run or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
 
+The composer's dismiss control removes a finished checklist, or an unfinished one once the Gateway reports no active run for the session, for example after a restart interrupted the run. The Gateway enforces the same rule for revision-checked clears: it removes only a checklist at the expected revision, and keeps unfinished steps while a run still owns the session. Note-only cards stay until the agent or a reset clears them.
+
 ## Gateway requests
 
 `progressCard.get` and `progressCard.put` accept a required `sessionKey` and optional `agentId`. Pass both when selecting an agent explicitly, for example `{ "sessionKey": "global", "agentId": "research" }`. Omitting `agentId` retains the Gateway's existing session-owner resolution. An unknown agent or an agent that conflicts with the session owner is rejected.

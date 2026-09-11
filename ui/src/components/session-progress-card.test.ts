@@ -601,6 +601,25 @@ describe("renderSessionProgressCard", () => {
     expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
   });
 
+  it("keeps a stale unfinished checklist undismissable while a later run is active", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "composer",
+        () => undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__dismiss")).toBeNull();
+  });
+
   it("falls back safely for timestamps outside the Date range", () => {
     const container = document.createElement("div");
     render(

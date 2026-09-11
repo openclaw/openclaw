@@ -127,6 +127,7 @@ const realGatewayFiles = [
   "model-picker-search.real-gateway",
   "profile-page.real-gateway",
   "session-progress-hovercard.real-gateway",
+  "session-progress-interrupted-dismiss.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -598,6 +599,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/session-progress-interrupted-dismiss.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
           phase: 1,
           workers: 1,

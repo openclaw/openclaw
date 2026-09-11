@@ -131,4 +131,20 @@ describe("session progress card store", () => {
       card: expect.objectContaining({ revision: 2 }),
     });
   });
+
+  it("dismisses an unfinished checklist only when the caller allows it", () => {
+    writeSessionProgressCard(db, SESSION_KEY, { steps: STEPS });
+    expect(
+      writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 2, allowIncomplete: true }),
+    ).toEqual({ card: expect.objectContaining({ revision: 1 }) });
+    expect(
+      writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 1, allowIncomplete: true }),
+    ).toEqual({ cleared: true });
+    expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
+
+    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Still relevant" });
+    expect(
+      writeSessionProgressCard(db, SESSION_KEY, { expectedRevision: 3, allowIncomplete: true }),
+    ).toEqual({ card: expect.objectContaining({ revision: 3 }) });
+  });
 });

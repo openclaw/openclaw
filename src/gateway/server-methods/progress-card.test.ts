@@ -6,19 +6,28 @@ import {
   type ProgressCard,
   type ProgressCardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
-import type { ProgressCardStore } from "../progress-card-store.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import { createProgressCardHandlers, type ProgressCardRunActivity } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-function createHarness() {
+function createHarness({ hasActiveRun = false } = {}) {
   const cards = new Map<string, ProgressCard>();
   const get = vi.fn<ProgressCardStore["get"]>(async (sessionKey) => cards.get(sessionKey) ?? null);
   const put = vi.fn<ProgressCardStore["put"]>(async (sessionKey, input) => {
     const current = cards.get(sessionKey);
     if (!input.markdown && !input.steps?.length) {
-      if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
+      if (
+        input.expectedRevision !== undefined &&
+        (current?.revision !== input.expectedRevision ||
+          !current.steps?.length ||
+          (!input.allowIncomplete && current.steps.some((step) => step.status !== "completed")))
+      ) {
         return { card: current ?? null };
       }
       cards.delete(sessionKey);
@@ -34,7 +43,8 @@ function createHarness() {
     cards.set(sessionKey, card);
     return { card };
   });
-  const handlers = createProgressCardHandlers({ get, put });
+  const activity = vi.fn<ProgressCardRunActivity>(() => hasActiveRun);
+  const handlers = createProgressCardHandlers({ get, put }, activity);
   const broadcast = vi.fn();
   const invoke = async (
     method: "progressCard.get" | "progressCard.put",
@@ -51,7 +61,7 @@ function createHarness() {
     } as never);
     return respond;
   };
-  return { broadcast, invoke, get, put };
+  return { activity, broadcast, invoke, get, put };
 }
 
 describe("progress card gateway methods", () => {
@@ -306,5 +316,87 @@ describe("progress card gateway methods", () => {
       },
       { sessionKeys: ["agent:main:main"], agentId: "main" },
     );
+  });
+
+  it.each([
+    { hasActiveRun: true, expected: { card: expect.objectContaining({ revision: 1 }) } },
+    { hasActiveRun: false, expected: { card: null } },
+  ])(
+    "dismisses an unfinished checklist only without an active run (active=$hasActiveRun)",
+    async ({ hasActiveRun, expected }) => {
+      const { activity, invoke } = createHarness({ hasActiveRun });
+      await invoke("progressCard.put", {
+        sessionKey: "agent:main:main",
+        plan: [
+          { step: "Done", status: "completed" },
+          { step: "Interrupted", status: "in_progress" },
+        ],
+      });
+      expect(activity).not.toHaveBeenCalled();
+
+      const dismissed = await invoke("progressCard.put", {
+        sessionKey: "agent:main:main",
+        expectedRevision: 1,
+      });
+
+      expect(dismissed).toHaveBeenCalledWith(true, expected, undefined);
+      expect(activity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestedKey: "agent:main:main",
+          session: expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+        }),
+      );
+    },
+  );
+});
+
+describe("progress card dismissal with Gateway run state", () => {
+  it("keeps an active run's unfinished checklist, then dismisses it once no run owns it", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const sessionKey = "agent:main:progress-dismiss";
+      await upsertSessionEntryCore(
+        { sessionKey, agentId: "main" },
+        { sessionId: "progress-dismiss", updatedAt: 1 },
+      );
+      const written = await progressCardStore.put(
+        sessionKey,
+        {
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
+        "main",
+      );
+      const revision = written.card!.revision;
+      const chatAbortControllers = new Map([["run-1", { sessionKey, agentId: "main" }]]);
+      const handlers = createProgressCardHandlers();
+      const dismiss = async () => {
+        const respond = vi.fn<RespondFn>();
+        await handlers["progressCard.put"]!({
+          params: { sessionKey, expectedRevision: revision },
+          respond,
+          context: {
+            broadcast: vi.fn(),
+            chatAbortControllers,
+            getRuntimeConfig: () => cfg,
+          } as unknown as GatewayRequestContext,
+        } as never);
+        return respond;
+      };
+
+      expect(await dismiss()).toHaveBeenCalledWith(
+        true,
+        { card: expect.objectContaining({ revision }) },
+        undefined,
+      );
+      expect(await progressCardStore.get(sessionKey, "main")).not.toBeNull();
+
+      chatAbortControllers.clear();
+      expect(await dismiss()).toHaveBeenCalledWith(true, { card: null }, undefined);
+      expect(await progressCardStore.get(sessionKey, "main")).toBeNull();
+    });
   });
 });
