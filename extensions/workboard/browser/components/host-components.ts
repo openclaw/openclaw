@@ -11,7 +11,7 @@ type AvatarProps = Parameters<Components["mountAgentAvatar"]>[1];
 type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
 type AppearancePickerProps = Parameters<Components["mountAppearancePicker"]>[1];
 type AppearanceGlyphProps = Parameters<Components["mountAppearanceGlyph"]>[1];
-type DashboardProps = Parameters<Components["mountDashboard"]>[1];
+type SessionSummaryProps = Parameters<Components["mountSessionSummary"]>[1];
 function createHostComponent<Props extends object>(
   mount: (container: HTMLElement, props: Props) => ControlUiComponentHandle<Props>,
 ) {
@@ -91,8 +91,8 @@ const mountAppearancePicker = createHostComponent((container, props: AppearanceP
 const mountAppearanceGlyph = createHostComponent((container, props: AppearanceGlyphProps) =>
   workboardHost().components.mountAppearanceGlyph(container, props),
 );
-const mountDashboard = createHostComponent((container, props: DashboardProps) =>
-  workboardHost().components.mountDashboard(container, props),
+const mountSessionSummary = createHostComponent((container, props: SessionSummaryProps) =>
+  workboardHost().components.mountSessionSummary(container, props),
 );
 
 export function renderDialog(props: Omit<DialogProps, "content">, content: unknown) {
@@ -124,6 +124,6 @@ export function renderAppearanceGlyph(props: AppearanceGlyphProps, className = "
   ></span>`;
 }
 
-export function renderDashboard(props: DashboardProps) {
-  return html`<div class="workboard-card-dashboard" ${mountDashboard(props)}></div>`;
+export function renderSessionSummary(props: SessionSummaryProps) {
+  return html`<div class="workboard-session-summary" ${mountSessionSummary(props)}></div>`;
 }

@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import type { CronJob } from "@openclaw/gateway-protocol";
+import { html, type TemplateResult } from "lit";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -23,11 +24,18 @@ import { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 export { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 
+export type BoardAutomationState = { jobId: string } & (
+  | { status: "loading" }
+  | { status: "loaded"; job: CronJob }
+  | { status: "unavailable"; error: string }
+);
+
 export type WorkboardProps = {
   heading?: TemplateResult;
   scopeControl?: TemplateResult;
   pageError?: string | null;
   overlayOpen?: boolean;
+  detailBoardAutomation?: BoardAutomationState;
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -338,8 +346,4 @@ export function renderLifecycleIcon(lifecycle: WorkboardLifecycle, task?: Workbo
               ? icons.messageSquare
               : icons.alertTriangle;
   return html`<span class="workboard-card__session-icon" aria-hidden="true">${icon}</span>`;
-}
-
-export function renderWorkboardError(error: string | null | undefined) {
-  return error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing;
 }

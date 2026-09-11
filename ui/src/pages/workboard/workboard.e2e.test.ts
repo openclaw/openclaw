@@ -601,6 +601,7 @@ suite.define(() => {
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
       await clickCardAction(reviewedCardSurface, "View details");
+      await writable.page.getByRole("tab", { name: "Activity", exact: true }).click();
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });

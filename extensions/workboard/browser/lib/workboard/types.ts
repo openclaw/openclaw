@@ -118,7 +118,9 @@ export type WorkboardUiState = {
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
   detailCardId: string | null;
+  detailTab: "overview" | "activity" | "session" | "details";
   detailCommentBody: string;
+  detailCommentDrafts: Map<string, string>;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;

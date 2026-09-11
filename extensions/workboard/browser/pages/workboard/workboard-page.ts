@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
 import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
@@ -26,9 +27,10 @@ import {
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
 import { createBoardDraft, renderBoardModal, type BoardDraft } from "./view-board-modal.ts";
 import { getVisibleDetailCard } from "./view-card-details.ts";
-import { workboardErrorMessage } from "./view-helpers.ts";
+import { workboardErrorMessage, type BoardAutomationState } from "./view-helpers.ts";
 import { renderWorkboard } from "./view.ts";
 
 export function workboardPageTarget(boardId?: string) {
@@ -57,6 +59,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     let context = initialContext;
     let disposed = false;
     let boardDraft: BoardDraft | null = null;
+    const automations = new Map<string, BoardAutomationState>();
     let queued = false;
     let connected = false;
     let refreshActive = false;
@@ -193,6 +196,35 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         boardId === WORKBOARD_ALL_BOARDS_FILTER
           ? null
           : state.boards.find((board) => board.id === boardId);
+      const detailCard = getVisibleDetailCard(state);
+      const detailJobId = detailCard
+        ? state.boards.find((board) => board.id === workboardCardBoardId(detailCard))
+            ?.automationJobId
+        : undefined;
+      const activeJobIds = new Set(
+        connected && context.presented
+          ? [selectedBoard?.automationJobId, detailJobId].filter((id) => typeof id === "string")
+          : [],
+      );
+      for (const jobId of automations.keys()) {
+        if (!activeJobIds.has(jobId)) {
+          automations.delete(jobId);
+        }
+      }
+      for (const jobId of activeJobIds) {
+        if (automations.has(jobId)) {
+          continue;
+        }
+        const pending: BoardAutomationState = { jobId, status: "loading" };
+        automations.set(jobId, pending);
+        void loadBoardAutomation(client, jobId).then((automation) => {
+          if (disposed || automations.get(jobId) !== pending) {
+            return;
+          }
+          automations.set(jobId, automation);
+          requestUpdate();
+        });
+      }
       const focusedCard = state.draftOpen
         ? state.cards.find((card) => card.id === state.editingCardId)
         : getVisibleDetailCard(state);
@@ -246,6 +278,11 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                       : nothing
                   }
                 </div>
+                ${
+                  selectedBoard?.automationJobId
+                    ? renderBoardAutomationHeading(automations.get(selectedBoard.automationJobId))
+                    : nothing
+                }
               </div>
             `,
             scopeControl:
@@ -279,6 +316,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                 : undefined,
             pageError,
             overlayOpen: Boolean(boardDraft),
+            detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
             host: workboard,
             client: connected ? client : null,
             connected,
@@ -294,6 +332,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             showAgentFilter: false,
             onOpenSession: host.sessions.open,
             onRefresh: () => {
+              automations.clear();
               void refreshMetadata();
               sessionResolver.refresh();
               void refreshWorkboard({
