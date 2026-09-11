@@ -583,7 +583,7 @@ async function dispatchDiscordCommandInteraction(params: {
           provider: menuModelContext?.provider,
           model: menuModelContext?.model,
           agentRuntime: menuModelContext?.agentRuntime,
-          ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+          catalog: menuModelCatalog,
         });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({

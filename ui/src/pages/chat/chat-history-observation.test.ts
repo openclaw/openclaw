@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
@@ -44,9 +43,7 @@ const initial = {
 } satisfies GatewaySessionRow;
 const sibling = { ...initial, key: "agent:main:sibling", sessionId: "sibling", label: "Sibling" };
 const query = { ownerId: "ada", agentId: "main" };
-type WireHistory = ChatHistoryResponse & { resolution?: SessionsResolveResult };
-
-function history(row: GatewaySessionRow): WireHistory {
+function history(row: GatewaySessionRow): ChatHistoryResponse {
   return {
     sessionInfo: row,
     sessionId: row.sessionId,
@@ -70,7 +67,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const reads: Array<{
     method: string;
     params: unknown;
-    pending: ReturnType<typeof createDeferred<WireHistory>>;
+    pending: ReturnType<typeof createDeferred<ChatHistoryResponse>>;
   }> = [];
   const client = createTestGatewayClient((method, params) => {
     if (method === "sessions.list") {
@@ -81,8 +78,11 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
     if (method === "models.list") {
       return { models };
     }
+    if (method === "sessions.resolve") {
+      return { ok: true, key, agentId: "main", displayName: "Observed session" };
+    }
     if (method === "chat.history" || method === "chat.startup") {
-      const pending = createDeferred<WireHistory>();
+      const pending = createDeferred<ChatHistoryResponse>();
       reads.push({ method, params, pending });
       return pending.promise;
     }
@@ -441,7 +441,7 @@ describe("history descriptor observation order", () => {
   });
 
   it.each([false, true])(
-    "keeps short-startup issuance ordering through a later pane handoff (retried: %s)",
+    "orders short-route pane history by request issuance (retried: %s)",
     async (retried) => {
       const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
       const lifecycle = new AbortController();
@@ -471,8 +471,17 @@ describe("history descriptor observation order", () => {
         hash: "",
       });
       h.operations.push(navigation);
+      await navigation;
+      expect(router.getState().matches[0]?.data).toMatchObject({
+        kind: "session",
+        sessionKey: key,
+      });
+      expect(h.reads).toHaveLength(0);
+      const pane = h.makeState();
+      const loaded = h.begin(pane, true);
       await vi.waitFor(() => expect(h.reads).toHaveLength(1));
-      expect(h.reads[0]!.params).toMatchObject({ shortId: "12345678" });
+      expect(h.reads[0]!.method).toBe("chat.startup");
+      expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
       if (retried) {
         h.reads[0]!.pending.reject(
           new GatewayRequestError({
@@ -498,16 +507,11 @@ describe("history descriptor observation order", () => {
         updatedAt: 50,
         label: retried ? "Startup retry descriptor" : "Earlier startup",
       };
-      h.reads[retried ? 1 : 0]!.pending.resolve({
-        ...history(startupRow),
-        resolution: { ok: true, key, agentId: "main", displayName: "Observed session" },
-      });
-      await navigation;
       if (!retried) {
         await h.refreshManaged({ ...initial, updatedAt: 5, label: "After startup read" });
       }
-      const pane = h.makeState();
-      await h.begin(pane, true);
+      h.reads[retried ? 1 : 0]!.pending.resolve(history(startupRow));
+      await loaded;
 
       expect(h.reads).toHaveLength(retried ? 2 : 1);
       expect(pane.chatMessages).toHaveLength(1);

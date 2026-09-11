@@ -141,14 +141,20 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
   if (!auth.apiKey) {
     return null;
   }
+  const defaults = buildMinimaxProvider(ctx.env);
+  const providerConfig = {
+    ...defaults,
+    baseUrl: getProviderBaseUrl(ctx.config, API_PROVIDER_ID) ?? defaults.baseUrl,
+    api: ctx.config.models?.providers?.[API_PROVIDER_ID]?.api ?? defaults.api,
+  };
   return await buildOpenAICompatibleLiveProviderCatalog({
     discoveryMode: "strict",
     providerId: API_PROVIDER_ID,
-    providerConfig: buildMinimaxProvider(ctx.env),
+    providerConfig,
     apiKey: auth.apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
-    modelDiscovery: buildMinimaxModelDiscovery(),
+    modelDiscovery: buildMinimaxModelDiscovery("api_key", providerConfig.api),
   });
 }
 

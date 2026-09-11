@@ -179,7 +179,11 @@ export class LogbookStore {
   private readonly walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
   readonly framesDir: string;
 
-  constructor(readonly dataDir: string) {
+  static async open(dataDir: string): Promise<LogbookStore> {
+    return new LogbookStore(dataDir);
+  }
+
+  private constructor(readonly dataDir: string) {
     // Frames and the DB hold raw screen contents; keep everything owner-only
     // even when the surrounding state dir is more permissive.
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -248,7 +252,7 @@ export class LogbookStore {
     this.cardsQuery = this.query.selectFrom("cards");
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.walMaintenance.close();
     this.db.close();
   }
@@ -257,7 +261,7 @@ export class LogbookStore {
     return path.join(this.framesDir, day, `${capturedAtMs}.jpg`);
   }
 
-  insertFrame(params: {
+  async insertFrame(params: {
     capturedAtMs: number;
     day: string;
     path: string;
@@ -267,7 +271,7 @@ export class LogbookStore {
     byteSize: number;
     contentHash: string;
     idle: boolean;
-  }): number {
+  }): Promise<number> {
     const { compiled, bind } = compileSqliteQueryBindings<typeof params>((p) =>
       this.query.insertInto("frames").values({
         captured_at_ms: p((row) => row.capturedAtMs),
@@ -285,7 +289,7 @@ export class LogbookStore {
     return Number(result.lastInsertRowid);
   }
 
-  lastFrame(): { capturedAtMs: number; contentHash: string } | null {
+  async lastFrame(): Promise<{ capturedAtMs: number; contentHash: string } | null> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.query
@@ -298,14 +302,14 @@ export class LogbookStore {
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
-  unbatchedActiveFrames(limit: number): LogbookFrame[] {
+  async unbatchedActiveFrames(limit: number): Promise<LogbookFrame[]> {
     return executeSqliteQuerySync(
       this.db,
       this.framesQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
     ).rows.map(toFrame);
   }
 
-  countUnbatchedActiveFrames(): number {
+  async countUnbatchedActiveFrames(): Promise<number> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.query
@@ -317,19 +321,24 @@ export class LogbookStore {
     return expectDefined(row, "Logbook unbatched frame count").n;
   }
 
-  frameById(id: number): LogbookFrame | null {
+  async frameById(id: number): Promise<LogbookFrame | null> {
     const row = executeSqliteQueryTakeFirstSync(this.db, this.framesQuery.where("id", "=", id));
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  async framesInRange(startMs: number, endMs: number): Promise<LogbookFrame[]> {
     return executeSqliteQuerySync(
       this.db,
       this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
     ).rows.map(toFrame);
   }
 
-  createBatch(params: { day: string; startMs: number; endMs: number; frameIds: number[] }): number {
+  async createBatch(params: {
+    day: string;
+    startMs: number;
+    endMs: number;
+    frameIds: number[];
+  }): Promise<number> {
     if (params.frameIds.length === 0) {
       throw new Error("Logbook batch requires at least one frame");
     }
@@ -379,12 +388,12 @@ export class LogbookStore {
     );
   }
 
-  setBatchStatus(
+  async setBatchStatus(
     batchId: number,
     status: LogbookBatchStatus,
     error?: string,
     model?: string,
-  ): void {
+  ): Promise<void> {
     const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
       this.query
         .updateTable("batches")
@@ -399,7 +408,7 @@ export class LogbookStore {
     this.db.prepare(compiled.sql).run(...bind());
   }
 
-  latestBatch(): LogbookBatch | null {
+  async latestBatch(): Promise<LogbookBatch | null> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.batchesQuery.orderBy("id", "desc").limit(1),
@@ -408,7 +417,7 @@ export class LogbookStore {
   }
 
   /** Requeues batches stuck in `running` after a crash so frames are not orphaned. */
-  resetRunningBatches(): void {
+  async resetRunningBatches(): Promise<void> {
     const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
       this.query
         .updateTable("batches")
@@ -419,7 +428,7 @@ export class LogbookStore {
   }
 
   /** Requeues failed batches for an explicit user-driven retry (analyze now). */
-  resetErrorBatches(): number {
+  async resetErrorBatches(): Promise<number> {
     const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
       this.query
         .updateTable("batches")
@@ -430,7 +439,7 @@ export class LogbookStore {
     return Number(result.changes);
   }
 
-  nextPendingBatch(): LogbookBatch | null {
+  async nextPendingBatch(): Promise<LogbookBatch | null> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.batchesQuery
@@ -442,7 +451,7 @@ export class LogbookStore {
     return row ? toBatch(row) : null;
   }
 
-  batchFrames(batchId: number): LogbookFrame[] {
+  async batchFrames(batchId: number): Promise<LogbookFrame[]> {
     return executeSqliteQuerySync(
       this.db,
       this.framesQuery.where("batch_id", "=", batchId),
@@ -454,11 +463,11 @@ export class LogbookStore {
    * after an error) rerun the vision stage, so appending would duplicate
    * evidence into card synthesis, standups, and ask answers.
    */
-  replaceObservations(
+  async replaceObservations(
     batchId: number,
     day: string,
     segments: Array<{ startMs: number; endMs: number; text: string }>,
-  ): void {
+  ): Promise<void> {
     const deletion = compileSqliteQueryBindings<void>(() =>
       this.query.deleteFrom("observations").where("batch_id", "=", batchId),
     );
@@ -489,12 +498,12 @@ export class LogbookStore {
     );
   }
 
-  observationsInRange(
+  async observationsInRange(
     day: string,
     startMs: number,
     endMs: number,
     tailLimit?: number,
-  ): LogbookObservation[] {
+  ): Promise<LogbookObservation[]> {
     const direction = tailLimit === undefined ? "asc" : "desc";
     let query = this.query
       .selectFrom("observations")
@@ -522,7 +531,10 @@ export class LogbookStore {
     }));
   }
 
-  cardsForDay(day: string, window?: { startMs: number; endMs: number }): LogbookCard[] {
+  async cardsForDay(
+    day: string,
+    window?: { startMs: number; endMs: number },
+  ): Promise<LogbookCard[]> {
     let query = this.cardsQuery
       .selectAll()
       .where("day", "=", day)
@@ -534,7 +546,7 @@ export class LogbookStore {
     return executeSqliteQuerySync(this.db, query).rows.map(toCard);
   }
 
-  countCardsForDay(day: string): number {
+  async countCardsForDay(day: string): Promise<number> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.cardsQuery.select((eb) => eb.fn.countAll<number>().as("count")).where("day", "=", day),
@@ -547,12 +559,12 @@ export class LogbookStore {
    * The analysis lookback treats recent cards as a revisable draft, so partial
    * writes here would surface as duplicated or missing timeline segments.
    */
-  replaceCardsInWindow(
+  async replaceCardsInWindow(
     day: string,
     startMs: number,
     endMs: number,
     drafts: LogbookCardDraft[],
-  ): void {
+  ): Promise<void> {
     const now = Date.now();
     const deletion = compileSqliteQueryBindings<void>(() =>
       this.query
@@ -595,7 +607,9 @@ export class LogbookStore {
     );
   }
 
-  listDays(): Array<{ day: string; cards: number; firstMs: number; lastMs: number }> {
+  async listDays(): Promise<
+    Array<{ day: string; cards: number; firstMs: number; lastMs: number }>
+  > {
     return executeSqliteQuerySync(
       this.db,
       this.cardsQuery
@@ -615,8 +629,10 @@ export class LogbookStore {
     }));
   }
 
-  timelineForDay(day: string): { day: string; cards: LogbookCard[]; stats: LogbookDayStats } {
-    const cards = this.cardsForDay(day);
+  async timelineForDay(
+    day: string,
+  ): Promise<{ day: string; cards: LogbookCard[]; stats: LogbookDayStats }> {
+    const cards = await this.cardsForDay(day);
     const categories = new Map<string, number>();
     const apps = new Map<string, number>();
     let trackedMs = 0;
@@ -647,7 +663,7 @@ export class LogbookStore {
     };
   }
 
-  getStandup(day: string): { day: string; text: string; updatedMs: number } | null {
+  async getStandup(day: string): Promise<{ day: string; text: string; updatedMs: number } | null> {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.query.selectFrom("standups").selectAll().where("day", "=", day),
@@ -655,7 +671,7 @@ export class LogbookStore {
     return row ? { day: row.day, text: row.text, updatedMs: row.updated_ms } : null;
   }
 
-  saveStandup(day: string, text: string): void {
+  async saveStandup(day: string, text: string): Promise<void> {
     const { compiled, bind } = compileSqliteQueryBindings<void>((p) =>
       this.query
         .insertInto("standups")
@@ -671,7 +687,7 @@ export class LogbookStore {
   }
 
   /** Deletes frame rows and files older than the retention window. */
-  pruneFrames(olderThanMs: number): number {
+  async pruneFrames(olderThanMs: number): Promise<number> {
     const rows = executeSqliteQuerySync(
       this.db,
       this.query

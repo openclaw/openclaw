@@ -306,8 +306,9 @@ function renderSkillsAgentSelector(props: SkillsProps) {
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
-  const skillIconUrl = safeExternalHref(detail?.skill?.icon ?? undefined);
-  const profileImageUrl = skillIconUrl ? null : safeExternalHref(detail?.owner?.image ?? undefined);
+  const skillIconUrl = detail?.skill?.icon ? props.clawhubIconUrls?.[detail.skill.icon] : undefined;
+  const profileImageUrl =
+    skillIconUrl || !detail?.owner?.image ? undefined : props.clawhubIconUrls?.[detail.owner.image];
   const detailImageUrl = skillIconUrl ?? profileImageUrl;
 
   return html`

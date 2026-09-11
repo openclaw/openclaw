@@ -96,6 +96,39 @@ afterEach(async () => {
 
 describe("runtime-owned lane deadline handoff", () => {
   test.each([
+    { name: "bounded", kind: "bounded" },
+    { name: "unlimited", kind: "unlimited" },
+  ] as const)("publishes $name deadlines to nested session and global leases", async ({ kind }) => {
+    const { controller, createAttemptControls } = await createRunController();
+    const entered = createDeferred();
+    const finished = createDeferred();
+    const run = controller.enqueueSession(() =>
+      controller.enqueueGlobal(async () => {
+        entered.resolve();
+        await finished.promise;
+        return { meta: { durationMs: 1 } };
+      }),
+    );
+    const observed = run.catch((error: unknown) => error);
+    cleanups.push(async () => {
+      finished.resolve();
+      await observed;
+    });
+    await entered.promise;
+
+    const controls = createAttemptControls();
+    controls.onAttemptDeadlineChanged(
+      kind === "bounded" ? { kind, deadlineAtMs: Date.now() + RUNTIME_TIMEOUT_MS } : { kind },
+    );
+    await vi.advanceTimersByTimeAsync(1_000 + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+
+    expect(controller.abortSignal.aborted).toBe(false);
+    expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+    finished.resolve();
+    await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
+  });
+
+  test.each([
     { name: "seeded bounded", kind: "bounded", initialTimeoutMs: RUNTIME_TIMEOUT_MS },
     { name: "seeded unlimited", kind: "unlimited", initialTimeoutMs: MAX_TIMER_TIMEOUT_MS },
     { name: "runtime bounded", kind: "bounded", initialTimeoutMs: undefined },

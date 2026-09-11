@@ -97,8 +97,11 @@ class CodexAppServerLocalRequestCancellationError extends Error {
     method: string,
     readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
+    cause?: unknown,
   ) {
-    super(`${method} ${reason}`);
+    const detail =
+      cause instanceof Error || typeof cause === "string" ? coerceErrorMessage(cause) : undefined;
+    super(`${method} ${reason}${detail ? `: ${detail}` : ""}`, { cause });
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
 }
@@ -429,7 +432,12 @@ export class CodexAppServerClient {
     }
     if (options.signal?.aborted) {
       return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(method, "aborted", false),
+        new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        ),
       );
     }
     const guard =
@@ -466,7 +474,12 @@ export class CodexAppServerClient {
             throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
           }
           if (error instanceof Error && error.message === abortMessage) {
-            throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+            throw new CodexAppServerLocalRequestCancellationError(
+              method,
+              "aborted",
+              false,
+              options.signal?.reason,
+            );
           }
           throw error;
         }
@@ -529,7 +542,12 @@ export class CodexAppServerClient {
         : undefined;
     for (let retry = 0; ; retry += 1) {
       if (options.signal?.aborted) {
-        throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+        throw new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        );
       }
       const remainingTimeoutMs = deadline === undefined ? undefined : deadline - Date.now();
       if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
@@ -572,7 +590,12 @@ export class CodexAppServerClient {
     signal: AbortSignal | undefined,
   ): Promise<void> {
     if (signal?.aborted) {
-      throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+      throw new CodexAppServerLocalRequestCancellationError(
+        method,
+        "aborted",
+        false,
+        signal?.reason,
+      );
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -587,7 +610,9 @@ export class CodexAppServerClient {
       timer.unref?.();
       const abortListener = () => {
         cleanup();
-        reject(new CodexAppServerLocalRequestCancellationError(method, "aborted", false));
+        reject(
+          new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal?.reason),
+        );
       };
       const cleanup = () => {
         clearTimeout(timer);
@@ -611,7 +636,12 @@ export class CodexAppServerClient {
     }
     if (options.signal?.aborted) {
       return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(method, "aborted", false),
+        new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        ),
       );
     }
     const id = this.nextId++;
@@ -664,7 +694,12 @@ export class CodexAppServerClient {
       if (options.signal) {
         const abortListener = () =>
           rejectPending(
-            new CodexAppServerLocalRequestCancellationError(method, "aborted", mayHaveWritten),
+            new CodexAppServerLocalRequestCancellationError(
+              method,
+              "aborted",
+              mayHaveWritten,
+              options.signal?.reason,
+            ),
           );
         options.signal.addEventListener("abort", abortListener, { once: true });
         cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
@@ -689,7 +724,14 @@ export class CodexAppServerClient {
         cleanup,
       });
       if (options.signal?.aborted) {
-        rejectPending(new CodexAppServerLocalRequestCancellationError(method, "aborted", false));
+        rejectPending(
+          new CodexAppServerLocalRequestCancellationError(
+            method,
+            "aborted",
+            false,
+            options.signal?.reason,
+          ),
+        );
         return;
       }
       try {

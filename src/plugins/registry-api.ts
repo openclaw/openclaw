@@ -15,6 +15,7 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
+import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistrars } from "./registry-registrars.js";
 import type { PluginRuntimeResolver } from "./registry-runtime.js";
@@ -130,6 +131,7 @@ export function createPluginApiFactory(
       version: record.version,
       description: record.description,
       source: record.source,
+      runtimeSource: getPluginRuntimeEntrySource(record),
       rootDir: record.rootDir,
       registrationMode,
       config: params.config,

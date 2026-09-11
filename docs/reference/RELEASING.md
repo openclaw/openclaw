@@ -253,6 +253,17 @@ website, and private dist-tags; do not run those steps for this Gateway path.
 
 This checklist is the public shape of the release flow. Private credentials and service-specific signing, notarization, dist-tag recovery, and emergency rollback procedures stay in the maintainer-only release runbook.
 
+`pnpm release:candidate` rejects fresh extended-stable launches, whether selected
+with `--npm-dist-tag extended-stable` or inferred from a final `.33+` version.
+Monthly correction suffixes are invalid; use a new monthly maintenance patch.
+Follow [Monthly Gateway extended-stable publication](/reference/RELEASING#monthly-gateway-extended-stable-publication):
+Full Release Validation, then the separate plugin npm and core npm publication owners.
+The guard runs after trusted tooling, candidate/tag, optional artifact, and saved-state
+checks, but before state writes, generated checks, plugin plans, or validation dispatch.
+An npm preflight run alone does not make a launch a resumed full-validation run.
+Explicit or restored full-validation run IDs and `--skip-dispatch` retain their
+existing recovery behavior; they do not certify monthly publication through this helper.
+
 An explicit stable or full release request includes macOS publication unless the operator limits its scope. That authorization carries through macOS validation, signing, notarization, promotion, and verification without a separate macOS consent step. Follow the current owner-configured environment policy and retain all enforced rules and exact-source artifact checks.
 
 For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm publication. Windows and macOS cross-OS lanes run in parallel as advisory coverage; their failures remain visible under **advisory** in `release-ci-summary` and in the evidence manifest without blocking Release Decision or `pnpm release:candidate`. Selected lanes still finish for terminal evidence. npm qualification, Docker, Package Acceptance, normal CI, and the profile's performance and soak gates remain required. macOS app signing/notarization/appcast and Windows Hub asset promotion run in parallel with or after npm publication and never delay it; verify platform readiness separately.
@@ -359,7 +370,10 @@ The recorder scans emitted lazy imports in the updater, service, and CLI cleanup
 regions and records required export origins. The wizard entry is excluded
 because it starts before replacement. `runtime-postbuild` generates hashed
 compatibility files by re-exporting the candidate's corresponding symbols;
-missing or ambiguous mappings fail the build. Stable entrypoints are checked
+multiple exports of one declaration resolve to its own chunk, with sorted paths
+and export names breaking alias ties. Missing mappings or distinct declaration
+bindings for the same source origin fail the build. The isolated `config-doctor`
+graph cannot supply updater bridges. Stable entrypoints are checked
 without replacement. The package carries the inventory in
 `dist/update-compat-inventory.json`, so negative and future fixtures remove that
 candidate's bridges. Existing older compatibility aliases remain separately

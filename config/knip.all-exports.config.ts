@@ -51,6 +51,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.
   "test/fixtures/mantis-request-producer.mts!",
+  // Prior-release fixture generation invokes this CLI from the selected release checkout.
+  "test/fixtures/state-corpus/generate.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",

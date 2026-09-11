@@ -16,6 +16,7 @@ const NO_CATALOG_CURSOR: string | null = null;
 
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
+  overview: boolean;
   categories?: PluginDiscoveryCategory[];
   nextCursor?: string;
   remoteError?: string;
@@ -84,7 +85,6 @@ export class PluginDiscoveryController {
     private readonly gateway: PluginDiscoveryGateway,
   ) {
     this.browseTask = new Task(host, {
-      // Scope changes call refresh(), which invalidates overview hydration before this task runs.
       autoRun: false,
       args: () =>
         [
@@ -103,7 +103,7 @@ export class PluginDiscoveryController {
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
         this.remoteError = page.remoteError ?? null;
-        if (this.isGroupedOverview()) {
+        if (page.overview) {
           this.categories = page.categories ?? [];
           this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
             0,
@@ -179,6 +179,8 @@ export class PluginDiscoveryController {
     cursor?: string;
     signal?: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
+    const overview =
+      !params.cursor && this.isGroupedOverview(params.intent, params.category, params.query);
     const page = await params.client.request<PluginDiscoveryResult>(
       "plugins.catalog.browse",
       {
@@ -196,6 +198,7 @@ export class PluginDiscoveryController {
         : page.items;
     return {
       items,
+      overview,
       ...(page.categories ? { categories: page.categories } : {}),
       ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
@@ -203,8 +206,12 @@ export class PluginDiscoveryController {
     };
   }
 
-  private isGroupedOverview(): boolean {
-    return this.intent === "all" && this.category === null && !this.committedQuery;
+  private isGroupedOverview(
+    intent = this.intent,
+    category = this.category,
+    query = this.committedQuery,
+  ): boolean {
+    return intent === "all" && category === null && !query;
   }
 
   ensureInitial(): void {

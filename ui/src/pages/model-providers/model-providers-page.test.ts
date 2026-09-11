@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection } from "./data.ts";
@@ -13,8 +15,6 @@ import {
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
-  deferred,
-  publishableGateway,
   requestCount,
   saveKey,
   type AgentSelectElement,
@@ -122,7 +122,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it("recovers a failed provider usage result after a same-client reconnect", async () => {
     const { context, request, snapshot } = createHarness("main");
-    const source = publishableGateway(snapshot);
+    const source = createApplicationGateway(snapshot);
     (context as { gateway: unknown }).gateway = source.gateway;
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -147,7 +147,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it("defers failed provider usage recovery while hidden until page activation", async () => {
     const { context, request, snapshot } = createHarness("main");
-    const source = publishableGateway(snapshot);
+    const source = createApplicationGateway(snapshot);
     (context as { gateway: unknown }).gateway = source.gateway;
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
@@ -176,7 +176,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it("supersedes a hung load on disconnect so reconnect can replace it", async () => {
     const { context, request, snapshot, deferNextAuthStatus } = createHarness("main");
-    const source = publishableGateway(snapshot);
+    const source = createApplicationGateway(snapshot);
     (context as { gateway: unknown }).gateway = source.gateway;
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -195,7 +195,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it("keeps direct data visible while a same-client reconnect replaces it", async () => {
     const { context, deferNextAuthStatus, request, snapshot } = createHarness("main");
-    const source = publishableGateway(snapshot);
+    const source = createApplicationGateway(snapshot);
     (context as { gateway: unknown }).gateway = source.gateway;
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -558,7 +558,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it("keeps a replacement agent's default-model draft after a global model write", async () => {
     const { agentSelection, context, notifySelection, runtimeConfig } = createHarness("main");
-    const gate = deferred<void>();
+    const gate = deferred();
     runtimeConfig.ensureLoaded.mockImplementationOnce(async () => gate.promise);
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
@@ -586,7 +586,7 @@ describe("ModelProvidersPage agent scope", () => {
   it("cancels a queued key save when the selected agent changes", async () => {
     const { agentSelection, context, notifySelection, runtimeConfig, request } =
       createHarness("main");
-    const gate = deferred<void>();
+    const gate = deferred();
     runtimeConfig.beforeExternalDispatch.mockImplementationOnce(() => gate.promise);
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));

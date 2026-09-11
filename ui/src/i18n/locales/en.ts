@@ -3735,6 +3735,8 @@ export const en: TranslationMap & {
     },
     notices: {
       applied: "Applied",
+      confirmUnconfirmed:
+        "The proposal status did not confirm as expected after the action. Refresh the workshop and check before retrying.",
       proposalChanged:
         "Suggestion changed. Review the updated draft before choosing another action.",
       rejected: "Rejected",
@@ -5621,7 +5623,7 @@ export const en: TranslationMap & {
       positionUserMessage: "User message",
       positionAssistantMessage: "Assistant message",
       positionMarkerHint:
-        "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
+        "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
       waitingForWorkspaceSync: "Received · waiting for workspace sync",

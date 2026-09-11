@@ -256,9 +256,9 @@ describe("runDoctorHealthFlow", () => {
           kind.endsWith("loaded-disabled")
         ) {
           await run;
-          expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
-            completedAt,
-          );
+          expect(
+            (await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt,
+          ).toBe(completedAt);
           expect(fs.existsSync(sourcePath)).toBe(false);
           expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
           if (kind !== "absent" && kind !== "runtime-only") {
@@ -494,9 +494,9 @@ describe("runDoctorHealthFlow", () => {
               },
             });
             expect(migration.warnings.join("\n")).toContain("legacy cleanup failed");
-            expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
-              "2026-07-15T00:00:00.000Z",
-            );
+            expect(
+              (await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt,
+            ).toBe("2026-07-15T00:00:00.000Z");
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -973,7 +973,7 @@ describe("runDoctorHealthFlow", () => {
           runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
         );
         expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("legacy cleanup failed"));
-        expect(readWorkspaceStateSnapshot(workspaceDir).setup.setupCompletedAt).toBe(
+        expect((await readWorkspaceStateSnapshot(workspaceDir)).setup.setupCompletedAt).toBe(
           "2026-07-15T00:00:00.000Z",
         );
         expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);

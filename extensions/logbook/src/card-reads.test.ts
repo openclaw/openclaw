@@ -62,7 +62,7 @@ it("hydrates a timeline once and counts status without reading card payloads", a
     config: {},
     logger: { info() {}, warn() {}, error() {}, debug() {} },
   };
-  const store = new LogbookStore(path.join(stateDir, "logbook"));
+  const store = await LogbookStore.open(path.join(stateDir, "logbook"));
   const day = "2026-07-03";
   const startMs = new Date(`${day}T09:00:00`).getTime();
   const drafts = Array.from({ length: 8 }, (_, index) => ({
@@ -75,9 +75,9 @@ it("hydrates a timeline once and counts status without reading card payloads", a
     category: "coding",
     distractions: [{ startMs: startMs + 1, endMs: startMs + 11, title: "Break" }],
   }));
-  store.replaceCardsInWindow(day, 0, Number.MAX_SAFE_INTEGER, drafts);
-  const cards = store.cardsForDay(day);
-  store.close();
+  await store.replaceCardsInWindow(day, 0, Number.MAX_SAFE_INTEGER, drafts);
+  const cards = await store.cardsForDay(day);
+  await store.close();
 
   plugin.register({
     pluginConfig: { captureEnabled: false },

@@ -15,6 +15,7 @@ import {
   qaMaturityCoverageCategoryKey,
   qaMaturityScoreObjectForScore,
   qaMaturityTaxonomyLevelMap,
+  qaMaturityTaxonomyIdentity,
   readQaMaturityTaxonomySource,
   readValidatedQaMaturityScoreSources,
   type QaMaturityCoverageScores,
@@ -54,6 +55,7 @@ type EvidenceSummary = {
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
+  taxonomyStatus: "current" | "unknown" | "mismatch";
 };
 
 type StatusCounts = Record<QaEvidenceStatus, number>;
@@ -780,7 +782,11 @@ function followUpText(missingCoverageIds: readonly string[]): string {
   return `${missingCoverageIds.length} capability ${missingCoverageIds.length === 1 ? "gap" : "gaps"}`;
 }
 
-function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
+function readEvidenceSummaries(
+  taxonomy: QaMaturityTaxonomy,
+  evidenceDir?: string,
+): EvidenceSummary[] {
+  const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
     return {
@@ -792,6 +798,12 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
       statuses: countStatuses(payload.entries),
       blockingResults: blockingResultLabels(payload.entries),
       scorecard: payload.scorecard,
+      taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
+        ? "unknown"
+        : payload.profilePlan.taxonomyIdentity.version === identity.version &&
+            payload.profilePlan.taxonomyIdentity.sha256 === identity.sha256
+          ? "current"
+          : "mismatch",
     };
   });
 }
@@ -836,14 +848,24 @@ function deriveCoverageScores(
   taxonomy: QaMaturityTaxonomy,
   evidenceSummaries: EvidenceSummary[],
 ): DerivedCoverageScores {
-  const warnings: string[] = [];
-  const coverageSummary = latestCoverageScorecard(evidenceSummaries);
+  const warnings = evidenceSummaries.flatMap((item) =>
+    !item.scorecard || item.taxonomyStatus === "current"
+      ? []
+      : [
+          `${item.path}: semantic taxonomy identity is ${item.taxonomyStatus === "unknown" ? "missing" : "mismatched"}; historical evidence cannot supply current coverage`,
+        ],
+  );
+  const current = evidenceSummaries.filter((item) => item.taxonomyStatus === "current");
+  const coverageSummary = latestCoverageScorecard(current);
   if (!coverageSummary) {
+    if (latestCoverageScorecard(evidenceSummaries)) {
+      return { categories: new Map(), surfaces: new Map(), rollups: {}, warnings };
+    }
     throw new Error(
       "maturity scorecard rendering requires all or release profile qa-evidence.json with a scorecard field; pass --evidence-dir with QA evidence artifacts",
     );
   }
-  const selectedProfileScorecardSummaries = evidenceSummaries.filter(
+  const selectedProfileScorecardSummaries = current.filter(
     (item) => item.profile === coverageSummary.profile && item.scorecard,
   );
   if (selectedProfileScorecardSummaries.length > 1) {
@@ -990,6 +1012,7 @@ function renderEvidenceSection(
       '  <div className="maturity-evidence-card">',
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
+      `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
@@ -997,9 +1020,31 @@ function renderEvidenceSection(
   }
   lines.push("</div>", "");
 
-  const categoryRows = scorecardSummaries.flatMap((item) =>
-    (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
-  );
+  const historical = scorecardSummaries.filter((item) => item.taxonomyStatus !== "current");
+  if (historical.length > 0) {
+    lines.push(
+      "### Historical category evidence",
+      "",
+      "These recorded categories describe the original run and do not contribute to current coverage.",
+      "",
+      "| Profile | Recorded category | ID | Outcome | Features | Coverage IDs |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const item of historical) {
+      for (const category of item.scorecard?.categoryReports ?? []) {
+        lines.push(
+          `| ${markdownEscape(item.profile)} | ${markdownEscape(category.name)} | ${markdownEscape(category.id)} | ${markdownEscape(category.status)} | ${markdownEscape(countText(category.features))} | ${markdownEscape(countText(category.coverageIds))} |`,
+        );
+      }
+    }
+    lines.push("");
+  }
+
+  const categoryRows = scorecardSummaries
+    .filter((item) => item.taxonomyStatus === "current")
+    .flatMap((item) =>
+      (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
+    );
   if (categoryRows.length > 0) {
     const grouped = new Map<string, Array<(typeof categoryRows)[number]>>();
     for (const row of categoryRows) {
@@ -1323,7 +1368,7 @@ function main(): void {
 
   validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
 
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const evidenceSummaries = readEvidenceSummaries(taxonomy, args.evidenceDir);
   if (!args.allowFailures) {
     rejectBlockingEvidence(evidenceSummaries);
   }

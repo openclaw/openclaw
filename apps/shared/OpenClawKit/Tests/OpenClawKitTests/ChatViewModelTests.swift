@@ -278,7 +278,9 @@ private func modelChoice(
     available: Bool? = nil,
     unavailableReason: String? = nil,
     unavailableUntil: Int? = nil,
-    reasoning: Bool? = nil) -> OpenClawChatModelChoice
+    reasoning: Bool? = nil,
+    supportsFastMode: Bool? = nil,
+    thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil) -> OpenClawChatModelChoice
 {
     OpenClawChatModelChoice(
         modelID: id,
@@ -288,7 +290,9 @@ private func modelChoice(
         unavailableReason: unavailableReason,
         unavailableUntil: unavailableUntil,
         contextWindow: nil,
-        reasoning: reasoning)
+        reasoning: reasoning,
+        supportsFastMode: supportsFastMode,
+        thinkingLevels: thinkingLevels)
 }
 
 private func openAIModelPatchResult(
@@ -9079,6 +9083,59 @@ struct ChatViewModelTests {
         #expect(await defaultTransport.modelAgentIDs() == [nil])
     }
 
+    @Test(arguments: ["/models", "/login"])
+    @MainActor func `older Gateway guidance keeps slash commands usable`(command: String) async throws {
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        try await loadAndWaitBootstrap(vm: vm)
+        await vm.fetchModels()
+
+        #expect(vm.modelCatalogMessage ==
+            "Update your Gateway to use session model choices. Slash commands are still available.")
+        #expect(!vm.showsThinkingPicker)
+        #expect(!vm.selectedModelSupportsFastMode)
+        let context = await vm.modelSignInContext()
+        #expect(context == nil)
+        #expect(vm.errorText == "Model sign-in needs a newer Gateway. Update it or use /login.")
+
+        await sendUserMessage(vm, text: command)
+        _ = try await waitForLastSentRunId(transport)
+        #expect(await transport.sentMessages() == [command])
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func `old model catalog cannot overwrite a changed session or reconnected catalog`(
+        reconnect: Bool) async throws
+    {
+        let gate = SessionSubscribeGate()
+        defer { Task { await gate.release() } }
+        let stale = modelChoice(id: "stale", name: "Stale", available: false, unavailableReason: "auth-failed")
+        let current = modelChoice(id: "current", name: "Current", available: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionKey: reconnect ? "main" : "other")],
+            modelCatalogHook: { call in
+                if call == 0 { await gate.wait() }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: call == 0 ? [stale] : [current], availabilityIsSessionScoped: true)
+            })
+        let pending = Task { await vm.fetchModels() }
+        await gate.waitUntilBlocked()
+        if reconnect {
+            vm.handleTransportEvent(.routeChanged)
+        } else {
+            vm.switchSession(to: "other")
+        }
+        try await waitUntil("replacement catalog applies") {
+            await MainActor.run { vm.modelChoices == [current] }
+        }
+        await gate.release()
+        await pending.value
+
+        #expect(vm.sessionKey == (reconnect ? "main" : "other"))
+        #expect(vm.modelChoices == [current])
+        #expect(vm.canSelectModel(current.selectionID))
+        #expect(vm.modelCatalogMessage == nil)
+    }
+
     @Test @MainActor func `unavailable picker rows cannot change the selected model`() async throws {
         let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
         let unavailable = modelChoice(
@@ -9157,11 +9214,11 @@ struct ChatViewModelTests {
         }
     }
 
-    @Test @MainActor func `usable provider alias prevents a permanent auth gate`() async throws {
+    @Test @MainActor func `one available catalog route prevents a permanent auth gate`() async throws {
         let unavailable = modelChoice(
             id: "gpt-5.4",
             name: "GPT-5.4",
-            provider: "openai-codex",
+            provider: "openai",
             available: false,
             unavailableReason: "missing-auth")
         let available = modelChoice(
@@ -9175,7 +9232,7 @@ struct ChatViewModelTests {
                 key: "main",
                 updatedAt: 1,
                 model: "gpt-5.4",
-                modelProvider: "codex"))],
+                modelProvider: "openai"))],
             modelResponses: [[unavailable, available]],
             modelAvailabilityIsSessionScoped: true)
         try await loadAndWaitBootstrap(vm: vm)
@@ -11740,7 +11797,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "adaptive", "maximum"])
     }
 
-    @Test func `thinking picker follows gateway metadata before current level augmentation`() async throws {
+    @Test func `thinking picker uses only published choices`() async throws {
         let history = historyPayload(sessionId: "sess-main")
         let offOnlySessions = sessionsResponse(
             sessionEntry(
@@ -11767,7 +11824,7 @@ struct ChatViewModelTests {
 
             try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
             try await waitUntil("off-only thinking metadata applied") {
-                await MainActor.run { vm.thinkingLevelOptions.map(\.id) == ["off", "medium"] }
+                await MainActor.run { vm.thinkingLevelOptions.map(\.id) == ["off"] }
             }
 
             #expect(await MainActor.run { !vm.showsThinkingPicker })
@@ -11793,9 +11850,8 @@ struct ChatViewModelTests {
         let (_, legacyVM) = await makeViewModel(historyResponses: [history])
         try await loadAndWaitBootstrap(vm: legacyVM, sessionId: "sess-main")
 
-        #expect(await MainActor.run { legacyVM.showsThinkingPicker })
-        #expect(await MainActor.run { legacyVM.thinkingLevelOptions.map(\.id) } ==
-            ["off", "minimal", "low", "medium", "high"])
+        #expect(await MainActor.run { !legacyVM.showsThinkingPicker })
+        #expect(await MainActor.run { legacyVM.thinkingLevelOptions.isEmpty })
     }
 
     @Test func `gated thinking picker sends off without changing stored level`() async throws {
@@ -11872,7 +11928,8 @@ struct ChatViewModelTests {
                 id: "reasoning-model",
                 name: "Reasoning Model",
                 provider: "openai",
-                reasoning: true),
+                reasoning: true,
+                thinkingLevels: [thinkingOption("off"), thinkingOption("medium")]),
             modelChoice(id: "plain-model", name: "Plain Model", provider: "openai", reasoning: false),
         ]
         let (transport, vm) = await makeViewModel(
@@ -12095,11 +12152,12 @@ struct ChatViewModelTests {
         await MainActor.run { vm.selectModel("openai/model-y") }
         try await waitUntil("model Y patch completed") {
             await MainActor.run {
-                vm.sessions.first?.model == "model-y" && vm.showsThinkingPicker
+                vm.sessions.first?.model == "model-y" && !vm.showsThinkingPicker
             }
         }
 
         #expect(await transport.patchedModels() == ["openai/model-y"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.isEmpty })
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevels == nil })
         #expect(await MainActor.run { vm.sessions.first?.thinkingOptions == nil })
         #expect(await MainActor.run { vm.sessions.first?.thinkingDefault == nil })
@@ -12108,11 +12166,13 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.contextUsageFraction == nil })
     }
 
-    @Test func `default model selection resolves session model reasoning`() async throws {
+    @Test func `default model selection resolves published thinking choices`() async throws {
         let history = historyPayload(sessionId: "sess-main")
         let models = [
             modelChoice(id: "plain-model", name: "Plain Model", provider: "openai", reasoning: false),
-            modelChoice(id: "reasoning-model", name: "Reasoning Model", provider: "openai", reasoning: true),
+            modelChoice(
+                id: "reasoning-model", name: "Reasoning Model", provider: "openai", reasoning: true,
+                thinkingLevels: [thinkingOption("off"), thinkingOption("high")]),
         ]
         let (_, vm) = await makeViewModel(
             historyResponses: [history],
@@ -12151,7 +12211,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.showsThinkingPicker })
     }
 
-    @Test func `thinking options fallback and current unsupported level stay visible`() async throws {
+    @Test func `published thinking options retain the saved level separately`() async throws {
         let history = historyPayloadWithoutRunState(thinkingLevel: "xhigh")
         let sessions = sessionsResponse(sessionEntry(
             key: "main",
@@ -12170,11 +12230,11 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         #expect(await MainActor.run { vm.thinkingLevel } == "xhigh")
-        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "max", "xhigh"])
-        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "max", "xhigh"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "max"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "max"])
     }
 
-    @Test func `matching default thinking levels beat legacy row thinking options`() async throws {
+    @Test func `session thinking profile wins over matching defaults`() async throws {
         let history = historyPayloadWithoutRunState(thinkingLevel: "adaptive")
         let sessions = sessionsResponse(
             sessionEntry(
@@ -12204,7 +12264,9 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "adaptive", "max"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off"])
+        #expect(await MainActor.run { vm.thinkingLevel } == "adaptive")
+        #expect(await MainActor.run { !vm.showsThinkingPicker })
     }
 
     @Test func `default thinking levels do not leak to different session model`() async throws {
@@ -12236,8 +12298,7 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         #expect(await MainActor.run { vm.thinkingLevel } == "max")
-        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } ==
-            ["off", "minimal", "low", "medium", "high", "max"])
+        #expect(await MainActor.run { vm.thinkingLevelOptions.isEmpty })
     }
 
     @Test func `thinking patches are serialized without replay`() async throws {
@@ -12418,11 +12479,14 @@ struct ChatViewModelTests {
                 sessionsResponse(sessionEntry(
                     key: "main",
                     updatedAt: 1,
-                    model: nil,
+                    model: "fast-model",
+                    modelProvider: "fixture",
                     verboseLevel: nil,
                     fastMode: nil,
                     effectiveFastMode: .on)),
             ],
+            modelResponses: [[modelChoice(
+                id: "fast-model", name: "Fast Model", provider: "fixture", supportsFastMode: true)]],
             sessionSettingsPatchHook: { _ in
                 throw NSError(
                     domain: "ChatViewModelTests",
@@ -12520,13 +12584,15 @@ struct ChatViewModelTests {
         let alphaSessions = sessionsResponse(sessionEntry(
             key: "agent:alpha:main",
             updatedAt: 1,
-            model: nil,
+            model: "fast-model",
+            modelProvider: "fixture",
             fastMode: .on,
             effectiveFastMode: .on))
         let betaSessions = sessionsResponse(sessionEntry(
             key: "agent:beta:main",
             updatedAt: 2,
-            model: nil,
+            model: "fast-model",
+            modelProvider: "fixture",
             fastMode: .off,
             effectiveFastMode: .off))
         let (_, vm) = await makeViewModel(
@@ -12536,6 +12602,8 @@ struct ChatViewModelTests {
                 historyPayload(sessionKey: "main", sessionId: "sess-beta"),
             ],
             sessionsResponses: [alphaSessions, betaSessions],
+            modelResponses: [[modelChoice(
+                id: "fast-model", name: "Fast Model", provider: "fixture", supportsFastMode: true)]],
             sessionSettingsPatchHook: { patch in
                 guard patch.fastMode != nil else { return nil }
                 await patchStarted.open()
@@ -13016,6 +13084,8 @@ struct ChatViewModelTests {
                 effectiveFastMode: .off))
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionId: "sess-main")],
+            modelResponses: [[modelChoice(
+                id: "model-a", name: "Model A", provider: "openai", supportsFastMode: true)]],
             sessionSettingsPatchHook: { patch in
                 if patch.fastMode != nil {
                     return OpenClawChatModelPatchResult(

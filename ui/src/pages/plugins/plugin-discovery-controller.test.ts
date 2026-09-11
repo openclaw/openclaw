@@ -1,6 +1,7 @@
 // @vitest-environment node
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PluginDiscoveryEntry, PluginDiscoveryResult } from "../../lib/plugins/index.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
@@ -27,7 +28,7 @@ function entry(index: number, imageUrl?: string): PluginDiscoveryEntry {
 }
 
 function setup(
-  responses: PluginDiscoveryResult[],
+  responses: Array<PluginDiscoveryResult | Promise<PluginDiscoveryResult>>,
   responder?: (method: string, params: unknown) => Promise<unknown>,
 ) {
   const host = {
@@ -104,6 +105,44 @@ it("switches filtered tabs to All when starting a unified search", async () => {
     expect.objectContaining({ intent: "all", query: "memory" }),
     expect.anything(),
   );
+});
+
+it("preserves home navigation when a category completes during the search debounce", async () => {
+  vi.useFakeTimers();
+  const featured = entry(1);
+  featured.catalog.featured = true;
+  const trending = entry(2);
+  trending.catalog.trending = true;
+  const categories = [
+    { slug: "channels", label: "Channels", description: "Channels", icon: "globe", order: 0 },
+  ];
+  const category = createDeferred<PluginDiscoveryResult>();
+  const categoryItems = [entry(3)];
+  const searchItems = [entry(4)];
+  const { controller, request } = setup([
+    { items: [featured, trending], categories },
+    category.promise,
+    { items: searchItems },
+  ]);
+  await controller.refresh();
+  controller.selectCategory("channels");
+  controller.updateQuery("calendar");
+
+  category.resolve({ items: categoryItems });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
+  expect(controller.result?.items).toEqual(categoryItems);
+  expect.soft(controller.categories).toEqual(categories);
+  expect.soft(controller.featured).toEqual([featured]);
+  expect.soft(controller.trending).toEqual([trending]);
+
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
+  expect(controller.result?.items).toEqual(searchItems);
+  expect.soft(controller.categories).toEqual(categories);
+  expect.soft(controller.featured).toEqual([featured]);
+  expect.soft(controller.trending).toEqual([trending]);
 });
 
 it("does not expose continuation for search results", async () => {

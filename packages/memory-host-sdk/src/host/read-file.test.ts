@@ -49,7 +49,7 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: nonDirectoryParentPath,
         }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -127,7 +127,7 @@ describe("readMemoryFile", () => {
           ]) {
             await expect(
               readMemoryFile({ workspaceDir, extraPaths: [extraDir], relPath }),
-            ).rejects.toThrow("path required");
+            ).rejects.toThrow("path is not an allowed Markdown memory file");
           }
           await expect(
             readMemoryFile({
@@ -135,7 +135,7 @@ describe("readMemoryFile", () => {
               extraPaths: [{ path: extraDir, pattern: "runbooks/**/*.md" }],
               relPath: target,
             }),
-          ).rejects.toThrow("path required");
+          ).rejects.toThrow("path is not an allowed Markdown memory file");
         } finally {
           lstatSyncSpy.mockRestore();
           lstatSpy.mockRestore();
@@ -175,7 +175,7 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: path.join(insideLinkPath, "inside.md"),
         }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
 
       const outsideLinkPath = path.join(extraDir, "link");
       if (!(await createDirectorySymlink(outsideDir, outsideLinkPath))) {
@@ -188,14 +188,14 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: path.join(outsideLinkPath, "private.md"),
         }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
       await expect(
         readMemoryFile({
           workspaceDir,
           extraPaths: [extraDir],
           relPath: path.join(outsideLinkPath, "missing.md"),
         }),
-      ).rejects.toThrow("path required");
+      ).rejects.toThrow("path is not an allowed Markdown memory file");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -225,7 +225,7 @@ describe("readMemoryFile", () => {
         ).resolves.toMatchObject({ text: "allowed" });
         await expect(
           readAgentMemoryFile({ cfg, agentId: "main", relPath: excludedPath }),
-        ).rejects.toThrow("path required");
+        ).rejects.toThrow("path is not an allowed Markdown memory file");
       } finally {
         await fs.rm(tmpRoot, { recursive: true, force: true });
       }

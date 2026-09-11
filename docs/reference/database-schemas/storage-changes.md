@@ -38,6 +38,19 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Board operations, board inventory reads, and widget document reads expose asynchronous
+contracts. Gateway callers await persistence before publishing board changes or replies.
+Writes carry the caller's current-authority assertion into the synchronous SQLite
+transaction. HTML widget capability actions and protected publication run in the store's immediate
+continuation after its authoritative read and current ticket, session, and grant checks.
+Database ownership is released before awaiting external work; no Promise handoff separates
+the final authorization from its use. SQLite execution remains synchronous inside the
+store, with existing revision, grant, and transaction semantics.
+
+MCP App pinning retains its existing source-interaction checks. A delayed adapter must
+revalidate that source authority at its actual write admission; checking view registration
+alone cannot replace the supported asynchronous interaction policy.
+
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
 existing asynchronous admission owner runs the full integrity and foreign-key

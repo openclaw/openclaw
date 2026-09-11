@@ -1,6 +1,7 @@
 import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
@@ -28,6 +29,7 @@ export type UpdateStepResult = {
 };
 
 export type UpdateRunResult = {
+  localOverrides?: LocalPackageOverridesResult;
   runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";

@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   advanceUsageRetries,
   appendPage,
   createHarness,
   createAuthStatus,
-  deferred,
   focusDocument,
   requestCount,
   type ModelProvidersPageTestElement,

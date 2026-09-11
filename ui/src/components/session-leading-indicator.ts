@@ -155,6 +155,9 @@ export function renderSessionLeadingState(
     };
   }
   if (ownerChip) {
+    // The chip stacks a second face (or +N) behind the owner whenever anyone
+    // else participates; the run state then traces that pair instead of a circle.
+    const stackedParticipants = participantCount ?? participants?.length ?? 0;
     return {
       running,
       leadingIndicator: renderSessionGlyph({
@@ -163,11 +166,12 @@ export function renderSessionLeadingState(
         queued,
         badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         circular: true,
+        ring: stackedParticipants > 0 ? "pair" : "circle",
       }),
       // Exclude only visible avatars; a +N stack still needs individual live viewers.
       renderedIdentities: [
         ...(ownerActor?.identity ? [ownerActor.identity] : []),
-        ...((participantCount ?? participants?.length) === 1
+        ...(stackedParticipants === 1
           ? (participants ?? []).slice(0, 1).map((participant) => participant.identity)
           : []),
       ],

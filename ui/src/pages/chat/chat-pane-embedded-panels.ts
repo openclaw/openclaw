@@ -169,6 +169,7 @@ export function sidebarPanelDefinitions(
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
+        .sendShortcut=${state?.settings.chatSendShortcut ?? "enter"}
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onVisibilityChange=${params.onCompanionVisibilityChange}

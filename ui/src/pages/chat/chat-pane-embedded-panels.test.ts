@@ -6,6 +6,7 @@ import "./components/chat-detail-panel.ts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -685,6 +686,7 @@ describe("chat pane embedded panels", () => {
       sessionKey: "agent:main:review",
       sidebarContent: null,
       sidebarLayout: { columns: [] },
+      settings: loadSettings(),
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
     const renderPanels = async (layout: SidebarLayout) => {

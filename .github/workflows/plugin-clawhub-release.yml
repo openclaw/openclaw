@@ -605,6 +605,14 @@ jobs:
           chmod +x "${RUNNER_TEMP}/clawhub"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
+      - name: Checkout trusted artifact tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+
       - name: Pack ClawHub package artifact
         if: inputs.prepared_artifact == ''
         env:
@@ -615,16 +623,8 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
-        run: bash scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}"
-
-      - name: Checkout trusted artifact tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.workflow_sha }}
-          path: .release-tooling
-          sparse-checkout: scripts
-          fetch-depth: 1
+          PNPM_CONFIG_MODULES_DIR: ${{ github.workspace }}/node_modules
+        run: bash .release-tooling/scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}" --metadata-root .release-tooling
 
       - name: Setup Node for prepared promotion
         if: inputs.prepared_artifact != ''

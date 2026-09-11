@@ -12,25 +12,36 @@ import {
 import { writePackageRoot } from "./package-update-steps.test-support.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
-function readPnpmStageArgs(argv: string[]) {
+function readPnpmStageArgs(argv: string[], env?: NodeJS.ProcessEnv, pnpm12 = false) {
   return {
     projectRoot: argv
       .find((arg) => arg.startsWith("--config.global-dir="))
       ?.slice("--config.global-dir=".length),
-    binDir: argv
-      .find((arg) => arg.startsWith("--config.global-bin-dir="))
-      ?.slice("--config.global-bin-dir=".length),
+    // pnpm 12 ignores the CLI bin override and reads its environment config.
+    binDir: pnpm12
+      ? (env?.pnpm_config_global_bin_dir ?? env?.PNPM_CONFIG_GLOBAL_BIN_DIR)
+      : argv
+          .find((arg) => arg.startsWith("--config.global-bin-dir="))
+          ?.slice("--config.global-bin-dir=".length),
   };
 }
 
 describe.runIf(process.platform !== "win32")("native package transactions", () => {
   it.each([
+    {
+      layout: "pnpm11",
+      siblingChange: "none",
+      shimFailure: false,
+      rollbackFailure: "none",
+      pnpm12: true,
+    } as const,
     ...(["pnpm10", "pnpm11", "bun"] as const).flatMap((layout) =>
       (["none", "before", "after", "upgrade", "remove"] as const).map((siblingChange) => ({
         layout,
         siblingChange,
         shimFailure: false,
         rollbackFailure: "none" as const,
+        pnpm12: false,
       })),
     ),
     {
@@ -38,12 +49,14 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
       siblingChange: "none",
       shimFailure: true,
       rollbackFailure: "none",
+      pnpm12: false,
     } as const,
     {
       layout: "pnpm11",
       siblingChange: "none",
       shimFailure: true,
       rollbackFailure: "launcher-owner",
+      pnpm12: false,
     } as const,
     ...(
       [
@@ -59,10 +72,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
       siblingChange: "none" as const,
       shimFailure: false,
       rollbackFailure,
+      pnpm12: false,
     })),
   ])(
-    "preserves $layout native project ownership (sibling change=$siblingChange, shim failure=$shimFailure, rollback failure=$rollbackFailure)",
-    async ({ layout, siblingChange, shimFailure, rollbackFailure }) => {
+    "preserves $layout native project ownership (pnpm12=$pnpm12, sibling change=$siblingChange, shim failure=$shimFailure, rollback failure=$rollbackFailure)",
+    async ({ layout, siblingChange, shimFailure, rollbackFailure, pnpm12 }) => {
       await withTestDir({ prefix: "openclaw-native-update-" }, async (base) => {
         const manager = layout === "bun" ? "bun" : "pnpm";
         const project = path.join(base, manager, "global");
@@ -148,15 +162,15 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             PNPM_HOME: path.dirname(project),
             pnpm_config_global_dir: project,
             pnpm_config_global_bin_dir: binDir,
+            PNPM_CONFIG_GLOBAL_BIN_DIR: binDir,
             BUN_INSTALL_GLOBAL_DIR: project,
             BUN_INSTALL_BIN: binDir,
           },
           runCommand: async (argv, options) => {
-            const stage = readPnpmStageArgs(argv);
+            const stage = readPnpmStageArgs(argv, options.env, pnpm12);
             if (stage.projectRoot) {
               expect(options.cwd).toBe(stage.projectRoot);
               expect(stage.projectRoot).not.toBe(project);
-              expect(stage.binDir).not.toBe(binDir);
               phases.push(`probe ${argv[1]}`);
             }
             return {
@@ -169,7 +183,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           },
           runStep: async ({ name, argv, cwd, env }) => {
             expect(argv[0]).toBe(manager);
-            const stageArgs = readPnpmStageArgs(argv);
+            const stageArgs = readPnpmStageArgs(argv, env, pnpm12);
             const stageProject =
               manager === "bun" ? env?.BUN_INSTALL_GLOBAL_DIR : stageArgs.projectRoot;
             const stageBin = manager === "bun" ? env?.BUN_INSTALL_BIN : stageArgs.binDir;
@@ -178,6 +192,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             }
             expect(cwd).toBe(stageProject);
             expect(stageProject).not.toBe(project);
+            expect(stageBin).not.toBe(binDir);
             await expect(
               fs.readFile(path.join(stageProject, "sibling-package"), "utf8"),
             ).resolves.toBe("unrelated package\n");

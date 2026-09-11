@@ -163,6 +163,13 @@ the channel's allowlists and pairing state. Access-group entries referenced by
 channel allowlists are resolved automatically. There is no command-level
 access-group toggle.
 
+For Gateway users with verified login identity, both command allowlists can
+match the user's profile ID. A shared owner profile used only for attribution
+does not grant this access. Internal synthetic callers cannot borrow a human's
+profile. Non-UI Gateway clients also retain application-ID matches such as
+`cli`; operator UI clients do not receive application-ID matches. Existing
+operator scopes and command enablement still apply.
+
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only
 commands, even when those senders are not in `commands.ownerAllowFrom`.

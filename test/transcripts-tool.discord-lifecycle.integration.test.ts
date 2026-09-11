@@ -40,6 +40,7 @@ defineDiscordVoiceTests(
           { token: "test-token", groupPolicy: "open", allowFrom: ["discord:u-speaker"] },
         );
         const config = {
+          agents: { defaults: { utilityModel: "" } },
           transcripts: { enabled: true },
           channels: { discord: { accounts: { [accountId]: discordConfig } } },
         };

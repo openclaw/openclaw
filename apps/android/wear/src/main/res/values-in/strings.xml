@@ -79,6 +79,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tindakan tidak diterima"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terjadi kesalahan"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segarkan daftar dan coba lagi."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Beberapa model tidak dapat dimuat ulang. Model yang tercantum masih tersedia."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Perbarui OpenClaw di ponsel Anda dan Gateway untuk memilih model bagi percakapan ini."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Coba lagi dari jam tangan."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pembaruan diperlukan"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Perbarui OpenClaw di ponsel dan jam tangan."</string>

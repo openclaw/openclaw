@@ -7,7 +7,7 @@ fi
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>"
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]"
   echo "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>"
 }
 
@@ -41,6 +41,15 @@ fi
 if [[ -z "${input_path}" ]]; then
   echo "missing package dir or ClawPack path" >&2
   exit 2
+fi
+metadata_root=""
+if [[ "${1:-}" == "--metadata-root" ]]; then
+  if [[ -z "${2:-}" || "${2}" == -* || "${mode}" == "--validate-packed" || "${mode}" == "--publish-packed" ]]; then
+    echo "--metadata-root requires a trusted checkout and an unpacked package mode" >&2
+    exit 2
+  fi
+  metadata_root="$(cd "$2" && pwd)"
+  shift 2
 fi
 if [[ "$#" -gt 0 ]]; then
   echo "unexpected plugin ClawHub publish argument: $1" >&2
@@ -177,9 +186,13 @@ if [[ "${packed_mode}" == "false" ]]; then
   build_package_runtime
 
   pack_json="${pack_dir}/pack.json"
+  metadata_args=()
+  if [[ -n "${metadata_root}" ]]; then
+    metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
+  fi
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
-    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
+    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" "${metadata_args[@]}" -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"

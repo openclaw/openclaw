@@ -63,18 +63,19 @@ type ChildOperation<T> = (
 ) => Promise<T>;
 const childOwners = new WeakMap<
   UpdateRecoveryFence,
-  <T>(operation: ChildOperation<T>) => Promise<T>
+  <T>(root: string, operation: ChildOperation<T>) => Promise<T>
 >();
 
 export async function withUpdateCommandExecutorChild<T>(
   fence: UpdateRecoveryFence,
+  root: string,
   operation: ChildOperation<T>,
 ): Promise<T> {
   const owner = childOwners.get(fence);
   if (!owner) {
     throw new UpdateCommandRecoveryPendingError("Child continuation requires its live executor.");
   }
-  return await owner(operation);
+  return await owner(root, operation);
 }
 
 /** A child owns its separate lease while the original installation lease remains
@@ -190,7 +191,10 @@ export async function withUpdateCommandExecutor<T>(
   const fence = { assertCurrent };
   childOwners.set(
     fence,
-    <ChildResult>(childOperation: ChildOperation<ChildResult>): Promise<ChildResult> => {
+    <ChildResult>(
+      root: string,
+      childOperation: ChildOperation<ChildResult>,
+    ): Promise<ChildResult> => {
       assertCurrent();
       if (!childAdmissionOpen || !store || !lease || !databasePath) {
         throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
@@ -198,40 +202,73 @@ export async function withUpdateCommandExecutor<T>(
       preflightReleases.delete(fence);
       const control = store;
       const original = lease;
-      const acquired = control.acquire(
-        `${original.key}/.openclaw-update-child-${randomUUID()}`,
-        runId,
-        { kind: "update" },
-      );
-      if (acquired.kind !== "acquired") {
-        throw new UpdateCommandRecoveryPendingError("Candidate lifetime could not be acquired.");
-      }
-      let childLease = acquired.lease;
+      const authority = captureUpdateCommandExecutorAuthority(fence);
+      const candidateRoot = resolveUpdateInstallRoot(root);
+      let candidateParent = original;
+      const children: ManagedHandoffLease[] = [];
       let bound = false;
       delegating = true;
-      const grant: UpdateCommandChildGrant = {
-        runId,
-        root: original.key,
-        databasePath,
-        parent: original,
-        childKey: childLease.key,
-        databaseIdentity: admittedAuthorities.get(fence),
+      const assertOwners = () => {
+        assertBase();
+        if (
+          !control.owns(candidateParent, "executor") ||
+          resolveUpdateInstallRoot(root) !== candidateParent.key
+        ) {
+          throw new UpdateCommandRecoveryPendingError("Candidate installation ownership changed.");
+        }
       };
       const running = async () => {
         let outcome: { result: ChildResult } | { error: Error };
         try {
+          assertBase();
+          if (candidateRoot !== original.key) {
+            const acquired = control.acquire(candidateRoot, randomUUID(), { kind: "update" });
+            if (acquired.kind !== "acquired") {
+              throw new UpdateCommandRecoveryPendingError(
+                "Another update executor owns the candidate installation.",
+              );
+            }
+            candidateParent = acquired.lease;
+          }
+          assertOwners();
+          // The original child row keeps recovery exclusion after the updater dies.
+          // A replaced generation also needs the shipped worker's active-root binding.
+          const parents = candidateParent === original ? [original] : [original, candidateParent];
+          for (const parent of parents) {
+            const acquired = control.acquire(
+              `${parent.key}/.openclaw-update-child-${randomUUID()}`,
+              runId,
+              { kind: "update" },
+            );
+            if (acquired.kind !== "acquired") {
+              throw new UpdateCommandRecoveryPendingError(
+                "Candidate lifetime could not be acquired.",
+              );
+            }
+            children.push(acquired.lease);
+          }
+          const grant: UpdateCommandChildGrant = {
+            runId,
+            root: candidateParent.key,
+            databasePath: authority.databasePath,
+            parent: candidateParent,
+            childKey: children[children.length - 1]!.key,
+            databaseIdentity: authority,
+          };
           const result = await childOperation(grant, (pid) => {
-            assertBase();
+            assertOwners();
             if (bound || pid === process.pid) {
               throw new UpdateCommandRecoveryPendingError(
                 "Candidate process can be bound only once.",
               );
             }
-            const assigned = control.bind(childLease, pid);
-            if (!assigned) {
-              throw new UpdateCommandRecoveryPendingError("Candidate process binding failed.");
+            for (let index = 0; index < children.length; index++) {
+              const assigned = control.bind(children[index]!, pid);
+              if (!assigned) {
+                throw new UpdateCommandRecoveryPendingError("Candidate process binding failed.");
+              }
+              children[index] = assigned;
             }
-            childLease = assigned;
             bound = true;
           });
           if (!bound) {
@@ -239,7 +276,7 @@ export async function withUpdateCommandExecutor<T>(
               "Candidate continuation did not bind a process.",
             );
           }
-          assertBase();
+          assertOwners();
           outcome = { result };
         } catch (cause) {
           outcome = {
@@ -248,8 +285,15 @@ export async function withUpdateCommandExecutor<T>(
         }
         try {
           // Release refuses a live child. Never reactivate the parent on timeout
-          // until the process owner has actually joined the candidate.
-          if (!control.release(childLease)) {
+          // until the process owner has actually joined the candidate. Keep the
+          // original child until active-generation cleanup is also confirmed.
+          if (children.length > 1 && !control.release(children[1]!)) {
+            throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
+          }
+          if (candidateParent !== original && !control.release(candidateParent)) {
+            throw new UpdateCommandRecoveryPendingError("Candidate installation release failed.");
+          }
+          if (children.length > 0 && !control.release(children[0]!)) {
             throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
           }
           delegating = false;

@@ -546,6 +546,7 @@ describe("human mention submission", () => {
       chatMessage: "@Alex please review",
       chatMentions: [{ profileId: "profile-first", start: 0, end: 5 }],
       chatLoading: true,
+      currentSessionId: "existing-conversation",
       requestHandlers: {
         "chat.history": () => history.promise,
         "chat.send": { status: "started" },

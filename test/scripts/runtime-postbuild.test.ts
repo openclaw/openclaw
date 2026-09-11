@@ -1759,6 +1759,59 @@ describe("previous release update compatibility", () => {
     expect(loaded.mode()).toBe("npm");
   });
 
+  it.each([
+    'import { y as mode } from "../current.mjs"; export { mode as forwarded };',
+    'export { y as forwarded } from "../current.mjs";',
+    'export * from "../current.mjs";',
+  ])("bridges shared declaration bindings through %s", async (forwarding) => {
+    const inventory = recordFixture();
+    const root = createTempDir("update-compat-shared-binding-");
+    candidate(root);
+    fsSync.appendFileSync(path.join(root, "dist/current.mjs"), "\nexport { resolveMode as z };\n");
+    write(
+      root,
+      "dist/a-facade/forward.mjs",
+      `//#region src/cli/update-cli/mode.ts\n${forwarding}\n`,
+    );
+    const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
+    writeUpdateCompatibilityChunks(options);
+    const bridge = path.join(root, "dist/service-abcdefgh.js");
+    const contents = fsSync.readFileSync(bridge, "utf8");
+    expect(contents).toContain('export { y as mode } from "./current.mjs";');
+    writeUpdateCompatibilityChunks(options);
+    expect(fsSync.readFileSync(bridge, "utf8")).toBe(contents);
+    const loaded = await import(pathToFileURL(bridge).href);
+    const current = await import(pathToFileURL(path.join(root, "dist/current.mjs")).href);
+    expect(loaded.mode).toBe(current.y);
+    expect(loaded.mode()).toBe("npm");
+    expect(loaded.runner).toBe(current.x);
+  });
+
+  it.each(["present", "missing"])(
+    "excludes the isolated config-doctor graph when the runtime binding is %s",
+    async (runtime) => {
+      const inventory = recordFixture();
+      const root = createTempDir("update-compat-isolated-graph-");
+      candidate(root);
+      const current = path.join(root, "dist/current.mjs");
+      write(root, "dist/config-doctor/inspect.mjs", fsSync.readFileSync(current, "utf8"));
+      const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
+      if (runtime === "missing") {
+        fsSync.unlinkSync(current);
+        expect(() => writeUpdateCompatibilityChunks(options)).toThrow(
+          /no equivalent current export/,
+        );
+        expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+        return;
+      }
+      writeUpdateCompatibilityChunks(options);
+      const bridge = await import(pathToFileURL(path.join(root, "dist/service-abcdefgh.js")).href);
+      const declaration = await import(pathToFileURL(current).href);
+      expect(bridge.mode).toBe(declaration.y);
+      expect(bridge.runner).toBe(declaration.x);
+    },
+  );
+
   it.each(["missing", "ambiguous"])(
     "refuses %s required implementations before writing bridges",
     (failure) => {

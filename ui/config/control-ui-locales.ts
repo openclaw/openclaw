@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { register } from "tsx/esm/api";
-import type { Plugin } from "vite";
+import { fileURLToPath } from "node:url";
+import { runnerImport, type Alias, type Plugin } from "vite";
 import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
@@ -23,33 +21,25 @@ const i18nAssetsDir = path.resolve(
 );
 const locales = new Set(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const sourceCatalogUrl = pathToFileURL(
-  path.join(repoRoot, "scripts/lib/control-ui-i18n-catalog.ts"),
-).href;
+const sourceCatalogPath = path.join(repoRoot, "scripts/lib/control-ui-i18n-catalog.ts");
 
-async function loadCurrentSourceCatalog(): Promise<{
+async function loadCurrentSourceCatalog(aliases: Alias[]): Promise<{
   catalog: TranslationMap;
   watchFiles: Set<string>;
 }> {
-  const watchFiles = new Set<string>();
-  const loader = register({
-    namespace: `openclaw-control-ui-source-catalog-${randomUUID()}`,
-    onImport(url) {
-      if (url.startsWith("file:")) {
-        watchFiles.add(fileURLToPath(url));
-      }
-    },
-    tsconfig: path.join(repoRoot, "tsconfig.json"),
+  // Each runner owns a fresh source graph without Node-only loader hooks.
+  // Resolved aliases keep workspace sources in the graph, not installed package outputs.
+  const { module, dependencies } = await runnerImport<
+    typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+  >(sourceCatalogPath, {
+    root: repoRoot,
+    resolve: { alias: aliases },
   });
-  try {
-    const module = (await loader.import(
-      sourceCatalogUrl,
-      import.meta.url,
-    )) as typeof import("../../scripts/lib/control-ui-i18n-catalog.ts");
-    return { catalog: module.loadControlUiSourceCatalog(), watchFiles };
-  } finally {
-    await loader.unregister();
-  }
+  return {
+    catalog: module.loadControlUiSourceCatalog(),
+    // Vite reports transitive files separately from the entry that also needs watching.
+    watchFiles: new Set([sourceCatalogPath, ...dependencies]),
+  };
 }
 
 type ControlUiLocaleCatalogPartition = {
@@ -92,6 +82,7 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; configHints:
 }
 
 export function controlUiLocaleModulesPlugin(): Plugin {
+  let sourceAliases: Alias[] = [];
   // Both modules must share one materialization. Replacing the cache object
   // fences resolved and rejected work from an invalidated build generation.
   const createCatalogCache = () => ({
@@ -105,6 +96,9 @@ export function controlUiLocaleModulesPlugin(): Plugin {
   return {
     name: "control-ui-locale-modules",
     enforce: "pre",
+    configResolved(config) {
+      sourceAliases = config.resolve.alias;
+    },
     buildStart() {
       invalidateCatalogs();
     },
@@ -127,11 +121,13 @@ export function controlUiLocaleModulesPlugin(): Plugin {
       const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
       while (true) {
         const activeCache = catalogCache;
-        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog().catch((error: unknown) => {
-          // A later request can retry a corrected source without a watched-file change.
-          activeCache.sourceCatalogLoad = null;
-          throw error;
-        });
+        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog(sourceAliases).catch(
+          (error: unknown) => {
+            // A later request can retry a corrected source without a watched-file change.
+            activeCache.sourceCatalogLoad = null;
+            throw error;
+          },
+        );
         let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
         try {
           sourceCatalogResult = await activeCache.sourceCatalogLoad;

@@ -149,7 +149,9 @@ export class TeamReportsStore {
     }
   }
 
-  upsertPeriod(value: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null }): void {
+  async upsertPeriod(
+    value: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null },
+  ): Promise<void> {
     this.assertOpen();
     const { report } = value;
     const dataJson = JSON.stringify(report);
@@ -207,7 +209,7 @@ export class TeamReportsStore {
     });
   }
 
-  getPeriod(period: Period, key: string): StoredPeriod | undefined {
+  async getPeriod(period: Period, key: string): Promise<StoredPeriod | undefined> {
     this.assertOpen();
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
@@ -220,13 +222,13 @@ export class TeamReportsStore {
     return row ? readPeriod(row) : undefined;
   }
 
-  listPeriods(
+  async listPeriods(
     options: {
       period?: Period;
       status?: "partial" | "closed";
       limit?: number;
     } = {},
-  ): PeriodListEntry[] {
+  ): Promise<PeriodListEntry[]> {
     this.assertOpen();
     let query = this.query
       .selectFrom("team_reports_periods")
@@ -272,7 +274,7 @@ export class TeamReportsStore {
     return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 180)).rows;
   }
 
-  getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
+  async getDayReports(sinceMs: number, untilMs: number): Promise<ReportDocument[]> {
     this.assertOpen();
     return executeSqliteQuerySync(
       this.db,
@@ -286,10 +288,10 @@ export class TeamReportsStore {
     ).rows.map((row) => reportDocumentSchema.parse(JSON.parse(row.data_json)));
   }
 
-  listPersonDays(
+  async listPersonDays(
     login: string,
     options: { since?: string; until?: string; limit?: number } = {},
-  ): PersonDay[] {
+  ): Promise<PersonDay[]> {
     this.assertOpen();
     let query = this.selectPersonDays()
       .where("login", "=", login.toLowerCase())
@@ -303,7 +305,7 @@ export class TeamReportsStore {
     return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 28)).rows;
   }
 
-  listPersonDaysSince(since: string): PersonDay[] {
+  async listPersonDaysSince(since: string): Promise<PersonDay[]> {
     this.assertOpen();
     return executeSqliteQuerySync(
       this.db,
@@ -333,12 +335,12 @@ export class TeamReportsStore {
       ]);
   }
 
-  startRun(run: {
+  async startRun(run: {
     id: string;
     kind: ReportRun["kind"];
     startedAtMs: number;
     periods: RunPeriod[];
-  }): void {
+  }): Promise<void> {
     this.assertOpen();
     executeSqliteQuerySync(
       this.db,
@@ -355,7 +357,7 @@ export class TeamReportsStore {
     );
   }
 
-  finishRun(
+  async finishRun(
     id: string,
     result: {
       finishedAtMs: number;
@@ -363,7 +365,7 @@ export class TeamReportsStore {
       stats?: Record<string, unknown>;
       error?: string;
     },
-  ): void {
+  ): Promise<void> {
     this.assertOpen();
     const updated = executeSqliteQuerySync(
       this.db,
@@ -383,10 +385,10 @@ export class TeamReportsStore {
     }
   }
 
-  listRuns(
+  async listRuns(
     limit = 20,
     filter: { kind?: ReportRun["kind"]; status?: ReportRun["status"] } = {},
-  ): ReportRun[] {
+  ): Promise<ReportRun[]> {
     this.assertOpen();
     let query = this.query.selectFrom("team_reports_runs").selectAll();
     if (filter.kind) {
@@ -410,10 +412,10 @@ export class TeamReportsStore {
     }));
   }
 
-  prune(
+  async prune(
     retentionDays: number,
     nowMs = Date.now(),
-  ): { periods: number; personDays: number; runs: number } {
+  ): Promise<{ periods: number; personDays: number; runs: number }> {
     this.assertOpen();
     if (!Number.isSafeInteger(retentionDays) || retentionDays < 0) {
       throw new Error("Team Reports retention days must be a nonnegative integer.");
@@ -449,7 +451,7 @@ export class TeamReportsStore {
     }));
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -462,9 +464,9 @@ export class TeamReportsStore {
   }
 }
 
-export function createTeamReportsStore(
+export async function createTeamReportsStore(
   options: { stateDir?: string; dbPath?: string } = {},
-): TeamReportsStore {
+): Promise<TeamReportsStore> {
   const dbPath =
     options.dbPath ??
     path.join(
