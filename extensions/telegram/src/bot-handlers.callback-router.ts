@@ -613,16 +613,7 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
-  if (selection.kind !== "resolved") {
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        MODEL_PICKER_CHANGED_MESSAGE,
-        buildTelegramModelsMenuButtons({ providers: providerInfos }),
-      ),
-    );
-    return true;
-  }
-  if (!byProvider.get(selection.provider)?.has(selection.model)) {
+  if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
     await retryModelAction(() =>
       editMessageWithButtons(
         MODEL_PICKER_CHANGED_MESSAGE,
