@@ -47,11 +47,18 @@ describe("desktop panel sizing", () => {
       credentials: undefined,
     },
   ])("passes only resolved credentials to noVNC for $name", async ({ observed, credentials }) => {
-    const request = vi.fn(async (method: string) =>
-      method === "environments.list"
-        ? { environments: [desktopEnvironment] }
-        : { transport: "rfb", wsPath: "/view", control: false, ...observed },
-    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      if (method === "environments.status") {
+        return desktopEnvironment;
+      }
+      if (method === "desktop.observe") {
+        return { transport: "rfb", wsPath: "/view", control: false, ...observed };
+      }
+      throw new Error(`Unexpected desktop RPC: ${method}`);
+    });
     const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) =>
       createConnectionHandle(),
     );
@@ -80,11 +87,18 @@ describe("desktop panel sizing", () => {
   )(
     "offers Match only after capable controller authentication ($documentMode/$canResize/$control)",
     async ({ documentMode, canResize, control }) => {
-      const request = vi.fn(async (method: string) =>
-        method === "environments.list"
-          ? { environments: [desktopEnvironment] }
-          : { transport: "rfb", wsPath: "/view", control, canResize },
-      );
+      const request = vi.fn(async (method: string) => {
+        if (method === "environments.list") {
+          return { environments: [desktopEnvironment] };
+        }
+        if (method === "environments.status") {
+          return desktopEnvironment;
+        }
+        if (method === "desktop.observe") {
+          return { transport: "rfb", wsPath: "/view", control, canResize };
+        }
+        throw new Error(`Unexpected desktop RPC: ${method}`);
+      });
       const handle = createConnectionHandle();
       const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) => handle);
       const panel = createPanel();
@@ -132,10 +146,25 @@ describe("desktop panel sizing", () => {
     async (transition) => {
       const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
       let canResize = true;
-      const request = vi.fn(async (method: string, params?: { control?: boolean }) =>
-        method === "environments.list"
-          ? { environments: [desktopEnvironment, replacement] }
-          : { transport: "rfb", wsPath: "/view", control: params?.control, canResize },
+      const request = vi.fn(
+        async (method: string, params?: { control?: boolean; environmentId?: string }) => {
+          if (method === "environments.list") {
+            return { environments: [desktopEnvironment, replacement] };
+          }
+          if (method === "environments.status") {
+            const environment = [desktopEnvironment, replacement].find(
+              (candidate) => candidate.id === params?.environmentId,
+            );
+            if (!environment) {
+              throw new Error("Unexpected desktop environment");
+            }
+            return environment;
+          }
+          if (method === "desktop.observe") {
+            return { transport: "rfb", wsPath: "/view", control: params?.control, canResize };
+          }
+          throw new Error(`Unexpected desktop RPC: ${method}`);
+        },
       );
       const handles: ReturnType<typeof createConnectionHandle>[] = [];
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
@@ -186,11 +215,18 @@ describe("desktop panel sizing", () => {
   );
 
   it("applies Fit selected during a Match reconnect before authentication enables sizing", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "environments.list"
-        ? { environments: [desktopEnvironment] }
-        : { transport: "rfb", wsPath: "/view", control: true, canResize: true },
-    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      if (method === "environments.status") {
+        return desktopEnvironment;
+      }
+      if (method === "desktop.observe") {
+        return { transport: "rfb", wsPath: "/view", control: true, canResize: true };
+      }
+      throw new Error(`Unexpected desktop RPC: ${method}`);
+    });
     const handles = [createConnectionHandle(), createConnectionHandle()];
     let connectionIndex = 0;
     const connect = vi.fn(
