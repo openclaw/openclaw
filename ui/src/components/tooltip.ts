@@ -174,6 +174,12 @@ class Tooltip extends OpenClawLitElement {
       --show-duration: var(--openclaw-tooltip-popup-show-duration, var(--wa-transition-fast));
       --hide-duration: var(--openclaw-tooltip-popup-hide-duration, var(--wa-transition-fast));
       font-family: var(--font-body);
+      /* Plain hints must not cover neighboring menu actions or capture the pointer bridge. */
+      pointer-events: none;
+    }
+
+    wa-tooltip[data-rich-content] {
+      pointer-events: auto;
     }
 
     wa-tooltip::part(body) {
@@ -513,6 +519,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private syncDescription() {
+    this.webAwesomeTooltip?.toggleAttribute("data-rich-content", Boolean(this.richContentText));
     if (!this.describe) {
       this.restoreDescription();
       return;
