@@ -1,5 +1,6 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
@@ -24,10 +25,36 @@ vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 
 import {
+  createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
   shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
+
+describe("createDefaultMediaGenerateBackgroundScheduler", () => {
+  it("runs genuinely detached work outside request-scoped async context", async () => {
+    const requestContext = new AsyncLocalStorage<string>();
+    let resolveWork!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      resolveWork = resolve;
+    });
+    const observedContexts: Array<string | undefined> = [];
+    const scheduler = createDefaultMediaGenerateBackgroundScheduler({
+      toolName: "image_generate",
+      onCrash: vi.fn(),
+    });
+
+    requestContext.run("matrix-monitor-task", () => {
+      scheduler(async () => {
+        observedContexts.push(requestContext.getStore());
+        resolveWork();
+      });
+    });
+
+    await completed;
+    expect(observedContexts).toEqual([undefined]);
+  });
+});
 
 beforeEach(() => {
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();

@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 /**
  * Shared detached-task lifecycle for media generation tools.
  *
@@ -39,6 +40,9 @@ import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
+const detachedMediaGenerationAsyncRoot = new AsyncResource(
+  "openclaw.media-generation.detached-root",
+);
 const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
   "generated_media_missing",
   "message_tool_delivery_missing",
@@ -319,9 +323,11 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
-    queueMicrotask(() => {
-      void work().catch((error: unknown) => {
-        params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+    detachedMediaGenerationAsyncRoot.runInAsyncScope(() => {
+      queueMicrotask(() => {
+        void work().catch((error: unknown) => {
+          params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+        });
       });
     });
   };
