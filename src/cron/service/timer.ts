@@ -5,9 +5,6 @@ export type { IsolatedAgentSetupTimeoutSignal } from "./timer-execution-timeout.
 export { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 export { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 export { applyJobResult } from "./timer-outcomes.js";
-export { applyTriggerRunResult } from "./timer-trigger.js";
-export { applyScriptRunResult } from "./timer-outcomes.js";
-export { applyTriggerNoFireResult } from "./timer-outcomes.js";
 export { armTimer } from "./timer-scheduler.js";
 export { runMissedJobs } from "./timer-catchup.js";
 export { stopTimer } from "./timer-execution.js";

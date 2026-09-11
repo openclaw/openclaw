@@ -125,8 +125,14 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 ```
 
 Only declare capabilities the native transport actually preserves. Cover
-each declared send, receipt, live-preview, and receive-ack capability with
-the contract helpers exported from this subpath.
+each declared capability with the matching contract helper exported from this
+subpath:
+
+- send: `verifyChannelMessageAdapterCapabilityProofs(...)`
+- durable final delivery: `verifyDurableFinalCapabilityProofs(...)`
+- live preview: `verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+  `verifyChannelMessageLiveFinalizerProofs(...)`
+- receive ack: `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`
 
 ## Outbound echo suppression
 
@@ -328,3 +334,11 @@ Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migratio
 This subpath is not tied to the next Plugin SDK major, and eligibility does not
 itself remove an export. External imports do not emit a runtime warning; update
 plugin imports rather than waiting for one.
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive side that records and dispatches before a reply is sent
+- [Channel ingress API](/plugins/sdk-channel-ingress) — the resolver that produces the participant identity a send is attributed to
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — which subpath exports each helper
+- [Plugin SDK migration](/plugins/sdk-migration) — removal-eligibility windows for legacy outbound exports

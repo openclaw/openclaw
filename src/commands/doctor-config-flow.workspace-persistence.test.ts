@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
@@ -15,7 +15,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 describe("Doctor workspace persistence", () => {
@@ -24,8 +26,8 @@ describe("Doctor workspace persistence", () => {
   });
 
   it("persists legacy channel command owners once and reports each rewritten entry", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const preserved = [
           "discord:100000000000000002",
           "matrix:@owner:example.org",
@@ -79,8 +81,8 @@ describe("Doctor workspace persistence", () => {
   ] as const)(
     "persists per-agent migrations with explicit ownership (%s, update in progress: %s)",
     async (shape, updateInProgress) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride(
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
           {
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_UPDATE_IN_PROGRESS: updateInProgress ? "1" : undefined,
@@ -137,8 +139,8 @@ describe("Doctor workspace persistence", () => {
   it.each(["entries", "list"])(
     "persists explicit ownership for a markerless multi-agent %s roster",
     async (shape) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const entries = {
             ops: { workspace: path.join(home, "ops") },
             research: { workspace: path.join(home, "research") },
@@ -180,8 +182,8 @@ describe("Doctor workspace persistence", () => {
   ])(
     "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
     async ({ kind, legacyId }) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride(
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
           { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_WORKSPACE_DIR: undefined },
           async () => {
             const workspace = path.join(
@@ -222,7 +224,8 @@ describe("Doctor workspace persistence", () => {
             expect(saved.valid).toBe(true);
             expect(saved.config.agents?.ownership).toBe("explicit");
             expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
-            expect(saved.config.agents?.defaults?.systemAgent).toBeUndefined();
+            expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+            expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
             expect(saved.config.bindings).toBeUndefined();
             expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
             for (const [name, content] of Object.entries(originals)) {
@@ -240,8 +243,8 @@ describe("Doctor workspace persistence", () => {
   it.each(["entries", "list", "noncanonical list"])(
     "repairs workspace and heartbeat values from %s through snapshot, doctor, and write",
     async (shape) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const agent = {
             workspace: null,
             heartbeat: { every: "30m", activeHours: { start: "99:99", end: "17:00" } },
@@ -280,9 +283,9 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it("repairs a legacy candidate without writing when include ownership blocks migration", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+  it("refuses a legacy candidate that mixes an include-owned repair with root changes", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           agents: {
             list: [
@@ -303,8 +306,12 @@ describe("Doctor workspace persistence", () => {
         );
 
         const ctx = await prepareDoctorContext(configPath);
-        expect(ctx.configResult.shouldWriteConfig).toBe(false);
+        // The nested include owns the otel repair, but the legacy roster needs the
+        // root writer; one file cannot take both, so the writer refuses and
+        // Doctor records the refusal instead of flattening the include.
+        expect(ctx.configResult.shouldWriteConfig).toBe(true);
         await runInitialConfigWriteHealth(ctx);
+        expect(ctx.configWriteRefusal).toBe("include-ownership");
         expect(await fs.readFile(configPath, "utf-8")).toBe(original);
         expect(JSON.parse(await fs.readFile(includePath, "utf-8"))).toEqual({ protocol: "grpc" });
       });
@@ -312,8 +319,8 @@ describe("Doctor workspace persistence", () => {
   });
 
   it("keeps the legacy owner on the shared workspace across later health writes", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const workspace = path.join(home, "shared-workspace");
         const configPath = await writeOpenClawConfig(home, {
           agents: {
@@ -348,9 +355,9 @@ describe("Doctor workspace persistence", () => {
   });
 
   it("persists cron runtime policy on the retained owner before rewriting its model", async () => {
-    await withTempHome(async (home) => {
+    await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_STATE_DIR: stateDir },
         async () => {
           const configPath = await writeOpenClawConfig(home, {

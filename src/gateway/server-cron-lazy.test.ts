@@ -2,6 +2,7 @@
  * Tests lazy cron startup behavior in the gateway server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
@@ -22,14 +23,6 @@ vi.mock("./server-cron.js", () => ({
 }));
 
 const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("createLazyGatewayCronState", () => {
   beforeEach(() => {

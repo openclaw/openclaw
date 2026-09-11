@@ -174,6 +174,7 @@ export const runProviderAuthWarmWorker: ProviderAuthWarmWorkerRunner = async (pa
                 apiKey: "synthetic-auth-present",
                 source: "prepared synthetic auth",
                 mode: fact.result.mode,
+                ...(fact.result.nativeAuth ? { nativeAuth: fact.result.nativeAuth } : {}),
                 ...(fact.result.expiresAt === undefined
                   ? {}
                   : { expiresAt: fact.result.expiresAt }),

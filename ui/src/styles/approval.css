@@ -410,7 +410,6 @@
   padding: 12px 16px;
   color: var(--muted-strong);
   font-size: var(--control-ui-text-sm);
-  text-decoration: none;
 }
 
 .approval-page__back-link:hover {

@@ -20,12 +20,14 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   remapChunkLines,
   retryTransientMemoryRead,
   runWithConcurrency,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
   type MemoryEntryProvenance,
+  type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -47,9 +49,7 @@ import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
-  isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingBatchError,
-  resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -74,9 +74,6 @@ const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_CACHE_PRUNE_BATCH_SIZE = 100;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
-const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -190,6 +187,8 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */
   signal?: AbortSignal;
+  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
+  deadlineControl?: MemorySearchDeadlineControl;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
@@ -201,25 +200,58 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const timeoutError = new Error(params.message);
-  const deadlineStartedAt = Date.now();
+  let remainingMs = timeoutMs;
+  let segmentStartedAt = Date.now();
+  let paused = false;
   let timer: NodeJS.Timeout | null = null;
+  let rejectTimeout!: (error: Error) => void;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(timeoutError);
-      controller.abort(timeoutError);
-    }, timeoutMs);
+    rejectTimeout = reject;
   });
+  const armWatchdog = () => {
+    segmentStartedAt = Date.now();
+    timer = setTimeout(() => {
+      timer = null;
+      rejectTimeout(timeoutError);
+      controller.abort(timeoutError);
+    }, remainingMs);
+  };
+  const unsubscribe = params.deadlineControl?.subscribe((action) => {
+    if (action === "pause") {
+      paused = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      remainingMs = Math.max(0, remainingMs - (Date.now() - segmentStartedAt));
+      if (remainingMs === 0) {
+        // Budget already consumed before the owned phase; do not let the
+        // exemption extend work that had no time left.
+        rejectTimeout(timeoutError);
+        controller.abort(timeoutError);
+      }
+      return;
+    }
+    paused = false;
+    if (!signal.aborted) {
+      armWatchdog();
+    }
+  });
+  if (!paused) {
+    armWatchdog();
+  }
   try {
     const operation = params.run(signal);
     const result = (await Promise.race([operation, timeoutPromise])) as T;
     params.signal?.throwIfAborted();
     // An overdue watchdog can run after provider success following an event-loop stall.
-    if (Date.now() - deadlineStartedAt >= timeoutMs) {
+    if (!paused && Date.now() - segmentStartedAt >= remainingMs) {
       controller.abort(timeoutError);
       throw timeoutError;
     }
     return result;
   } finally {
+    unsubscribe?.();
     if (timer) {
       clearTimeout(timer);
     }
@@ -497,6 +529,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
+            profile: "index",
             items: inputs,
             run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
@@ -523,7 +556,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               }
               return result;
             },
-            isRetryable: isRetryableMemoryEmbeddingError,
             isSplittable: isSplittableMemoryEmbeddingBatchError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(
@@ -531,8 +563,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 structured ? "retrying structured batch" : "retrying",
               );
             },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
                 `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${splitAt} + ${itemCount - splitAt}`,
@@ -561,13 +591,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     action: string,
     signal?: AbortSignal,
   ): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
-    log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await sleepWithAbort(waitMs, signal);
+    log.warn(`memory embeddings retryable error; ${action} in ${delayMs}ms`);
+    await sleepWithAbort(delayMs, signal);
   }
 
   private resolveEmbeddingTimeout(
@@ -589,6 +614,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     providerOverride?: EmbeddingProvider,
     markDegraded = true,
     providerRuntimeOverride?: MemoryEmbeddingProviderRuntime,
+    deadlineControl?: MemorySearchDeadlineControl,
   ): Promise<number[]> {
     const provider = providerOverride ?? this.provider;
     const providerRuntime = providerOverride ? providerRuntimeOverride : this.providerRuntime;
@@ -600,6 +626,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         provider,
         async () =>
           await runMemoryEmbeddingRetryLoop({
+            profile: "query",
             run: async () => {
               signal?.throwIfAborted();
               const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
@@ -608,17 +635,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 timeoutMs,
                 message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
                 signal,
+                deadlineControl,
                 run: async (opSignal) =>
-                  await provider.embed(text, { signal: opSignal, inputType: "query" }),
+                  await provider.embed(text, {
+                    signal: opSignal,
+                    inputType: "query",
+                    ...(deadlineControl
+                      ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl }
+                      : {}),
+                  }),
               });
             },
             signal,
-            isRetryable: isRetryableMemoryEmbeddingError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
             },
-            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
           }),
       );
     } catch (err) {

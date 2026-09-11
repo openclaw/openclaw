@@ -222,7 +222,9 @@ export async function fetchGitHubApi(
   beforeRedirect?: (url: URL) => Promise<void>,
   identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
   etag?: string,
+  callerSignal?: AbortSignal,
 ): Promise<Response> {
+  callerSignal?.throwIfAborted();
   const initialUrl = safeGitHubApiUrl(rawUrl);
   if (!initialUrl) {
     throw new ControlUiGitHubError(502, "Invalid GitHub API URL");
@@ -232,7 +234,8 @@ export async function fetchGitHubApi(
   const cooldowns = transportCooldowns.get(fetchImpl) ?? new Map<string, ControlUiGitHubError>();
   transportCooldowns.set(fetchImpl, cooldowns);
 
-  const signal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
+  const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
   for (let redirects = 0; ; redirects += 1) {
     // Recheck every dispatch, including redirects and auxiliary metadata reads.
     // Selection must still be current after the asynchronous credential read.
@@ -240,6 +243,7 @@ export async function fetchGitHubApi(
       await identity.revalidate();
       identity.assertSelected();
     }
+    callerSignal?.throwIfAborted();
     const resource = githubApiResource(url);
     const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
     const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);

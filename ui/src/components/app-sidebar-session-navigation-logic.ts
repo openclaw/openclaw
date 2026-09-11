@@ -25,6 +25,7 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isPinnableUiSessionRow,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
   readSessionDefaults,
@@ -208,6 +209,7 @@ export function buildSidebarSessionNavigationState(input: {
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
       pinned: row.pinned === true,
+      pinnable: isPinnableUiSessionRow(row),
       archived: row.archived === true,
       visibility: row.visibility,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
@@ -229,6 +231,8 @@ export function buildSidebarSessionNavigationState(input: {
         row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
       placementProfileId:
         row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
+      placementMachine:
+        row.placement && "machine" in row.placement ? row.placement.machine : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:

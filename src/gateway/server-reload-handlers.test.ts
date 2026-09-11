@@ -6,6 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -4280,7 +4281,7 @@ describe("gateway restart deferral preflight", () => {
     const setState = vi.fn();
     let runtimePublished = false;
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createGatewayReloadHandlers({
+    const { applyHotReload, getDeferredChannelReloads } = createGatewayReloadHandlers({
       setState,
       startChannel,
       stopChannel,
@@ -4317,6 +4318,9 @@ describe("gateway restart deferral preflight", () => {
       expect(startChannel).not.toHaveBeenCalled();
       expect(runtimePublished).toBe(false);
       expect(setState).not.toHaveBeenCalled();
+      expect(getDeferredChannelReloads?.()).toEqual([
+        { channel: "discord", publicationPending: true },
+      ]);
 
       hoisted.activeEmbeddedRunCount.value = 0;
       await vi.advanceTimersByTimeAsync(500);
@@ -4339,6 +4343,7 @@ describe("gateway restart deferral preflight", () => {
     });
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
@@ -4346,7 +4351,7 @@ describe("gateway restart deferral preflight", () => {
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createGatewayReloadHandlers({
+    const { applyHotReload, getDeferredChannelReloads } = createGatewayReloadHandlers({
       startChannel,
       stopChannel,
       logReload,
@@ -4368,6 +4373,9 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(299_500);
       expect(stopChannel).not.toHaveBeenCalled();
       expect(startChannel).not.toHaveBeenCalled();
+      expect(getDeferredChannelReloads?.()).toEqual([
+        { channel: "telegram", publicationPending: true },
+      ]);
 
       await vi.advanceTimersByTimeAsync(500);
       await reloadPromise;
@@ -4390,6 +4398,7 @@ describe("gateway restart deferral preflight", () => {
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
@@ -4811,7 +4820,11 @@ describe("gateway channel hot reload handlers", () => {
       return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createReloadHandlersForTest(logReload, channels, reloadPlugins);
+    const { applyHotReload, getDeferredChannelReloads } = createReloadHandlersForTest(
+      logReload,
+      channels,
+      reloadPlugins,
+    );
     vi.useFakeTimers();
     let reload: Promise<GatewayHotReloadApplicationStatus> | undefined;
 
@@ -4822,6 +4835,9 @@ describe("gateway channel hot reload handlers", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(events).toEqual([]);
         expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("(discord)"));
+        expect(getDeferredChannelReloads?.()).toEqual([
+          { channel: "discord", publicationPending: false },
+        ]);
 
         hoisted.activeEmbeddedRunCount.value = 0;
         await vi.advanceTimersByTimeAsync(500);
@@ -4836,6 +4852,7 @@ describe("gateway channel hot reload handlers", () => {
 
     expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
     expect(reloadPlugins).toHaveBeenCalledOnce();
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("requires a recovery owner for targeted account reloads", async () => {
@@ -7790,9 +7807,14 @@ describe("deferred channel reload abort generation", () => {
 
     try {
       await vi.advanceTimersByTimeAsync(10);
+      expect(oldHandlers.getDeferredChannelReloads?.()).toEqual([
+        { channel: "whatsapp", publicationPending: true },
+      ]);
       resetGatewayRestartStateForInProcessRestart();
+      expect(oldHandlers.getDeferredChannelReloads?.()).toEqual([]);
       hoisted.activeTaskBlockers.length = 0;
       const nextHandlers = createTestHandlers(logChannels, nextChannels);
+      expect(nextHandlers.getDeferredChannelReloads?.()).toEqual([]);
       const nextReload = nextHandlers
         .applyHotReload({ ...abortChannelReloadPlan, reloadInternalHooks: true }, {})
         .then(
@@ -7978,7 +8000,11 @@ describe("deferred channel reload abort generation", () => {
           activeChannels: new Set(["whatsapp"]),
         });
       };
-      const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+      const { applyHotReload, getDeferredChannelReloads } = createTestHandlers(
+        logChannels,
+        channels,
+        { reloadPlugins },
+      );
       hoisted.activeTaskBlockers.push(
         makeActiveTaskBlocker({ taskId: "task-blocking-superseded-reload" }),
       );
@@ -8004,14 +8030,20 @@ describe("deferred channel reload abort generation", () => {
           (error: unknown) => error,
         );
         await vi.advanceTimersByTimeAsync(10);
+        expect(getDeferredChannelReloads?.()).toEqual([
+          { channel: "whatsapp", publicationPending: !committed },
+        ]);
 
         if (cancellationKind === "lifecycle") {
           abortPendingChannelReloads();
         } else {
           transactionCurrent = false;
         }
+        // Status follows the live owner immediately, not the next 500 ms poll.
+        expect(getDeferredChannelReloads?.()).toEqual([]);
         await vi.advanceTimersByTimeAsync(500);
         const error = await reloadError;
+        expect(getDeferredChannelReloads?.()).toEqual([]);
         if (committed && cancellationKind === "config") {
           expect(error).toBeNull();
           expect(channels.stop).toHaveBeenCalledOnce();
@@ -8098,11 +8130,7 @@ describe("deferred channel reload abort generation", () => {
       const application = createRuntimeConfigWriteApplication();
       const settled = vi.fn();
       void application.result.then(settled);
-      const logReload = {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
+      const logReload = createInfoWarnErrorLogger();
       const watch = vi.spyOn(chokidar, "watch");
       setActivePluginRegistry(registry);
       const reloader = startManagedGatewayConfigReloader({
@@ -8139,12 +8167,16 @@ describe("deferred channel reload abort generation", () => {
         );
         expect(application.claimed).toBe(true);
         expect(settled).not.toHaveBeenCalled();
+        expect(reloader.getDeferredChannelReloads?.()).toEqual([
+          { channel: "whatsapp", publicationPending: true },
+        ]);
 
         // Revoke the write epoch while real hot reload is waiting on unrelated work.
         // Hold the disk reread so cancellation settles before exact-candidate replay.
         const watcher = watch.mock.results[0]?.value;
         expect(watcher).toBeDefined();
         watcher.emit("change", "/tmp/openclaw.json");
+        expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
         await vi.advanceTimersByTimeAsync(500);
         await vi.advanceTimersByTimeAsync(300);
         await snapshotStarted.promise;
@@ -8159,6 +8191,7 @@ describe("deferred channel reload abort generation", () => {
           await expect(application.result).resolves.toBe("stopped");
           snapshotGate.resolve();
           await stopping;
+          expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
           expect(setState).not.toHaveBeenCalled();
           expect(startChannel).not.toHaveBeenCalled();
         } else {
@@ -8173,6 +8206,9 @@ describe("deferred channel reload abort generation", () => {
             expect(settled).not.toHaveBeenCalled();
             expect(setState).not.toHaveBeenCalled();
             expect(logReload.warn).toHaveBeenCalledTimes(2);
+            expect(reloader.getDeferredChannelReloads?.()).toEqual([
+              { channel: "whatsapp", publicationPending: true },
+            ]);
           }
           unrelatedRequest.release();
           await vi.advanceTimersByTimeAsync(500);
@@ -8183,6 +8219,7 @@ describe("deferred channel reload abort generation", () => {
                 ? "failed"
                 : "applied",
           );
+          expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
           if (outcome === "same write") {
             expect(setState).toHaveBeenCalledOnce();
             expect(commitRuntimePolicy).toHaveBeenCalledWith(nextConfig);

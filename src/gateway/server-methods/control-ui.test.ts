@@ -51,6 +51,11 @@ describe("controlUi.githubPreview", () => {
     vi.stubEnv("GITHUB_TOKEN", "");
     const identity = {
       token: "selected-agent-github-token",
+      selection: {
+        source: "agent-override" as const,
+        profileId: `ghp_${"a".repeat(32)}`,
+        accountId: 101,
+      },
       cacheScope: "selected-agent-preview",
       assertSelected: vi.fn(),
       revalidate: vi.fn().mockResolvedValue(undefined),

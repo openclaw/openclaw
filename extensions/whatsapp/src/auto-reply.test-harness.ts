@@ -13,6 +13,7 @@ import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
@@ -136,8 +137,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
-    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 
@@ -346,14 +345,6 @@ export function createWebInboundDeliverySpies(): AnyExport {
   };
 }
 
-function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 export function startWebAutoReplyMonitor(params: {
   monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
   listenerFactory: unknown;
@@ -367,7 +358,7 @@ export function startWebAutoReplyMonitor(params: {
   accountId?: string;
   statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
-  const runtime = createWebAutoReplyRuntime();
+  const runtime: WebAutoReplyRuntime = createRuntimeSpies();
   const controller = new AbortController();
   const run = params.monitorWebChannelFn(
     false,

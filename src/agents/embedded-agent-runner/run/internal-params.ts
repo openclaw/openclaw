@@ -1,6 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
@@ -33,6 +34,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Candidate producers have already resolved the model against their captured metadata. */
+  requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;
   onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
   /** Attempt-local context observer, installed by the host loop before dispatch. */

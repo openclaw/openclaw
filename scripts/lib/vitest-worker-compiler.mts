@@ -106,8 +106,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
           return null;
         },
         generateBundle(_options, bundle) {
-          for (const id of Object.keys(inputs)) {
-            let packageDirectory = path.dirname(id);
+          const packageDirectories = new Set(Object.keys(inputs).map((id) => path.dirname(id)));
+          for (let packageDirectory of packageDirectories) {
             while (packageDirectory.startsWith(root)) {
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {

@@ -86,6 +86,45 @@ describe("resolveModelDirectiveSelection", () => {
     },
   );
 
+  it.each(["custom/custom/model", "chosen", "cho"])(
+    "keeps literal configured-model permission for %s",
+    (raw) => {
+      for (const allow of ["custom/model", "custom/custom/model"]) {
+        const { result } = resolveDirective({
+          cfg: {
+            agents: {
+              defaults: {
+                models: { "custom/custom/model": { alias: "chosen" } },
+                modelPolicy: { allow: [allow] },
+              },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-responses",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          raw,
+        });
+
+        if (allow === "custom/custom/model") {
+          expect
+            .soft(result.selection)
+            .toMatchObject({ provider: "custom", model: "custom/model" });
+        } else if (raw === "cho") {
+          expect.soft(result.selection).toBeUndefined();
+          expect.soft(result.error).toBeTruthy();
+        } else {
+          expect.soft(result.selection).toMatchObject({ provider: "custom", model: "model" });
+        }
+      }
+    },
+  );
+
   it.each([undefined, {}, { allow: [] }, { allow: ["openai/*"] }])(
     "permits an explicit uncataloged model with policy %j",
     async (modelPolicy) => {

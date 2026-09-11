@@ -23,6 +23,7 @@ Advantages:
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/searxng-plugin
+    openclaw gateway restart
     ```
   </Step>
   <Step title="Run a SearXNG instance">

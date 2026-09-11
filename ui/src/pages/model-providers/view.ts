@@ -1,19 +1,25 @@
 // Control UI view renders the Models settings page content.
-import { html, nothing } from "lit";
-import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import { html, nothing, type TemplateResult } from "lit";
+import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -21,23 +27,19 @@ import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/for
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
-  ModelProviderLogoutTarget,
+  ModelProviderPendingLogout,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
+import { renderProviderProfiles } from "./profiles-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 
 registerSettingsEnglish();
-
-export type ModelProviderRowMessage = {
-  kind: "success" | "error";
-  text: string;
-  warning?: string;
-};
 
 type ModelProvidersViewProps = {
   connected: boolean;
@@ -56,9 +58,14 @@ type ModelProvidersViewProps = {
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
+  /** True while picker-triggered catalog discovery is in flight. */
+  catalogDiscovering: boolean;
+  /** Retryable error from a picker-triggered catalog discovery. */
+  catalogDiscoveryError: string | null;
   configBusy: boolean;
   quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
+  canViewProfiles: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
@@ -69,7 +76,7 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogoutProvider: string | null;
+  profileOrders: Record<string, string[]>;
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
@@ -80,9 +87,8 @@ type ModelProvidersViewProps = {
   onSaveKey: (provider: string, configKey: string) => void;
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (provider: string) => void;
-  onCancelLogout: () => void;
-  onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onRequestLogout: (pending: ModelProviderPendingLogout) => void;
+  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProviderKeyChange: (value: string) => void;
@@ -94,6 +100,8 @@ type ModelProvidersViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
+  onModelPickerOpen: () => void;
+  onCatalogRetry: () => void;
   onOpenModelSetup: () => void;
 };
 
@@ -277,10 +285,8 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
-  const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
   const blocked = props.mutationBlockedReason ?? "";
   const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
   const apiKeyUnsupported = card.apiKeySupported === false;
@@ -336,46 +342,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
           : nothing
       }
-      ${
-        canLogout
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                title=${blocked}
-                @click=${() => props.onRequestLogout(card.id)}
-              >
-                ${t("modelProviders.logout.action")}
-              </button>
-            `
-          : nothing
-      }
     </div>
-    ${
-      props.pendingLogoutProvider === card.id
-        ? html`
-            <div class="model-providers__confirm" role="alert">
-              <span>${t("modelProviders.logout.confirm", { provider: card.displayName })}</span>
-              <div class="model-providers__form-actions">
-                <button
-                  class="btn danger btn--sm"
-                  ?disabled=${logoutBusy || mutationDisabled}
-                  @click=${() => props.onLogout(card.id, card.logoutTargets)}
-                >
-                  ${
-                    logoutBusy
-                      ? t("modelProviders.logout.loggingOut")
-                      : t("modelProviders.logout.action")
-                  }
-                </button>
-                <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                  ${t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          `
-        : nothing
-    }
   `;
 }
 
@@ -402,7 +369,19 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      ${
+        card.profiles.length > 0 && props.canViewProfiles
+          ? renderProviderProfiles(card, {
+              busy: props.busy,
+              canMutate: props.canMutate && !props.configBusy,
+              mutationBlockedReason: props.mutationBlockedReason,
+              profileOrders: props.profileOrders,
+              onOpenModelSetup: props.onOpenModelSetup,
+              onProfileOrderChange: props.onProfileOrderChange,
+              onRequestLogout: props.onRequestLogout,
+            })
+          : renderCredentialSummary(card, props.credentialAgentLabel)
+      }
       <div
         class="model-providers__global-metrics"
         aria-busy=${props.supplementalLoading ? "true" : "false"}
@@ -557,6 +536,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           fastMode: props.fastMode,
           fastModeOverridden: props.fastModeOverridden,
           loading: true,
+          catalogDiscovering: props.catalogDiscovering,
+          catalogDiscoveryError: props.catalogDiscoveryError,
           canMutate: !configMutationDisabled(props),
           mutationBlockedReason: props.mutationBlockedReason,
           busy: props.busy,
@@ -568,6 +549,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           onThinkingReset: props.onThinkingReset,
           onFastModeChange: props.onFastModeChange,
           onFastModeReset: props.onFastModeReset,
+          onOpen: props.onModelPickerOpen,
+          onCatalogRetry: props.onCatalogRetry,
         })}
       </div>
       ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
@@ -605,6 +588,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         thinkingOverridden: props.thinkingOverridden,
         fastMode: props.fastMode,
         fastModeOverridden: props.fastModeOverridden,
+        catalogDiscovering: props.catalogDiscovering,
+        catalogDiscoveryError: props.catalogDiscoveryError,
         canMutate: !configMutationDisabled(props),
         mutationBlockedReason: props.mutationBlockedReason,
         busy: props.busy,
@@ -616,6 +601,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
         onFastModeReset: props.onFastModeReset,
+        onOpen: props.onModelPickerOpen,
+        onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
     ${renderSettingsSection(
@@ -659,4 +646,33 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         : nothing
     }
   `);
+}
+
+/** Page shell for the Models settings page: header, agent scope control, body. */
+export function renderModelProvidersPageShell(props: {
+  agentSelection: AgentSelectionCapability;
+  agents: readonly GatewayAgentRow[];
+  onOpenModelSetup: () => void;
+  selectedAgentId: string;
+  body: TemplateResult;
+}): TemplateResult {
+  return html`
+    ${renderSettingsPageHeader({
+      title: titleForRoute("model-providers"),
+      subtitle: html`${t("modelProviders.subtitle")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/model-providers")}`,
+      actions: html`
+        ${renderAgentScopeControl({
+          agents: props.agents,
+          selection: props.agentSelection,
+          allowAll: false,
+          selectedId: props.selectedAgentId,
+        })}
+        <button class="btn" @click=${props.onOpenModelSetup}>
+          ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
+        </button>
+      `,
+    })}
+    ${renderSettingsWorkspace(props.body)}
+  `;
 }

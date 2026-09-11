@@ -39,10 +39,10 @@ import {
   visibleCatalogHosts,
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
-import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
+import { renderSessionGlyph } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type SessionCatalogGroupsParams = {
@@ -222,6 +222,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
+      canCreateSession ? "sidebar-recent-sessions__group--catalog-can-create" : "",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
       params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
       params.sectionDropTarget?.sectionId === sectionId
@@ -295,6 +296,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                 >${catalog.label}</span
               >
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
+              <span class="sidebar-session-catalog-action-reserve" aria-hidden="true"></span>
               ${
                 hasError || (collapsed && rows.length > 0)
                   ? html`<span
@@ -337,7 +339,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     disabledReason: params.newSessionDisabledReason,
                     onOpen: params.onOpenNewSession,
                   })
-                : nothing
+                : html`<span class="sidebar-session-catalog-new-spacer" aria-hidden="true"></span>`
             }
           `,
         })}
@@ -540,20 +542,8 @@ function renderCatalogSessionRow(
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
-  const menuOpen = params.isMenuOpen(catalogKey);
-  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
-  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-  if (adoptedRow) {
-    return params.renderLiveRow(adoptedRow, {
-      catalogIdentityKey: identityKey,
-      catalogMenuOpen: menuOpen,
-      ...(rowRef ? { rowRef } : {}),
-      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-    });
-  }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const color = normalizeSessionColorValue(session.color ?? "");
   const routeId = "chat";
   const target = sessionNavigationTarget({
     face: routeId,
@@ -563,26 +553,35 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
+  const catalogMenu: CatalogSessionMenuRequest = {
+    key: catalogKey,
+    agentId: params.newSessionAgentId,
+    routeId,
+    navigation,
+    canOpenTerminal: session.canOpenTerminal === true,
+    canDelete: session.canArchive && catalog.capabilities.archive,
+    name: session.name ?? session.threadId,
+    meta,
+  };
+  const menuOpen = params.isMenuOpen(catalogKey);
+  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+  if (adoptedRow) {
+    return params.renderLiveRow(adoptedRow, {
+      catalogIdentityKey: identityKey,
+      catalogMenuOpen: menuOpen,
+      catalogMenu,
+      ...(rowRef ? { rowRef } : {}),
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+    });
+  }
+  const color = normalizeSessionColorValue(session.color ?? "");
   const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
-  const stateDescription = running ? t("sessionsView.activeRun") : "";
-  const stateId = running ? sidebarSessionStateId(key) : undefined;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(
-      {
-        key: catalogKey,
-        agentId: params.newSessionAgentId,
-        routeId,
-        navigation,
-        canOpenTerminal: session.canOpenTerminal === true,
-        meta,
-      },
-      x,
-      y,
-      trigger,
-    );
+    params.onOpenMenu(catalogMenu, x, y, trigger);
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -621,7 +620,6 @@ function renderCatalogSessionRow(
         href=${withSidebarNavCollapseIntent(href)}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
-        aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -634,7 +632,9 @@ function renderCatalogSessionRow(
           }
         }}
       >
-        <span class="sidebar-session-indicator"></span>
+        <span class="sidebar-session-indicator">
+          ${running ? renderSessionGlyph({ content: nothing, running }) : nothing}
+        </span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
@@ -642,19 +642,6 @@ function renderCatalogSessionRow(
               ${renderSessionRowBadges({
                 pullRequest: session.pullRequest,
               })}
-              ${
-                running
-                  ? html`<span class="session-row-aside">
-                      <span
-                        class="session-row-state"
-                        id=${stateId}
-                        role="img"
-                        aria-label=${stateDescription}
-                        >${renderSessionRunSpinner(false)}</span
-                      >
-                    </span>`
-                  : nothing
-              }
             </span>
           </span>
         </span>

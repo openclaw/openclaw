@@ -223,7 +223,7 @@ describe("models.list native account catalog", () => {
                   provider: "openai",
                   modelId: "synthetic-opaque",
                 });
-              expect(readiness()).toEqual({ accountType: "apiKey" });
+              expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
               const configured = (cfg = config) =>
                 listModels({
                   ...scope,
@@ -249,11 +249,14 @@ describe("models.list native account catalog", () => {
                 pinnedProfileId: "openai:missing",
               });
               const locked = await buildModelsListResult({
-                context: {
-                  getRuntimeConfig: () => config,
-                  loadGatewayModelCatalogSnapshot: vi.fn(),
-                  logGateway: { debug: vi.fn() },
-                } as unknown as GatewayRequestContext,
+                source: {
+                  kind: "gateway",
+                  context: {
+                    getRuntimeConfig: () => config,
+                    loadGatewayModelCatalogSnapshot: vi.fn(),
+                    logGateway: { debug: vi.fn() },
+                  } as unknown as GatewayRequestContext,
+                },
                 agentId: "main",
                 params: { view: "configured" },
                 preloadedOnly: true,
@@ -272,11 +275,15 @@ describe("models.list native account catalog", () => {
               for (const observed of [
                 {
                   value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                  mode: "chatgpt",
+                  readiness: { accountType: "chatgpt" },
                   available: true,
                 },
-                { value: null, mode: undefined, available: false },
-                { value: { type: "apiKey" }, mode: "apiKey", available: true },
+                { value: null, readiness: undefined, available: false },
+                {
+                  value: { type: "apiKey" },
+                  readiness: { accountType: "apiKey", authMode: "api_key" },
+                  available: true,
+                },
               ]) {
                 account = observed.value;
                 const refreshed = await listModels({
@@ -288,9 +295,7 @@ describe("models.list native account catalog", () => {
                   refresh: true,
                 });
                 expect(refreshed.models[0]?.available).toBe(observed.available);
-                expect(readiness()).toEqual(
-                  observed.mode ? { accountType: observed.mode } : undefined,
-                );
+                expect(readiness()).toEqual(observed.readiness);
               }
               const hostRoutes: OpenClawConfig["models"][] = [
                 {
@@ -339,8 +344,12 @@ describe("models.list native account catalog", () => {
                   cfg: hostConfig,
                   catalog: rows,
                   view: "configured",
+                  refresh: true,
                 });
-                expect(readiness(hostConfig)).toEqual({ accountType: "apiKey" });
+                expect(readiness(hostConfig)).toEqual({
+                  accountType: "apiKey",
+                  authMode: "api_key",
+                });
                 expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
               }
               expect(requests).not.toContain("account/login/start");

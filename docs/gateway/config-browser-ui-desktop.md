@@ -75,7 +75,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   identity, and unresolved native targets remain fully process-local, so they
   are not automatically closed after a restart. Older untracked tabs require
   manual closure. Transient failures stay pending for a later retry. See
-  [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
+  [Tab cleanup ownership](/tools/browser/configuration#tab-cleanup-ownership).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -101,7 +101,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
   `userDataDir` is ignored for Chrome MCP launch arguments.
   Valid endpoint arguments in `mcpArgs` take precedence over `cdpUrl`; see
-  [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
+  [Custom Chrome MCP launch](/tools/browser/existing-session#custom-chrome-mcp-launch).
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
@@ -109,7 +109,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 - Local managed `openclaw` profiles get a `cdpPort` allocated from the managed
   range when OpenClaw creates the profile. A profile you declare by hand must
   set `cdpPort` itself, or `cdpUrl` for a remote CDP endpoint; the schema
-  rejects an `openclaw` or `clawd` profile that sets neither.
+  rejects an `openclaw` (or legacy `clawd`) driver profile that sets neither.
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
@@ -148,7 +148,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 }
 ```
 
-Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents#agentsentries-per-agent-overrides).
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents/entries-and-multi-agent#agentsentries-per-agent-overrides).
 
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
@@ -179,6 +179,11 @@ The host desktop source lets the Control UI Desktop panel connect to the Gateway
 machine. It can attach to an existing loopback RFB server, or supervise a
 headless TigerVNC/XFCE desktop on Linux. It is a Labs feature and is off by
 default.
+
+Observer tokens and observer connections are bound to the Gateway connection
+that requested them. Ending or revoking that connection refuses unused tokens
+and closes its observers with `4006 authority_revoked`. Internal callers without
+a Gateway connection keep TTL-only tokens.
 
 ```json5
 {
@@ -211,6 +216,13 @@ managed mode. Managed mode requires `Xtigervnc`, `tigervncpasswd`, and
 `tigervnc-standalone-server tigervnc-tools xfce4-session`. The Gateway creates a
 fresh temporary VNC password for each managed session, never persists it, and
 supervises both the VNC server and XFCE session.
+
+If desktop teardown fails, the Gateway retains the session's cleanup owner and
+reports the failure in its logs. A new observation retries cleanup before
+starting a replacement. For SSH-backed worker desktops, temporary connection
+files remain until the transport has closed; a late process exit triggers
+another cleanup attempt. Check the reported process or filesystem error before
+retrying an observation that cannot finish cleanup.
 
 Without managed mode, configure third-party servers to listen on loopback when
 they support it. On Linux, use loopback-only TigerVNC or `x11vnc`; GNOME Remote

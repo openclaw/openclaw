@@ -52,6 +52,38 @@ DRAFT_REPORT = {
 
 
 class AutoreviewCursorTests(unittest.TestCase):
+    def test_parser_resource_errors_are_invalid_reports(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P2")
+        for raw in ("[" * 2000 + "]" * 2000, '{"findings":[],"number":' + "9" * 10000 + "}"):
+            with self.subTest(length=len(raw)), mock.patch.object(
+                AUTOREVIEW, "run_engine", return_value=raw,
+            ):
+                with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.run_reviewer(args, Path.cwd(), "synthetic", set(), [])
+                self.assertEqual(caught.exception.reason, "invalid_report")
+
+    def test_container_valued_report_enums_are_invalid_reports(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P2")
+        finding = copy.deepcopy(DRAFT_REPORT["findings"][0])
+        finding["source_attribution"] = {
+            "target": "index", "record_id": "record", "source_id": "source",
+            "side": "present", "column": 1, "excerpt": "text",
+        }
+        for field in ("overall_correctness", "priority", "category", "target", "side"):
+            for value in ([], {}, None, 42, False):
+                report = copy.deepcopy(FINAL_REPORT)
+                report["findings"] = [copy.deepcopy(finding)]
+                owner = report if field == "overall_correctness" else report["findings"][0]
+                if field in {"target", "side"}:
+                    owner = owner["source_attribution"]
+                owner[field] = value
+                with self.subTest(field=field, value=value), mock.patch.object(
+                    AUTOREVIEW, "run_engine", return_value=json.dumps(report),
+                ):
+                    with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                        AUTOREVIEW.run_reviewer(args, Path.cwd(), "synthetic", {"draft.js"}, [])
+                    self.assertEqual(caught.exception.reason, "invalid_report")
+
     def test_extract_json_prefers_terminal_result_event(self) -> None:
         stream = "\n".join(
             [
@@ -158,9 +190,7 @@ class AutoreviewResultScopeTests(unittest.TestCase):
     def test_required_finding_must_survive_priority_filter_for_every_pass_count(self) -> None:
         args = argparse.Namespace(engine="codex", max_priority="P0", require_finding=["Draft finding"])
         for count in (1, 2):
-            with self.subTest(count=count), mock.patch.object(
-                AUTOREVIEW, "scan_outgoing_review_pack"
-            ), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)):
+            with self.subTest(count=count), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)):
                 reports = AUTOREVIEW.run_review_passes(
                     args, [args], Path.cwd(), ["pack"] * count, {"draft.js"}
                 )
@@ -357,7 +387,6 @@ class AutoreviewTargetResultTests(unittest.TestCase):
                     "overall_correctness": "patch is incorrect", "overall_confidence": 0.43}
         for engine in AUTOREVIEW.ENGINES:
             with self.subTest(engine=engine), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(provider)), \
-                    mock.patch.object(AUTOREVIEW, "scan_outgoing_review_pack"), \
                     mock.patch.object(AUTOREVIEW, "verify_mixed_sources"), contextlib.redirect_stderr(io.StringIO()):
                 report = AUTOREVIEW.run_reviewer(argparse.Namespace(engine=engine, max_priority="P0"),
                                                  Path.cwd(), prompt, captured, [])
@@ -845,6 +874,27 @@ class AutoreviewAmpTests(unittest.TestCase):
         self.assertIn("amp engine timed out after 0.01s", message)
         attest.assert_not_called()
 
+    def test_amp_failed_process_and_invalid_artifact_keep_runtime_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cases = (
+                (subprocess.CompletedProcess([], 7, "", "provider failed"), "expected exactly one leading"),
+                (subprocess.CompletedProcess([], 7, '{"type":"system","subtype":"init"}\n', ""), "unexpected adapter event sequence"),
+                (subprocess.CompletedProcess([], 0, amp_test_stream(root, tools=["shell_command"]), ""), "exposed tools"),
+                (subprocess.CompletedProcess([], 0, amp_test_stream(root), ""), "produced no result file"),
+                (subprocess.CompletedProcess([], 0, '{"type":[]}\n', ""), "unexpected stream event type"),
+            )
+            for result, diagnostic in cases:
+                with self.subTest(diagnostic=diagnostic), self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.amp_review_result(result, root, root / "error", root / "result")
+                self.assertEqual(caught.exception.reason, "runtime_validation_failed")
+                self.assertIn(diagnostic, str(caught.exception))
+                self.assertEqual(caught.exception.returncode, result.returncode)
+            for raw in ("[" * 2000 + "]" * 2000, '{"number":' + "9" * 10000 + "}"):
+                with self.subTest(length=len(raw)), self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                    AUTOREVIEW.amp_review_result(subprocess.CompletedProcess([], 0, raw, ""), root, root / "error", root / "result")
+                self.assertEqual(caught.exception.reason, "runtime_validation_failed")
+
     def test_amp_plugin_inventory_attestation_fails_closed(self) -> None:
         cwd = Path("/tmp/amp-review-empty")
         plugin_path = cwd.parent / "config" / "amp" / "plugins" / "autoreview-token.ts"
@@ -934,56 +984,21 @@ class AutoreviewAmpTests(unittest.TestCase):
                     AUTOREVIEW.run_amp(args, repo, "review")
 
 
-class AutoreviewTruffleHogTests(unittest.TestCase):
-    def test_refusal_does_not_echo_input_headings_or_scanner_fields(self) -> None:
-        marker = "SYNTHETIC_SCAN_SENTINEL_NOT_A_CREDENTIAL"
-        headings = [
-            f"# Dataset: {marker}",
-            f"# Prompt file: {marker}",
-            'Source snapshot: ' + json.dumps({"path": marker, "line_count": 0}),
-            'Removed source: ' + json.dumps({"path": marker}),
-            '# Untracked File\npath: ' + json.dumps(marker),
-            f"+++ b/{marker}",
-            f"diff --git a/old.txt b/{marker}\n--- a/old.txt\n+++ b/{marker}\n@@ -1 +1 @@\n+example",
-        ]
-        for heading in headings:
-            with self.subTest(heading=heading), tempfile.TemporaryDirectory() as tempdir:
-                prompt = "# Dataset: safe-evidence.txt\n" + heading
-                lines = [number for number, line in enumerate(prompt.splitlines(), 1) if marker in line]
-                output = json.dumps({"SourceMetadata": {"Data": {"Filesystem": {"line": lines[-1]}}},
-                                     "Raw": marker, "RawV2": marker})
-                with mock.patch.object(AUTOREVIEW, "find_command", return_value="/trusted/trufflehog"), \
-                        mock.patch.object(AUTOREVIEW, "run", return_value=subprocess.CompletedProcess(
-                            [], AUTOREVIEW.TRUFFLEHOG_FINDINGS_EXIT_CODE, output, marker,
-                        )), mock.patch.object(AUTOREVIEW, "run_engine") as provider:
-                    with self.assertRaises(SystemExit) as error:
-                        AUTOREVIEW.run_reviewer(argparse.Namespace(engine="codex", max_priority="P0"),
-                                                 Path(tempdir), prompt, {"change.txt"}, [])
-                self.assertNotIn(marker, str(error.exception))
-                self.assertIn("remove credential material", str(error.exception))
-                provider.assert_not_called()
+class AutoreviewInputTests(unittest.TestCase):
 
-    def test_scanner_checks_stdin_without_literal_ignore_markers(self) -> None:
-        prompt = "unicode \u03c0\r\nsource without suppression instructions\n"
-        commands = []
-        with tempfile.TemporaryDirectory() as tempdir:
-            def scanner(command, cwd, **kwargs):
-                commands.append(command[1])
-                if command[1] == "filesystem":
-                    self.assertEqual(Path(command[2]).read_bytes(), prompt.encode("utf-8"))
-                    return subprocess.CompletedProcess(command, 0, "", "")
-                self.assertEqual(command[1], "stdin")
-                self.assertEqual(kwargs["stdin"].read(), prompt.encode("utf-8"))
-                return subprocess.CompletedProcess(command, AUTOREVIEW.TRUFFLEHOG_FINDINGS_EXIT_CODE, "", "")
 
-            with mock.patch.object(AUTOREVIEW, "find_command", return_value="/trusted/trufflehog"), \
-                    mock.patch.object(AUTOREVIEW, "run", side_effect=scanner), \
-                    mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(FINAL_REPORT)) as provider:
-                with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
-                    AUTOREVIEW.run_reviewer(argparse.Namespace(engine="codex", max_priority="P0"),
-                                             Path(tempdir), prompt, {"change.txt"}, [])
-            self.assertEqual(commands, ["filesystem", "stdin"])
-            provider.assert_not_called()
+    def test_every_provider_reviews_each_pack_without_a_scanner(self) -> None:
+        for engine in ("codex", "claude", "amp", "pi", "kimi"):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tempdir:
+                args = argparse.Namespace(engine=engine, max_priority="P0")
+                prompts = [f"complete pack {index}: unicode π\r\n-context\n+change\n" for index in range(2)]
+                with mock.patch.object(AUTOREVIEW, "find_command", side_effect=AssertionError("unexpected scanner lookup")), \
+                        mock.patch.object(AUTOREVIEW, "run", side_effect=AssertionError("unexpected scanner process")), \
+                        mock.patch.object(AUTOREVIEW, f"run_{engine}", return_value=json.dumps(FINAL_REPORT)) as provider:
+                    for prompt in prompts:
+                        report = AUTOREVIEW.run_reviewer(args, Path(tempdir), prompt, set(), [])
+                        self.assertEqual(report["findings"], [])
+                self.assertEqual([call.args[2] for call in provider.call_args_list], prompts)
 
     def test_binary_stdin_preserves_utf8_and_crlf_bytes(self) -> None:
         payload = "unicode \u03c0\r\nnext\n".encode("utf-8")
@@ -995,100 +1010,6 @@ class AutoreviewTruffleHogTests(unittest.TestCase):
                 Path(tempdir), stdin=source,
             )
         self.assertEqual(result.stdout.strip(), payload.hex())
-
-    def test_every_provider_scans_each_pack_and_refuses_scanner_failures(self) -> None:
-        for engine in ("codex", "claude", "amp", "pi", "kimi"):
-            for failed_source, failure in ((None, None), (None, "missing"),
-                                           ("filesystem", "finding"), ("filesystem", "error"),
-                                           ("stdin", "finding"), ("stdin", "error")):
-                with self.subTest(engine=engine, source=failed_source, failure=failure), tempfile.TemporaryDirectory() as tempdir:
-                    repo = Path(tempdir)
-                    args = argparse.Namespace(engine=engine, max_priority="P0")
-                    prompts = [f"complete pack {index}: unicode \u03c0\r\n-context\n+change\n" for index in range(2)]
-                    events: list[tuple[str, str]] = []
-                    packs: list[Path] = []
-
-                    def scanner(command, cwd, **kwargs):
-                        source = command[1]
-                        pack = Path(command[2]) if source == "filesystem" else Path(kwargs["stdin"].name)
-                        data = pack.read_bytes() if source == "filesystem" else kwargs["stdin"].read()
-                        packs.append(pack)
-                        prompt = data.decode("utf-8")
-                        self.assertIn(prompt, prompts)
-                        self.assertEqual(cwd, pack.parent)
-                        if os.name != "nt":
-                            self.assertEqual(stat.S_IMODE(pack.stat().st_mode), 0o600)
-                            self.assertEqual(stat.S_IMODE(pack.parent.stat().st_mode), 0o700)
-                        events.append((source, prompt))
-                        code = 0
-                        if prompt == prompts[1] and source == failed_source:
-                            code = {"finding": AUTOREVIEW.TRUFFLEHOG_FINDINGS_EXIT_CODE, "error": 1}.get(failure, 0)
-                        return subprocess.CompletedProcess(command, code, "", "")
-
-                    def provider(_args, _repo, prompt):
-                        events.append(("send", prompt))
-                        return json.dumps(FINAL_REPORT)
-
-                    with mock.patch.object(AUTOREVIEW, "find_command", return_value="/trusted/trufflehog") as find, \
-                            mock.patch.object(AUTOREVIEW, "run", side_effect=scanner), contextlib.ExitStack() as stack:
-                        providers = {
-                            name: stack.enter_context(mock.patch.object(AUTOREVIEW, f"run_{name}", side_effect=provider))
-                            for name in ("codex", "claude", "amp", "pi", "kimi")
-                        }
-                        AUTOREVIEW.run_reviewer(args, repo, prompts[0], set(), [])
-                        if failure == "missing":
-                            find.return_value = None
-                        if failure:
-                            with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
-                                AUTOREVIEW.run_reviewer(args, repo, prompts[1], set(), [])
-                        else:
-                            AUTOREVIEW.run_reviewer(args, repo, prompts[1], set(), [])
-                        for name, call in providers.items():
-                            self.assertEqual(call.call_count, (1 if failure else 2) if name == engine else 0)
-                    expected = [("filesystem", prompts[0]), ("stdin", prompts[0]), ("send", prompts[0])]
-                    if failure != "missing":
-                        expected.append(("filesystem", prompts[1]))
-                        if failed_source != "filesystem":
-                            expected.append(("stdin", prompts[1]))
-                    if not failure:
-                        expected.append(("send", prompts[1]))
-                    self.assertEqual(events, expected)
-                    self.assertTrue(all(not pack.parent.exists() for pack in packs))
-
-    def test_scanner_command_requests_verified_and_unknown_results(self) -> None:
-        prompt = "review pack with redacted examples only"
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = Path(tempdir)
-
-            def run_scanner(
-                command: list[str],
-                cwd: Path,
-                **kwargs: object,
-            ) -> subprocess.CompletedProcess[str]:
-                pack = Path(command[2]) if command[1] == "filesystem" else Path(kwargs["stdin"].name)
-                self.assertEqual(cwd, pack.parent)
-                data = pack.read_bytes() if command[1] == "filesystem" else kwargs["stdin"].read()
-                self.assertEqual(data, prompt.encode("utf-8"))
-                self.assertEqual(
-                    command[3:] if command[1] == "filesystem" else command[2:],
-                    [
-                        "--json",
-                        "--no-color",
-                        "--results=verified,unknown",
-                        "--fail",
-                        "--fail-on-scan-errors",
-                        "--no-update",
-                    ],
-                )
-                self.assertEqual(kwargs["check"], False)
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            with mock.patch.object(
-                AUTOREVIEW,
-                "find_command",
-                return_value="/trusted/trufflehog",
-            ), mock.patch.object(AUTOREVIEW, "run", side_effect=run_scanner):
-                AUTOREVIEW.scan_outgoing_review_pack(repo, prompt)
 
 
 class AutoreviewCompatibilityTests(unittest.TestCase):
@@ -1178,6 +1099,24 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 AUTOREVIEW.ensure_kimi_isolation_supported(args, Path(tmpdir)),
                 "/usr/bin/kimi",
             )
+
+    def test_kimi_invalid_streams_are_unavailable_after_launch(self) -> None:
+        args = argparse.Namespace(engine="kimi", kimi_bin="kimi", model="kimi-model",
+                                  stream_engine_output=False, thinking="on", max_priority="P2")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            for stream in ("malformed JSON", '{"role":"meta"}\n', '{"role":"assistant","content":"{}"}'):
+                with self.subTest(stream=stream), mock.patch.object(
+                    AUTOREVIEW, "ensure_kimi_isolation_supported", return_value="/usr/bin/kimi",
+                ), mock.patch.object(
+                    AUTOREVIEW, "load_kimi_review_config", return_value=({"telemetry": False}, None),
+                ), mock.patch.object(
+                    AUTOREVIEW, "run_with_heartbeat", return_value=subprocess.CompletedProcess([], 0, stream, ""),
+                ):
+                    with self.assertRaises(AUTOREVIEW.ReviewerUnavailable) as caught:
+                        AUTOREVIEW.run_reviewer(args, repo, "synthetic pack", set(), [])
+                    self.assertEqual(caught.exception.reason, "invalid_report")
 
     def test_kimi_runs_with_empty_tools_skills_and_mcp(self) -> None:
         args = argparse.Namespace(
@@ -1275,62 +1214,31 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             web_search=False,
         )
         prompt = "complete retry pack: unicode \u03c0\r\n-deleted line\n unchanged context\n"
-        for failed_source, failure in ((None, None), (None, "missing"),
-                                       ("filesystem", "finding"), ("filesystem", "error"),
-                                       ("stdin", "finding"), ("stdin", "error")):
-            with self.subTest(source=failed_source, failure=failure), tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir:
-                events: list[str] = []
-                packs: list[Path] = []
+        with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir:
+            events = []
 
-                def scanner(command, _cwd, **kwargs):
-                    source = command[1]
-                    pack = Path(command[2]) if source == "filesystem" else Path(kwargs["stdin"].name)
-                    data = pack.read_bytes() if source == "filesystem" else kwargs["stdin"].read()
-                    packs.append(pack)
-                    self.assertEqual(data, prompt.encode("utf-8"))
-                    events.append(source)
-                    code = 0
-                    if "gpt-5.6-sol" in events and source == failed_source:
-                        code = {"finding": AUTOREVIEW.TRUFFLEHOG_FINDINGS_EXIT_CODE, "error": 1}.get(failure, 0)
-                    return subprocess.CompletedProcess(command, code, "", "")
+            def fake_run(command, _cwd, **kwargs):
+                self.assertEqual(kwargs["input_text"], prompt)
+                model = command[command.index("--model") + 1]
+                events.append(model)
+                if model == "gpt-5.6-sol":
+                    return subprocess.CompletedProcess(
+                        command, 1, "",
+                        "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
+                    )
+                output_path = Path(command[command.index("--output-last-message") + 1])
+                output_path.write_text(json.dumps(FINAL_REPORT))
+                return subprocess.CompletedProcess(command, 0, "", "")
 
-                def fake_run(command, _cwd, **kwargs):
-                    self.assertEqual(kwargs["input_text"], prompt)
-                    model = command[command.index("--model") + 1]
-                    events.append(model)
-                    if model == "gpt-5.6-sol":
-                        if failure == "missing":
-                            find.return_value = None
-                        return subprocess.CompletedProcess(
-                            command, 1, "",
-                            "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
-                        )
-                    output_path = Path(command[command.index("--output-last-message") + 1])
-                    output_path.write_text(json.dumps(FINAL_REPORT))
-                    return subprocess.CompletedProcess(command, 0, "", "")
-
-                with mock.patch.object(AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"), \
-                        mock.patch.object(AUTOREVIEW, "ensure_codex_isolation_supported", return_value="/usr/bin/codex"), \
-                        mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), \
-                        mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=None), \
-                        mock.patch.object(AUTOREVIEW, "find_command", return_value="/trusted/trufflehog") as find, \
-                        mock.patch.object(AUTOREVIEW, "run", side_effect=scanner), \
-                        mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_run):
-                    if failure:
-                        with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
-                            AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
-                    else:
-                        report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
-                        self.assertEqual(report["findings"], [])
-                expected = ["filesystem", "stdin", "gpt-5.6-sol"]
-                if failure != "missing":
-                    expected.append("filesystem")
-                    if failed_source != "filesystem":
-                        expected.append("stdin")
-                if not failure:
-                    expected.append("gpt-5.6-terra")
-                self.assertEqual(events, expected)
-                self.assertTrue(all(not pack.parent.exists() for pack in packs))
+            with mock.patch.object(AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"), \
+                    mock.patch.object(AUTOREVIEW, "ensure_codex_isolation_supported", return_value="/usr/bin/codex"), \
+                    mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), \
+                    mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=None), \
+                    mock.patch.object(AUTOREVIEW, "find_command", side_effect=AssertionError("unexpected scanner lookup")), \
+                    mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_run):
+                report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), prompt, set(), [])
+                self.assertEqual(report["findings"], [])
+            self.assertEqual(events, ["gpt-5.6-sol", "gpt-5.6-terra"])
 
     def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
         args = argparse.Namespace(

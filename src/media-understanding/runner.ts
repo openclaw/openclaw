@@ -83,7 +83,7 @@ export {
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
   typeof import("../agents/prepared-model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadPreparedModelCatalog"]>>;
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
 
 type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
@@ -219,9 +219,9 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -282,8 +282,8 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
-  const { loadPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const { readPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
@@ -449,9 +449,9 @@ async function activeModelSupportsNativeVision(params: {
   ) {
     return false;
   }
-  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+  const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
