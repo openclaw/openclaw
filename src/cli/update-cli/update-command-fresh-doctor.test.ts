@@ -228,11 +228,12 @@ describe("post-plugin update readiness", () => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const io = createConfigIO({ configPath, observe: false });
       mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
+      mocks.runDoctor.mockImplementation(async () => {
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
+        return doctorExit;
+      });
       mocks.runExec.mockImplementation(async (_command, args: string[]) => {
-        if (args.includes("--repair")) {
-          await fs.mkdir(path.dirname(configPath), { recursive: true });
-          await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
-        }
         if (args.includes("validate")) {
           throw new Error("Config invalid");
         }
