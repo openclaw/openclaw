@@ -27,7 +27,7 @@ type ModuleWithResolver = typeof Module & {
   registerHooks?: (options: {
     resolve?: (
       specifier: string,
-      context: { parentURL?: string | undefined },
+      context: { parentURL?: string | undefined; conditions: readonly string[] },
       nextResolve: (
         specifier: string,
         context?: { parentURL?: string | undefined },
@@ -363,6 +363,11 @@ function installResolver(): void {
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
       if (aliasTarget) {
+        if (isPluginSdkAliasSpecifier(specifier) && context.conditions.includes("import")) {
+          // Finish the SDK graph before async linking caches an uninstantiated job
+          // that a concurrently activated CJS plugin cannot require.
+          Module.createRequire(import.meta.url)(aliasTarget);
+        }
         return {
           shortCircuit: true,
           url: pathToFileURL(aliasTarget).href,

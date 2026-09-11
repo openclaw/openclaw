@@ -27,6 +27,7 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   DEFINITION_DENIAL,
   GatewayRestartHealthError,
@@ -410,6 +411,9 @@ export async function maybeRestartService(params: {
           }
         } catch (err) {
           assertCurrent();
+          if (err instanceof UpdateCommandRecoveryPendingError) {
+            throw err;
+          }
           if (activation.serviceLoadBoundary) {
             throw new UpdateServiceLoadBoundaryError("Service staging or sealing failed.", {
               cause: err,

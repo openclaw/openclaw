@@ -595,7 +595,8 @@ export async function listAgentSessionDirs(stateDir: string): Promise<string[]> 
     const entries = await fs.readdir(root, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(root, entry.name, "sessions"));
+      .map((entry) => path.join(root, entry.name, "sessions"))
+      .toSorted();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];

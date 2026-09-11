@@ -6509,6 +6509,67 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it.each(["mdl_prov", "mdl_list_xai_1"])(
+    "explains missing access in %s callbacks",
+    async (data) => {
+      loadConfig.mockReturnValue({
+        agents: { defaults: { model: "xai/grok-test" } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      setSessionStoreEntriesForTest({
+        "agent:main:main": {
+          sessionId: "pinned-model-account",
+          updatedAt: 0,
+          authProfileOverride: "xai:missing",
+          authProfileOverrideSource: "user",
+        },
+      });
+      vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockImplementationOnce(
+        async (_cfg, _agentId, options) => {
+          const missingAccess = options?.sessionEntry?.authProfileOverride === "xai:missing";
+          return {
+            byProvider: new Map([["xai", new Set(["grok-test"])]]),
+            providers: ["xai"],
+            resolvedDefault: { provider: "xai", model: "grok-test" },
+            modelNames: new Map([["xai/grok-test", "Grok Test"]]),
+            modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
+            modelMenu: {
+              modelNames: new Map([
+                ["xai/grok-test", missingAccess ? "Sign-in needed — Grok Test" : "Grok Test"],
+              ]),
+              byProvider: new Map([
+                [
+                  "xai",
+                  {
+                    available: missingAccess ? 0 : 1,
+                    notice: missingAccess ? "xai: Sign-in needed. Connect with /login xai." : "",
+                  },
+                ],
+              ]),
+            },
+          };
+        },
+      );
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({ id: `missing-access-${data}`, data, messageId: 24 }),
+      );
+
+      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Connect with /login xai.");
+      if (data === "mdl_list_xai_1") {
+        expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("0 of 1 available");
+        expect(editMessageTextSpy.mock.calls.at(-1)?.[3]).toMatchObject({
+          reply_markup: {
+            inline_keyboard: expect.arrayContaining([
+              [expect.objectContaining({ text: expect.stringContaining("Sign-in needed") })],
+            ]),
+          },
+        });
+      }
+      expect(replySpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");

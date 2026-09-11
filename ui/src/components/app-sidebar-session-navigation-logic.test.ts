@@ -484,6 +484,18 @@ describe("sidebar navigation lineage ownership", () => {
 
   it.each([
     ["legacy active child", { status: "running" }, 1, 0],
+    [
+      "queued leaf subagent",
+      { status: "queued", hasActiveRun: true, hasActiveSubagentRun: true },
+      1,
+      0,
+    ],
+    [
+      "archived subagent",
+      { status: "running", hasActiveRun: true, hasActiveSubagentRun: true, archived: true },
+      0,
+      0,
+    ],
     ["stale running child", { status: "running", hasActiveRun: false }, 0, 0],
     ["failed child with a stale active flag", { status: "failed", hasActiveRun: true }, 0, 1],
   ] as const)(

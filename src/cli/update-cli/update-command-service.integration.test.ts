@@ -1,4 +1,5 @@
-// Keep the real lifecycle/version guards across the old-parent and fresh-CLI boundaries.
+// Keep real lifecycle/version guards; native transport is simulated in this suite.
+// Actual executor/receiver custody is covered by update-command-service-custody.test.ts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -143,6 +144,23 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
 vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
   readSystemdDefinitionMutationCapability: mocks.capability,
 }));
+// These platform-mocked lifecycle fixtures do not own a real updater process.
+// Keep the real command/result implementation, but model only its native transport.
+// The real caller's missing/unregistered executor refusals have process tests.
+vi.mock("./update-command-service-command.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-command-service-command.js")>();
+  return {
+    ...actual,
+    runUpdatedInstallGatewayCommand: (
+      ...[params, action, preserve]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
+    ) =>
+      actual.runUpdatedInstallGatewayCommand(
+        { ...params, opts: { json: params.opts.json } },
+        action,
+        preserve,
+      ),
+  };
+});
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout: mocks.child,
@@ -236,7 +254,7 @@ beforeEach(async () => {
     environment: { HOME: root },
     sourcePath: "/etc/systemd/system/openclaw-gateway.service",
   });
-  mocks.child.mockImplementation(async (args) => {
+  mocks.child.mockReset().mockImplementation(async (args) => {
     if (!args.includes("restart")) {
       throw new Error("Unexpected subprocess in activation fixture");
     }

@@ -317,8 +317,7 @@ describe("deepinfra video generation provider", () => {
           models: {
             providers: {
               deepinfra: {
-                // Assembled from pieces so TruffleHog's URI detector
-                // (security-fast CI gate) does not flag the fixture.
+                // Assemble the fixture URL at runtime to avoid scanner false positives.
                 baseUrl: ["https://user", "password@gw.example.com/v1/inference?token=secret"].join(
                   ":",
                 ),

@@ -2237,7 +2237,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["install-trufflehog", "setup-node-env-bun", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
   [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
   [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
@@ -2446,17 +2446,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/ci-check-testbox\.yml$/u,
-    [workflowGuards, packageAcceptance, "changed-lanes", "install-trufflehog"],
+    [workflowGuards, packageAcceptance, "changed-lanes"],
   ],
-  [
-    /^\.github\/workflows\/ci-check-arm-testbox\.yml$/u,
-    [workflowGuards, packageAcceptance, "install-trufflehog"],
-  ],
+  [/^\.github\/workflows\/ci-check-arm-testbox\.yml$/u, [workflowGuards, packageAcceptance]],
   [/^\.github\/workflows\/crabbox-hydrate\.yml$/u, [workflowGuards, packageAcceptance]],
-  [
-    /^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u,
-    ["install-trufflehog", packageAcceptance, workflowGuards],
-  ],
+  [/^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u, [packageAcceptance, workflowGuards]],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
     [

@@ -8,9 +8,8 @@ import {
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import { isChatControlCommand, type SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { isChatControlCommand, isModelIndependentChatCommand } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
-import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
@@ -31,7 +30,7 @@ import {
 import { createGoalComposerController } from "./chat-composer-goal-mode.ts";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
-import { resolveComposerMenus } from "./chat-composer-menus.ts";
+import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import {
   isSkillMenuVisible,
   resetSkillMenuState,
@@ -61,23 +60,6 @@ import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
-
-function resolveChatSlashCommandArgOptions(
-  command: SlashCommandDef,
-  props: ChatComposerProps,
-): string[] {
-  if (command.key !== "think") {
-    return command.argOptions ?? [];
-  }
-  if (props.modelSwitching) {
-    return [];
-  }
-  return resolveThinkingCommandArgOptionsForSession(
-    props.selectedSession,
-    props.sessions?.defaults,
-    props.modelCatalog,
-  );
-}
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
@@ -195,11 +177,16 @@ export function renderChatComposer(props: ChatComposerProps) {
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => void props.onSend(),
-    canRun: (inline, command) =>
+    canRun: (inline, command, args = "") =>
+      canCompose &&
       state.slashCommandDispatchConnected &&
       !(inline && !props.onSlashCommand) &&
+      (!props.modelRequiredReason ||
+        isModelIndependentChatCommand(
+          command ? `/${command.name} ${args}` : skillMenuHost.getDraft(),
+        )) &&
       (!props.submitDisabledReason ||
-        isChatControlCommand(command ? `/${command.name}` : skillMenuHost.getDraft())),
+        isChatControlCommand(command ? `/${command.name} ${args}` : skillMenuHost.getDraft())),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),
@@ -307,6 +294,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   // slash commands are live controls and must not execute against stale state.
   const canSubmitDraft = (draft: string) =>
     canCompose &&
+    (!props.modelRequiredReason ||
+      (!goalComposer.active &&
+        (props.getAttachments?.() ?? props.attachments ?? []).length === 0 &&
+        isModelIndependentChatCommand(draft))) &&
     (!props.submitDisabledReason || (!goalComposer.active && isChatControlCommand(draft))) &&
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
