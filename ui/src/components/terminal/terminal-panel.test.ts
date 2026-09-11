@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
+import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import * as themeColor from "../../lib/theme-color.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -446,6 +447,40 @@ describe("OpenClawTerminalPanel", () => {
         method: "terminal.close",
         params: { sessionId: "session-1" },
       });
+    });
+  });
+
+  it("closes a prepared native terminal when its page renderer fails to initialize", async () => {
+    createGhosttyTerminalMock.mockRejectedValue(new Error("renderer initialization failed"));
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return terminalOpenResult("prepared-session") as T;
+      },
+      addEventListener: () => () => {},
+    };
+    await prepareCatalogTerminal(
+      client,
+      { catalogId: "codex", agentId: "ops", hostId: "gateway:local", cwd: "/work/ops" },
+      () => true,
+    );
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = { sessionId: "prepared-session" };
+    document.body.append(panel);
+
+    await waitForFast(() => {
+      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+        "renderer initialization failed",
+      );
+    });
+    expect(requests).toContainEqual({
+      method: "terminal.close",
+      params: { sessionId: "prepared-session" },
     });
   });
 

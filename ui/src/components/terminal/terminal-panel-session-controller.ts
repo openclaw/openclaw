@@ -516,10 +516,10 @@ export class TerminalPanelSessionController
   ): Promise<boolean> {
     let createdTab: TerminalPanelSessionTab | undefined;
     let createdConnection: TerminalConnection | undefined;
+    const prepared = this.host.page
+      ? takePreparedCatalogTerminal(sessionId, operation.client)
+      : null;
     try {
-      const prepared = this.host.page
-        ? takePreparedCatalogTerminal(sessionId, operation.client)
-        : null;
       if (prepared) {
         this.connection?.dispose();
         this.connection = prepared.connection;
@@ -549,6 +549,11 @@ export class TerminalPanelSessionController
       this.adoptSession(boot.tab, result, agentOwned);
       return true;
     } catch (error) {
+      // Claiming cancels the handoff expiry; failed boot or binding must close
+      // this newly started PTY even if the page lifecycle was also cancelled.
+      if (prepared) {
+        void prepared.connection.close(prepared.result.sessionId);
+      }
       if (!this.isTerminalOperationCurrent(operation, restore)) {
         return false;
       }
