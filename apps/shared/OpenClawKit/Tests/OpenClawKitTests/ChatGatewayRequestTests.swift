@@ -744,6 +744,18 @@ struct ChatGatewayRequestTests {
 }
 
 struct ChatGatewayPayloadCodecTests {
+    @Test func `published catalog hello enables direct session model choices`() throws {
+        let data = Data("""
+        {"type":"hello-ok","protocol":4,"server":{},
+         "features":{"capabilities":["published-model-catalog"]},
+         "snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},
+         "auth":{},"policy":{}}
+        """.utf8)
+        let hello = try JSONDecoder().decode(HelloOk.self, from: data)
+
+        #expect(hello.supportsServerCapability(.publishedModelCatalog))
+    }
+
     @Test func `hello operator scopes preserve the exact advertised authorization`() {
         let snapshot = Snapshot(
             presence: [],

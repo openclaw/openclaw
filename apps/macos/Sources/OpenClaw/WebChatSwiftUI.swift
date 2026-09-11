@@ -267,7 +267,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
     {
         let lease = try await self.connection.acquireServerLease()
         guard await self.connection.supportsServerCapability(
-            .sessionScopedModelCatalog, ifCurrentServerLease: lease) == true
+            .publishedModelCatalog, ifCurrentServerLease: lease) == true
         else {
             return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
         }

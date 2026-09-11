@@ -42,10 +42,12 @@ final class ChatCatalogUITests: XCTestCase {
 
         let modelPicker = app.buttons["chat-composer-inline-model"]
         XCTAssertTrue(modelPicker.waitForExistence(timeout: 30))
+        XCTAssertTrue(self.waitUntilEnabled(modelPicker), app.debugDescription)
         modelPicker.tap()
+        self.capture(app, named: "opened-model-menu")
         let unknownRow = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", "catalog-proof/fixture")).firstMatch
-        XCTAssertTrue(unknownRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(unknownRow.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(unknownRow.isEnabled)
         let authRequiredRow = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", "anthropic/claude-fixture")).firstMatch

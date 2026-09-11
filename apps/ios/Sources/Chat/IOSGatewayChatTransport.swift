@@ -303,7 +303,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             throw CancellationError()
         }
         let sessionScoped = await self.gateway.supportsServerCapability(
-            .sessionScopedModelCatalog,
+            .publishedModelCatalog,
             ifCurrentRoute: route) == true
         guard sessionScoped else {
             return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
