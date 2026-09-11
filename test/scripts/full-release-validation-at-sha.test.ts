@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -97,6 +98,8 @@ function createDispatchFixture(
     failIntentWrite?: boolean;
     stopBeforeDispatch?: boolean;
     reopenDuringDispatch?: boolean;
+    payloadPreparationFailure?: "directory" | "write";
+    payloadCleanupFailure?: boolean;
     parentRunStates?: Array<{
       conclusion: string | null;
       status: string;
@@ -128,6 +131,8 @@ function createDispatchFixture(
   const artifactFixturePath = join(root, "artifact-fixture.cjs");
   const fetchCallsPath = join(root, "fetch-calls.txt");
   const artifactTransportPath = join(root, "artifact-transport.jsonl");
+  const payloadEventsPath = join(root, "payload-events.jsonl");
+  const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
   const releaseRef = options.releaseRef ?? "release/2026.8.1";
@@ -141,23 +146,64 @@ function createDispatchFixture(
   writeFileSync(waitCallsPath, "");
   writeFileSync(fetchCallsPath, "");
   writeFileSync(artifactTransportPath, "");
+  writeFileSync(payloadEventsPath, "");
   writeFileSync(
     preloadPath,
     `import { appendFileSync } from "node:fs";
 import fs from "node:fs";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { basename, dirname, join } from "node:path";
+const payloadEvent = (stage, path, extra = {}) => appendFileSync(
+  ${JSON.stringify(payloadEventsPath)}, JSON.stringify({ stage, path, ...extra }) + "\\n",
+);
+const isPayloadDirectory = (path) => typeof path === "string" && basename(path).startsWith("openclaw-release-dispatch-payload-");
+const makeDirectory = fs.mkdtempSync;
+fs.mkdtempSync = (prefix, ...args) => {
+  if (!isPayloadDirectory(prefix)) return makeDirectory(prefix, ...args);
+  const requests = join(process.cwd(), ".artifacts", "full-release-validation");
+  const requestPath = process.env.MOCK_REQUEST_FILE || join(requests, fs.readdirSync(requests).find((name) => name.endsWith(".json")));
+  const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+  if (intent.phase !== "prepared" || intent.refs.target !== "intended" || intent.refs.workflow !== "intended") {
+    throw new Error("payload preparation requires durable prepared intent before either ref");
+  }
+  if (${JSON.stringify(options.payloadPreparationFailure ?? "")} === "directory") {
+    throw new Error("injected payload directory failure");
+  }
+  const directory = makeDirectory(prefix, ...args);
+  payloadEvent("created", directory);
+  return directory;
+};
 const write = fs.writeFileSync;
 fs.writeFileSync = (path, data, ...args) => {
   if (${JSON.stringify(options.failIntentWrite ?? false)} && String(data).includes('"phase":"attempted"')) {
     throw new Error("injected intent write failure");
   }
+  if (typeof path === "string" && isPayloadDirectory(dirname(path))) {
+    payloadEvent("write", path, { options: args[0] });
+    if (${JSON.stringify(options.payloadPreparationFailure ?? "")} === "write") {
+      write(path, String(data).slice(0, 10), ...args);
+      throw new Error("injected payload write failure");
+    }
+  }
   return write(path, data, ...args);
+};
+const remove = fs.rmSync;
+fs.rmSync = (path, ...args) => {
+  if (!isPayloadDirectory(path)) return remove(path, ...args);
+  payloadEvent("cleanup", path);
+  if (${JSON.stringify(options.payloadCleanupFailure ?? false)}) {
+    throw new Error("private-cleanup-error-must-not-be-logged".repeat(100));
+  }
+  return remove(path, ...args);
 };
 const execute = childProcess.execFileSync;
 childProcess.execFileSync = (file, args, options) => {
   if (${JSON.stringify(options.stopBeforeDispatch ?? false)} && args?.some((arg) => arg.endsWith("/dispatches"))) {
     process.exit(77);
+  }
+  if (args?.some((arg) => /\\/actions\\/workflows\\/17\\/runs$/.test(arg))) {
+    payloadEvent("reconcile", "");
   }
   if (args?.some((arg) => /\\/actions\\/artifacts\\/\\d+(?:\\/zip)?$/.test(arg))) {
     appendFileSync(${JSON.stringify(artifactTransportPath)}, JSON.stringify({
@@ -416,8 +462,23 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
   });
   process.exit(result.status ?? 1);
 } else if ((args[0] === "workflow" && args[1] === "run") || (method === "POST" && endpoint.endsWith("/dispatches"))) {
-  const wireInputs = Object.fromEntries(args[0] === "workflow" ? fields : [...fields]
+  const inputIndex = args.indexOf("--input");
+  const payloadPath = inputIndex >= 0 ? args[inputIndex + 1] : undefined;
+  const payloadText = payloadPath ? fs.readFileSync(payloadPath, "utf8") : undefined;
+  const payload = payloadText === undefined ? undefined : JSON.parse(payloadText);
+  const wireInputs = payload?.inputs ?? Object.fromEntries(args[0] === "workflow" ? fields : [...fields]
     .filter(([key]) => key.startsWith("inputs[")).map(([key, value]) => [key.slice(7, -1), value]));
+  if (payload) {
+    const directory = require("node:path").dirname(payloadPath);
+    fs.writeFileSync(${JSON.stringify(payloadCapturePath)}, JSON.stringify({
+      body: payload, path: payloadPath, directory,
+      bytes: Buffer.byteLength(payloadText),
+      regularFile: fs.lstatSync(payloadPath).isFile(),
+      fileMode: fs.statSync(payloadPath).mode & 0o777,
+      directoryMode: fs.statSync(directory).mode & 0o777,
+    }));
+    fs.appendFileSync(${JSON.stringify(payloadEventsPath)}, JSON.stringify({ stage: "post", path: payloadPath }) + "\\n");
+  }
   const declaredInputs = new Set(JSON.parse(process.env.MOCK_WORKFLOW_INPUTS));
   for (const key of Object.keys(wireInputs)) {
     if (!declaredInputs.has(key)) {
@@ -430,6 +491,7 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     const requestPath = process.env.MOCK_REQUEST_FILE || require("node:path").join(directory, fs.readdirSync(directory).find((name) => name.endsWith(".json")));
     const intent = JSON.parse(fs.readFileSync(requestPath, "utf8"));
     if (intent.phase !== "attempted" || JSON.stringify(intent.request.wireInputs) !== JSON.stringify(wireInputs) ||
+        (payload && payload.ref !== intent.request.workflowRef) ||
         (fs.statSync(requestPath).mode & 0o777) !== 0o600) {
       throw new Error("POST must have an exact private retained attempted intent");
     }
@@ -457,7 +519,7 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     typedInputs: Object.fromEntries(Object.entries(wireInputs).map(([key, value]) => [
       key, JSON.parse(process.env.MOCK_WORKFLOW_SCHEMA)[key].type === "boolean" ? value === "true" : value,
     ])),
-    ref: args[0] === "workflow" ? args[args.indexOf("--ref") + 1] : fields.get("ref"),
+    ref: payload?.ref ?? (args[0] === "workflow" ? args[args.indexOf("--ref") + 1] : fields.get("ref")),
   }));
   if (${JSON.stringify(options.acceptedDispatchFailure ?? false)}) {
     console.error("connection reset by peer after server acceptance");
@@ -641,12 +703,26 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
       .map((line) => JSON.parse(line) as string[]);
   const readWaits = (): number[] =>
     readFileSync(waitCallsPath, "utf8").trim().split("\n").filter(Boolean).map(Number);
+  const readPayloadEvents = (): Array<{
+    stage: string;
+    path: string;
+    options?: { flag: string; mode: number };
+  }> =>
+    readFileSync(payloadEventsPath, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
 
   return {
     checkout,
     acceptedRunPath,
     artifactTransportPath,
-    cleanup: () => rmSync(root, { force: true, recursive: true }),
+    cleanup: () => {
+      for (const event of readPayloadEvents().filter((entry) => entry.stage === "created")) {
+        rmSync(event.path, { force: true, recursive: true });
+      }
+      rmSync(root, { force: true, recursive: true });
+    },
     ghCallsPath,
     fetchCallsPath,
     gitCallsPath,
@@ -655,6 +731,17 @@ if (args[0] === "api" && method === "POST" && endpoint.endsWith("/git/refs")) {
     pathGhCallsPath,
     readCalls,
     readWaits,
+    readPayloadEvents,
+    readPayload: () =>
+      JSON.parse(readFileSync(payloadCapturePath, "utf8")) as {
+        body: { ref: string; inputs: Record<string, string> };
+        path: string;
+        directory: string;
+        bytes: number;
+        regularFile: boolean;
+        fileMode: number;
+        directoryMode: number;
+      },
     requestPath: () => {
       const directory = join(checkout, ".artifacts", "full-release-validation");
       return join(
@@ -693,18 +780,6 @@ function ghField(args: string[], name: string): string {
     args
       .find((arg, index) => args[index - 1] === "-f" && arg.startsWith(prefix))
       ?.slice(prefix.length) ?? ""
-  );
-}
-
-function dispatchedInputs(args: string[]): Record<string, string> {
-  return Object.fromEntries(
-    args.flatMap((argument, index) => {
-      if (args[index - 1] !== "-f") {
-        return [];
-      }
-      const assignment = /^inputs\[([^\]]+)\]=([\s\S]*)$/u.exec(argument);
-      return assignment ? [[assignment[1], assignment[2]]] : [];
-    }),
   );
 }
 
@@ -1162,6 +1237,225 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
+  it("keeps dispatch inputs out of the selected GitHub CLI argv", () => {
+    const fixture = createDispatchFixture();
+    const marker = "synthetic-private-dispatch-value";
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        `live_suite_filter=${marker}`,
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(
+        JSON.parse(readFileSync(fixture.acceptedRunPath, "utf8")).inputs.live_suite_filter,
+      ).toBe(marker);
+      const dispatches = fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch);
+      expect(dispatches).toHaveLength(1);
+      expect(JSON.stringify(dispatches[0])).not.toContain(marker);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("delivers the complete wire body through a private, bounded, short-lived payload", () => {
+    const fixture = createDispatchFixture();
+    const value = "spaces 'quotes' \"double\" = & ? $() `command`\n\u00e9\u65e5\u672c";
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        `live_suite_filter=${value}`,
+        "-f",
+        "run_release_soak=true",
+        "-f",
+        "reuse_evidence=false",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      const payload = fixture.readPayload();
+      const intent = JSON.parse(readFileSync(fixture.requestPath(), "utf8"));
+      expect(payload.body).toEqual({
+        ref: intent.request.workflowRef,
+        inputs: intent.request.wireInputs,
+      });
+      expect(payload.body.inputs).toMatchObject({
+        live_suite_filter: value,
+        cross_os_suite_filter: "",
+        run_release_soak: "true",
+        reuse_evidence: "false",
+      });
+      expect(Object.values(payload.body.inputs).every((input) => typeof input === "string")).toBe(
+        true,
+      );
+      expect(payload.bytes).toBe(Buffer.byteLength(JSON.stringify(payload.body)));
+      expect(payload.bytes).toBeGreaterThan(JSON.stringify(payload.body).length);
+      expect(payload.bytes).toBeLessThanOrEqual(128 * 1024);
+      expect(payload).toMatchObject({ regularFile: true, fileMode: 0o600, directoryMode: 0o700 });
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      expect(calls.filter(isWorkflowDispatch)).toEqual([
+        [
+          "api",
+          "--include",
+          "--method",
+          "POST",
+          "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches",
+          "--hostname",
+          "github.com",
+          "--input",
+          payload.path,
+        ],
+      ]);
+      expect(JSON.stringify(calls)).not.toContain(value);
+      expect(result.stdout + result.stderr).not.toContain(value);
+      const events = fixture.readPayloadEvents();
+      expect(events.slice(0, 4).map((event) => event.stage)).toEqual([
+        "created",
+        "write",
+        "post",
+        "cleanup",
+      ]);
+      expect(events[1]?.options).toEqual({ flag: "wx", mode: 0o600 });
+      expect(events[4]?.stage).toBe("reconcile");
+      expect(existsSync(payload.path)).toBe(false);
+      expect(existsSync(payload.directory)).toBe(false);
+      expect(intent).toMatchObject({
+        phase: "observed",
+        error: "none",
+        run: { id: 123, attempt: 1 },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each(["directory", "write"] as const)(
+    "does not mutate remote refs when payload %s preparation fails",
+    (failure) => {
+      const fixture = createDispatchFixture({ payloadPreparationFailure: failure });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`injected payload ${failure} failure`);
+        expect(
+          fixture.readCalls(fixture.ghCallsPath).filter((call) => ghApiMethod(call) !== "GET"),
+        ).toEqual([]);
+        expect(
+          fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push"),
+        ).toEqual([]);
+        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
+          phase: "prepared",
+          error: "none",
+          run: null,
+          refs: { target: "intended", workflow: "intended" },
+        });
+        const events = fixture.readPayloadEvents();
+        expect(events.map((event) => event.stage)).toEqual(
+          failure === "write" ? ["created", "write", "cleanup"] : [],
+        );
+        for (const event of events) {
+          expect(existsSync(event.path)).toBe(false);
+        }
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("rejects oversized UTF-8 inputs before payload preparation or remote mutation", () => {
+    const fixture = createDispatchFixture();
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        `live_suite_filter=${"\u00e9".repeat(34_000)}`,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Dispatch request exceeds its byte limit");
+      expect(fixture.readPayloadEvents()).toEqual([]);
+      expect(
+        fixture.readCalls(fixture.ghCallsPath).filter((call) => ghApiMethod(call) !== "GET"),
+      ).toEqual([]);
+      expect(fixture.readCalls(fixture.gitCallsPath).filter((call) => call[0] === "push")).toEqual(
+        [],
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    { name: "success", options: {}, status: 0, phase: "observed", error: "none", deleted: 2 },
+    {
+      name: "HTTP rejection",
+      options: { dispatchHttpStatus: 422 },
+      status: 1,
+      phase: "rejected",
+      error: "http-rejection",
+      deleted: 0,
+    },
+    {
+      name: "unknown transport",
+      options: { dispatchFailure: true },
+      status: 1,
+      phase: "attempted",
+      error: "unclassified",
+      deleted: 0,
+    },
+    {
+      name: "accepted response loss",
+      options: { acceptedDispatchFailure: true },
+      status: 0,
+      phase: "observed",
+      error: "transport",
+      deleted: 2,
+    },
+  ])(
+    "preserves $name despite payload cleanup failure",
+    ({ options, status, phase, error, deleted }) => {
+      const fixture = createDispatchFixture({ ...options, payloadCleanupFailure: true });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+        expect(result.status, result.stderr).toBe(status);
+        const payload = fixture.readPayload();
+        expect(existsSync(payload.path)).toBe(true);
+        expect(result.stderr).toContain(
+          `Could not remove dispatch payload directory: ${JSON.stringify(payload.directory)}`,
+        );
+        expect(result.stderr).not.toContain("private-cleanup-error-must-not-be-logged");
+        expect(JSON.parse(readFileSync(fixture.requestPath(), "utf8"))).toMatchObject({
+          phase,
+          error,
+        });
+        const calls = fixture.readCalls(fixture.ghCallsPath);
+        expect(calls.filter(isWorkflowDispatch)).toHaveLength(1);
+        expect(calls.filter((call) => ghApiMethod(call) === "DELETE")).toHaveLength(deleted);
+        expect(
+          runGit(fixture.origin, [
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/release-ci",
+            "refs/heads/validation",
+          ])
+            .split("\n")
+            .filter(Boolean),
+        ).toHaveLength(2 - deleted);
+        const stages = fixture.readPayloadEvents().map((event) => event.stage);
+        expect(stages.slice(0, 4)).toEqual(["created", "write", "post", "cleanup"]);
+        if (phase === "rejected") {
+          expect(result.stderr).toContain("dispatch=rejected: GitHub returned HTTP 422");
+          expect(stages).not.toContain("reconcile");
+        } else {
+          expect(stages[4]).toBe("reconcile");
+        }
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
   it("reconciles an accepted dispatch after its response is lost without another POST", () => {
     const fixture = createDispatchFixture({ acceptedDispatchFailure: true });
     try {
@@ -1214,6 +1508,11 @@ describe("full-release-validation-at-sha", () => {
       try {
         expect(fixture.run(["--workflow-sha", fixture.workflowSha]).status).toBe(0);
         const path = fixture.requestPath();
+        const payload = fixture.readPayload();
+        expect(existsSync(payload.directory)).toBe(false);
+        const priorPayloadEvents = fixture
+          .readPayloadEvents()
+          .filter((event) => event.stage !== "reconcile");
         const before = readFileSync(path, "utf8");
         const priorGh = fixture.readCalls(fixture.ghCallsPath).length;
         const priorGit = fixture.readCalls(fixture.gitCallsPath).length;
@@ -1227,6 +1526,9 @@ describe("full-release-validation-at-sha", () => {
         );
         expect(readFileSync(path, "utf8")).toBe(before);
         expect(statSync(path).mode & 0o777).toBe(0o600);
+        expect(fixture.readPayloadEvents().filter((event) => event.stage !== "reconcile")).toEqual(
+          priorPayloadEvents,
+        );
         expect(fixture.readCalls(fixture.gitCallsPath)).toHaveLength(priorGit);
         expect(
           fixture
@@ -1669,6 +1971,7 @@ describe("full-release-validation-at-sha", () => {
       const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--dry-run"]);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("(dry run; not written)");
+      expect(fixture.readPayloadEvents()).toEqual([]);
       expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
       expect(fixture.readCalls(fixture.gitCallsPath).some((args) => args[0] === "push")).toBe(
         false,
@@ -2025,8 +2328,8 @@ describe("full-release-validation-at-sha", () => {
         expect(ghApiEndpoint(dispatch)).toBe(
           "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches",
         );
-        expect(ghField(dispatch, "ref")).toBe(workflowBranch);
-        const dispatchInputs = dispatchedInputs(dispatch);
+        expect(fixture.readPayload().body.ref).toBe(workflowBranch);
+        const dispatchInputs = fixture.readPayload().body.inputs;
         expect(dispatchInputs).toMatchObject({
           ref: fixture.targetSha,
           expected_sha: fixture.targetSha,
@@ -2126,15 +2429,13 @@ describe("full-release-validation-at-sha", () => {
         "dispatch_release_evidence=false",
       ]);
       expect(result.status, result.stderr).toBe(0);
-      const calls = fixture.readCalls(fixture.ghCallsPath);
-      const dispatch = calls.find(isWorkflowDispatch) ?? [];
-      const transportRef = ghField(dispatch, "ref");
+      const transportRef = fixture.readPayload().body.ref;
       expect(transportRef).toMatch(
         new RegExp(`^release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`, "u"),
       );
       expect(transportRef).not.toBe(fixture.targetSha);
       expect(transportRef).not.toBe(fixture.workflowSha);
-      const inputs = dispatchedInputs(dispatch);
+      const inputs = fixture.readPayload().body.inputs;
       expect(inputs).toMatchObject({
         ref: fixture.targetSha,
         expected_sha: fixture.targetSha,
@@ -2548,8 +2849,7 @@ describe("full-release-validation-at-sha", () => {
         "origin",
         `refs/tags/${fixture.trustedWorkflowTag}`,
       ]);
-      const dispatch = fixture.readCalls(fixture.ghCallsPath).find(isWorkflowDispatch);
-      const trustedIdentity = dispatchedInputs(dispatch ?? []).trusted_workflow_json;
+      const trustedIdentity = fixture.readPayload().body.inputs.trusted_workflow_json;
       expect(JSON.parse(trustedIdentity ?? "{}")).toEqual({
         ref: fixture.trustedWorkflowTag,
         fullRef: `refs/tags/${fixture.trustedWorkflowTag}`,
@@ -2570,8 +2870,7 @@ describe("full-release-validation-at-sha", () => {
         fixture.trustedWorkflowTag,
       ]);
       expect(result.status, result.stderr).toBe(0);
-      const dispatch = fixture.readCalls(fixture.ghCallsPath).find(isWorkflowDispatch);
-      const inputs = dispatchedInputs(dispatch ?? []);
+      const inputs = fixture.readPayload().body.inputs;
       expect(inputs).not.toHaveProperty("trusted_workflow_json");
       expect(inputs.reuse_evidence).toBe("false");
     } finally {

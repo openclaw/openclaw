@@ -1850,50 +1850,73 @@ async function main() {
     record = next;
   };
   try {
-    if (record) {
-      retain({ ...record, refs: { ...record.refs, target: "uncertain" } });
-    }
-    createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
-    targetRefCreated = true;
-    if (record) {
-      retain({ ...record, refs: { ...record.refs, target: "created", workflow: "uncertain" } });
-    }
-    createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
-    workflowRefCreated = true;
-    if (record) {
-      retain({ ...record, phase: "attempted", refs: { target: "created", workflow: "created" } });
-    }
-    const dispatchArgs = [
-      "api",
-      "--include",
-      "--method",
-      "POST",
-      `repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,
-      "--hostname",
-      "github.com",
-      "-f",
-      `ref=${branch}`,
-    ];
-    for (const [key, value] of Object.entries(selection.wireInputs)) {
-      dispatchArgs.push("-f", `inputs[${key}]=${value}`);
-    }
-
-    // Once dispatch starts, the refs may be needed for GitHub reruns even when
-    // the client loses the response. Cleanup resumes only after verified success.
-    dispatchAttempted = true;
+    let payloadDirectory: string | undefined;
     let dispatchOutput = "";
     let dispatchError: unknown;
     try {
-      if (args.dryRun) {
-        console.log(
-          `+ gh api --method POST repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches (input values omitted)`,
+      let payloadPath = "";
+      if (!args.dryRun) {
+        const payload = JSON.stringify({ ref: branch, inputs: selection.wireInputs });
+        requireDispatch(
+          Buffer.byteLength(payload) <= MAX_REQUEST_BYTES,
+          "Dispatch payload exceeds its byte limit",
         );
-      } else {
-        dispatchOutput = runGh(dispatchArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        payloadDirectory = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-payload-"));
+        payloadPath = join(payloadDirectory, "dispatch.json");
+        writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
       }
-    } catch (error) {
-      dispatchError = error;
-      dispatchOutput = error instanceof Error && "stdout" in error ? stringValue(error.stdout) : "";
+      if (record) {
+        retain({ ...record, refs: { ...record.refs, target: "uncertain" } });
+      }
+      createTemporaryRef(remoteTargetBranchRef, targetSha, args.dryRun);
+      targetRefCreated = true;
+      if (record) {
+        retain({ ...record, refs: { ...record.refs, target: "created", workflow: "uncertain" } });
+      }
+      createTemporaryRef(remoteBranchRef, workflowSha, args.dryRun);
+      workflowRefCreated = true;
+      if (record) {
+        retain({ ...record, phase: "attempted", refs: { target: "created", workflow: "created" } });
+      }
+      const dispatchArgs = [
+        "api",
+        "--include",
+        "--method",
+        "POST",
+        `repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`,
+        "--hostname",
+        "github.com",
+        "--input",
+        payloadPath,
+      ];
+
+      // Once dispatch starts, the refs may be needed for GitHub reruns even when
+      // the client loses the response. Cleanup resumes only after verified success.
+      dispatchAttempted = true;
+      try {
+        if (args.dryRun) {
+          console.log(
+            `+ gh api --method POST repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches (input values omitted)`,
+          );
+        } else {
+          dispatchOutput = runGh(dispatchArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        }
+      } catch (error) {
+        dispatchError = error;
+        dispatchOutput =
+          error instanceof Error && "stdout" in error ? stringValue(error.stdout) : "";
+      }
+    } finally {
+      if (payloadDirectory) {
+        try {
+          rmSync(payloadDirectory, { recursive: true, force: true });
+        } catch {
+          // A local cleanup failure must not change the observed POST outcome.
+          console.warn(
+            `Could not remove dispatch payload directory: ${JSON.stringify(payloadDirectory)}`,
+          );
+        }
+      }
     }
     if (record) {
       let responseStatus = 0;
