@@ -426,7 +426,7 @@ it.each([false, true])(
     const { runUtf8CommandWithTimeout } = await import("../../process/exec.js");
     const { finishUpdateRun, recordUpdateRunVerification } =
       await import("../../infra/update-run-ledger.js");
-    const { withOwnedManagedUpdateEnv } = await import("./update-command-managed-context.js");
+    const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
     const stateDir = await fs.realpath(dirs.make("migrated-capture-retirement-"));
     const env = {
       ...process.env,

@@ -40,6 +40,10 @@ export const UpdateRunRecordSchema = z.object({
   reason: text.nullable(),
   origin: z.object({
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
+    unprotectedGatewayUpdate: z
+      .object({ owner: driver, finalizer: driver.optional() })
+      .strict()
+      .optional(),
     driver: driver.optional(),
     previousDrivers: z
       .array(driver)

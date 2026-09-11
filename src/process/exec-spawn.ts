@@ -1,41 +1,116 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import process from "node:process";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { killProcessTree } from "./kill-tree.js";
+import { forceKillChildProcessTree, isChildProcessTreeAlive } from "./child-process-tree.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 
+type ScopedCommandProcess = {
+  stop: () => void;
+  isSettled: () => boolean;
+};
+
 type CommandProcessScope = {
   stopped: boolean;
-  children: Set<() => void>;
+  children: Set<ScopedCommandProcess>;
+  windowsChildrenSettled?: () => boolean;
 };
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
-/** Terminal command deadlines stop their children before the caller permits rollback. */
+export class CommandProcessScopeUnsettledError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      "Command process scope could not prove that every child stopped; recovery must retain its capture",
+      { cause },
+    );
+    this.name = "CommandProcessScopeUnsettledError";
+  }
+}
+
+/** Retire only settled operation ownership before an intentional process handoff. */
+export async function retireCommandProcessJobForHandoff(): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const { retireRetainedWindowsProcessJob } =
+    await import("./supervisor/service-child-windows-job-native.js");
+  try {
+    retireRetainedWindowsProcessJob();
+  } catch (cause) {
+    throw new CommandProcessScopeUnsettledError(cause);
+  }
+}
+
+/** Terminal command deadlines stop and join their children before rollback. */
 export async function withCommandProcessScope<T>(
   run: (stop: () => void) => Promise<T>,
 ): Promise<T> {
-  const scope: CommandProcessScope = { stopped: false, children: new Set() };
-  const stop = () => {
-    scope.stopped = true;
-    for (const stopChild of scope.children) {
-      stopChild();
-    }
-    scope.children.clear();
+  const parent = commandProcessScope.getStore();
+  const windowsJob =
+    process.platform === "win32"
+      ? await import("./supervisor/service-child-windows-job-native.js")
+      : undefined;
+  if (parent?.stopped) {
+    throw new Error("Command process scope is closed");
+  }
+  windowsJob?.rearmRetainedWindowsProcessJob();
+  const scope: CommandProcessScope = {
+    stopped: false,
+    children: new Set(),
+    windowsChildrenSettled: windowsJob?.areRetainedWindowsProcessJobChildrenSettled,
   };
-  return await commandProcessScope.run(scope, async () => {
-    try {
-      return await run(stop);
-    } finally {
-      stop();
+  let deadline = 0;
+  let settled = false;
+  const stop = () => {
+    if (scope.stopped) {
+      return;
     }
+    scope.stopped = true;
+    deadline = performance.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+    for (const child of scope.children) {
+      child.stop();
+    }
+  };
+  const nested = { stop, isSettled: () => settled };
+  parent?.children.add(nested);
+  return await commandProcessScope.run(scope, async () => {
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await run(stop) };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    stop();
+    while (scope.children.size > 0) {
+      for (const child of scope.children) {
+        if (child.isSettled()) {
+          scope.children.delete(child);
+        }
+      }
+      if (scope.children.size === 0) {
+        break;
+      }
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) {
+        throw new CommandProcessScopeUnsettledError(outcome.ok ? undefined : outcome.error);
+      }
+      // Keep the timer referenced: an exited launcher is not descendant settlement.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(25, remaining));
+      });
+    }
+    settled = true;
+    parent?.children.delete(nested);
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
   });
 }
 
@@ -44,36 +119,41 @@ function retainCommandProcess<OptionsType extends ExecaOptions>(
   child: ResultPromise<OptionsType>,
 ): void {
   const pid = child.pid;
-  // Windows executable finalizers retain a Job until process exit; dead launcher
-  // PIDs cannot safely identify their surviving descendants through taskkill.
-  if (pid === undefined || process.platform === "win32") {
-    return;
-  }
-  const startedAt = getFileLockProcessStartTime(pid);
-  const stop = () => {
-    const nativeChild = child.nodeChildProcess;
-    // A live direct child holds PID custody even when its optional timestamp probe failed.
-    if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
-      const currentStart = getFileLockProcessStartTime(pid);
-      if (currentStart !== null && currentStart !== startedAt) {
-        return;
-      }
+  const nativeChild = child.nodeChildProcess;
+  const windows = process.platform === "win32";
+  const startedAt = pid !== undefined && !windows ? getFileLockProcessStartTime(pid) : null;
+  let commandSettled = false;
+  let treeGone = pid === undefined;
+  const isSettled = () => {
+    if (!treeGone) {
+      treeGone = windows
+        ? scope.windowsChildrenSettled?.() === true
+        : !isChildProcessTreeAlive(nativeChild);
     }
-    killProcessTree(pid, { detached: true, force: true });
+    return treeGone && commandSettled;
   };
-  scope.children.add(stop);
-  const release = () => {
-    try {
-      // A direct child can exit while descendants retain its pipes or mutate
-      // installed files. Keep that group owned until it actually disappears.
-      process.kill(-pid, 0);
-      return;
-    } catch (error) {
-      if (extractErrorCode(error) !== "ESRCH") {
+  const retained: ScopedCommandProcess = {
+    isSettled,
+    stop: () => {
+      if (treeGone || windows || pid === undefined) {
         return;
       }
+      // A live direct child holds PID custody even without a start-time probe.
+      if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+        const currentStart = getFileLockProcessStartTime(pid);
+        if (currentStart !== null && currentStart !== startedAt) {
+          return;
+        }
+      }
+      forceKillChildProcessTree(nativeChild);
+    },
+  };
+  scope.children.add(retained);
+  const release = () => {
+    commandSettled = true;
+    if (isSettled()) {
+      scope.children.delete(retained);
     }
-    scope.children.delete(stop);
   };
   void child.then(release, release);
 }

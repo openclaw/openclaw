@@ -9,6 +9,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { UNPROTECTED_GATEWAY_UPDATE_ADVISORY } from "./update-run-record.js";
 
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
 export function readUpdateRunStatus() {
@@ -24,6 +25,7 @@ export function readUpdateRunStatus() {
     const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
     const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
     const expired = listUpdateRuns({ limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0];
+    const currentRun = activeRun ?? lastRun;
     return {
       ...(runReconciliationError ? { runReconciliationError } : {}),
       ...(activeRun ? { activeRun } : {}),
@@ -34,14 +36,27 @@ export function readUpdateRunStatus() {
       ...(abandonment && abandonment !== LEGACY_UPDATE_RUN_EXPIRED_REASON && activeRun
         ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
         : {}),
-      ...(expired
+      ...(expired || currentRun?.origin.unprotectedGatewayUpdate
         ? {
             advisories: [
-              {
-                runId: expired.runId,
-                reason: LEGACY_UPDATE_RUN_EXPIRED_REASON,
-                message: LEGACY_UPDATE_RUN_ADVISORY,
-              },
+              ...(expired
+                ? [
+                    {
+                      runId: expired.runId,
+                      reason: LEGACY_UPDATE_RUN_EXPIRED_REASON,
+                      message: LEGACY_UPDATE_RUN_ADVISORY,
+                    },
+                  ]
+                : []),
+              ...(currentRun?.origin.unprotectedGatewayUpdate
+                ? [
+                    {
+                      runId: currentRun.runId,
+                      reason: "unprotected-gateway-update",
+                      message: UNPROTECTED_GATEWAY_UPDATE_ADVISORY,
+                    },
+                  ]
+                : []),
             ],
           }
         : {}),

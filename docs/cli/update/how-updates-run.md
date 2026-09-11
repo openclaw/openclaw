@@ -33,6 +33,13 @@ the selected channel or installation method, or the Git target SHA equals
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
+An already-current update creates its recovery capture and parks the owned
+Gateway only when config or plugin work reaches its first persistent change.
+The same capture protects subsequent Doctor migrations. A true no-op leaves the
+Gateway running and creates no capture. If protected changes fail while the
+core remains unchanged, recovery restores the captured state without replacing
+the core package, then follows the normal service and health checks.
+
 Explicit package artifacts, such as tarball paths and URLs, still pass through
 validation and installation when their version matches the installed version.
 A matching version alone does not establish artifact equality.
@@ -140,8 +147,8 @@ convergence, and final runtime verification checks the resulting snapshot.
 
 ### Recovery limits
 
-The current updater writes a verified `update-recovery` set before persistent
-Doctor migrations. It captures inventoried local state, config and `$include`
+The current updater writes a verified `update-recovery` set before protected
+config, plugin, or Doctor mutations. It captures inventoried local state, config and `$include`
 files, and raw SQLite online-backup copies, including plugin-declared migration
 resources. Every file has a verified size and SHA-256. Unlike portable user
 backups, these SQLite copies are unsanitized. The run records the set at
@@ -163,6 +170,13 @@ blocks a second protected update until explicit recovery resolves it. Inspect
 with `openclaw update status --json`, then use
 `npx openclaw@latest doctor --fix` with the same state selection. See
 [Update recovery sets](/cli/backup#update-recovery-sets) for coverage and lifecycle.
+
+Standalone `openclaw update repair` and `update finalize` use one verified
+capture before requested channel writes, plugin convergence, and both Doctor
+phases. Failed finalization restores state only after mutating children have
+settled. Successful finalization never starts the Gateway, so it retains the
+set until explicit Doctor resolution; command success alone is not runtime
+health verification.
 
 If a later activation or verification step fails, rollback restores the retained
 package and the verified recovery set before starting the previous Gateway.
@@ -279,6 +293,16 @@ Gateway process tree. The Gateway exits only after candidate validation succeeds
 and activation begins. If the handoff is unavailable,
 `update.run` returns a structured response with the safe shell command to run
 manually.
+
+An unsupervised Git `update.run` invocation that runs inside the serving Gateway
+is an explicit unprotected exception. Its run, result, and status record the
+advisory: "This Gateway-initiated update is not protected by a recovery capture.
+Run `openclaw update` from a terminal for a protected update." The exception
+requires that exact live Gateway run and its bound children; it does not disable
+ordinary ownership, maintenance, or schema checks. Package updates and supervised
+Git updates continue through the protected managed-service handoff. Moving the
+remaining inline Git path to a protected owner is tracked in
+[#144422](https://github.com/openclaw/openclaw/issues/144422).
 
 Stored extended-stable selections receive read-only startup and 24-hour update
 hints when `update.checkOnStart` is enabled. These checks never apply an update,

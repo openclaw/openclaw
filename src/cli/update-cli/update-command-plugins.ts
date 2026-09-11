@@ -241,6 +241,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   };
 
   const cohort = await convergePluginReleaseCohort({
+    beforePersistentEffect: params.beforePersistentEffect,
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,

@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
+import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   restart: vi.fn(),
   record: vi.fn(),
+  capture: vi.fn(),
   configCurrent: vi.fn(),
   outcome:
     vi.fn<
@@ -33,7 +35,10 @@ vi.mock("../../infra/update-recovery-backup.js", () => ({
   restoreUpdateRecoveryBackup: mocks.restore,
   writeUpdateRecoveryBackupOutcome: mocks.outcome,
 }));
-vi.mock("../../infra/update-run-ledger.js", () => ({ recordUpdateRunStep: mocks.record }));
+vi.mock("../../infra/update-run-ledger.js", () => ({
+  recordUpdateRunStep: mocks.record,
+  recordUpdateRunRecoveryCapture: mocks.capture,
+}));
 vi.mock("../../infra/update-recovery-config-writes.js", () => ({
   assertUpdateRecoveryConfigUnchanged: mocks.configCurrent,
   withUpdateRecoveryConfigValidation: async (
@@ -64,10 +69,15 @@ beforeEach(() => {
 
 type RollbackCase = {
   corrupt: boolean;
+  stateOnly?: boolean;
   state: "absent" | "newer" | "pending" | "malformed" | "publication";
-  failure?: "package" | "restore" | "metadata" | "lost authority" | "config";
+  failure?: "package" | "restore" | "metadata" | "lost authority" | "config" | "core identity";
 };
 const cases: RollbackCase[] = [
+  { corrupt: false, state: "absent", stateOnly: true },
+  { corrupt: false, state: "absent", stateOnly: true, failure: "core identity" },
+  { corrupt: false, state: "newer", stateOnly: true, failure: "restore" },
+  { corrupt: true, state: "newer", stateOnly: true },
   { corrupt: false, state: "absent" },
   { corrupt: true, state: "absent" },
   { corrupt: false, state: "newer" },
@@ -81,10 +91,18 @@ const cases: RollbackCase[] = [
   { corrupt: false, state: "newer", failure: "config" },
 ];
 it.each(cases)(
-  "restores migrated state before restarting, corrupt backup=$corrupt, state=$state, failure=$failure",
-  async ({ corrupt, state, failure }) => {
+  "restores migrated state before restarting, corrupt backup=$corrupt, state=$state, failure=$failure, state only=$stateOnly",
+  async ({ corrupt, state, failure, stateOnly }) => {
     const root = dirs.make("update-rollback-backup-");
     await fs.mkdir(path.join(root, "tmp"));
+    const packageRoot = stateOnly ? path.join(root, "package") : root;
+    if (stateOnly) {
+      await fs.mkdir(packageRoot);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+      );
+    }
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       path.join(root, "tmp"),
     );
@@ -138,7 +156,7 @@ it.each(cases)(
       manifestPath: path.join(root, "backup/manifest.json"),
       manifestSha256: "a".repeat(64),
     };
-    mocks.verify.mockResolvedValue({ runId: "fixture-run", installRoot: root });
+    mocks.verify.mockResolvedValue({ runId: "fixture-run", installRoot: packageRoot });
     if (corrupt) {
       mocks.verify.mockRejectedValue(new Error("Backup SHA-256 mismatch"));
     }
@@ -173,26 +191,43 @@ it.each(cases)(
       ...(failure === "package" ? { stderrTail: "Package rollback denied" } : {}),
       activePackageRoot: root,
     }));
+    const unchangedCore = stateOnly
+      ? {
+          root: packageRoot,
+          fingerprint: await createPackageIntegrityReader().tree(await fs.realpath(packageRoot)),
+        }
+      : undefined;
+    if (failure === "core identity") {
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+      );
+    }
     const result = await rollbackFailedUpdate({
       result: {
         status: "error",
         mode: "npm",
-        root,
+        root: packageRoot,
         reason: "restart-unhealthy",
         before: { version: "2026.9.3" },
         steps: [],
         durationMs: 0,
       },
-      previousRoot: root,
+      previousRoot: packageRoot,
       previousVerified: true,
       configSnapshot,
       rollbackBlockedReason: "state-migrated-no-rollback",
       updateRecoveryBackup: ref,
-      packageTransaction: {
-        backupRoot: path.join(root, "package-backup"),
-        rollback,
-        complete: async () => {},
-      },
+      unchangedCore,
+      ...(stateOnly
+        ? {}
+        : {
+            packageTransaction: {
+              backupRoot: path.join(root, "package-backup"),
+              rollback,
+              complete: async () => {},
+            },
+          }),
       preManagedServiceStop: {
         stopped: true,
         running: true,
@@ -215,12 +250,12 @@ it.each(cases)(
       expect(result.pendingRecoveryReason).not.toMatch(/newer schema version/);
     } else if (corrupt || failure) {
       expect(result.rolledBack).toBe(false);
-      if (corrupt || failure === "config") {
+      if (corrupt || failure === "config" || stateOnly) {
         expect(rollback).not.toHaveBeenCalled();
       } else {
         expect(rollback).toHaveBeenCalledOnce();
       }
-      if (corrupt || failure === "package" || failure === "config") {
+      if (corrupt || failure === "package" || failure === "config" || failure === "core identity") {
         expect(mocks.restore).not.toHaveBeenCalled();
       }
       expect(mocks.restart).not.toHaveBeenCalled();
@@ -233,6 +268,9 @@ it.each(cases)(
         result: { recovery: { service: "healthy" } },
       });
       expect(mocks.restore).toHaveBeenCalledWith(ref, { assertOwned: expect.any(Function) });
+      if (stateOnly) {
+        expect(rollback).not.toHaveBeenCalled();
+      }
       expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restore.mock.invocationCallOrder[0]!,
       );
@@ -274,7 +312,7 @@ it.each(cases)(
           { assertOwned: expect.any(Function) },
         );
       }
-      if (failure && failure !== "package" && failure !== "config") {
+      if (failure && failure !== "package" && failure !== "config" && failure !== "core identity") {
         expect(result.pendingRecoveryReason).toContain("State restore could not finish");
       }
       if (failure === "config") {

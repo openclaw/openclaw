@@ -25,8 +25,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { deferUpdateCommandCaptureRetirement } from "./update-command-terminal.js";
 
 function assertCaptureStateOwner(runEnv: NodeJS.ProcessEnv, captureEnv: NodeJS.ProcessEnv): void {
@@ -57,9 +57,51 @@ export async function createUpdateCommandBackup(params: {
     }
     assertUpdateCommandRecovery(params.opts);
   };
-  const backup = await withOwnedManagedUpdateEnv(params.env, () =>
-    createUpdateRecoveryBackup({ runId: run.runId, installRoot: params.root, assertOwned }),
-  );
+  const backup = await withOwnedManagedUpdateEnv(params.env, async () => {
+    const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+    assertOwned();
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true },
+      runtime: defaultRuntime,
+    });
+    if (!maintenance) {
+      throw new Error("Update recovery capture requires offline state maintenance.");
+    }
+    let outcome: { ok: true; value: UpdateRecoveryBackupRef } | { ok: false; error: unknown };
+    try {
+      outcome = {
+        ok: true,
+        value: await createUpdateRecoveryBackup({
+          runId: run.runId,
+          installRoot: params.root,
+          assertOwned() {
+            assertOwned();
+            maintenance.assertCurrent();
+          },
+        }),
+      };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    try {
+      // Fresh Doctor children acquire these physical owners themselves.
+      await maintenance.release();
+    } catch (error) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, error],
+          "Update capture and physical maintenance settlement failed.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  });
   assertOwned();
   recordUpdateRunStep(
     run.runId,

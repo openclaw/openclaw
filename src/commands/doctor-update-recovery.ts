@@ -340,7 +340,12 @@ async function assertPendingRecoveryOffline(): Promise<void> {
 export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): Promise<void> {
   const supplied = options.updateRecoveryBackup;
   const marked = options.updateRecoveryOwner !== undefined || supplied !== undefined;
-  if (marked && (options.updateRecoveryOwner !== "driver" || !supplied?.trim())) {
+  if (
+    marked &&
+    (options.updateRecoveryOwner === "unprotected"
+      ? supplied !== undefined
+      : options.updateRecoveryOwner !== "driver" || !supplied?.trim())
+  ) {
     throw new Error(
       "Doctor update recovery requires both the driver owner and a backup reference.",
     );
@@ -354,6 +359,19 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
     return;
   }
   scope.prepared = true;
+  if (options.updateRecoveryOwner === "unprotected") {
+    const { readUnprotectedGatewayUpdateParent } =
+      await import("../infra/update-run-recovery-admission.js");
+    const { UNPROTECTED_GATEWAY_UPDATE_ADVISORY } = await import("../infra/update-run-record.js");
+    const parent = readUnprotectedGatewayUpdateParent();
+    if (!parent) {
+      throw new Error("Unprotected Doctor requires an explicitly declared Gateway update parent.");
+    }
+    parent.assertCurrent();
+    scope.assertRecoveryClaim = parent.assertCurrent;
+    scope.runtime.error(UNPROTECTED_GATEWAY_UPDATE_ADVISORY);
+    return;
+  }
   if (!updating && options.repair !== true && options.yes !== true) {
     try {
       const { inspectUpdateRecoveryBackups } = await import("../infra/update-recovery-backup.js");
@@ -546,7 +564,9 @@ export function hasVerifiedDoctorUpdateRecovery(): boolean {
 
 /** Process exit must unwind the recovery owner before terminating the Doctor child. */
 export function doctorUpdateRecoveryRuntime(runtime: RuntimeEnv): RuntimeEnv {
-  if (!doctorRecovery.getStore()?.maintenance) {
+  const scope = doctorRecovery.getStore();
+  scope?.assertRecoveryClaim?.();
+  if (!scope?.maintenance) {
     return runtime;
   }
   return {

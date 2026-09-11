@@ -10,7 +10,9 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import * as updateRunLedger from "../infra/update-run-ledger.js";
+import { UNPROTECTED_GATEWAY_UPDATE_ADVISORY } from "../infra/update-run-record.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorUpdateRecovery, withDoctorUpdateRecovery } from "./doctor-update-recovery.js";
@@ -141,6 +143,47 @@ describe("update Doctor state recovery", () => {
     }
     await fs.rm(directory, { recursive: true, force: true });
   });
+
+  it.each(["declared", "undeclared", "wrong parent"] as const)(
+    "accepts only an explicitly unprotected Doctor with its actual parent: %s",
+    async (declaration) => {
+      const parent = readUpdateRunDriver(process.ppid);
+      assert(parent, "The fixture requires an observable actual parent");
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+      mocks.driver.mockReturnValue("alive");
+      const owner =
+        declaration === "wrong parent"
+          ? { ...parent, startIdentity: String(Number(parent.startIdentity) + 1) }
+          : parent;
+      updateRunLedger.recordUpdateRunPhase(runId, "staging", {
+        trigger: "api",
+        target: { kind: "git" },
+        origin: {
+          driver: owner,
+          ...(declaration !== "undeclared" ? { unprotectedGatewayUpdate: { owner } } : {}),
+        },
+      });
+      const run = () =>
+        doctorCommand(runtime, {
+          repair: true,
+          nonInteractive: true,
+          updateRecoveryOwner: "unprotected",
+        });
+      if (declaration === "declared") {
+        await expect(run()).resolves.toBeUndefined();
+        expect(mocks.flow).toHaveBeenCalledOnce();
+        expect(runtime.error).toHaveBeenCalledWith(UNPROTECTED_GATEWAY_UPDATE_ADVISORY);
+      } else {
+        await expect(run()).rejects.toThrow(/declared Gateway update parent|does not belong/);
+        expect(mocks.flow).not.toHaveBeenCalled();
+      }
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.restore).not.toHaveBeenCalled();
+      expect(mocks.outcome).not.toHaveBeenCalled();
+      expect(updateRunLedger.getUpdateRun(runId)?.status).toBe("running");
+      expect(await fs.readFile(configPath, "utf8")).toBe("original config");
+    },
+  );
 
   it.each(["throw", "nonzero exit"])(
     "restores before propagating a Doctor %s and retains recovery guidance",

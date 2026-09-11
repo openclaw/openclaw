@@ -55,13 +55,18 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 
 ## Update recovery sets
 
-Before update-time Doctor migrations, the current updater creates and verifies
+Before protected update-time config, plugin, or Doctor mutations, the current updater creates and verifies
 an `update-recovery` set at `<stateDir>.update-captures/<captureId>/`. The update
 run records its manifest path. The sibling root, capture directory, and private
 ancestors use owner-only permissions; capture files use `0600`. Each movable
 capture carries the [private capture marker](#private-update-captures). Ordinary
 backups, Doctor archives, and support exports exclude these sets, including
 when a selected workspace contains or is nested inside one.
+
+This also covers updates whose core is already current but whose config or
+plugins need changes. A true no-op creates no capture and does not stop the
+Gateway. Standalone `openclaw update repair` captures before requested channel
+changes and uses the same set for both Doctor phases and plugin convergence.
 
 This internal backup kind reuses the existing backup inventory and SQLite
 snapshot machinery. It does not change the commands, archive layout, or
@@ -83,6 +88,11 @@ verifies the manifest and resource identities before migrations proceed and
 again before restoring. A missing or mismatched payload is a hard failure.
 These sets can contain original credentials and private state.
 
+After verifying and restoring the raw resources, OpenClaw clears process
+coordination leases from the restored shared database before writers resume.
+Those leases belong to the source processes and cannot own a restored copy.
+The retained recovery set stays unchanged.
+
 Restoring a declared database directory removes migration-created files inside
 that directory before restoring the captured files. This includes newer
 version manifests used by directory databases such as LanceDB. Files outside
@@ -103,6 +113,12 @@ outcome is a separate write-once file. There is no count, age, or disk-pressure
 pruning. Pending, failed-restoration, and crash-left captures stay retained;
 process exit does not resolve them. Deliberate backups, manually retained
 captures, and historical recovery evidence are never cleanup targets.
+
+Successful standalone repair does not start the Gateway or establish runtime
+health, so it retains its set for explicit Doctor resolution. A repair failure
+can restore the captured state without a package rollback, after all mutating
+children have settled. It never treats an uncertain child exit as permission to
+restore over a possible writer.
 
 A retained set blocks another protected update over the same state. Inspect it
 and resolve it explicitly with the same profile and state/config selection:

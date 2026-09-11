@@ -1164,8 +1164,12 @@ async function runCliWithPreparedOutputMode(
     const { prepareDoctorUpdateRecovery } = await import("../commands/doctor-update-recovery.js");
     const recoveryOwner = getFlagValue(normalizedArgv, "--update-recovery-owner");
     const recoveryBackup = getFlagValue(normalizedArgv, "--update-recovery-backup");
-    if (recoveryOwner !== undefined && recoveryOwner !== "driver") {
-      throw new Error("--update-recovery-owner must be driver.");
+    if (
+      recoveryOwner !== undefined &&
+      recoveryOwner !== "driver" &&
+      recoveryOwner !== "unprotected"
+    ) {
+      throw new Error("--update-recovery-owner must be driver or unprotected.");
     }
     if (recoveryBackup === null) {
       throw new Error("--update-recovery-backup requires a reference.");

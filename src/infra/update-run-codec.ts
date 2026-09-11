@@ -1,29 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { isRetainedStep, type UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
-const RETAINED_STEP_NAMES = [
-  ...UPDATE_RUN_PHASES,
-  "notice:ack",
-  "notice:activating",
-  "notice:verifying",
-  "previous generation restoration",
-  "post-update verification",
-  "driver:adopted",
-  "driver:identity-unavailable",
-  "reconcile:abandoned",
-  "reconcile:superseded",
-  "reconcile:acknowledged",
-];
 const JSON_FIELDS = [
   "origin",
   "target",
@@ -52,14 +38,6 @@ function mapJsonText(value: unknown, transform: (text: string) => string): unkno
     );
   }
   return value;
-}
-
-export function isRetainedStep(item: unknown): boolean {
-  return (
-    isRecord(item) &&
-    typeof item.step === "string" &&
-    (item.step.startsWith("finalize:") || RETAINED_STEP_NAMES.some((name) => name === item.step))
-  );
 }
 
 /** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
@@ -102,8 +80,14 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
 }
 
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
-  const { driver, previousDrivers, updateRecoveryCapture, ...diagnostics } = origin;
-  const identities = JSON.stringify({ driver, previousDrivers });
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    unprotectedGatewayUpdate,
+    ...diagnostics
+  } = origin;
+  const identities = JSON.stringify({ driver, previousDrivers, unprotectedGatewayUpdate });
   const boundedDiagnostics = boundedJson(diagnostics, JSON_BYTES - Buffer.byteLength(identities));
   const recovery = JSON.stringify({ updateRecoveryCapture });
   return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1), recovery.slice(1, -1)].filter(Boolean).join(",")}}`;
@@ -145,7 +129,13 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Recovery receipts and process identities must remain exact, not diagnostic excerpts.
-  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    unprotectedGatewayUpdate,
+    ...originDiagnostics
+  } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText({ ...input, origin: originDiagnostics }, (value) => {
       let text = redactSensitiveText(value, { mode: "tools" });
@@ -160,6 +150,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    unprotectedGatewayUpdate,
   });
   return {
     run_id: record.runId,

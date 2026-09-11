@@ -652,6 +652,7 @@ export async function updateGitCheckout(params: {
         nodePath: doctorNodePath,
         fix: doctorPolicy.fix,
         updateRecoveryBackup: opts.getUpdateRecoveryBackup?.(),
+        updateRecoveryOwner: opts.updateRecoveryOwner,
         step,
         env: opts.getDoctorEnv?.(),
         doctorEnvOptions: {

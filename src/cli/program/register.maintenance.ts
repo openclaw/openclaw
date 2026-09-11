@@ -63,7 +63,9 @@ export function registerMaintenanceCommands(program: Command) {
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
-    .addOption(new Option("--update-recovery-owner <owner>").choices(["driver"]).hideHelp())
+    .addOption(
+      new Option("--update-recovery-owner <owner>").choices(["driver", "unprotected"]).hideHelp(),
+    )
     .addOption(new Option("--update-recovery-backup <reference>").hideHelp())
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
@@ -193,7 +195,9 @@ export function registerMaintenanceCommands(program: Command) {
             opts.json === true,
           );
           await doctorCommand(defaultRuntime, {
-            ...(opts.updateRecoveryOwner === "driver" ? { updateRecoveryOwner: "driver" } : {}),
+            ...(opts.updateRecoveryOwner === "driver" || opts.updateRecoveryOwner === "unprotected"
+              ? { updateRecoveryOwner: opts.updateRecoveryOwner }
+              : {}),
             ...(typeof opts.updateRecoveryBackup === "string"
               ? { updateRecoveryBackup: opts.updateRecoveryBackup }
               : {}),

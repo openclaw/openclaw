@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { ExitError } from "../../runtime.js";
+import * as cleanupScope from "../runtime-cleanup-scope.js";
 import { updateCommand } from "./update-command.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,4 +50,11 @@ describe("unsupported CLI Node update admission", () => {
       }),
     );
   });
+});
+
+it("refuses executable update preparation when Windows Job ownership cannot be retained", async () => {
+  const failure = new Error("AssignProcessToJobObject(finalizer) failed");
+  vi.spyOn(cleanupScope, "retainCliProcessJobUntilExit").mockRejectedValue(failure);
+  await expect(updateCommand({ json: true })).rejects.toBe(failure);
+  expect(mocks.stateAdmission).not.toHaveBeenCalled();
 });

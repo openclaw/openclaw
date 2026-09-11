@@ -192,8 +192,7 @@ async function updateCommandInternal(
     });
 
   if (requestedChannel === "extended-stable" && installKind === "git") {
-    await refuseUpdate("unsupported_git_channel");
-    return;
+    return await refuseUpdate("unsupported_git_channel");
   }
 
   const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
@@ -706,9 +705,13 @@ async function updateCommandInternal(
         env: ownedManagedUpdateContext?.env ?? run.env,
       });
   run.executorFence?.assertCurrent();
-  if (opts.recovery || rollbackBlockedReason) {
-    // A migrated database belongs to the candidate runtime. The old process
-    // must not reopen it, including during error reporting or outer cleanup.
+  if (
+    opts.recovery ||
+    rollbackBlockedReason ||
+    (finalization.updateRecoveryBackup && finalization.candidateUpdateRecovery === "parent-v1")
+  ) {
+    // The target runtime owns protected convergence even when schemas did not change.
+    // The parent retains capture restoration until that mutating child has settled.
     recoveryState.ledgerHandoffOwned = true;
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },

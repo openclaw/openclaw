@@ -52,6 +52,7 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
+  unchangedCore?: FinishUpdateParams["unchangedCore"];
   updateRecoveryBackup?: import("../../infra/update-recovery-backup-contract.js").UpdateRecoveryBackupRef;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
@@ -126,16 +127,12 @@ export class UpdateCommandFailure extends Error {
 /** A conservative pending outcome, never a grant of recovery or mutation authority. */
 export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
   constructor(result: UpdateRunResult, detail?: string, options?: ErrorOptions) {
-    super(
-      {
-        ...result,
-        status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
-      1,
-      detail,
-      options,
-    );
+    const unsafeResult: UpdateRunResult = {
+      ...result,
+      status: "error",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    };
+    super(unsafeResult, resolveManagedServiceUpdateFailureExitCode(unsafeResult), detail, options);
     this.name = "UpdateCommandPendingRecoveryFailure";
   }
 }
@@ -157,7 +154,7 @@ export function reportUpdateCommandPendingRecovery(
 /** Reporting-only marker: the outcome was recorded and printed; no follow-up triage. */
 export class UpdateCommandFinalizedRecoveryFailure extends UpdateCommandFailure {
   constructor(result: UpdateRunResult) {
-    super(result, 1);
+    super(result, resolveManagedServiceUpdateFailureExitCode(result));
   }
 }
 

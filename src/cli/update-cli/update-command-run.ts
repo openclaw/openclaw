@@ -57,6 +57,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
@@ -490,6 +491,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   }
   opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
+    await retainCliProcessJobUntilExit();
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       recoverOrphanedSidecars: false,

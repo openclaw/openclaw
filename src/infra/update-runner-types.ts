@@ -120,6 +120,7 @@ export type UpdateRunnerOptions = {
   allowGatewayActivation?: boolean;
   getDoctorEnv?: () => NodeJS.ProcessEnv | undefined;
   getUpdateRecoveryBackup?: () => UpdateRecoveryBackupRef | undefined;
+  updateRecoveryOwner?: "unprotected";
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
   /** Read-only admission before executing a fetched candidate; never stops a service. */

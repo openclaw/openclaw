@@ -1,10 +1,13 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as recoveryConfigWrites from "../../infra/update-recovery-config-writes.js";
 import { defaultRuntime } from "../../runtime.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as shared from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -56,26 +59,16 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfig,
 }));
 
-// This fixture proves lease ordering; process tests cover durable ledger writes.
-vi.mock("../../infra/update-run-ledger.js", () => ({
-  createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
-  adoptUpdateRun: vi.fn(() => ({
-    origin: { driver: { host: "lease-order-fixture", pid: 1, startIdentity: "1" } },
-  })),
-  heartbeatUpdateRun: vi.fn(),
-  recordUpdateRunStep: vi.fn(),
-  finishUpdateRun: vi.fn(),
-  recordUpdateRunDiagnostic: vi.fn(),
-}));
-
-vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => {
     record("installed-records");
     return {};
   }),
 }));
 
-vi.mock("../../plugins/installed-plugin-index-store.js", () => ({
+vi.mock("../../plugins/installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index-store.js")>()),
   readPersistedInstalledPluginIndex: vi.fn(async () => {
     record("persisted-index");
     return null;
@@ -95,12 +88,9 @@ vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   },
 }));
 
-vi.mock("../../state/openclaw-state-db.paths.js", () => ({
+vi.mock("../../state/openclaw-state-db.paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-db.paths.js")>()),
   resolveOpenClawStateSqlitePath: vi.fn(() => mocks.databasePath),
-}));
-
-vi.mock("../../state/openclaw-state-ownership.js", () => ({
-  assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
 vi.mock("./shared.js", async (importOriginal) => ({
@@ -138,7 +128,10 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("./update-command-fresh-doctor.js", () => ({
+vi.mock("./update-command-fresh-doctor.js", async (importOriginal) => ({
+  UpdateDoctorProcessUnsettledError: (
+    await importOriginal<typeof import("./update-command-fresh-doctor.js")>()
+  ).UpdateDoctorProcessUnsettledError,
   completePostCorePluginUpdate: vi.fn(async () => {
     record("complete");
     return {
@@ -180,6 +173,53 @@ import {
 } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+
+async function withFinalizerState(operation: () => Promise<void>): Promise<void> {
+  await withOpenClawTestState(
+    {
+      layout: "state-only",
+      scenario: "minimal",
+      env: { OPENCLAW_UPDATE_RUN_ID: undefined },
+    },
+    async (state) => {
+      await state.writeConfig({
+        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+      });
+      mocks.databasePath = state.statePath("state", "openclaw.sqlite");
+      const config =
+        await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+      const strict = await config
+        .createConfigIO({ observe: false })
+        .readConfigFileSnapshotForWrite();
+      expect(strict.snapshot.valid, JSON.stringify(strict.snapshot.issues)).toBe(true);
+      mocks.readConfig.mockImplementation(
+        async (...params: Parameters<typeof config.readConfigFileSnapshot>) => {
+          record("read-config");
+          return await config.readConfigFileSnapshot(...params);
+        },
+      );
+      const root = state.path("install");
+      await fs.mkdir(root, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+      );
+      const coordinator = state.path("coordinator");
+      await fs.mkdir(coordinator, { mode: 0o700 });
+      const temp = vi
+        .spyOn(tempRoot, "resolvePreferredOpenClawTmpDir")
+        .mockReturnValue(coordinator);
+      vi.mocked(shared.resolveUpdateRoot).mockResolvedValueOnce(root);
+      try {
+        await operation();
+      } finally {
+        temp.mockRestore();
+      }
+    },
+  );
+}
 
 function expectLifecycleBoundary(preLeaseEvent: string): void {
   const preLeaseIndex = mocks.events.indexOf(`${preLeaseEvent}:false`);
@@ -405,13 +445,15 @@ describe("update plugin lifecycle lease boundaries", () => {
   it.each([undefined, "5"])(
     "runs finalizer doctors outside the lease with timeout %s",
     async (timeout) => {
-      await updateFinalizeCommand({
-        channel: "stable",
-        deferCompletionCache: true,
-        json: true,
-        yes: true,
-        timeout,
-      });
+      await withFinalizerState(() =>
+        updateFinalizeCommand({
+          channel: "stable",
+          deferCompletionCache: true,
+          json: true,
+          yes: true,
+          timeout,
+        }),
+      );
 
       expectLifecycleBoundary("fresh-doctor");
       const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
@@ -432,7 +474,9 @@ describe("update plugin lifecycle lease boundaries", () => {
 
   it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
     mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];
-    await updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true });
+    await withFinalizerState(() =>
+      updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+    );
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({

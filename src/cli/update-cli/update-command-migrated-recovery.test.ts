@@ -140,7 +140,14 @@ function fixture(): FinishUpdateParams {
 }
 
 function worker(
-  outcome: "failed" | "crashed" | "transport failed" | "uncertain" | "lost executor" | "success",
+  outcome:
+    | "failed"
+    | "crashed"
+    | "transport failed"
+    | "uncertain"
+    | "unsettled descendants"
+    | "lost executor"
+    | "success",
   parentRecoverySupported = true,
   afterChild?: () => void,
 ) {
@@ -185,7 +192,12 @@ function worker(
         result: {
           ...input.params.result,
           status: outcome === "success" ? "ok" : "error",
-          reason: outcome === "success" ? undefined : "restart-unhealthy",
+          reason:
+            outcome === "success"
+              ? undefined
+              : outcome === "unsettled descendants"
+                ? "update-processes-unsettled"
+                : "restart-unhealthy",
         },
         exitCode: outcome === "success" ? 0 : 1,
         executorDelegation: "pid-start-v1",
@@ -203,7 +215,7 @@ function worker(
   });
 }
 
-it.each(["failed", "crashed", "transport failed"] as const)(
+it.each(["failed"] as const)(
   "restores the retained package and state after the candidate %s and exits",
   async (outcome) => {
     const params = fixture();
@@ -233,6 +245,24 @@ it.each(["failed", "crashed", "transport failed"] as const)(
   },
 );
 
+it.each(["crashed", "transport failed"] as const)(
+  "retains recovery without a worker settlement receipt after %s",
+  async (outcome) => {
+    worker(outcome);
+    vi.mocked(rollbackFailedUpdate).mockImplementation(async ({ result }) => ({
+      result,
+      rolledBack: true,
+      stateRestored: true,
+    }));
+    await expect(continueMigratedUpdateInFreshProcess(fixture(), [])).rejects.toThrow(
+      "npx openclaw@latest doctor --fix",
+    );
+    expect(rollbackFailedUpdate).not.toHaveBeenCalled();
+    expect(recordUpdateResultNextAction).not.toHaveBeenCalled();
+    expect(printResult).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["uncertain", "lost executor"] as const)(
   "does not restore state after %s candidate ownership",
   async (outcome) => {
@@ -243,6 +273,22 @@ it.each(["uncertain", "lost executor"] as const)(
     expect(printResult).not.toHaveBeenCalled();
   },
 );
+
+it("retains recovery when the worker reports unsettled descendants despite normal launcher cleanup", async () => {
+  const params = fixture();
+  worker("unsettled descendants");
+  vi.mocked(rollbackFailedUpdate).mockImplementation(async ({ result }) => ({
+    result,
+    rolledBack: true,
+    stateRestored: true,
+  }));
+  await expect(continueMigratedUpdateInFreshProcess(params, [])).rejects.toThrow(
+    "npx openclaw@latest doctor --fix",
+  );
+  expect(rollbackFailedUpdate).not.toHaveBeenCalled();
+  expect(recordUpdateResultNextAction).not.toHaveBeenCalled();
+  expect(printResult).not.toHaveBeenCalled();
+});
 
 it.each(["run", "executor"] as const)(
   "refuses parent restoration after its original %s is replaced",

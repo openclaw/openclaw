@@ -3,6 +3,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -52,6 +53,7 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
@@ -165,9 +167,14 @@ export async function prepareGitPackageExposure(
   const prepared = createDeferredCore();
   const activation = createDeferredCore<boolean>();
   const cancellation = new Error("Source activation cancelled before global exposure");
+  let unchangedCore: FinishUpdateParams["unchangedCore"];
   const completed = runGlobalPackageUpdateSteps({
     ...params,
     beforeActivate: async () => {
+      const root = params.installTarget.packageRoot;
+      if (root) {
+        unchangedCore = { root, fingerprint: await createPackageIntegrityReader().tree(root) };
+      }
       prepared.resolve();
       if (!(await activation.promise)) {
         throw cancellation;
@@ -193,7 +200,7 @@ export async function prepareGitPackageExposure(
     cancel: async () => {
       activation.resolve(false);
       try {
-        return await completed;
+        return { ...(await completed), unchangedCore: undefined };
       } catch (error) {
         if (error !== cancellation) {
           throw error;
@@ -203,6 +210,7 @@ export async function prepareGitPackageExposure(
         return {
           steps: [],
           recovery: await verifyPackageUpdateRecovery(params.installTarget.packageRoot),
+          unchangedCore,
         };
       }
     },

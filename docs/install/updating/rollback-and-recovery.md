@@ -95,8 +95,8 @@ openclaw update cleanup --dry-run
 
 ### Full-state recovery requires a backup
 
-The current updater creates an `update-recovery` set before persistent Doctor
-migrations. It uses SQLite's online backup API to retain unsanitized database
+The current updater creates an `update-recovery` set before protected config,
+plugin, or Doctor mutations. It uses SQLite's online backup API to retain unsanitized database
 contents, plus the config, includes, and other inventoried local migration
 resources. Every file has a verified size and SHA-256. The set is stored at
 `<stateDir>.update-captures/<captureId>/` with owner-only permissions, and its
@@ -120,6 +120,14 @@ still require intervention. A verified rollback retains the original failure
 and exits nonzero. With `--no-restart` or no managed service, file restoration
 does not claim that a Gateway was restarted or verified.
 
+When the core is already current, config or plugin changes still receive the
+same protection. A failure restores the captured state without inventing a
+package rollback for an unchanged core. A true no-op neither captures state nor
+stops the Gateway. Standalone `openclaw update repair` also captures before its
+first mutation and can restore state after its mutating children settle. It
+never starts the Gateway, even on success, and retains its set for explicit
+Doctor resolution because it has not verified runtime health.
+
 A missing, corrupt, or unrestorable set is a hard failure. Preserve the path
 named in the report, keep an unverified Gateway stopped, and let the update and
 Doctor processes exit before running:
@@ -142,6 +150,12 @@ reconstruct a missing backup; preserve any surviving state and
 use an independent verified backup when the report says no usable set exists.
 Remote services and undeclared external plugin resources are outside this local
 inventory and need their own recovery procedure.
+
+The explicitly declared, unsupervised Git update inside a serving Gateway does
+not create a recovery capture. Its result and status warn that a terminal
+`openclaw update` is required for protection. Existing ownership, maintenance,
+and schema checks still apply; see the
+[inline Git follow-up](https://github.com/openclaw/openclaw/issues/144422).
 
 An existing pending checkpoint-recovery record blocks further mutable updates.
 The updater reports that it is unsupported and leaves its records, backups, and

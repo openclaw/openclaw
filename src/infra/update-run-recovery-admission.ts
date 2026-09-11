@@ -7,6 +7,10 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
+import type { UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
+import { readUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
+import { bindUnprotectedGatewayUpdateDriver, getUpdateRun } from "./update-run-ledger.js";
+import { requireUnprotectedGatewayUpdate } from "./update-run-record.js";
 import {
   isUpdateRecoveryPending,
   UpdateRecoveryRequiredError,
@@ -95,4 +99,66 @@ export async function assertUpdateRecoveryBackupAdmission(
   } finally {
     snapshot.cleanup();
   }
+}
+
+export type UnprotectedGatewayUpdateContext = { runId: string; assertCurrent: () => void };
+
+/** A run ID selects a declaration; the child's actual parent must still own that run. */
+export function readUnprotectedGatewayUpdateParent(
+  options: LedgerOptions = {},
+): UnprotectedGatewayUpdateContext | undefined {
+  const runId = (options.env ?? process.env).OPENCLAW_UPDATE_RUN_ID?.trim();
+  if (!runId || !getUpdateRun(runId, options)?.origin.unprotectedGatewayUpdate) {
+    return undefined;
+  }
+  const parent = readUpdateRunDriver(process.ppid);
+  const assertCurrent = () => {
+    const { record, declaration } = requireUnprotectedGatewayUpdate(getUpdateRun(runId, options));
+    const currentParent = readUpdateRunDriver(process.ppid);
+    if (
+      !parent ||
+      !currentParent ||
+      !sameUpdateRunDriver(parent, currentParent) ||
+      !record.origin.driver ||
+      !sameUpdateRunDriver(record.origin.driver, parent) ||
+      ![declaration.owner, declaration.finalizer].some(
+        (driver) => driver && sameUpdateRunDriver(driver, parent),
+      )
+    ) {
+      throw new Error(
+        "Unprotected Gateway update does not belong to this Doctor or finalizer parent.",
+      );
+    }
+  };
+  assertCurrent();
+  return { runId, assertCurrent };
+}
+
+/** Bind one actual finalizer child before it can pass the exception to its own Doctor children. */
+export function bindUnprotectedGatewayUpdateFinalizer(
+  parent: UnprotectedGatewayUpdateContext,
+  options: LedgerOptions = {},
+): UnprotectedGatewayUpdateContext {
+  parent.assertCurrent();
+  const self = readUpdateRunDriver();
+  bindUnprotectedGatewayUpdateDriver(parent.runId, options);
+  const assertCurrent = () => {
+    const { record, declaration } = requireUnprotectedGatewayUpdate(
+      getUpdateRun(parent.runId, options),
+    );
+    const currentParent = readUpdateRunDriver(process.ppid);
+    if (
+      !self ||
+      !currentParent ||
+      !sameUpdateRunDriver(declaration.owner, currentParent) ||
+      !declaration.finalizer ||
+      !sameUpdateRunDriver(declaration.finalizer, self) ||
+      !record.origin.driver ||
+      !sameUpdateRunDriver(record.origin.driver, self)
+    ) {
+      throw new Error("Unprotected Gateway finalizer lost its declared run ownership.");
+    }
+  };
+  assertCurrent();
+  return { runId: parent.runId, assertCurrent };
 }

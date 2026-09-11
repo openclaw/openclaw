@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
+import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createUpdateRun,
@@ -11,6 +13,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
@@ -135,5 +138,66 @@ it.each(["healthy", "readiness-missing", "wrong-version", "settlement-failed"] a
         ).toBeNull();
       }
     });
+  },
+);
+
+it.each([false, true])(
+  "captures only after physical writer quiescence (external writer=%s)",
+  async (active) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        scenario: "minimal",
+        env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" },
+      },
+      async (state) => {
+        await state.writeConfig({ plugins: { enabled: false } });
+        const temporary = state.path("coordinator");
+        await fs.mkdir(temporary, { mode: 0o700 });
+        vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
+        const root = state.path("install");
+        await fs.mkdir(root);
+        const run: NonNullable<UpdateCommandOptions["run"]> = {
+          runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+          env: state.env,
+        };
+        const anchor = acquireGatewayLifecycleCoordinator({
+          databasePath: resolveOpenClawStateSqlitePath(state.env),
+        });
+        anchor.release();
+        const writer = active
+          ? tryAcquireExclusiveSqliteCoordinator(anchor.path, { busyTimeoutMs: 0 })
+          : null;
+        if (active) {
+          expect(writer).not.toBeNull();
+        }
+        const before = await fs.readFile(state.configPath);
+        try {
+          await withUpdateCommandExecutor(run.runId, async (executor) => {
+            run.executorFence = await executor.enter(root);
+            const capture = createUpdateCommandBackup({ opts: { run }, root, env: state.env });
+            if (active) {
+              await expect(capture).rejects.toThrow(
+                "another OpenClaw process owns gateway-lifecycle",
+              );
+              await expect(fs.lstat(`${state.stateDir}.update-captures`)).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+              expect(
+                getUpdateRun(run.runId, { env: state.env })?.steps.some(
+                  (step) => step.step === "update recovery backup",
+                ),
+              ).toBe(false);
+            } else {
+              const backup = await capture;
+              expect((await fs.stat(backup.manifestPath)).isFile()).toBe(true);
+            }
+          });
+          expect(await fs.readFile(state.configPath)).toEqual(before);
+        } finally {
+          writer?.release();
+        }
+      },
+    );
   },
 );

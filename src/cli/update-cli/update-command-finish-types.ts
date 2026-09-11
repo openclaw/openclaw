@@ -11,6 +11,11 @@ import type { UpdateRestartParams } from "./update-command-service-context-types
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  preparePersistentMutation?: () => Promise<UpdateRecoveryBackupRef>;
+  unchangedCore?: {
+    root: string;
+    fingerprint: import("../../infra/package-update-integrity.js").PackageIntegrityFingerprint;
+  };
   serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;

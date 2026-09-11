@@ -51,8 +51,10 @@ export type PluginCapabilityConsentHandler = (
 /** Preserve caller control-flow failures across installers that normalize exceptions. */
 export function capturePluginCapabilityConsentHandlerErrors(
   handler: PluginCapabilityConsentHandler | undefined,
+  beforePersistentEffect?: () => void | Promise<void>,
 ): {
   onCapabilityConsent: PluginCapabilityConsentHandler | undefined;
+  beforePersistentEffect: (() => Promise<void>) | undefined;
   rethrowCallbackError: () => void;
 } {
   let failure: { error: unknown } | undefined;
@@ -61,6 +63,16 @@ export function capturePluginCapabilityConsentHandlerErrors(
       ? async (review) => {
           try {
             return await handler(review);
+          } catch (error) {
+            failure = { error };
+            throw error;
+          }
+        }
+      : undefined,
+    beforePersistentEffect: beforePersistentEffect
+      ? async () => {
+          try {
+            await beforePersistentEffect();
           } catch (error) {
             failure = { error };
             throw error;

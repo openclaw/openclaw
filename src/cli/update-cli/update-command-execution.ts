@@ -144,6 +144,7 @@ export async function executeMutableUpdate(
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
+  let unchangedCore: MutableUpdateExecutionResult["unchangedCore"];
   let updateRecoveryBackup: UpdateRecoveryBackupRef | undefined;
   const doctorEnv = () => ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
   let schemaVersions: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>> | undefined;
@@ -645,6 +646,9 @@ export async function executeMutableUpdate(
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onUnchangedCore: (core) => {
+          unchangedCore = core;
+        },
         onConfigSnapshot,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: doctorEnv,
@@ -730,6 +734,7 @@ export async function executeMutableUpdate(
     ownedManagedUpdateContext,
     recoveryEnv,
     packageTransaction,
+    unchangedCore,
     updateRecoveryBackup,
     schemaVersions,
     candidateSchemaVersions,

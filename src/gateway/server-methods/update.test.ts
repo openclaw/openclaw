@@ -2,7 +2,6 @@
 // managed-service handoff, restart scheduling, and delivery context preservation.
 
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
@@ -22,6 +21,8 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import {
   sentinelState,
+  captureUpdateRunPayload,
+  invokeUpdateRun,
   withTransferredUpdateHandoff,
   runGatewayUpdateMock,
   runGatewayUpdatePreflightMock,
@@ -41,51 +42,7 @@ import {
   resolveGatewayLifecycleNoticeRouteMock,
   scheduleGatewaySigusr1RestartMock,
   runPostCoreFinalizeAfterGatewayUpdateMock,
-  type UpdateRunPayload,
 } from "./update.test-harness.js";
-
-async function invokeUpdateRun(
-  params: Record<string, unknown>,
-  respond?: (ok: boolean, response?: unknown) => void,
-  runtimeConfig: OpenClawConfig = { update: {} },
-) {
-  const { updateHandlers } = await import("./update.js");
-  const onRespond = respond ?? (() => {});
-  await expectDefined(
-    updateHandlers["update.run"],
-    'updateHandlers["update.run"] test invariant',
-  )({
-    params,
-    respond: onRespond as never,
-    context: { getRuntimeConfig: () => runtimeConfig },
-  } as never);
-}
-
-async function captureUpdateRunPayload(
-  params: Record<string, unknown> = {},
-  runtimeConfig?: OpenClawConfig,
-): Promise<UpdateRunPayload | undefined> {
-  let payload: UpdateRunPayload | undefined;
-  await invokeUpdateRun(
-    params,
-    (_ok: boolean, response: unknown) => {
-      payload = response as UpdateRunPayload;
-    },
-    runtimeConfig,
-  );
-  if (
-    payload?.result?.status &&
-    payload.result.status !== "ok" &&
-    payload.handoff?.status !== "started"
-  ) {
-    expect(getUpdateRun(payload.runId)).toMatchObject({
-      status: payload.result.status === "skipped" ? "skipped" : "failed",
-      phase: "finished",
-      reason: payload.result.reason,
-    });
-  }
-  return payload;
-}
 
 function readCapturedPayload(): RestartSentinelPayload {
   if (!sentinelState.capturedPayload) {

@@ -188,6 +188,13 @@ markers, then verifies the previous managed Gateway. Missing or invalid recovery
 data remains a hard failure, never evidence that a downgrade is safe. See
 [Update recovery sets](/cli/backup#update-recovery-sets) for inventory and lifecycle.
 
+Protected already-current updates and standalone finalization capture before
+config or plugin writes as well as Doctor migrations. An unchanged core uses
+state-only restoration; package replacement is not required to restore the
+set. Mutating children must settle before restoration. Successful standalone
+repair retains its capture because it does not start or verify the Gateway.
+A true no-op does not capture or stop the Gateway.
+
 This adds one recovery-set kind, not a SQLite schema or protocol change.
 Captures live at the private sibling
 `<stateDir>.update-captures/<captureId>/`, carry the shared privacy marker, and
@@ -196,6 +203,12 @@ binds numbered resources by size and SHA-256. Mutable config write receipts,
 verified restoration facts, and pending or failed-restoration status live in the existing run's
 `origin.updateRecoveryCapture` metadata; terminal `outcome.json` is a separate
 write-once file. Restore verifies the manifest and resource identities first.
+
+After raw restoration, the shared database's `state_leases` and
+`agent_database_leases` are cleared before writers resume. Restored process
+leases would otherwise appear held by processes whose state no longer exists.
+This uses the same lease-clearing owner as snapshot sanitization and candidate
+rehearsal; captured resources and their immutable manifest remain unchanged.
 
 Capture retirement uses the existing update lifecycle after durable terminal
 success, runtime/data validation bound to the installed artifact, settled
@@ -218,6 +231,13 @@ that run or retiring its capture; it cannot establish whole-update success.
 Failures after a successful Doctor invocation remain outside that old-driver
 protection. Recovery backups do not change the deferred-publication rules above
 or make older readers safe against migrated feature tables.
+
+Unsupervised Git updates initiated inside the serving Gateway explicitly record
+that they are unprotected. Only that declared live run and its bound finalizer
+and Doctor children can use the exception; it grants no general maintenance or
+schema bypass. The result and update status direct operators to terminal
+`openclaw update` for capture protection. The remaining handoff work is tracked
+in [#144422](https://github.com/openclaw/openclaw/issues/144422).
 
 The driver check requires a valid semantic version and includes 2026.9.2
 rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal

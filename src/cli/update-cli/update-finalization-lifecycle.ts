@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -42,6 +43,7 @@ export class UpdateFinalizationLifecycle {
     outcome: Outcome;
   }[] = [];
   root?: string;
+  updateRecoveryBackup?: UpdateRecoveryBackupRef;
   private runId?: string;
   private driver?: UpdateRunDriver;
   private ledgerOptions?: { env: NodeJS.ProcessEnv };
@@ -58,7 +60,7 @@ export class UpdateFinalizationLifecycle {
     private readonly stopChildren: () => void,
   ) {}
 
-  attachLedger(): void {
+  attachLedger(): { runId: string; env: NodeJS.ProcessEnv } {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
     this.ledgerOptions = { env: { ...process.env } };
@@ -75,6 +77,7 @@ export class UpdateFinalizationLifecycle {
         this.ledgerOptions,
       );
     }
+    return { runId: this.runId, env: this.ledgerOptions.env };
   }
 
   private record(
@@ -169,8 +172,20 @@ export class UpdateFinalizationLifecycle {
           // Child inventory remains separate and is never process-kill authority.
           end("failed", doctorOutput ? formatDoctorOutputDetail(doctorOutput) : undefined);
           const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
+          const recovery = this.updateRecoveryBackup
+            ? {
+                manifestPath: this.updateRecoveryBackup.manifestPath,
+                command: "npx openclaw@latest doctor --fix",
+              }
+            : undefined;
+          const recoveryGuidance = recovery
+            ? `Update recovery capture retained at ${recovery.manifestPath}; inspect with openclaw update status --json, then run ${recovery.command}.`
+            : undefined;
           this.finishLedger(1, error);
           writeSync(2, `${error}\n`);
+          if (recoveryGuidance) {
+            writeSync(2, `${recoveryGuidance}\n`);
+          }
           if (doctorOutput) {
             writeSync(2, `[update finalize] Doctor output: ${JSON.stringify(doctorOutput)}\n`);
           }
@@ -178,11 +193,13 @@ export class UpdateFinalizationLifecycle {
             2,
             `[update finalize] Stalled phase children: ${JSON.stringify(diagnostics)}\n`,
           );
-          this.recordDiagnostic(JSON.stringify(diagnostics));
+          this.recordDiagnostic(
+            JSON.stringify({ ...diagnostics, ...(recovery ? { recovery } : {}) }),
+          );
           if (this.json) {
             writeSync(
               1,
-              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics, ...(doctorOutput ? { doctorOutput } : {}) })}\n`,
+              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics, ...(doctorOutput ? { doctorOutput } : {}), ...(recovery ? { recovery } : {}) })}\n`,
             );
           }
         } finally {

@@ -14,6 +14,7 @@ import {
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { finishUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
+import { retireCommandProcessJobForHandoff } from "../../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -28,7 +29,6 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
@@ -47,9 +47,11 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { inspectUpdateRuntimeCapability } from "./update-command-runtime-capability.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
+  withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { recordVerifiedUpdatePackageCleanup } from "./update-command-terminal.js";
@@ -267,6 +269,8 @@ export async function continueMigratedUpdateInFreshProcess(
   const result = params.result;
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
   let candidateExtinguished = false;
+  let candidateStarted = false;
+  let candidateSettlementConfirmed = false;
   let recoveryAttempted = false;
   let windowsHandedOff = false;
   let parentRecoverySupported = false;
@@ -307,25 +311,17 @@ export async function continueMigratedUpdateInFreshProcess(
       assertCurrent();
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
-      const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
-        cwd: root,
-        baseEnv: {},
+      const { check, contract, parseError } = await inspectUpdateRuntimeCapability({
+        command: workerCommand,
+        root,
         env: workerEnv,
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        killGraceMs: 500,
-        maxOutputBytes: 64 * 1024,
       });
       candidateExtinguished = check.cleanup !== "uncertain";
       assertCurrent();
-      let contract: unknown;
-      try {
-        contract = JSON.parse(check.stdout);
-      } catch (cause) {
+      if (parseError) {
         throw new UpdateCommandRecoveryPendingError(
           "Candidate live executor delegation capability could not be inspected.",
-          { cause },
+          { cause: parseError },
         );
       }
       if (
@@ -433,6 +429,9 @@ export async function continueMigratedUpdateInFreshProcess(
       }
     };
     candidateExtinguished = false;
+    await retireCommandProcessJobForHandoff();
+    assertCurrent();
+    candidateStarted = true;
     const outcome = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
@@ -471,6 +470,13 @@ export async function continueMigratedUpdateInFreshProcess(
         "Candidate finalization did not confirm the admitted run's terminal outcome.",
       );
     }
+    if (params.updateRecoveryBackup && response.result.reason === "update-processes-unsettled") {
+      throw new UpdateCommandPendingRecoveryFailure(
+        response.result,
+        `Candidate descendants have not settled. Capture retained at ${params.updateRecoveryBackup.manifestPath}. Inspect with openclaw update status --json; keep the Gateway stopped and run npx openclaw@latest doctor --fix after resolving child ownership.`,
+      );
+    }
+    candidateSettlementConfirmed = true;
     if (params.updateRecoveryBackup && response.result.status === "error") {
       return await recover(response.result);
     }
@@ -520,7 +526,7 @@ export async function continueMigratedUpdateInFreshProcess(
           };
           const retirementChild = await withUpdateCommandExecutor(run.runId, async (executor) => {
             const fence = await executor.enter(root);
-            return await withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+            return await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
               runUtf8CommandWithTimeout([...workerCommand, "--retire-capture"], {
                 cwd: root,
                 baseEnv: {},
@@ -568,8 +574,21 @@ export async function continueMigratedUpdateInFreshProcess(
       automaticTriage: response.automaticTriage,
     };
   } catch (error) {
-    if (recoveryAttempted) {
+    if (recoveryAttempted || error instanceof UpdateCommandPendingRecoveryFailure) {
       throw error;
+    }
+    // Launcher extinction alone cannot settle a plugin's detached process group.
+    if (params.updateRecoveryBackup && candidateStarted && !candidateSettlementConfirmed) {
+      throw new UpdateCommandPendingRecoveryFailure(
+        {
+          ...result,
+          status: "error",
+          reason: "update-processes-unsettled",
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        },
+        `Candidate settlement was not confirmed. Capture retained at ${params.updateRecoveryBackup.manifestPath}. Inspect with openclaw update status --json; keep the Gateway stopped and run npx openclaw@latest doctor --fix after resolving child ownership.`,
+        { cause: error },
+      );
     }
     if (params.updateRecoveryBackup && candidateExtinguished) {
       assertCurrent();

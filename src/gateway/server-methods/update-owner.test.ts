@@ -3,10 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { UNPROTECTED_GATEWAY_UPDATE_ADVISORY } from "../../infra/update-run-record.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock,
+  captureUpdateRunPayload,
+  runPostCoreFinalizeAfterGatewayUpdateMock,
   detectRespawnSupervisorMock,
   initializeGatewayUpdateStatusMock,
   runGatewayUpdateMock,
@@ -187,4 +192,81 @@ describe("update.run current owner authority", () => {
       }),
     );
   });
+});
+
+it("preserves the non-Git package-root refusal without declaring an unprotected update", async () => {
+  const root = "/tmp/openclaw-local-package";
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    root,
+    status: { root, installKind: "package", packageManager: "npm" },
+    installReceipt: null,
+  });
+  runGatewayUpdateMock.mockResolvedValueOnce({
+    status: "skipped",
+    reason: "not-git-install",
+    mode: "unknown",
+    root,
+    steps: [],
+    durationMs: 0,
+  });
+
+  const payload = await captureUpdateRunPayload();
+
+  expect(payload?.result).toMatchObject({
+    status: "skipped",
+    reason: "not-git-install",
+    steps: [],
+  });
+  expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+  const options = runGatewayUpdateMock.mock.calls[0]?.[0];
+  expect(options?.updateRecoveryOwner).toBeUndefined();
+  expect(options?.getDoctorEnv).toBeUndefined();
+  const runId = expectDefined(payload?.runId, "Package-root refusal retains its own run");
+  expect(getUpdateRun(runId)?.origin.unprotectedGatewayUpdate).toBeUndefined();
+  const runStatus = readUpdateRunStatus();
+  expect(runStatus).not.toHaveProperty("runStatusError");
+  expect(runStatus).not.toMatchObject({
+    advisories: expect.arrayContaining([
+      expect.objectContaining({ message: UNPROTECTED_GATEWAY_UPDATE_ADVISORY }),
+    ]),
+  });
+});
+
+it("declares an unsupervised Git update unprotected before Doctor and reports its advisory", async () => {
+  let declaredRun: ReturnType<typeof getUpdateRun>;
+  runGatewayUpdateMock.mockImplementationOnce(async (opts) => {
+    declaredRun = getUpdateRun(expectDefined(opts?.runId, "RPC update has an admitted run"));
+    return { status: "ok", mode: "git", root: "/tmp/openclaw", steps: [], durationMs: 0 };
+  });
+  const payload = await captureUpdateRunPayload();
+  expect(payload?.result?.status).toBe("ok");
+  expect(
+    Boolean(declaredRun?.origin.unprotectedGatewayUpdate),
+    "RPC declares intent before launching Doctor",
+  ).toBe(true);
+  expect(declaredRun?.origin.unprotectedGatewayUpdate?.owner).toEqual(readUpdateRunDriver());
+  const opts = runGatewayUpdateMock.mock.calls[0]?.[0];
+  expect(opts?.getDoctorEnv?.()?.OPENCLAW_UPDATE_RUN_ID).toBe(declaredRun?.runId);
+  expect(opts?.updateRecoveryOwner).toBe("unprotected");
+  expect(opts?.getUpdateRecoveryBackup).toBeUndefined();
+  expect(payload?.result).toMatchObject({
+    steps: expect.arrayContaining([
+      expect.objectContaining({
+        advisory: { kind: "recoverable-maintenance", message: UNPROTECTED_GATEWAY_UPDATE_ADVISORY },
+      }),
+    ]),
+  });
+  expect(readUpdateRunStatus()).toMatchObject({
+    advisories: expect.arrayContaining([
+      expect.objectContaining({
+        runId: payload?.runId,
+        message: UNPROTECTED_GATEWAY_UPDATE_ADVISORY,
+      }),
+    ]),
+  });
+  expect(runPostCoreFinalizeAfterGatewayUpdateMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      env: expect.objectContaining({ OPENCLAW_UPDATE_RUN_ID: payload?.runId }),
+    }),
+  );
 });

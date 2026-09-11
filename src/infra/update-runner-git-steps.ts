@@ -45,6 +45,7 @@ export async function runGitDoctorStep(params: {
   nodePath: string;
   fix: boolean;
   updateRecoveryBackup?: UpdateRecoveryBackupRef;
+  updateRecoveryOwner?: "unprotected";
   env?: NodeJS.ProcessEnv;
   doctorEnvOptions: Parameters<typeof buildUpdateDoctorEnv>[0];
   step: (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv) => RunStepOptions;
@@ -57,7 +58,7 @@ export async function runGitDoctorStep(params: {
       "doctor",
       "--non-interactive",
       ...(params.fix ? ["--fix"] : []),
-      ...buildUpdateRecoveryDoctorArgs(params.updateRecoveryBackup),
+      ...buildUpdateRecoveryDoctorArgs(params.updateRecoveryBackup, params.updateRecoveryOwner),
     ],
     params.root,
     { ...params.env, ...buildUpdateDoctorEnv(params.doctorEnvOptions) },

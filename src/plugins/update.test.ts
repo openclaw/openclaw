@@ -1027,6 +1027,16 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
       reviewRetryStage: true,
     },
+    {
+      label: "preserves persistent-effect refusal instead of disabling the installed plugin",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "persistent-throw",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+      disableOnFailure: true,
+    },
     ...(["throw", "throw-undefined"] as const).map((review) => ({
       label: `preserves the original consent callback failure (${review})`,
       nextProviders: ["existing-child-provider", "new-child-provider"],
@@ -1158,7 +1168,11 @@ describe("updateNpmInstalledPlugins", () => {
 
       const callbackFailure =
         review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
-      const beforePersistentEffect = vi.fn();
+      const beforePersistentEffect = vi.fn(async () => {
+        if (review === "persistent-throw") {
+          throw new Error("recovery capture refused");
+        }
+      });
       let reviewed = false;
       const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
         review === "none"
@@ -1190,6 +1204,13 @@ describe("updateNpmInstalledPlugins", () => {
         disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
+      if (review === "persistent-throw") {
+        await expect(pendingUpdate).rejects.toThrow("recovery capture refused");
+        expect(beforePersistentEffect).toHaveBeenCalledOnce();
+        expect(fs.readFileSync(childManifestPath, "utf8")).toBe(previousChildManifest);
+        expect(config.plugins.entries[rootPluginId].enabled).toBe(ownerEnabled);
+        return;
+      }
       if (omitStageReview) {
         await expect(pendingUpdate).rejects.toThrow("did not expose its verified artifact");
         return;

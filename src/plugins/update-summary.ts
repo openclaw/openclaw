@@ -92,6 +92,7 @@ export async function finalizePluginUpdateSummary(params: {
   ranNpmInstaller: boolean;
   logger: PluginUpdateLogger;
   transactionState: ReturnType<typeof createPluginUpdateTransactionState>;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<PluginUpdateSummary> {
   let changed = params.changed;
   if (params.ranNpmInstaller) {
@@ -100,6 +101,7 @@ export async function finalizePluginUpdateSummary(params: {
         (await repairOpenClawPeerLinksForNpmInstalls({
           config: params.config,
           logger: params.logger,
+          beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     } catch (error) {
       await settlePluginInstallTransactions(params.transactionState.transactions, "rollback");

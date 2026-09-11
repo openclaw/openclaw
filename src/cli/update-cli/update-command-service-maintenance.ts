@@ -267,6 +267,7 @@ export function createWindowsTaskAutoStartGuard(params: {
 
 async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   serviceEnv: NodeJS.ProcessEnv | undefined;
+  restoreOnFailure?: false;
   assertCurrentService?: () => Promise<void>;
   assertCurrent?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -333,6 +334,7 @@ type ManagedServiceStopParams = {
   updateInstallKind: "git" | "package";
   root: string;
   shouldRestart: boolean;
+  restoreWindowsTaskOnFailure?: false;
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
@@ -528,6 +530,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   const suspendTask = async () => {
     return await maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
+      restoreOnFailure: params.restoreWindowsTaskOnFailure,
       updateRun,
       assertCurrentService: createWindowsTaskAutoStartGuard({
         root: params.root,

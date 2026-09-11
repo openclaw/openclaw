@@ -33,7 +33,6 @@ import {
 import {
   decodeRun,
   encodeRun,
-  isRetainedStep,
   type UpdateRunLedgerOptions as LedgerOptions,
 } from "./update-run-codec.js";
 import {
@@ -53,6 +52,9 @@ import {
 } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
+  upsertUpdateRunStep,
+  declareUnprotectedGatewayUpdateRecord,
+  bindUnprotectedGatewayUpdateFinalizerRecord,
   type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
@@ -221,7 +223,7 @@ export function createUpdateRun(
         !hasStoredUpdateRecovery(db, previous.runId) &&
         isStaleIdentitylessUpdateRun(previous)
       ) {
-        upsertStep(previous, {
+        upsertUpdateRunStep(previous, {
           step: "reconcile:superseded",
           status: "failed",
           endedAtMs: now,
@@ -239,20 +241,17 @@ export function createUpdateRun(
   }, options);
 }
 
-function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
-  const index = record.steps.findIndex((existing) => existing.step === step.step);
-  if (index >= 0) {
-    record.steps[index] = { ...record.steps[index], ...step };
-  } else {
-    record.steps.push(step);
-  }
-  while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
-    if (disposable < 0) {
-      throw new Error("Update run retained steps exceed the step limit");
-    }
-    record.steps.splice(disposable, 1);
-  }
+/** Commit the RPC driver's explicit policy under the existing run transaction. */
+export function declareUnprotectedGatewayUpdate(runId: string, options: LedgerOptions = {}): void {
+  mutateRun(runId, declareUnprotectedGatewayUpdateRecord, options);
+}
+
+export function bindUnprotectedGatewayUpdateDriver(
+  runId: string,
+  options: LedgerOptions = {},
+): void {
+  mutateRun(runId, bindUnprotectedGatewayUpdateFinalizerRecord, options);
+  adoptUpdateRun(runId, options);
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
@@ -268,7 +267,7 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
       if (!driver) {
         if (!record.steps.some((step) => step.step === "driver:identity-unavailable")) {
           // Retain known parents, but their death cannot prove this adopter exited.
-          upsertStep(record, {
+          upsertUpdateRunStep(record, {
             step: "driver:identity-unavailable",
             status: "completed",
             endedAtMs: Date.now(),
@@ -307,7 +306,11 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
       }
       record.origin.driver = driver;
       record.origin.previousDrivers = previousDrivers.length ? previousDrivers : undefined;
-      upsertStep(record, { step: "driver:adopted", status: "completed", endedAtMs: Date.now() });
+      upsertUpdateRunStep(record, {
+        step: "driver:adopted",
+        status: "completed",
+        endedAtMs: Date.now(),
+      });
     },
     options,
   );
@@ -351,7 +354,7 @@ export function acknowledgeAbandonedUpdateRun(runId: string, options: LedgerOpti
         isAbandonedUpdateRun(record) &&
         !record.steps.some((step) => step.step === "reconcile:acknowledged")
       ) {
-        upsertStep(record, {
+        upsertUpdateRunStep(record, {
           step: "reconcile:acknowledged",
           status: "completed",
           endedAtMs: Date.now(),
@@ -456,7 +459,7 @@ function reconcileCandidates(
           if (!rule || (input.legacyOnly && rule !== LEGACY_UPDATE_RUN_EXPIRED_REASON)) {
             return record;
           }
-          upsertStep(record, {
+          upsertUpdateRunStep(record, {
             step: "reconcile:abandoned",
             status: "failed",
             endedAtMs: Date.now(),
@@ -516,9 +519,9 @@ export function recordUpdateRunPhase(
         (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
       ) {
         const now = Date.now();
-        upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
+        upsertUpdateRunStep(record, { step: record.phase, status: "completed", endedAtMs: now });
         record.phase = phase;
-        upsertStep(record, {
+        upsertUpdateRunStep(record, {
           step: phase,
           status: "in_progress",
           startedAtMs: now,
@@ -526,7 +529,7 @@ export function recordUpdateRunPhase(
         });
       }
       if (patch.step) {
-        upsertStep(record, patch.step);
+        upsertUpdateRunStep(record, patch.step);
       }
     },
     options,
@@ -542,7 +545,7 @@ export function recordUpdateRunStep(
     runId,
     (record) => {
       if (record.status === "running") {
-        upsertStep(record, step);
+        upsertUpdateRunStep(record, step);
       }
     },
     options,
@@ -578,7 +581,7 @@ export function recordUpdateRunDiagnostic(
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
+      upsertUpdateRunStep(record, {
         step: "finalize:exit",
         status: "completed",
         endedAtMs: Date.now(),

@@ -94,7 +94,10 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
     restoredAuthoredChannels: [],
   }),
 }));
-vi.mock("./update-command-fresh-doctor.js", () => ({
+vi.mock("./update-command-fresh-doctor.js", async (importOriginal) => ({
+  UpdateDoctorProcessUnsettledError: (
+    await importOriginal<typeof import("./update-command-fresh-doctor.js")>()
+  ).UpdateDoctorProcessUnsettledError,
   completePostCorePluginUpdate: mocks.completePluginUpdate,
 }));
 vi.mock("./update-command-plugins.js", () => ({

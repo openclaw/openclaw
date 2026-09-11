@@ -1,6 +1,6 @@
 /** CLI option shape shared by doctor command entrypoints and prompt helpers. */
 export type DoctorOptions = {
-  updateRecoveryOwner?: "driver";
+  updateRecoveryOwner?: "driver" | "unprotected";
   updateRecoveryBackup?: string;
   workspaceSuggestions?: boolean;
   yes?: boolean;

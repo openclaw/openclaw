@@ -48,6 +48,7 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   prepareGitPackageExposure,
   readPackageUpdateIdentity,
@@ -449,6 +450,7 @@ export async function updateGitInstall(params: {
   beforeGitMutation?: BeforeGitMutation;
   validateCandidate?: (root: string) => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onUnchangedCore?: (core: NonNullable<FinishUpdateParams["unchangedCore"]>) => void;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
   getUpdateRecoveryBackup?: UpdateRunnerOptions["getUpdateRecoveryBackup"];
@@ -618,6 +620,12 @@ export async function updateGitInstall(params: {
       // Recover that exact package; its version alone cannot authorize Git source.
       if (packageOwner && gitOwner && packageOwner !== gitOwner && serviceUsesPackage === true) {
         updateResult.recovery = cancelled.recovery;
+        if (cancelled.recovery?.serviceRestartSafe && cancelled.unchangedCore) {
+          // The source owner cancelled before exposure; restore state against this exact package.
+          updateResult.root = packageRoot;
+          updateResult.after = before;
+          params.onUnchangedCore?.(cancelled.unchangedCore);
+        }
       }
       steps.push(...cancelled.steps);
     }

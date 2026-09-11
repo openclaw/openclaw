@@ -70,28 +70,35 @@ export async function persistUpdateRecoveryConfigWrites(
 }
 
 export async function withUpdateRecoveryConfigWrites<T>(
-  ref: UpdateRecoveryBackupRef | undefined,
+  ref: UpdateRecoveryBackupRef | undefined | (() => UpdateRecoveryBackupRef | undefined),
   authority: Authority,
   run: () => Promise<T>,
 ): Promise<T> {
   if (!ref) {
     return await run();
   }
+  const current = typeof ref === "function" ? ref : () => ref;
   return await withConfigFileWriteCapture(async () => {
-    bindCapture(ref);
+    const initial = current();
+    if (initial) {
+      bindCapture(initial);
+    }
     let result: { ok: true; value: T } | { ok: false; error: unknown };
     try {
       result = { ok: true, value: await run() };
     } catch (error) {
       result = { ok: false, error };
     }
+    const backup = current();
     try {
-      await persistUpdateRecoveryConfigWrites(ref, authority);
+      if (backup) {
+        await persistUpdateRecoveryConfigWrites(backup, authority);
+      }
     } catch (error) {
       if (!result.ok) {
         throw new AggregateError(
           [result.error, error],
-          `Update failed and config write receipts could not be recorded. Backup retained at ${ref.manifestPath}; run npx openclaw@latest doctor --fix after resolving ownership.`,
+          `Update failed and config write receipts could not be recorded. Backup retained at ${backup?.manifestPath}; run npx openclaw@latest doctor --fix after resolving ownership.`,
           { cause: error },
         );
       }
