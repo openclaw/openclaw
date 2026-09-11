@@ -3065,7 +3065,7 @@ jobs:
               pnpm check:assertion-safety --base "$base_ref"
               pnpm config:docs:check
               pnpm plugins:inventory:check
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
