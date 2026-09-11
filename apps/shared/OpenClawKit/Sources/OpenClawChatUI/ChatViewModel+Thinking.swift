@@ -5,7 +5,8 @@ extension OpenClawChatViewModel {
         let clearsOverride = level == Self.inheritedThinkingSelectionID
         let next = clearsOverride
             ? (Self.normalizedThinkingLevel(self.resolvedThinkingLevelOptions(
-                for: self.currentSessionEntry(), modelChoice: self.selectedModelChoice(for: self.currentSessionEntry())).defaultLevel)
+                for: self.currentSessionEntry(), modelChoice: self.selectedModelChoice(for: self.currentSessionEntry()))
+                .defaultLevel)
                 ?? Self.normalizedThinkingLevel(self.thinkingLevel)
                 ?? "off")
             : (Self.normalizedThinkingLevel(level) ?? "off")
@@ -304,7 +305,7 @@ extension OpenClawChatViewModel {
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
             : Self.normalizedThinkingLevel(currentSession?.thinkingLevel) ??
-                Self.normalizedThinkingLevel(resolved.defaultLevel) ?? self.preferredThinkingLevel
+            Self.normalizedThinkingLevel(resolved.defaultLevel) ?? self.preferredThinkingLevel
         let preferred: String? = if resolved.isGatewayMetadata {
             Self.normalizedThinkingLevel(
                 preferredLevel,
@@ -354,7 +355,7 @@ extension OpenClawChatViewModel {
     private struct ThinkingLevelOptionsResolution {
         let options: [OpenClawChatThinkingLevelOption]
         let isGatewayMetadata: Bool
-        var defaultLevel: String? = nil
+        var defaultLevel: String?
     }
 
     private func resolvedThinkingLevelOptions(

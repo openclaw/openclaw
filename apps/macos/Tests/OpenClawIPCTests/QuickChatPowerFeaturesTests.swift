@@ -8,6 +8,7 @@ extension QuickChatModelControlSnapshot {
     static let testThinkingOptions = ["off", "minimal", "low", "medium", "high"].map {
         OpenClawChatThinkingLevelOption(id: $0, label: $0)
     }
+
     static let testFixture = QuickChatModelControlSnapshot(
         models: [],
         currentModelSelectionID: nil,

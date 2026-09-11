@@ -36,7 +36,9 @@ struct ChatModelAuthStatus: Decodable {
         let provider: String
         let displayName: String
         let status: String
-        var id: String { self.provider }
+        var id: String {
+            self.provider
+        }
 
         var statusLabel: String {
             switch self.status {
@@ -89,7 +91,10 @@ final class ChatModelSignInModel {
         do {
             try await self.readStatus()
         } catch {
-            self.message = String(localized: "Could not load sign-in options. Check the connection or update the Gateway, then retry.")
+            self
+                .message =
+                String(
+                    localized: "Could not load sign-in options. Check the connection or update the Gateway, then retry.")
         }
     }
 
@@ -112,7 +117,9 @@ final class ChatModelSignInModel {
                 ])
             } catch let error as GatewayResponseError {
                 if self.sessionID == id { self.sessionID = nil }
-                self.message = String(localized: "Sign-in could not start. Refresh the options or use Models in the Dashboard.")
+                self
+                    .message =
+                    String(localized: "Sign-in could not start. Refresh the options or use Models in the Dashboard.")
                 throw error
             } catch let error as GatewayNodeSessionRequestError {
                 if self.sessionID == id { self.sessionID = nil }
@@ -166,7 +173,9 @@ final class ChatModelSignInModel {
         } catch {
             if await self.retireIfContextLost(id) { return }
             if self.sessionID == id, !self.closed {
-                self.message = String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
+                self
+                    .message =
+                    String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
             }
         }
     }
@@ -186,13 +195,16 @@ final class ChatModelSignInModel {
             if await self.retireIfContextLost(id) {
                 if !cancellationAlreadyRequested { try? await self.closeSession(id) }
             } else if !self.closed, self.sessionID == id, !self.cancelRequested {
-                self.message = String(localized: "Sign-in could not continue. Check the connection, then cancel this attempt and try again.")
+                self
+                    .message =
+                    String(
+                        localized: "Sign-in could not continue. Check the connection, then cancel this attempt and try again.")
             }
         }
     }
 
     private func retireIfContextLost(_ id: String) async -> Bool {
-        guard !(await self.context.isCurrent()) else { return false }
+        guard await !(self.context.isCurrent()) else { return false }
         guard self.sessionID == id else { return true }
         // Pending admission retains its captured id and still closes any late server session.
         self.cancelRequested = true
@@ -246,7 +258,9 @@ final class ChatModelSignInModel {
         do {
             try await self.readStatus()
         } catch {
-            self.message = String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
+            self
+                .message =
+                String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
         }
         if await self.context.isCurrent(), !self.closed { await self.onAuthChanged() }
     }

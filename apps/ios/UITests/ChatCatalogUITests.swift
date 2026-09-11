@@ -9,7 +9,9 @@ final class ChatCatalogUITests: XCTestCase {
         let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
         let catalogData = try XCTUnwrap(environment["OPENCLAW_IOS_CATALOG_ROW"]?.data(using: .utf8))
         let model = try JSONDecoder().decode(CatalogModel.self, from: catalogData)
-        XCTAssertFalse(model.supportsFastMode, "Fixture must distinguish published applicability from provider inference")
+        XCTAssertFalse(
+            model.supportsFastMode,
+            "Fixture must distinguish published applicability from provider inference")
         XCTAssertFalse(model.thinkingLevels.isEmpty)
         continueAfterFailure = false
 

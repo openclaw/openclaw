@@ -8,7 +8,7 @@ struct QuickChatModelControlSnapshot: Sendable {
     let currentThinkingLevel: String?
     let thinkingOptions: [OpenClawChatThinkingLevelOption]
     let defaultProvider: String?
-    var catalogMessage: String? = nil
+    var catalogMessage: String?
     var catalogRefreshFailed = false
 }
 

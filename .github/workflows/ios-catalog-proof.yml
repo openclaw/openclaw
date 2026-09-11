@@ -1,4 +1,5 @@
 name: iOS catalog targeted proof
+run-name: Apple catalog proof (${{ inputs.phase || 'registration' }})
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +12,11 @@ on:
         required: false
         default: ChatCatalogProjectionTests
         type: string
+      phase:
+        description: Run all checks or simulator with retained package proof
+        type: choice
+        options: [all, simulator]
+        default: all
   push:
     branches: [feat/ios-catalog-protocol-consumers]
     paths: [.github/workflows/ios-catalog-proof.yml]
@@ -108,6 +114,7 @@ jobs:
           git diff --binary > "$RUNNER_TEMP/catalog-proof/format.patch"
       - name: Swift package tests
         id: swift
+        if: inputs.phase != 'simulator'
         continue-on-error: true
         env:
           SWIFT_FILTER: ${{ inputs.swift_filter }}
@@ -116,6 +123,7 @@ jobs:
           swift test --package-path apps/shared/OpenClawKit --scratch-path "$RUNNER_TEMP/catalog-swift" --no-parallel --filter "$SWIFT_FILTER" 2>&1 | tee "$RUNNER_TEMP/catalog-proof/swift-tests.log"
       - name: macOS Quick Chat tests
         id: mac
+        if: inputs.phase != 'simulator'
         continue-on-error: true
         run: |
           set -o pipefail
@@ -228,4 +236,9 @@ jobs:
           SWIFT_OUTCOME: ${{ steps.swift.outcome }}
           MAC_OUTCOME: ${{ steps.mac.outcome }}
           SIMULATOR_OUTCOME: ${{ steps.simulator.outcome }}
-        run: test "$SWIFT_OUTCOME" = success && test "$MAC_OUTCOME" = success && test "$SIMULATOR_OUTCOME" = success
+          PROOF_PHASE: ${{ inputs.phase }}
+        run: |
+          test "$SIMULATOR_OUTCOME" = success
+          if [ "$PROOF_PHASE" != simulator ]; then
+            test "$SWIFT_OUTCOME" = success && test "$MAC_OUTCOME" = success
+          fi

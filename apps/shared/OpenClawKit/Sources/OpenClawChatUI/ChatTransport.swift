@@ -696,7 +696,8 @@ public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
 
     public var message: String? {
         if !self.availabilityIsSessionScoped {
-            return String(localized: "Update your Gateway to use session model choices. Slash commands are still available.")
+            return String(
+                localized: "Update your Gateway to use session model choices. Slash commands are still available.")
         }
         return self.refreshFailed ? String(localized: "Model choices could not refresh. Reconnect and try again.") : nil
     }
@@ -1321,7 +1322,9 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
     }
 
-    public func acquireModelSignInContext(agentID _: String?) async -> OpenClawChatModelSignInContext? { nil }
+    public func acquireModelSignInContext(agentID _: String?) async -> OpenClawChatModelSignInContext? {
+        nil
+    }
 
     public func loadModelCatalog(
         sessionKey _: String,

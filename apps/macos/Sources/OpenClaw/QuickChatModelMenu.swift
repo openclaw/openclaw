@@ -64,8 +64,12 @@ enum QuickChatModelMenuPresenter {
             submenu.autoenablesItems = false
             for choice in section.models {
                 let item = NSMenuItem(
-                    title: [choice.name, choice.capabilityDescription, choice.available == false
-                        ? choice.availabilityReason?.pickerDescription ?? String(localized: "Unavailable") : ""]
+                    title: [
+                        choice.name,
+                        choice.capabilityDescription,
+                        choice.available == false
+                            ? choice.availabilityReason?.pickerDescription ?? String(localized: "Unavailable") : "",
+                    ]
                         .filter { !$0.isEmpty }.joined(separator: " — "),
                     action: #selector(QuickChatModelMenuTarget.selectModel(_:)),
                     keyEquivalent: "")

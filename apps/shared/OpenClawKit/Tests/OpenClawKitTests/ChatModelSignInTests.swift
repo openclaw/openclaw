@@ -15,7 +15,9 @@ struct ChatModelSignInTests {
             request: { method, params in
                 switch method {
                 case "models.authStatus":
-                    return Data(#"{"providers":[],"providerCapabilities":[{"loginOptions":[{"id":"fixture/device","label":"Sign in"}]}]}"#.utf8)
+                    return Data(
+                        #"{"providers":[],"providerCapabilities":[{"loginOptions":[{"id":"fixture/device","label":"Sign in"}]}]}"#
+                            .utf8)
                 case "models.authLogin":
                     return try JSONEncoder().encode(WizardStartResult(
                         sessionid: #require(params["sessionId"]?.stringValue), done: false,
@@ -34,7 +36,7 @@ struct ChatModelSignInTests {
             isCurrent: { current })
         let model = ChatModelSignInModel(context: context, onAuthChanged: { catalogRefreshes += 1 })
         await model.refresh()
-        await model.start(try #require(model.authStatus?.loginOptions.first))
+        try await model.start(#require(model.authStatus?.loginOptions.first))
         #expect(model.sessionID != nil)
         await model.answer()
         await model.close()
@@ -61,14 +63,16 @@ struct ChatModelSignInTests {
                 switch method {
                 case "models.authStatus":
                     statusReads += 1
-                    return Data(#"{"providers":[],"providerCapabilities":[{"loginOptions":[{"id":"fixture/device","label":"Sign in"}]}]}"#.utf8)
+                    return Data(
+                        #"{"providers":[],"providerCapabilities":[{"loginOptions":[{"id":"fixture/device","label":"Sign in"}]}]}"#
+                            .utf8)
                 case "models.authLogin":
                     return await withCheckedContinuation { continuation in
                         pendingLogin = continuation
                         started.continuation.yield()
                     }
                 case "wizard.cancel":
-                    cancelledSessionIDs.append(try #require(params["sessionId"]?.stringValue))
+                    try cancelledSessionIDs.append(#require(params["sessionId"]?.stringValue))
                     #expect(params["closeInput"]?.value as? Bool == true)
                     if !admitted {
                         throw GatewayResponseError(

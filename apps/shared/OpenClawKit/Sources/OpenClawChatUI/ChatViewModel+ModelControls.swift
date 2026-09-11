@@ -51,7 +51,9 @@ extension OpenClawChatViewModel {
             })
     }
 
-    public func refreshModelSignIn() async { await self.fetchModels() }
+    public func refreshModelSignIn() async {
+        await self.fetchModels()
+    }
 
     public var modelPickerSections: ChatModelPickerSections {
         let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
