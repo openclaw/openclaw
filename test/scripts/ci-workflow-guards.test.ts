@@ -13791,7 +13791,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         name: "checks-ui-e2e-real-gateway",
         setup: realGatewaySetup,
         matrix: {},
-        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+        blacksmithRunner: "blacksmith-32vcpu-ubuntu-2404",
       },
     ] as const;
     const routingScenarios = [

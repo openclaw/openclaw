@@ -31,6 +31,109 @@ function fixture() {
 }
 
 describe("canonical declaration stage", () => {
+  it("retains a sibling failure when another compiler cannot start", async () => {
+    const { staging, dist, invocation } = fixture();
+    const missing = invocation({});
+    missing.command = path.join(staging, "missing-compiler");
+    const failed = invocation({}, 17);
+    const result = await publishStagedDeclarations(
+      {
+        env: process.env,
+        maxOldSpaceMb: 8192,
+        heapShortfall: null,
+        invocations: [missing, failed],
+      },
+      [],
+      staging,
+      dist,
+      ["plugin-sdk/core.d.ts"],
+      ["plugin-sdk/obsolete.d.ts"],
+      undefined,
+      2,
+    ).catch((error: unknown) => error);
+    expect(result).toBeInstanceOf(AggregateError);
+    expect(result).toMatchObject({
+      errors: expect.arrayContaining([
+        expect.objectContaining({ code: "ENOENT" }),
+        expect.objectContaining({ exitCode: 17 }),
+      ]),
+    });
+    expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+  });
+
+  it.each(["success", "exit", "diagnostic"])(
+    "joins both private compiler stages before %s publication",
+    async (outcome) => {
+      const { staging, dist, invocation } = fixture();
+      const root = path.dirname(staging);
+      const sources = ["public", "private"].map((name) => ({
+        output: path.join(root, name),
+        required: [`plugin-sdk/${name}.d.ts`],
+      }));
+      const invocations = sources.map((source, index) => {
+        const child = invocation({ [source.required[0]!]: "export {};" }, 0, source.output);
+        child.args[1] = `
+          const fs = require('node:fs'), path = require('node:path');
+          const root = ${JSON.stringify(root)}, index = ${index};
+          fs.writeFileSync(path.join(root, index + '.started'), 'started');
+          const deadline = Date.now() + 3000;
+          const wait = setInterval(() => {
+            if (!fs.existsSync(path.join(root, (1 - index) + '.started'))) {
+              if (Date.now() > deadline) { clearInterval(wait); process.exitCode = 73; }
+              return;
+            }
+            clearInterval(wait);
+            { ${child.args[1]} }
+            if (index === 0) {
+              if (${JSON.stringify(outcome)} === 'exit') process.exitCode = 17;
+              if (${JSON.stringify(outcome)} === 'diagnostic') console.error('[INEFFECTIVE_DYNAMIC_IMPORT]');
+              fs.writeFileSync(path.join(root, 'first.finished'), 'finished');
+            } else {
+              const drain = setInterval(() => {
+                if (!fs.existsSync(path.join(root, 'first.finished'))) {
+                  if (Date.now() > deadline) { clearInterval(drain); process.exitCode = 74; }
+                  return;
+                }
+                clearInterval(drain);
+                fs.writeFileSync(path.join(root, 'second.finished'), 'finished');
+              }, 10);
+            }
+          }, 10);
+        `;
+        return child;
+      });
+      const seal = vi.fn(() => {
+        expect(fs.existsSync(path.join(root, "second.finished"))).toBe(true);
+        expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+      });
+      const publication = publishStagedDeclarations(
+        { env: process.env, maxOldSpaceMb: 8192, heapShortfall: null, invocations },
+        sources,
+        staging,
+        dist,
+        sources.flatMap((source) => source.required),
+        ["plugin-sdk/obsolete.d.ts"],
+        seal,
+        2,
+      );
+      if (outcome === "success") {
+        await publication;
+        expect(seal).toHaveBeenCalledOnce();
+        for (const source of sources) {
+          expect(fs.readFileSync(path.join(dist, source.required[0]!), "utf8")).toBe("export {};");
+        }
+      } else {
+        await expect(publication).rejects.toThrow(
+          `Declaration build failed with exit ${outcome === "exit" ? 17 : 1}`,
+        );
+        expect(seal).not.toHaveBeenCalled();
+        expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+        expect(fs.existsSync(path.join(dist, "plugin-sdk/public.d.ts"))).toBe(false);
+      }
+      expect(fs.readFileSync(path.join(root, "second.finished"), "utf8")).toBe("finished");
+    },
+  );
+
   it.each([".d.ts", ".d.mts", ".d.cts"])(
     "strips undeclared __exportAll from staged %s declaration exports",
     async (extension) => {

@@ -2770,11 +2770,11 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # First-attempt same-repo runs use Blacksmith unless the backend breaker is
-    # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    # Keep the existing hybrid route for the prepared Chromium workload:
-    # Blacksmith on attempt 1, hosted on rerun.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Contributor trust controls Blacksmith eligibility; manual runs and PR retries
+    # stay hosted. Hybrid also uses hosted capacity on push retries.
+    # The 32-class request can fit both staged SDK compilers; actual remaining
+    # memory still gates overlap, with unchanged browser worker limits.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
