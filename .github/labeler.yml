@@ -77,6 +77,13 @@
       - any-glob-to-any-file:
           - "extensions/imap/**"
           - "docs/automation/imap.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
+          - "docs/plugins/facetime-recovery.md"
+          - "docs/plugins/reference/facetime.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
