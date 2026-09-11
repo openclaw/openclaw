@@ -3,17 +3,19 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.js";
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
+import * as processExec from "../../src/process/exec.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import {
+  createDesktopResizeGuest,
   observeDesktopFilterPackets,
   readDesktopResizeFixture,
   resizeSources,
@@ -52,6 +54,36 @@ function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResiz
 }
 
 describe("desktop resize fixture provenance and carrier", () => {
+  it.each([undefined, "/tmp/desktop proof/Xauthority"])(
+    "uses private Xauthority for all guest commands when supplied: %s",
+    async (xauthorityPath) => {
+      const command = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+        stdout: "Screen 0: current 1200 x 850",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+      const guest = await createDesktopResizeGuest({ ...fixture(), xauthorityPath });
+      try {
+        expect(await guest.geometry()).toEqual({ width: 1200, height: 850 });
+        const argv = command.mock.calls[0]![0];
+        expect(argv[0]).toBe("ssh");
+        const remote = argv.at(-1)!;
+        expect(remote).toContain("DISPLAY=:99");
+        expect(remote).toContain("xrandr");
+        if (xauthorityPath) {
+          expect(remote).toContain("'XAUTHORITY=/tmp/desktop proof/Xauthority'");
+        } else {
+          expect(remote).not.toContain("XAUTHORITY");
+        }
+      } finally {
+        await guest.close();
+        command.mockRestore();
+      }
+    },
+  );
   it.each(["ssh", "node"] as const)(
     "retains explicit upstream provenance for %s",
     async (carrier) => {

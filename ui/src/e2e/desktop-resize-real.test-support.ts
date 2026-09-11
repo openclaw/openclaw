@@ -20,6 +20,7 @@ export type DesktopResizeFixture = {
   carrier: "ssh" | "node";
   ssh: WorkerSshEndpoint;
   identityPath: string;
+  xauthorityPath?: string;
   desktop: WorkerDesktopEndpoint;
   fixedDesktop: WorkerDesktopEndpoint;
   provenance:
@@ -299,7 +300,9 @@ export async function createDesktopResizeGuest(fixture: DesktopResizeFixture) {
         String(ssh.port),
         "--",
         ssh.sshTarget,
-        workerSshRemoteCommand(argv),
+        workerSshRemoteCommand(
+          fixture.xauthorityPath ? ["env", `XAUTHORITY=${fixture.xauthorityPath}`, ...argv] : argv,
+        ),
       ],
       workerSshCommandOptions({ timeoutMs: 10_000 }),
     );
