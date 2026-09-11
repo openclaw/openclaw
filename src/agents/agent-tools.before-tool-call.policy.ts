@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 /**
  * Ordered before_tool_call policy chain.
  *
@@ -8,6 +9,7 @@
 import type { ToolLoopWarning } from "@openclaw/agent-core";
 import { getRuntimeConfig } from "../config/config.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
@@ -290,6 +292,7 @@ export async function runBeforeToolCallHook(args: {
     }
     let trustedApprovalParams: unknown;
     let trustedApprovalResolution: PluginApprovalResolution | undefined;
+    let trustedApprovalGranted = false;
     if (trustedPolicyResult?.requireApproval) {
       const approvalOutcome = await resolveBeforeToolCallApprovalOutcome({
         result: trustedPolicyResult,
@@ -309,9 +312,11 @@ export async function runBeforeToolCallHook(args: {
         }
         trustedApprovalParams = approvalOutcome.params;
         trustedApprovalResolution = approvalOutcome.approvalResolution;
+        trustedApprovalGranted = true;
       }
     }
     const policyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
+    const trustedApprovalBoundary = trustedApprovalGranted;
     const policyAdjustedToolIdentity =
       getCodeModeExecBeforeHookMetadataForToolKind({
         toolKind: args.toolKind,
@@ -344,7 +349,13 @@ export async function runBeforeToolCallHook(args: {
       }
       return withLoopWarning(allowed);
     }
-    const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
+    const approvedParamsSnapshot = trustedApprovalBoundary
+      ? cloneHookIsolationValue("before_tool_call", policyAdjustedParams)
+      : undefined;
+    const hookParamsValue = trustedApprovalBoundary
+      ? cloneHookIsolationValue("before_tool_call", approvedParamsSnapshot)
+      : policyAdjustedParams;
+    const hookEventParams = isPlainObject(hookParamsValue) ? hookParamsValue : {};
     const callerIdentity = getGatewayToolCallerIdentity();
     let ownerDecisionMarked = false;
     const receipt =
@@ -382,17 +393,32 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
-    let finalParams = policyAdjustedParams;
+    const rawHookCandidateParams =
+      hookResult?.params === undefined
+        ? isPlainObject(hookParamsValue)
+          ? hookEventParams
+          : approvedParamsSnapshot
+        : mergeParamsWithApprovalOverrides(hookEventParams, hookResult.params);
+    const hookCandidateParams =
+      hookResult?.params === undefined
+        ? rawHookCandidateParams
+        : reconcileCodeModeExecBeforeHookParams({
+            owner: { toolKind: args.toolKind },
+            originalParams: hookEventParams,
+            hookParams: hookEventParams,
+            adjustedParams: rawHookCandidateParams,
+          });
+    let finalParams = approvedParamsSnapshot ?? policyAdjustedParams;
     let finalApprovalResolution = trustedApprovalResolution;
     if (hookResult?.requireApproval) {
       const approvalOutcome = await resolveBeforeToolCallApprovalOutcome({
-        result: hookResult,
+        result: trustedApprovalBoundary ? { ...hookResult, params: undefined } : hookResult,
         approvalMode: args.approvalMode,
         toolName,
         ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
         ...(args.ctx ? { ctx: args.ctx } : {}),
         signal: args.signal,
-        baseParams: policyAdjustedParams,
+        baseParams: trustedApprovalBoundary ? hookCandidateParams : policyAdjustedParams,
       });
       if (approvalOutcome) {
         if (approvalOutcome.blocked) {
@@ -404,9 +430,20 @@ export async function runBeforeToolCallHook(args: {
         finalParams = approvalOutcome.params;
         finalApprovalResolution = approvalOutcome.approvalResolution ?? finalApprovalResolution;
       }
+    } else if (
+      trustedApprovalBoundary &&
+      !isDeepStrictEqual(approvedParamsSnapshot, hookCandidateParams)
+    ) {
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "blocked",
+        deniedReason: "plugin-approval",
+        reason: "Tool call parameters changed after trusted approval",
+        params: approvedParamsSnapshot,
+      };
     }
-
-    if (hookResult?.params) {
+    if (!trustedApprovalBoundary && hookResult?.params) {
       finalParams = reconcileCodeModeExecBeforeHookParams({
         owner: { toolKind: args.toolKind },
         originalParams: policyAdjustedParams,

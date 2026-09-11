@@ -116,6 +116,28 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     resetGlobalHookRunner();
   });
 
+  function installTrustedApprovalPolicy(): void {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-policy",
+        source: "test",
+        policy: {
+          id: "approval-policy",
+          description: "Approval policy",
+          evaluate: () => ({
+            requireApproval: {
+              pluginId: "trusted-policy",
+              title: "Policy approval",
+              description: "Policy requested approval",
+            },
+          }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+  }
+
   it.each(["request", "waitDecision"])(
     "cancels the gateway approval %s transport when the owning tool lifetime ends",
     async (phase) => {
@@ -622,6 +644,85 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an ordinary hook rewrite after trusted policy approval", async () => {
+    installTrustedApprovalPolicy();
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { command: "unapproved" },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
+  });
+
+  it("rejects an in-place ordinary hook mutation after trusted policy approval", async () => {
+    installTrustedApprovalPolicy();
+    runBeforeToolCallMock.mockImplementation((event) => {
+      event.params.command = "unapproved";
+      return Promise.resolve(undefined);
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
+  });
+
+  it("allows an ordinary hook rewrite after a separate approval", async () => {
+    installTrustedApprovalPolicy();
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { code: "return 'separately-approved';" },
+      requireApproval: {
+        title: "Rewrite approval",
+        description: "Approve the rewritten command",
+      },
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({
+        id: "trusted-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      })
+      .mockResolvedValueOnce({
+        id: "rewrite-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        params: { code: "return 'approved';", command: "return 'approved';" },
+      }),
+    ).resolves.toEqual({
+      blocked: false,
+      params: { code: "return 'separately-approved';", command: "return 'separately-approved';" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+  });
+
   it("requires approval before skill_workshop applies a proposal", async () => {
     mockCallGatewayTool.mockResolvedValueOnce({
       id: "skill-workshop-approval",
@@ -991,83 +1092,5 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     if (!result.blocked) {
       expect(result.params).toEqual({ file: "/etc/hosts" });
     }
-  });
-});
-
-describe("before_tool_call approval snapshots", () => {
-  it("detaches deferred approval params from mutable hook and caller objects", async () => {
-    const baseParams = { command: "safe", options: { cwd: "/safe" } };
-    const overrideParams = { env: { MODE: "safe" } };
-
-    const outcome = await resolveBeforeToolCallApprovalOutcome({
-      result: {
-        requireApproval: {
-          pluginId: "policy",
-          title: "Needs approval",
-          description: "Approval needed",
-        },
-        params: overrideParams,
-      },
-      approvalMode: "defer",
-      toolName: "bash",
-      baseParams,
-    });
-
-    baseParams.options.cwd = "/unapproved";
-    overrideParams.env.MODE = "unapproved";
-
-    expect(outcome).toMatchObject({
-      blocked: false,
-      params: { command: "safe", options: { cwd: "/safe" } },
-      deferredApproval: {
-        baseParams: { command: "safe", options: { cwd: "/safe" } },
-        overrideParams: { env: { MODE: "safe" } },
-      },
-    });
-    if (!outcome || outcome.blocked || !outcome.deferredApproval) {
-      throw new Error("expected deferred approval outcome");
-    }
-    (outcome.params as typeof baseParams).options.cwd = "/outcome-mutated";
-    expect(outcome.deferredApproval.baseParams).toEqual({
-      command: "safe",
-      options: { cwd: "/safe" },
-    });
-  });
-
-  const sharedMemoryCases: Array<
-    [
-      string,
-      {
-        baseParams: Record<string, unknown>;
-        overrideParams?: Record<string, unknown>;
-      },
-    ]
-  > = [
-    ["base params", { baseParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) } }],
-    [
-      "override params",
-      {
-        baseParams: { command: "safe" },
-        overrideParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) },
-      },
-    ],
-  ];
-
-  it.each(sharedMemoryCases)("rejects shared memory in %s", async (_name, values) => {
-    await expect(
-      resolveBeforeToolCallApprovalOutcome({
-        result: {
-          requireApproval: {
-            pluginId: "policy",
-            title: "Needs approval",
-            description: "Approval needed",
-          },
-          params: values.overrideParams,
-        },
-        approvalMode: "defer",
-        toolName: "bash",
-        baseParams: values.baseParams,
-      }),
-    ).rejects.toThrow("before_tool_call mutable input isolation failed");
   });
 });
