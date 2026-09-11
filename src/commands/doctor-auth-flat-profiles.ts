@@ -66,6 +66,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
+import { applyPluginDoctorCompatibilityMigrations } from "../plugins/doctor-contract-registry.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { renameUserProfileAuthLinks } from "../state/user-model-accounts.js";
 import { shortenHomePath } from "../utils.js";
 import {
   listAuthProfileRepairCandidates,
@@ -92,7 +95,12 @@ import {
   type AuthAliasArchiveMapping,
   type AuthAliasStoreSnapshot,
 } from "./doctor/auth-alias-receipt.js";
+import { listMutableCodexRouteAgentEntries } from "./doctor/shared/codex-route-agent-entries.js";
 import { resolveLegacyRuntimeModelProviderAlias } from "./doctor/shared/legacy-runtime-model-providers.js";
+import {
+  repairModelRefAuthProfile,
+  repairRetiredConfigModelRefs,
+} from "./doctor/shared/retired-model-ref-repair.js";
 import { inspectAuthDatabaseFiles } from "./doctor/shared/stale-auth-order-store.js";
 
 type AuthProfileSqliteMigrationCandidate = AuthProfileRepairCandidate & {
@@ -1570,33 +1578,42 @@ function canonicalizeLegacyAuthProfileEntries(
   return { profileIdMap, changed };
 }
 
-const AUTH_PROFILE_REF_KEYS = new Set(["authProfileId"]);
-
 function rewriteMappedAuthProfileRefs(
-  value: unknown,
+  config: OpenClawConfig,
   profileIdMap: ReadonlyMap<string, string>,
 ): boolean {
-  if (Array.isArray(value)) {
-    return value.reduce(
-      (changed, entry) => rewriteMappedAuthProfileRefs(entry, profileIdMap) || changed,
-      false,
-    );
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-
   let changed = false;
-  for (const [key, entry] of Object.entries(value)) {
-    if (AUTH_PROFILE_REF_KEYS.has(key) && typeof entry === "string") {
-      const replaced = profileIdMap.get(entry);
-      if (replaced && replaced !== entry) {
-        value[key] = replaced;
-        changed = true;
-      }
+  const rewrite = (owner: unknown, key: string) => {
+    if (!isRecord(owner) || typeof owner[key] !== "string") {
+      return;
+    }
+    const replacement = profileIdMap.get(owner[key]);
+    if (replacement && replacement !== owner[key]) {
+      owner[key] = replacement;
+      changed = true;
+    }
+  };
+  for (const provider of Object.values(config.models?.providers ?? {})) {
+    rewrite(provider, "apiKey");
+  }
+  for (const model of config.tools?.media?.models ?? []) {
+    rewrite(model, "profile");
+    rewrite(model, "preferredProfile");
+  }
+  for (const server of Object.values(config.mcp?.servers ?? {})) {
+    rewrite(server.oauth, "authProfileId");
+  }
+  const agents = [
+    config.agents?.defaults,
+    ...listMutableCodexRouteAgentEntries(config).map(({ agent }) => agent),
+  ];
+  for (const agent of agents) {
+    if (!isRecord(agent) || !isRecord(agent.models)) {
       continue;
     }
-    changed = rewriteMappedAuthProfileRefs(entry, profileIdMap) || changed;
+    for (const model of Object.values(agent.models)) {
+      rewrite(isRecord(model) ? model.agentRuntime : undefined, "authProfileId");
+    }
   }
   return changed;
 }
@@ -1745,7 +1762,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   changes: string[];
   warnings: string[];
 } {
-  const config = structuredClone(cfg);
+  let config = structuredClone(cfg);
   const root = config as Record<string, unknown>;
   const auth = isRecord(root.auth) ? root.auth : undefined;
   const profileIdMap = new Map<string, string>(options?.profileIdMap);
@@ -1768,6 +1785,18 @@ export function maybeRepairOpenAICodexAuthConfig(
   }
   if (profileIdMap.size > 0 && rewriteMappedAuthProfileRefs(config, profileIdMap)) {
     changed = true;
+  }
+  if (profileIdMap.size > 0) {
+    const models = repairRetiredConfigModelRefs(config, ({ modelRef }) =>
+      repairModelRefAuthProfile(modelRef, profileIdMap),
+    );
+    config = models.config;
+    changed ||= models.changes.length > 0;
+    const plugins = applyPluginDoctorCompatibilityMigrations(config, {
+      authProfileIdMap: profileIdMap,
+    });
+    config = plugins.config;
+    changed ||= plugins.changes.length > 0;
   }
   if (!changed) {
     return { config, changes: [], warnings: [] };
@@ -1984,7 +2013,7 @@ export function maybeRepairLegacyAuthProfileStores(params: {
   });
   const locked: Array<{ database: AuthProfileDatabase; target: (typeof migrated)[number] }> = [];
   const changes: string[] = [];
-  const migrate = (index: number): void => {
+  const migrate = (index: number, sharedDatabase?: OpenClawStateDatabase): void => {
     const nextTarget = migrated[index];
     if (nextTarget) {
       runAuthProfileWriteTransaction(
@@ -1999,13 +2028,22 @@ export function maybeRepairLegacyAuthProfileStores(params: {
             throw new Error("auth profile store or rotation state changed during alias migration");
           }
           locked.push({ database, target: nextTarget });
-          migrate(index + 1);
+          migrate(index + 1, sharedDatabase);
         },
         { env },
       );
       return;
     }
     // Every participating owner is locked and revalidated before the first write.
+    const renamedLinks = renameUserProfileAuthLinks(params.profileIdMap, {
+      env,
+      database: sharedDatabase,
+    });
+    if (renamedLinks > 0) {
+      changes.push(
+        `Updated renamed auth profiles in ${renamedLinks} personal account selection record(s).`,
+      );
+    }
     for (const { database, target } of locked) {
       const store = target.migratedStore;
       const state = target.migratedState;
@@ -2024,7 +2062,7 @@ export function maybeRepairLegacyAuthProfileStores(params: {
       }
     }
   };
-  runWithAuthAliasMigrationReceipt(receiptSha256, env, () => migrate(0));
+  runWithAuthAliasMigrationReceipt(receiptSha256, env, (database) => migrate(0, database));
   if (changes.length > 0) {
     clearRuntimeAuthProfileStoreSnapshots();
   }

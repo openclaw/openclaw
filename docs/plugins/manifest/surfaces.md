@@ -35,6 +35,11 @@ Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 both. One declaration covers the complete config-repair artifact.
 
+When Doctor renames saved credentials, it passes an optional
+`authProfileIdMap: ReadonlyMap<string, string>` to `normalizeCompatibilityConfig`
+alongside `cfg`. Use this verified map to update plugin-owned account references.
+Preserve unmapped values and literal credentials; do not infer renames from names.
+
 Bundled plugins declare each state migration in execution order so Doctor can
 plan its owner and receipt without loading plugin code:
 

@@ -212,6 +212,7 @@ export async function loadLegacyCronRepairState(params: {
 export async function applyLegacyCronStoreRepair(params: {
   cfg: OpenClawConfig;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  authProfileIdMap?: ReadonlyMap<string, string>;
   state: LegacyCronRepairState;
   normalized?: ReturnType<typeof normalizeStoredCronJobs>;
   migrateCodexModelRefs?: boolean;
@@ -230,6 +231,7 @@ export async function applyLegacyCronStoreRepair(params: {
           cfg: params.cfg,
           checkModelPolicy: true,
           retiredModelRefConfig: params.retiredModelRefConfig,
+          authProfileIdMap: params.authProfileIdMap,
           warnings,
         })
       : undefined;
@@ -305,13 +307,13 @@ export async function applyLegacyCronStoreRepair(params: {
         warnings.push(
           `Skipped retired model repair for cron job "${jobId}": select its owning agent, then rerun openclaw doctor --fix.`,
         );
-        continue;
       }
       const beforeChanges = retirementChanges.length;
       repairRetiredModelSlots({
         owner: payload,
         path: `cron.${jobId}.payload`,
         agentId,
+        authProfileOnly: !agentId,
         resolve: resolveRetired,
         changes: retirementChanges,
       });
@@ -552,6 +554,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
 export async function repairCronCodexModelRefsAfterConfigWrite(params: {
   cfg: OpenClawConfig;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  authProfileIdMap?: ReadonlyMap<string, string>;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   repairRetiredModelRefs?: boolean;
 }): Promise<LegacyCronRepairResult> {
@@ -564,6 +567,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
       ? await applyLegacyCronStoreRepair({
           cfg: params.cfg,
           retiredModelRefConfig: params.retiredModelRefConfig,
+          authProfileIdMap: params.authProfileIdMap,
           state,
           migrateCodexModelRefs: true,
           repairRetiredModelRefs: params.repairRetiredModelRefs,

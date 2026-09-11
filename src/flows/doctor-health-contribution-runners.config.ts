@@ -228,6 +228,7 @@ export async function runWriteConfigHealth(
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     repairRetiredModelRefs: ctx.prompter.shouldRepair,
+    authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
