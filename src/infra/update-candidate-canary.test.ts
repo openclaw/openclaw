@@ -277,7 +277,7 @@ describe("update candidate canary", () => {
       candidateMutation: "checkpoint-owned-v1",
     };
     const requests: string[] = [];
-    const completed: Array<{ name: string; argv: string[] }> = [];
+    const completed: Array<{ name: string; argv: string[]; updateInProgress: string }> = [];
     let startupCalls = 0;
     vi.stubGlobal(
       "fetch",
@@ -306,12 +306,18 @@ describe("update candidate canary", () => {
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: path.join(root, "live-result.json"),
         [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: path.join(root, "live-config.json"),
         OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_SYSTEMD_UNIT: "source-gateway.service",
         CUSTOM_PROVIDER_KEY: "synthetic-provider-credential",
       },
       timeoutMs: 3_000,
       onStep: (step) => {
-        completed.push({ name: step.name, argv: [...mocks.spawn.mock.calls.at(-1)![1]] });
+        const invocation = mocks.spawn.mock.calls.at(-1)!;
+        completed.push({
+          name: step.name,
+          argv: [...invocation[1]],
+          updateInProgress: invocation[2].env.OPENCLAW_UPDATE_IN_PROGRESS,
+        });
       },
     });
     expect(result.status).toBe("ok");
@@ -326,6 +332,7 @@ describe("update candidate canary", () => {
       "candidate gateway canary",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
+    expect(completed.map((step) => step.updateInProgress)).toEqual(["0", "0", "0", "0", "0", "0"]);
     expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
       ["doctor", "--fix"],
       ["doctor", "--lint"],

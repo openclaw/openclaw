@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { z } from "zod";
 import type { UpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { withConfigMutationLock } from "../config/mutate.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -10,49 +8,15 @@ import {
   withConfigFileWriteCapture,
   type ConfigFileWrite,
 } from "../config/write-capture.js";
-import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
+import {
+  mergeUpdateRecoveryConfigWrites,
+  type UpdateRecoveryConfigWrite,
+  type UpdateRecoveryBackupRef,
+} from "./update-recovery-backup-contract.js";
 import { canonicalEntryPath, digest, statOrMissing } from "./update-recovery-backup-files.js";
 
 type Authority = { assertOwned: () => void };
-const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-export const updateRecoveryConfigWriteSchema = z
-  .object({
-    path: z
-      .string()
-      .min(1)
-      .max(4096)
-      .refine((value) => !value.includes("\0") && path.resolve(value) === value),
-    beforeHash: sha256.nullable(),
-    afterHash: sha256.nullable(),
-    contiguous: z.boolean(),
-  })
-  .strict();
-export type UpdateRecoveryConfigWrite = z.infer<typeof updateRecoveryConfigWriteSchema>;
-export const MAX_UPDATE_RECOVERY_OUTCOME_BYTES = 3 * 1024 * 1024;
 const captureOwners = new WeakMap<Map<string, ConfigFileWrite>, string>();
-
-export function mergeUpdateRecoveryConfigWrites(
-  previous: readonly UpdateRecoveryConfigWrite[],
-  next: readonly UpdateRecoveryConfigWrite[],
-): UpdateRecoveryConfigWrite[] {
-  const merged = new Map(previous.map((entry) => [entry.path, entry]));
-  for (const entry of next) {
-    const before = merged.get(entry.path);
-    merged.set(
-      entry.path,
-      before
-        ? {
-            path: entry.path,
-            beforeHash: before.beforeHash,
-            afterHash: entry.afterHash,
-            contiguous:
-              before.contiguous && entry.contiguous && before.afterHash === entry.beforeHash,
-          }
-        : entry,
-    );
-  }
-  return [...merged.values()].toSorted((left, right) => left.path.localeCompare(right.path));
-}
 
 function bindCapture(ref: UpdateRecoveryBackupRef): Map<string, ConfigFileWrite> | undefined {
   const capture = getConfigFileWriteCapture();

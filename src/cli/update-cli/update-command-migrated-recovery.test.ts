@@ -142,6 +142,7 @@ function fixture(): FinishUpdateParams {
 function worker(
   outcome: "failed" | "crashed" | "transport failed" | "uncertain" | "lost executor" | "success",
   parentRecoverySupported = true,
+  afterChild?: () => void,
 ) {
   vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
     const command = {
@@ -194,6 +195,7 @@ function worker(
       }),
     );
     state.events.push("child finished");
+    afterChild?.();
     if (outcome === "lost executor") {
       state.executorCurrent = false;
     }
@@ -242,6 +244,33 @@ it.each(["uncertain", "lost executor"] as const)(
   },
 );
 
+it.each(["run", "executor"] as const)(
+  "refuses parent restoration after its original %s is replaced",
+  async (replacement) => {
+    const params = fixture();
+    const originalRun = params.opts.run;
+    assert(originalRun);
+    worker("failed", true, () => {
+      if (replacement === "run") {
+        params.opts.run = { ...originalRun };
+      } else {
+        originalRun.executorFence = { assertCurrent: vi.fn() };
+      }
+    });
+    vi.mocked(rollbackFailedUpdate).mockImplementation(async (input) => ({
+      result: input.result,
+      rolledBack: true,
+      stateRestored: true,
+    }));
+    await expect(continueMigratedUpdateInFreshProcess(params, [])).rejects.toThrow(
+      "lost its original executor",
+    );
+    expect(rollbackFailedUpdate).not.toHaveBeenCalled();
+    expect(recordUpdateResultNextAction).not.toHaveBeenCalled();
+    expect(printResult).not.toHaveBeenCalled();
+  },
+);
+
 it("does not reopen the old ledger when state restoration fails", async () => {
   worker("failed");
   vi.mocked(rollbackFailedUpdate).mockImplementation(async (input) => ({
@@ -258,32 +287,39 @@ it("does not reopen the old ledger when state restoration fails", async () => {
   expect(printResult).not.toHaveBeenCalled();
 });
 
-it("keeps successful candidate finalization terminal without restoring state", async () => {
+it("keeps successful candidate finalization terminal and fences package completion", async () => {
   const params = fixture();
+  const complete = params.packageTransaction?.complete;
+  assert(complete);
+  let completionFence: (() => void) | undefined;
+  vi.mocked(complete).mockImplementation(async (_outcome, assertCurrent) => {
+    completionFence = assertCurrent;
+    expect(state.childActive).toBe(false);
+    assertCurrent();
+  });
   worker("success");
   await expect(continueMigratedUpdateInFreshProcess(params, [])).resolves.toMatchObject({
     result: { status: "ok" },
     exitCode: 0,
   });
   expect(rollbackFailedUpdate).not.toHaveBeenCalled();
-  expect(params.packageTransaction?.complete).toHaveBeenCalledWith({ activationVerified: true });
+  expect(complete).toHaveBeenCalledWith({ activationVerified: true }, expect.any(Function));
+  assert(completionFence);
+  state.executorCurrent = false;
+  expect(completionFence).toThrow("Executor is not current");
 });
 
-it.each([
-  { outcome: "success", metadataFails: false },
-  { outcome: "success", metadataFails: true },
-  { outcome: "failed", metadataFails: false },
-] as const)(
-  "supports older finalizer capability (outcome=$outcome, metadataFails=$metadataFails)",
-  async ({ outcome, metadataFails }) => {
+it.each(["success", "failed"] as const)(
+  "supports older finalizer capability without early capture settlement (outcome=%s)",
+  async (outcome) => {
     const params = fixture();
     params.candidateUpdateRecovery = "parent-v1";
+    const backup = params.updateRecoveryBackup;
+    assert(backup);
+    await fs.mkdir(backup.directory);
+    const recoveryBytes = "retained recovery fixture\n";
+    await fs.writeFile(backup.manifestPath, recoveryBytes);
     worker(outcome, false);
-    if (metadataFails) {
-      vi.mocked(writeUpdateRecoveryBackupOutcome).mockRejectedValue(
-        new Error("Outcome file unavailable"),
-      );
-    }
     vi.mocked(rollbackFailedUpdate).mockImplementation(async (input) => ({
       result: {
         ...input.result,
@@ -293,6 +329,7 @@ it.each([
       stateRestored: true,
     }));
     const completed = await continueMigratedUpdateInFreshProcess(params, []);
+    expect(writeUpdateRecoveryBackupOutcome).not.toHaveBeenCalled();
     if (outcome === "failed") {
       expect(completed).toMatchObject({
         exitCode: 1,
@@ -304,24 +341,17 @@ it.each([
           updateRecoveryBackup: params.updateRecoveryBackup,
         }),
       );
-      expect(writeUpdateRecoveryBackupOutcome).not.toHaveBeenCalled();
     } else {
       expect(completed).toMatchObject({ exitCode: 0, result: { status: "ok" } });
       expect(rollbackFailedUpdate).not.toHaveBeenCalled();
-      expect(writeUpdateRecoveryBackupOutcome).toHaveBeenCalledWith(
-        params.updateRecoveryBackup,
-        { status: "committed" },
-        { assertOwned: expect.any(Function) },
+      expect(await fs.readFile(backup.manifestPath, "utf8")).toBe(recoveryBytes);
+      const warning = completed.result.steps.find(
+        (step) => step.name === "backup completion warning",
       );
-      if (metadataFails) {
-        expect(completed.result.steps).toContainEqual(
-          expect.objectContaining({
-            name: "backup outcome warning",
-            exitCode: 0,
-            stderrTail: expect.stringContaining("Outcome file unavailable"),
-          }),
-        );
-      }
+      expect(warning?.exitCode).toBe(0);
+      expect(warning?.stderrTail).toContain(backup.manifestPath);
+      expect(warning?.stderrTail).toContain("openclaw update status --json");
+      expect(warning?.stderrTail).toContain("npx openclaw@latest doctor --fix");
     }
   },
 );

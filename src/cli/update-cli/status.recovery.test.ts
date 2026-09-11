@@ -15,10 +15,7 @@ vi.mock("../../commands/node-runtime-diagnostics.js", () => ({
   collectNodeRuntimeFindings: async () => [],
 }));
 vi.mock("../../config/config.js", () => ({ readSourceConfigBestEffort: async () => ({}) }));
-vi.mock("../../infra/update-run-ledger.js", () => ({
-  findActiveUpdateRun: () => undefined,
-  listUpdateRuns: () => [],
-}));
+vi.mock("../../infra/update-run-status.js", () => ({ readUpdateRunStatus: () => ({}) }));
 vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks }));
 vi.mock("../../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-check.js")>()),

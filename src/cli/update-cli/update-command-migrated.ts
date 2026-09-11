@@ -11,7 +11,7 @@ import {
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
-import { writeUpdateRecoveryBackupOutcome } from "../../infra/update-recovery-backup.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { finishUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -20,8 +20,10 @@ import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-version
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
 import { printResult } from "./progress.js";
-import { resolveNodeRunner } from "./shared.js";
+import { readPackageVersion, resolveNodeRunner } from "./shared.js";
+import { completeUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
 import {
+  withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
@@ -30,6 +32,7 @@ import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
+  UpdateCaptureRetirementInput,
 } from "./update-command-migrated-types.js";
 import {
   createUpdateCommandFinalizationFence,
@@ -49,6 +52,7 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+import { recordVerifiedUpdatePackageCleanup } from "./update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 export type {
@@ -266,6 +270,7 @@ export async function continueMigratedUpdateInFreshProcess(
   let recoveryAttempted = false;
   let windowsHandedOff = false;
   let parentRecoverySupported = false;
+  let captureRetirementSupported = false;
   const recover = async (failure: FinishUpdateParams["result"]) => {
     recoveryAttempted = true;
     assertCurrent();
@@ -335,6 +340,7 @@ export async function continueMigratedUpdateInFreshProcess(
         );
       }
       parentRecoverySupported = contract.updateRecovery === "parent-v1";
+      captureRetirementSupported = contract.captureRetirement === "settled-v1";
     }
     if (windowsRecovery && params.preManagedServiceStop) {
       // The parent retains its original definition-refresh grant for compensation.
@@ -478,41 +484,83 @@ export async function continueMigratedUpdateInFreshProcess(
         { cause },
       );
     }
-    if (
-      !parentRecoverySupported &&
-      params.updateRecoveryBackup &&
-      response.result.status === "ok"
-    ) {
-      try {
-        assertCurrent();
-        await writeUpdateRecoveryBackupOutcome(
-          params.updateRecoveryBackup,
-          { status: "committed" },
-          { assertOwned: assertCurrent },
-        );
-      } catch (error) {
-        assertCurrent();
-        const warning = `Update completed; backup outcome could not be recorded at ${params.updateRecoveryBackup.manifestPath}: ${formatErrorMessage(error)}`;
-        defaultRuntime.error(`Warning: ${warning}`);
-        response.result.steps.push({
-          name: "backup outcome warning",
-          command: "openclaw update",
-          cwd: root,
-          durationMs: 0,
-          exitCode: 0,
-          stderrTail: warning,
-        });
-      }
+    if (params.updateRecoveryBackup && response.result.status === "ok") {
+      const backup = params.updateRecoveryBackup;
+      const runtimeRoot = await fs.realpath(root);
+      const runtimeBuildId = await readBuiltGatewayBuildId(root);
+      const retirementEnv = {
+        ...workerEnv,
+        TMPDIR: os.tmpdir(),
+        TMP: os.tmpdir(),
+        TEMP: os.tmpdir(),
+      };
+      await completeUpdateCommandBackup(
+        params,
+        response.result,
+        assertCurrent,
+        async (settledResult) => {
+          if (
+            !captureRetirementSupported ||
+            !runtimeBuildId ||
+            (await fs.realpath(root)) !== runtimeRoot ||
+            (await readPackageVersion(root)) !== settledResult.after?.version ||
+            (await readBuiltGatewayBuildId(root)) !== runtimeBuildId
+          ) {
+            throw new Error(
+              "Verified candidate capture-retirement runtime is unavailable or changed.",
+            );
+          }
+          const retirementInput: UpdateCaptureRetirementInput = {
+            runId: run.runId,
+            root: params.root,
+            runtimeRoot,
+            runtimeBuildId,
+            backup,
+            result: settledResult,
+          };
+          const retirementChild = await withUpdateCommandExecutor(run.runId, async (executor) => {
+            const fence = await executor.enter(root);
+            return await withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+              runUtf8CommandWithTimeout([...workerCommand, "--retire-capture"], {
+                cwd: root,
+                baseEnv: {},
+                env: retirementEnv,
+                input: JSON.stringify({ ...retirementInput, executor: grant }),
+                beforeInput,
+                timeoutMs: params.updateStepTimeoutMs,
+                killProcessTree: true,
+                requireProcessTreeExtinction: true,
+                killGraceMs: 500,
+                maxOutputBytes: 64 * 1024,
+              }),
+            );
+          });
+          const receipt: unknown = JSON.parse(retirementChild.stdout);
+          if (
+            retirementChild.termination !== "exit" ||
+            retirementChild.code !== 0 ||
+            retirementChild.cleanup !== "normal" ||
+            !isRecord(receipt) ||
+            receipt.retired !== true ||
+            receipt.runId !== run.runId ||
+            receipt.manifestSha256 !== backup.manifestSha256 ||
+            (receipt.warning !== undefined && typeof receipt.warning !== "string")
+          ) {
+            throw new Error(
+              `Capture retirement was not confirmed by the candidate: ${retirementChild.stderr}`,
+            );
+          }
+          return receipt.warning;
+        },
+      );
     }
-    const retained = await params.packageTransaction
-      ?.complete({ activationVerified: response.result.status === "ok" }, assertCurrent)
-      .catch((error: unknown) => {
-        assertCurrent();
-        defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
-      });
-    if (retained) {
-      response.result.steps.push(retained);
-      defaultRuntime.error(retained.stderrTail);
+    const cleanupFailure = await recordVerifiedUpdatePackageCleanup(
+      params,
+      response.result,
+      assertCurrent,
+    );
+    if (cleanupFailure) {
+      return { result: cleanupFailure.result, exitCode: cleanupFailure.exitCode };
     }
     return {
       result: response.result,

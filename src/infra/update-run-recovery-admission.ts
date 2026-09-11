@@ -6,7 +6,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import {
   isUpdateRecoveryPending,
   UpdateRecoveryRequiredError,

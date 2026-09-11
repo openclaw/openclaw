@@ -10,7 +10,9 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import * as updateRunLedger from "../infra/update-run-ledger.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorUpdateRecovery, withDoctorUpdateRecovery } from "./doctor-update-recovery.js";
 import { doctorCommand } from "./doctor.js";
 
@@ -42,7 +44,8 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   readActiveGatewayLockIdentity: mocks.gateway,
 }));
 
-vi.mock("../infra/update-recovery-backup.js", () => ({
+vi.mock("../infra/update-recovery-backup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-recovery-backup.js")>()),
   createUpdateRecoveryBackup: mocks.create,
   verifyUpdateRecoveryBackup: mocks.verify,
   restoreUpdateRecoveryBackup: mocks.restore,
@@ -52,7 +55,7 @@ vi.mock("../infra/update-recovery-backup.js", () => ({
 }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => "/fixture/openclaw",
+  resolveOpenClawPackageRoot: async () => path.join(process.env.OPENCLAW_STATE_DIR!, "install"),
 }));
 vi.mock("./doctor-maintenance.js", () => ({
   beginDoctorMaintenance: async () => ({
@@ -70,6 +73,7 @@ describe("update Doctor state recovery", () => {
   let runtime: RuntimeEnv;
   let ref: { directory: string; manifestPath: string; manifestSha256: string };
   let resultPath: string | undefined;
+  let runId: string;
 
   beforeEach(async () => {
     vi.resetAllMocks();
@@ -81,11 +85,20 @@ describe("update Doctor state recovery", () => {
       manifestPath: path.join(directory, "manifest.json"),
       manifestSha256: "a".repeat(64),
     };
-    await fs.writeFile(configPath, "original config");
+    await fs.mkdir(path.join(directory, "install"));
+    await fs.writeFile(configPath, "{}");
     vi.stubEnv("OPENCLAW_STATE_DIR", directory);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, undefined);
+    const created = updateRunLedger.createUpdateRun({ trigger: "cli" });
+    const run = updateRunLedger.recordUpdateRunStep(created.runId, {
+      step: "openclaw doctor",
+      status: "in_progress",
+      startedAtMs: Date.now(),
+    });
+    runId = run.runId;
+    await fs.writeFile(configPath, "original config");
     runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -95,22 +108,32 @@ describe("update Doctor state recovery", () => {
     };
     mocks.create.mockImplementation(async () => {
       await fs.copyFile(configPath, backupPath);
+      updateRunLedger.recordUpdateRunRecoveryCapture(
+        runId,
+        { manifestSha256: ref.manifestSha256 },
+        () => {},
+      );
       return ref;
     });
     mocks.restore.mockImplementation(async () => fs.copyFile(backupPath, configPath));
     mocks.verify.mockResolvedValue({
       stateDir: directory,
-      installRoot: "/fixture/openclaw",
+      installRoot: path.join(directory, "install"),
+      runId,
       creator: { host: "fixture", pid: 42, startIdentity: "1" },
       drivers: [],
     });
     mocks.pending.mockResolvedValue(null);
-    mocks.activeRuns.mockResolvedValue([]);
+    mocks.activeRuns.mockImplementation(async () =>
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? [run] : [],
+    );
     mocks.driver.mockReturnValue("dead");
     mocks.gateway.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     if (resultPath) {
       await fs.rm(resultPath, { force: true });
@@ -151,33 +174,39 @@ describe("update Doctor state recovery", () => {
     },
   );
 
-  it("leaves successful migrations in place and retires only the pending recovery marker", async () => {
+  it("leaves successful migrations protected until the parent updater settles", async () => {
     mocks.flow.mockImplementation(async () => fs.writeFile(configPath, "migrated config"));
     await doctorCommand(runtime, { repair: true });
     expect(await fs.readFile(configPath, "utf8")).toBe("migrated config");
     expect(await fs.readFile(backupPath, "utf8")).toBe("original config");
     expect(mocks.restore).not.toHaveBeenCalled();
-    expect(mocks.outcome).toHaveBeenCalledWith(
+    expect(mocks.outcome).not.toHaveBeenCalledWith(
       ref,
-      { status: "committed" },
-      {
-        assertOwned: expect.any(Function),
-      },
+      expect.objectContaining({ status: "committed" }),
+      expect.anything(),
     );
+    expect(updateRunLedger.getUpdateRun(runId)).toMatchObject({
+      status: "running",
+      origin: {
+        updateRecoveryCapture: { doctorCompleted: true, manifestSha256: ref.manifestSha256 },
+      },
+    });
   });
 
-  it("keeps a successful Doctor successful when backup outcome recording fails", async () => {
+  it("keeps a successful Doctor successful when its completion receipt cannot be recorded", async () => {
     mocks.flow.mockImplementation(async () => fs.writeFile(configPath, "migrated config"));
-    mocks.outcome.mockImplementation(async (_ref: unknown, outcome: { status: string }) => {
-      if (outcome.status === "committed") {
+    const recordCapture = updateRunLedger.recordUpdateRunRecoveryCapture;
+    vi.spyOn(updateRunLedger, "recordUpdateRunRecoveryCapture").mockImplementation((...args) => {
+      if (args[1].doctorCompleted) {
         throw new Error("outcome publication failed");
       }
+      return recordCapture(...args);
     });
     await expect(doctorCommand(runtime, { repair: true })).resolves.toBeUndefined();
     expect(await fs.readFile(configPath, "utf8")).toBe("migrated config");
     expect(mocks.restore).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("retained backup outcome could not be recorded"),
+      expect.stringContaining("capture outcome could not be recorded"),
     );
   });
 
@@ -366,7 +395,6 @@ describe("update Doctor state recovery", () => {
   it("refuses pending manual recovery beside a retained legacy checkpoint", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
     const stateParent = path.join(directory, "state");
-    await fs.mkdir(stateParent);
     const retained = path.join(stateParent, ".openclaw-restore-fixture");
     await fs.writeFile(retained, "retained checkpoint");
     await fs.writeFile(backupPath, "original config");

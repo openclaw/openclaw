@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveBackupPlanFromDisk } from "../commands/backup-shared.js";
@@ -24,16 +25,22 @@ import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { assertNotUpdateCapturePath, isUpdateCapturePath } from "./update-capture-paths.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "./update-capture-privacy-marker.js";
 import type { UpdateRecoveryBackupRef } from "./update-recovery-backup-contract.js";
 import {
   backupStore,
   canonicalEntryPath,
+  captureDirectory,
   digest,
   fileDigest,
-  installDirectory,
   MAX_MANIFEST_BYTES,
   statOrMissing,
 } from "./update-recovery-backup-files.js";
+import { assertUpdateRecoveryCapacity } from "./update-recovery-capacity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 
 function within(candidate: string, root: string): boolean {
@@ -82,6 +89,42 @@ function traversable(
   );
 }
 
+async function writePrivacyMarker(directory: string): Promise<void> {
+  const marker = path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER);
+  const existing = await statOrMissing(marker);
+  if (existing) {
+    if (
+      !existing.isFile() ||
+      existing.size !== Buffer.byteLength(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT) ||
+      (process.platform !== "win32" && (existing.mode & 0o077) !== 0)
+    ) {
+      throw new Error(`Invalid private update capture marker: ${marker}`);
+    }
+    const source = await (
+      await safeRoot(directory)
+    ).open(UPDATE_CAPTURE_PRIVACY_MARKER, {
+      symlinks: "reject",
+      hardlinks: "reject",
+    });
+    try {
+      if ((await source.handle.readFile("utf8")) !== UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT) {
+        throw new Error(`Invalid private update capture marker: ${marker}`);
+      }
+    } finally {
+      await source.handle.close();
+    }
+  } else {
+    const output = await fs.open(marker, "wx", 0o600);
+    try {
+      await output.writeFile(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
+      await output.sync();
+    } finally {
+      await output.close();
+    }
+  }
+  requireDirectorySync(await syncDirectory(directory), "Update capture privacy marker");
+}
+
 export async function captureUpdateRecoveryBackup(params: {
   assertOwned: () => void;
   runId: string;
@@ -107,7 +150,7 @@ export async function captureUpdateRecoveryBackup(params: {
   const config = await readConfigFileSnapshot({ observe: false });
   const stateDir = resolvePathViaExistingAncestorSync(plan.stateDir);
   const installRoot = path.resolve(params.installRoot);
-  const directory = path.join(installDirectory(installRoot, stateDir), params.runId, "backup");
+  const directory = captureDirectory(params.runId, stateDir);
   const registry = inspectOpenClawRegisteredAgentDatabases({
     includeIncompatibleSchemaVersions: true,
   });
@@ -185,6 +228,9 @@ export async function captureUpdateRecoveryBackup(params: {
       "Update recovery cannot capture a filesystem root or a root containing its backup store.",
     );
   }
+  for (const root of roots) {
+    assertNotUpdateCapturePath(root, stateDir);
+  }
   const manifest: UpdateRecoveryBackupManifest = {
     schemaVersion: 1,
     kind: "update-recovery",
@@ -219,12 +265,14 @@ export async function captureUpdateRecoveryBackup(params: {
       roots.map(async (pathname) => [pathname, await statOrMissing(pathname)] as const),
     ),
   );
-  params.assertOwned();
-  await ensurePrivateSnapshotRepositoryRoot(directory);
-  const directoryPin = await pinDirectory(directory);
-  await createPrivateSqliteDirectory(path.join(directory, "payload"));
+  const files: { pathname: string; before: Stats; sqlite: boolean }[] = [];
   const visit = async (pathname: string): Promise<void> => {
     if (seen.has(pathname) || !traversable(manifest, pathname)) {
+      return;
+    }
+    if (isUpdateCapturePath(pathname, stateDir)) {
+      // Restore must preserve the same private capture roots that inventory omits.
+      manifest.excludedRoots.push(pathname);
       return;
     }
     const declaredPath =
@@ -233,12 +281,11 @@ export async function captureUpdateRecoveryBackup(params: {
     if (!plan.inventory.isTraversable(pathname) && !declaredPath) {
       return;
     }
-    if (manifest.entries.length >= 1_000_000) {
+    if (seen.size >= 1_000_000) {
       throw new Error("Update recovery inventory exceeds one million entries.");
     }
     seen.add(pathname);
     params.assertOwned();
-    await directoryPin.assertCurrent();
     const before = rootStates.has(pathname)
       ? rootStates.get(pathname)
       : await statOrMissing(pathname);
@@ -305,6 +352,7 @@ export async function captureUpdateRecoveryBackup(params: {
       manifest.entries.push(link);
       if (sqliteLink || configFiles.has(pathname) || declaredKinds.get(pathname) === "directory") {
         const target = await fs.realpath(pathname);
+        assertNotUpdateCapturePath(target, stateDir);
         if (sqliteLink) {
           declaredKinds.set(target, "sqlite");
         } else if (configFiles.has(pathname)) {
@@ -361,79 +409,101 @@ export async function captureUpdateRecoveryBackup(params: {
     if (!manifest.roots.some((root) => within(pathname, root))) {
       manifest.roots.push(pathname);
     }
-    const archivePath = `payload/${manifest.entries.length}`;
-    const targetPath = path.join(directory, archivePath);
-    params.assertOwned();
-    if (sqlite) {
-      const owner = databaseOwners.get(pathname);
-      await createVerifiedSqliteSnapshot({
-        sourcePath: pathname,
-        targetPath,
-        preserveRowIds: true,
-        beforePublish: params.assertOwned,
-        validate:
-          owner?.role === "global"
-            ? (database, label) => assertOpenClawStateDatabaseOwner(database, { pathname: label })
-            : owner?.role === "agent"
-              ? (database, label) => {
-                  assertOpenClawAgentDatabaseOwner(database, {
-                    agentId: owner.agentId,
-                    pathname: label,
-                  });
-                }
-              : undefined,
-      });
-    } else {
-      const source = await (
-        await safeRoot(path.dirname(pathname))
-      ).open(path.basename(pathname), { symlinks: "reject", hardlinks: "allow" });
-      const output = await fs.open(targetPath, "wx+", 0o600);
-      try {
-        if (before.dev !== source.stat.dev || before.ino !== source.stat.ino) {
-          throw new Error(`Update recovery input changed before backup: ${pathname}`);
-        }
-        const opened = await source.handle.stat({ bigint: true });
-        await copyFileHandle(source.handle, output, {
-          noProgressMessage: "Update recovery input copy made no progress.",
+    files.push({ pathname, before, sqlite });
+  };
+  for (const root of scanRoots) {
+    await visit(root);
+  }
+  // Missing configured databases must remain absent after rolling back their first migration.
+  for (const pathname of explicitPaths) {
+    if (!seen.has(pathname)) {
+      await visit(pathname);
+    }
+  }
+  await assertUpdateRecoveryCapacity({
+    directory,
+    installRoot,
+    files: files.map(({ pathname, before, sqlite }) => ({ pathname, size: before.size, sqlite })),
+  });
+  params.assertOwned();
+  const store = backupStore(stateDir);
+  await ensurePrivateSnapshotRepositoryRoot(store);
+  params.assertOwned();
+  await writePrivacyMarker(store);
+  params.assertOwned();
+  await createPrivateSqliteDirectory(directory);
+  params.assertOwned();
+  await writePrivacyMarker(directory);
+  requireDirectorySync(await syncDirectory(store), "Update capture root");
+  const directoryPin = await pinDirectory(directory);
+  try {
+    await createPrivateSqliteDirectory(path.join(directory, "payload"));
+    for (const { pathname, before, sqlite } of files) {
+      const archivePath = `payload/${manifest.entries.length}`;
+      const targetPath = path.join(directory, archivePath);
+      params.assertOwned();
+      await directoryPin.assertCurrent();
+      if (sqlite) {
+        const owner = databaseOwners.get(pathname);
+        await createVerifiedSqliteSnapshot({
+          sourcePath: pathname,
+          targetPath,
+          preserveRowIds: true,
+          sourceStagingRoot: directory,
+          beforePublish: params.assertOwned,
+          validate:
+            owner?.role === "global"
+              ? (database, label) => assertOpenClawStateDatabaseOwner(database, { pathname: label })
+              : owner?.role === "agent"
+                ? (database, label) => {
+                    assertOpenClawAgentDatabaseOwner(database, {
+                      agentId: owner.agentId,
+                      pathname: label,
+                    });
+                  }
+                : undefined,
         });
-        if (!sameFileMutationFingerprint(opened, await source.handle.stat({ bigint: true }))) {
+      } else {
+        const source = await (
+          await safeRoot(path.dirname(pathname))
+        ).open(path.basename(pathname), { symlinks: "reject", hardlinks: "allow" });
+        const output = await fs.open(targetPath, "wx+", 0o600);
+        try {
+          if (before.dev !== source.stat.dev || before.ino !== source.stat.ino) {
+            throw new Error(`Update recovery input changed before backup: ${pathname}`);
+          }
+          const opened = await source.handle.stat({ bigint: true });
+          await copyFileHandle(source.handle, output, {
+            noProgressMessage: "Update recovery input copy made no progress.",
+          });
+          if (!sameFileMutationFingerprint(opened, await source.handle.stat({ bigint: true }))) {
+            throw new Error(`Update recovery input changed during backup: ${pathname}`);
+          }
+          await output.sync();
+        } finally {
+          await output.close();
+          await source.handle.close();
+        }
+        const after = await fs.lstat(pathname);
+        if (
+          before.dev !== after.dev ||
+          before.ino !== after.ino ||
+          before.size !== after.size ||
+          before.mtimeMs !== after.mtimeMs ||
+          before.ctimeMs !== after.ctimeMs
+        ) {
           throw new Error(`Update recovery input changed during backup: ${pathname}`);
         }
-        await output.sync();
-      } finally {
-        await output.close();
-        await source.handle.close();
       }
-      const after = await fs.lstat(pathname);
-      if (
-        before.dev !== after.dev ||
-        before.ino !== after.ino ||
-        before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs ||
-        before.ctimeMs !== after.ctimeMs
-      ) {
-        throw new Error(`Update recovery input changed during backup: ${pathname}`);
-      }
-    }
-    const content = await fileDigest(targetPath);
-    manifest.entries.push({
-      kind: "file",
-      sourcePath: pathname,
-      archivePath,
-      ...content,
-      sqlite,
-      mode: before.mode & 0o777,
-    });
-  };
-  try {
-    for (const root of scanRoots) {
-      await visit(root);
-    }
-    // Missing configured databases must remain absent after rolling back their first migration.
-    for (const pathname of explicitPaths) {
-      if (!seen.has(pathname)) {
-        await visit(pathname);
-      }
+      const content = await fileDigest(targetPath);
+      manifest.entries.push({
+        kind: "file",
+        sourcePath: pathname,
+        archivePath,
+        ...content,
+        sqlite,
+        mode: before.mode & 0o777,
+      });
     }
     manifest.configPaths = [...configFiles].toSorted();
     const raw = `${JSON.stringify(manifest)}\n`;

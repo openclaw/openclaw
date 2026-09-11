@@ -17,6 +17,7 @@ import {
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
 import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
+import { assertNoUnresolvedUpdateRecoveryBackup } from "../../infra/update-recovery-backup.js";
 import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -459,6 +460,14 @@ export async function executeMutableUpdate(
     }
     return validation.steps;
   };
+  const assertRecoveryCaptureAdmission = async (env: NodeJS.ProcessEnv) => {
+    try {
+      await withOwnedManagedUpdateEnv(env, () => assertNoUnresolvedUpdateRecoveryBackup());
+    } catch (cause) {
+      throw new UpdatePreMutationError("update-recovery-pending", formatErrorMessage(cause));
+    }
+    assertUpdateCommandRecovery(opts);
+  };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertUpdateCommandRecovery(opts);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
@@ -540,6 +549,7 @@ export async function executeMutableUpdate(
         env: opts.run.env,
       });
     }
+    await assertRecoveryCaptureAdmission(env);
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertUpdateCommandRecovery(opts);
@@ -567,6 +577,7 @@ export async function executeMutableUpdate(
         legacyConfigPlan: params.legacyConfigPlan,
       });
     }
+    await assertRecoveryCaptureAdmission(admission?.managedEnv ?? opts.run?.env ?? process.env);
     if (params.updateInstallKind === "package") {
       if (!stagedPluginAdmission) {
         await preflightPlugins(params.packageTargetVersion ?? null);

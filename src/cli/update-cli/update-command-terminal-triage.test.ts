@@ -38,6 +38,75 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("preserves the rollback result when recovery fails before terminal settlement", async () => {
+  const root = await fs.realpath(dirs.make("update-terminal-rollback-"));
+  const candidateRoot = path.join(root, "candidate");
+  const previousRoot = path.join(root, "previous");
+  const pendingResult: UpdateRunResult = {
+    status: "ok",
+    mode: "npm",
+    root: candidateRoot,
+    after: { version: "2026.9.4" },
+    steps: [],
+    durationMs: 1,
+  };
+  const rollbackResult: UpdateRunResult = {
+    ...pendingResult,
+    status: "error",
+    root: previousRoot,
+    after: { version: "2026.9.3" },
+    reason: "update-state-rollback-failed",
+    recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    steps: [
+      {
+        name: "global install rollback",
+        command: "openclaw update",
+        cwd: previousRoot,
+        durationMs: 1,
+        exitCode: 0,
+      },
+      {
+        name: "update state rollback",
+        command: "openclaw update",
+        cwd: previousRoot,
+        durationMs: 1,
+        exitCode: 1,
+        stderrTail: "State restore failed; retained recovery set requires repair.",
+      },
+    ],
+  };
+  const failure = new UpdateCommandPendingRecoveryFailure(rollbackResult);
+  const settled = await resolveSettledUpdateCommandResult(
+    {
+      opts: {},
+      root: candidateRoot,
+      ownedManagedUpdateEnv: {
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+      },
+    },
+    pendingResult,
+    failure,
+  );
+
+  expect(settled.settlementFailed).toBe(true);
+  expect(settled.result).toMatchObject({
+    status: "error",
+    reason: "update-executor-settlement-failed",
+    root: previousRoot,
+    after: { version: "2026.9.3" },
+    recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+  });
+  expect(settled.result.steps).toEqual([
+    ...rollbackResult.steps,
+    expect.objectContaining({
+      name: "update executor settlement",
+      cwd: previousRoot,
+      exitCode: 1,
+    }),
+  ]);
+});
+
 it.each([
   { name: "revoked-absent", revoked: true, existing: false },
   { name: "revoked-existing", revoked: true, existing: true },

@@ -1,4 +1,5 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup-contract.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryHandoff } from "../../infra/update-run-recovery.js";
@@ -39,3 +40,13 @@ export type MigratedUpdateFinalizationResult = MigratedUpdateFinalizationOutcome
     | { terminalRunId: string; recoveryRequired?: never }
     | { terminalRunId?: never; recoveryRequired: true }
   );
+
+export type UpdateCaptureRetirementInput = {
+  executor?: UpdateCommandChildGrant;
+  runId: string;
+  root: string;
+  runtimeRoot: string;
+  runtimeBuildId: string;
+  backup: UpdateRecoveryBackupRef;
+  result: UpdateRunResult;
+};

@@ -26,7 +26,11 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  withUpdateCommandExecutor,
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor.js";
 import {
   continueMigratedUpdateInFreshProcess,
   inspectActivatedUpdateState,
@@ -411,4 +415,113 @@ it.each([
     }
   },
   30_000,
+);
+
+it.each([false, true])(
+  "retires a verified capture through the current runtime after its older parent settles (delegated=%s)",
+  async (delegated) => {
+    const { createUpdateRecoveryBackup } = await import("../../infra/update-recovery-backup.js");
+    const { readBuiltGatewayBuildId } = await import("../../infra/update-git-runtime.js");
+    const { readPackageVersion } = await import("../../infra/package-json.js");
+    const { runUtf8CommandWithTimeout } = await import("../../process/exec.js");
+    const { finishUpdateRun, recordUpdateRunVerification } =
+      await import("../../infra/update-run-ledger.js");
+    const { withOwnedManagedUpdateEnv } = await import("./update-command-managed-context.js");
+    const stateDir = await fs.realpath(dirs.make("migrated-capture-retirement-"));
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, '{"plugins":{"enabled":false}}');
+    const temporary = path.join(stateDir, "coordination");
+    await fs.mkdir(temporary, { mode: 0o700 });
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
+    const root = await fs.realpath(process.cwd());
+    const version = await readPackageVersion(root);
+    const buildId = await readBuiltGatewayBuildId(root);
+    expect(version).toBeTruthy();
+    expect(buildId).toBeTruthy();
+    const created = createUpdateRun({ trigger: "cli" }, { env });
+    const backup = await withOwnedManagedUpdateEnv(env, () =>
+      createUpdateRecoveryBackup({
+        runId: created.runId,
+        installRoot: root,
+        assertOwned() {},
+      }),
+    );
+    recordUpdateRunVerification(
+      created.runId,
+      {
+        serviceRunning: true,
+        runningVersion: version!,
+        runningBuildId: buildId!,
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+        pluginErrors: [],
+      },
+      { env },
+    );
+    recordUpdateRunStep(
+      created.runId,
+      { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
+      { env },
+    );
+    finishUpdateRun(created.runId, { status: "succeeded", after: { version, buildId } }, { env });
+    const shared = openOpenClawStateDatabase({ env });
+    shared.db.exec(
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary';`,
+    );
+    expect(() =>
+      recordUpdateRunStep(created.runId, { step: "old parent", status: "completed" }, { env }),
+    ).toThrow(/newer schema version/);
+    const retire = (executor?: UpdateCommandChildGrant, beforeInput?: (pid: number) => void) =>
+      runUtf8CommandWithTimeout(
+        [
+          process.execPath,
+          path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"),
+          "--retire-capture",
+        ],
+        {
+          cwd: root,
+          env,
+          baseEnv: {},
+          beforeInput,
+          input: JSON.stringify({
+            executor,
+            runId: created.runId,
+            root,
+            runtimeRoot: root,
+            runtimeBuildId: buildId,
+            backup,
+            result: {
+              status: "ok",
+              mode: "npm",
+              root,
+              runId: created.runId,
+              after: { version, buildId },
+              steps: [],
+              durationMs: 1,
+            },
+          }),
+          timeoutMs: 30_000,
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+        },
+      );
+    const child = delegated
+      ? await withUpdateCommandExecutor(created.runId, async (executor) =>
+          withUpdateCommandExecutorChild(await executor.enter(root), retire),
+        )
+      : await retire();
+    expect(child.code, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({
+      retired: true,
+      runId: created.runId,
+      manifestSha256: backup.manifestSha256,
+    });
+    await expect(fs.stat(backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
+  },
 );

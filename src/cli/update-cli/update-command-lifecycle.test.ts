@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as recoveryConfigWrites from "../../infra/update-recovery-config-writes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -249,6 +251,83 @@ describe("update plugin lifecycle lease boundaries", () => {
       status: "skipped",
       reason: "already-current",
     });
+  });
+
+  it("does not launch Doctor when finalization is revoked during config receipt flush", async () => {
+    const directory = dirs.make("update-receipt-revocation-");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const revoked = new Error("Finalization authority was revoked");
+    let active = true;
+    const doctorLaunch = vi.fn();
+    const flush = vi
+      .spyOn(recoveryConfigWrites, "persistUpdateRecoveryConfigWrites")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+    vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async (params) => {
+      await params.beforeDoctor?.();
+      doctorLaunch();
+      return { pluginUpdate: successfulPluginUpdate, configSnapshot: validConfigSnapshot };
+    });
+    const convergence = convergeUpdatePlugins(
+      {
+        coreAlreadyCurrent: true,
+        updateRecoveryBackup: {
+          directory,
+          manifestPath: path.join(directory, "manifest.json"),
+          manifestSha256: "a".repeat(64),
+        },
+        result: {
+          status: "skipped",
+          mode: "npm",
+          root: "/tmp/openclaw",
+          reason: "already-current",
+          before: { version: "2026.9.3" },
+          after: { version: "2026.9.3" },
+          steps: [],
+          durationMs: 1,
+        },
+        root: "/tmp/openclaw",
+        installKindChanged: false,
+        configSnapshot: validConfigSnapshot,
+        requestedChannel: null,
+        storedChannel: null,
+        channel: "stable",
+        downgradeRisk: false,
+        opts: {},
+        preUpdatePluginInstallRecords: {},
+        startedAt: 1,
+        updateStepTimeoutMs: 1_000,
+      },
+      () => {
+        if (!active) {
+          throw revoked;
+        }
+      },
+    );
+    const settled = convergence.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    try {
+      await Promise.race([entered.promise, settled]);
+      expect(flush).toHaveBeenCalledOnce();
+      expect(doctorLaunch).not.toHaveBeenCalled();
+      active = false;
+      release.resolve();
+      const outcome = await settled;
+      expect(doctorLaunch).not.toHaveBeenCalled();
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.error).toBe(revoked);
+      }
+    } finally {
+      release.resolve();
+      await settled;
+      flush.mockRestore();
+    }
   });
 
   it.each(["copied", "live"] as const)(

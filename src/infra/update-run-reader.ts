@@ -14,6 +14,7 @@ import {
 } from "./kysely-sync.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { decodeRun } from "./update-run-codec.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateFetchFailure, UpdateRunRecord } from "./update-run-record.js";
 import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
@@ -25,6 +26,22 @@ export function readUpdateRunRecord(db: DatabaseSync, runId: string): UpdateRunR
     .where("run_id", "=", runId);
   const row = executeSqliteQueryTakeFirstSync(db, query);
   return row ? decodeRun(row) : undefined;
+}
+
+export function getUpdateRun(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRunRecord | undefined {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => (tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined),
+    options,
+  );
+}
+
+export function findActiveUpdateRun(
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRunRecord | undefined {
+  return listUpdateRuns({ limit: 1, active: true }, options)[0];
 }
 
 export async function getUpdateRunAsync(
@@ -194,5 +211,17 @@ export function readUpdateRunReconciliationCandidates(
   }
   return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
     inspectUpdateRunReconciliation(db, decodeRun(row), input),
+  );
+}
+
+export function canReconcileCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
   );
 }

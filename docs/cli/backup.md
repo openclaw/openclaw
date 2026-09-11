@@ -56,10 +56,15 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 ## Update recovery sets
 
 Before update-time Doctor migrations, the current updater creates and verifies
-an `update-recovery` set under
-`<stateDir>/updates/<install-hash>/<run-id>/backup/`. The update run records its
-manifest path. This internal backup kind uses the existing backup inventory and
-SQLite snapshot machinery; it does not change the commands, archive layout, or
+an `update-recovery` set at `<stateDir>.update-captures/<captureId>/`. The update
+run records its manifest path. The sibling root, capture directory, and private
+ancestors use owner-only permissions; capture files use `0600`. Each movable
+capture carries the [private capture marker](#private-update-captures). Ordinary
+backups, Doctor archives, and support exports exclude these sets, including
+when a selected workspace contains or is nested inside one.
+
+This internal backup kind reuses the existing backup inventory and SQLite
+snapshot machinery. It does not change the commands, archive layout, or
 sanitization behavior of `openclaw backup`.
 
 The inventory covers the active config and its `$include` files, shared state,
@@ -71,12 +76,12 @@ are unsanitized: delivery rows, TTL records, original row IDs, and other databas
 contents are preserved without snapshot pruning or `VACUUM`. No migration is
 required before capturing an older database.
 
-The manifest records every inventoried file with its size and SHA-256, along
-with directory, symbolic-link, and missing-path entries needed for restoration.
-The updater verifies the inventory and SQLite copies before migrations proceed
-and again before restoring. A missing or mismatched payload is a hard failure.
-These sets can contain original credentials and private state; protect them like
-the live state directory.
+Each set has one immutable manifest and numbered resource files. The manifest
+records every inventoried file with its size and SHA-256, along with directory,
+symbolic-link, and missing-path entries needed for restoration. The updater
+verifies the manifest and resource identities before migrations proceed and
+again before restoring. A missing or mismatched payload is a hard failure.
+These sets can contain original credentials and private state.
 
 Restoring a declared database directory removes migration-created files inside
 that directory before restoring the captured files. This includes newer
@@ -84,31 +89,46 @@ version manifests used by directory databases such as LanceDB. Files outside
 the declared directory remain untouched; directory replacement or alias changes
 refuse restoration.
 
-Writing a new set prunes completed or restored sets older than the newest three
-sets for that installation. Unresolved sets remain retained even after their
-owners exit, so unresolved recovery can leave more than three sets. Process exit
-does not prove that recovery finished. This is a fixed product
-default, with no configuration option. Update recovery sets are separate from
-the archive/SQLite/Git backup repositories and from historical unsupported
-checkpoint-recovery records.
+Before the protected mutation, capacity admission accounts for the capture,
+verification and restore staging, package staging, migration growth, and a
+reserve. Insufficient or unobservable capacity refuses the mutation while
+preserving live data and earlier sets. Free unrelated space and retry; the
+updater never removes recovery data or disables protection to make room.
 
-`openclaw update status --json` reports retained unresolved sets and their next
-action. Before manual restoration, Doctor reconciles the set with its exact
-update run. A completed update or recorded state restoration makes a pending
-backup marker stale; Doctor reports the set and does not restore it over newer
-data. Missing or unreadable history, a nonterminal run, or competing newer sets
-refuses automatic restoration and names the inspection command. Keep those sets
-until the recorded outcome is resolved, then follow the reported recovery command.
+Retirement belongs to the capture's own update transaction. The update must
+persist terminal success after validating the running artifact's identity,
+Gateway readiness, and data compatibility, settle every mutating child, and
+have no remaining recovery dependency before retiring its set. The terminal
+outcome is a separate write-once file. There is no count, age, or disk-pressure
+pruning. Pending, failed-restoration, and crash-left captures stay retained;
+process exit does not resolve them. Deliberate backups, manually retained
+captures, and historical recovery evidence are never cleanup targets.
 
-Coverage is limited to the local resources in the manifest. Remote services and
-external resources that an older plugin does not declare are outside this
-recovery boundary. Keep an independent backup for those resources and for
-long-term recovery; the three retained update sets are not a disaster-recovery
-history.
+A retained set blocks another protected update over the same state. Inspect it
+and resolve it explicitly with the same profile and state/config selection:
+
+```bash
+openclaw update status --json
+npx openclaw@latest doctor --fix
+```
+
+Before manual restoration, Doctor reconciles the set with its exact update
+run. A completed update or recorded state restoration makes the set stale;
+Doctor reports it and preserves newer data instead of restoring the old copy.
+Missing or unreadable history, a nonterminal run, or competing sets refuses
+restoration and names the inspection command. Successful explicit Doctor repair
+can resolve and retire an eligible retained set. It never automatically adopts
+an unresolved capture as the recovery point for a new update.
+
+Coverage is limited to the local resources in the manifest. Remote stores and
+plugin resources outside the declared inventory need their own recovery
+procedure. Keep an independent backup for long-term recovery; update captures
+are transaction recovery points, not a disaster-recovery history.
 
 The current updater restores the set together with the previous package and
-verifies the previous managed Gateway before reporting `rolled-back`. If restore
-fails, preserve the named set, keep the Gateway stopped, and run
+verifies the previous managed Gateway before reporting `rolled-back`. A failed
+update retains its set, even after successful rollback. If restore fails,
+preserve the named set, keep the Gateway stopped, and run
 `npx openclaw@latest doctor --fix` from the same installation environment after
 the update processes exit. See [Rollback and recovery](/install/updating/rollback-and-recovery#full-state-recovery-requires-a-backup)
 for older-updater behavior and manual recovery.

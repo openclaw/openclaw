@@ -145,10 +145,24 @@ Doctor migrations. It captures inventoried local state, config and `$include`
 files, and raw SQLite online-backup copies, including plugin-declared migration
 resources. Every file has a verified size and SHA-256. Unlike portable user
 backups, these SQLite copies are unsanitized. The run records the set at
-`<stateDir>/updates/<install-hash>/<run-id>/backup/`; writing a new set prunes
-sets outside the newest three while retaining recoveries with active or
-unobservable owners.
-See [Update recovery sets](/cli/backup#update-recovery-sets) for coverage and retention.
+`<stateDir>.update-captures/<captureId>/`. Owner-only permissions and the shared
+privacy marker keep captures out of ordinary backup and support exports, even
+through a containing or nested workspace selection.
+
+Before protected mutation, capacity admission reserves room for capture,
+verification and recovery staging, package staging, migration growth, and a
+reserve. An insufficient or unknown capacity refuses the mutation without
+deleting earlier sets or changing live data.
+
+A set becomes eligible for retirement only after its own update has persisted
+terminal success, validated runtime identity and data compatibility, settled
+mutating children, and released every recovery dependency. The existing update
+lifecycle then retires that set. No count, age, or disk-pressure policy prunes
+captures. Failed and unresolved updates retain theirs, and a retained capture
+blocks a second protected update until explicit recovery resolves it. Inspect
+with `openclaw update status --json`, then use
+`npx openclaw@latest doctor --fix` with the same state selection. See
+[Update recovery sets](/cli/backup#update-recovery-sets) for coverage and lifecycle.
 
 If a later activation or verification step fails, rollback restores the retained
 package and the verified recovery set before starting the previous Gateway.

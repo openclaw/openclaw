@@ -50,9 +50,9 @@ export function digest(value: string | Buffer): string {
 }
 
 export function backupStore(stateDir = resolveStateDir()): string {
-  return path.join(resolvePathViaExistingAncestorSync(stateDir), "updates");
+  return `${resolvePathViaExistingAncestorSync(stateDir)}.update-captures`;
 }
 
-export function installDirectory(installRoot: string, stateDir?: string): string {
-  return path.join(backupStore(stateDir), digest(path.resolve(installRoot)).slice(0, 32));
+export function captureDirectory(runId: string, stateDir?: string): string {
+  return path.join(backupStore(stateDir), runId);
 }

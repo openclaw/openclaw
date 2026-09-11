@@ -99,10 +99,18 @@ The current updater creates an `update-recovery` set before persistent Doctor
 migrations. It uses SQLite's online backup API to retain unsanitized database
 contents, plus the config, includes, and other inventoried local migration
 resources. Every file has a verified size and SHA-256. The set is stored at
-`<stateDir>/updates/<install-hash>/<run-id>/backup/` and its path is recorded in
-the update run. [Update recovery sets](/cli/backup#update-recovery-sets) describes
-coverage and the fixed three-set retention policy; recoveries with active or
-unobservable owners are preserved even when older.
+`<stateDir>.update-captures/<captureId>/` with owner-only permissions, and its
+path is recorded in the update run. The shared privacy marker excludes it from
+ordinary backups, Doctor archives, and support exports, including containing or
+nested workspace selections. [Update recovery sets](/cli/backup#update-recovery-sets)
+describes the inventory and capacity admission that precede protected mutation.
+
+The capture's own update may retire it only after durable terminal success,
+verified runtime identity and data compatibility, settled mutating children,
+and no remaining recovery dependency. There is no age, count, or disk-pressure
+pruning. Failed, restored-after-failure, and unresolved captures remain available
+until explicit recovery resolves them; deliberate backups and historical
+recovery evidence are never cleanup targets.
 
 If activation or later verification fails, the current updater restores the
 previous package and that verified set, then verifies the previous managed
@@ -122,9 +130,15 @@ npx openclaw@latest doctor --fix
 
 Run this on the Gateway host with the same profile, state, and config selection.
 If a compatible newer OpenClaw binary is already installed, use
-`openclaw doctor --fix`. Doctor verifies the pending set and checks that the
-Gateway and recorded update owners have stopped before restoring it. These
-commands cannot reconstruct a missing backup; preserve any surviving state and
+`openclaw doctor --fix`. A retained capture blocks another protected update.
+Inspect it first with `openclaw update status --json`. Doctor reconciles the
+capture with the exact update run before choosing a restore: completed updates
+and recorded restorations are stale captures, so newer live data stays intact.
+For an unresolved failed run, Doctor verifies the set and checks that the
+Gateway and recorded update owners have stopped before restoring it. Missing,
+unreadable, or ambiguous history refuses restoration. Successful explicit
+Doctor repair can resolve and retire the retained set. These commands cannot
+reconstruct a missing backup; preserve any surviving state and
 use an independent verified backup when the report says no usable set exists.
 Remote services and undeclared external plugin resources are outside this local
 inventory and need their own recovery procedure.
@@ -139,8 +153,9 @@ verified backup. An interrupted or refused restore is not a successful rollback.
 ### Recovery with older updaters
 
 The target Doctor detects whether its caller supplied a verified update-recovery
-set. When an older updater supplies none, Doctor creates and verifies the same
-kind of set before migrating. If migration or verification fails within that
+set. When an older updater supplies none, Doctor binds its capture to the one
+admitted update run and verifies the same kind of set before migrating. Missing
+or ambiguous update ownership refuses the protected mutation. If migration or verification fails within that
 Doctor invocation, it restores the set before exiting nonzero, so the older
 updater can restore package files without leaving forward-migrated databases.
 
@@ -160,7 +175,10 @@ state before starting the Gateway. The failure output names both paths and the r
 backup. This is best-effort support for the old driver: if Doctor succeeds and
 2026.9.2 fails later, that updater has already discarded its package backups.
 The target Doctor cannot automatically roll back a failure after its invocation
-has completed.
+has completed. A successful old-driver Doctor records its completion on the
+parent run, but does not finalize that run or retire the capture: its success
+does not prove the whole update passed runtime verification. The retained set
+requires explicit inspection and Doctor repair before another protected update.
 
 ### Automatic schema-neutral rollback
 
@@ -243,9 +261,9 @@ A refusal before the live swap restarts the unchanged Gateway and preserves the 
 
 ### Before updating: create a verified backup
 
-`openclaw update` preserves an automatic pre-update config copy, not a full-state
-recovery point. Before a significant update, create an independent verified backup
-explicitly:
+The automatic update capture protects inventoried local migration resources
+for that update transaction. Before a significant update, also create an
+independent verified backup for long-term recovery:
 
 ```bash
 mkdir -p ~/Backups/openclaw

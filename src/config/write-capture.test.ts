@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
 import { transformConfigFile } from "./mutate.js";
 import {
@@ -10,7 +11,7 @@ import {
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import {
   getConfigFileWriteCapture,
   recordConfigFileWrite,
@@ -59,7 +60,7 @@ describe("config file write ownership", () => {
 
   it("captures exact root and include bytes through the real config transformer", async () => {
     await withTempHome(async (home) => {
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_TEST_FAST: "1" },
         async () => {
           const configPath = await writeOpenClawConfig(home, {
@@ -118,7 +119,7 @@ describe("config file write ownership", () => {
     "publishes root receipts only after runtime validation succeeds (reject=%s)",
     async (reject) => {
       await withTempHome(async (home) => {
-        await withEnvOverride(
+        await withEnvAsync(
           { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_TEST_FAST: "1" },
           async () => {
             const configPath = await writeOpenClawConfig(home, {

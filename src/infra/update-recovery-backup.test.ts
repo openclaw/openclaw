@@ -1,23 +1,32 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { transformConfigFile } from "../config/config.js";
 import { recordConfigFileWrite } from "../config/write-capture.js";
 import * as pluginBackupResources from "../plugins/doctor-contract-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "./update-capture-privacy-marker.js";
 import { restorePreparedUpdateRecoveryBackup } from "./update-recovery-backup-restore.js";
 import {
   appendUpdateRecoveryConfigWrites,
   createUpdateRecoveryBackup,
-  findPendingUpdateRecoveryBackup,
   restoreUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
@@ -27,8 +36,10 @@ import {
   persistUpdateRecoveryConfigWrites,
   withUpdateRecoveryConfigWrites,
 } from "./update-recovery-config-writes.js";
+import { createUpdateRun } from "./update-run-ledger.js";
 
 const authority = { assertOwned() {} };
+const execFileAsync = promisify(execFile);
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn<() => string>());
 vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
@@ -43,6 +54,8 @@ async function fixture(state: OpenClawTestState) {
     agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
   });
+  const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+  closeOpenClawStateDatabaseForTest();
   const databasePath = state.statePath("state", "openclaw.sqlite");
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
   const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
@@ -50,16 +63,16 @@ async function fixture(state: OpenClawTestState) {
     PRAGMA journal_mode = WAL;
     PRAGMA wal_autocheckpoint = 0;
     PRAGMA user_version = 15;
-    CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER, agent_id TEXT, app_version TEXT, created_at INTEGER, updated_at INTEGER);
-    INSERT INTO schema_meta VALUES ('primary','global',15,NULL,'2026.9.2',1,1);
+    UPDATE schema_meta SET schema_version=15, app_version='2026.9.2' WHERE meta_key='primary';
     CREATE TABLE workshop(workspace_dir TEXT);
     INSERT INTO workshop(rowid,workspace_dir) VALUES (9,'original-workspace');
-    CREATE TABLE delivery_queue_entries(id TEXT PRIMARY KEY);
-    INSERT INTO delivery_queue_entries VALUES ('pending-delivery');
-    CREATE TABLE state_leases(scope TEXT,lease_key TEXT);
-    INSERT INTO state_leases VALUES ('test','retained');
+    INSERT INTO delivery_queue_entries(queue_name,id,status,entry_json,enqueued_at,updated_at)
+      VALUES ('test','pending-delivery','pending','{}',1,1);
+    INSERT INTO state_leases(scope,lease_key,owner,created_at,updated_at)
+      VALUES ('test','retained','fixture',1,1);
   `);
-  return { database, databasePath, installRoot: state.path("install") };
+  await fs.mkdir(state.path("install"), { mode: 0o700 });
+  return { database, databasePath, installRoot: state.path("install"), runId: run.runId };
 }
 
 describe("update recovery backup", () => {
@@ -151,7 +164,7 @@ describe("update recovery backup", () => {
     "restores the original WAL schema and rows through an old updater's open connection (cleanup failure=$cleanupFailure, directory=$directory)",
     async ({ cleanupFailure, directory }) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
-        const { database, databasePath, installRoot } = await fixture(state);
+        const { database, databasePath, installRoot, runId } = await fixture(state);
         const configBefore = await fs.readFile(state.configPath, "utf8");
         const ordinaryFile = await state.writeText("notes-wal", "ordinary file before update\n");
         await fs.mkdir(state.workspaceDir, { recursive: true });
@@ -169,7 +182,7 @@ describe("update recovery backup", () => {
           const ref = await createUpdateRecoveryBackup({
             ...authority,
             installRoot,
-            runId: "restore-open-driver",
+            runId,
           });
           const manifest = await verifyUpdateRecoveryBackup(ref);
           expect(manifest.kind).toBe("update-recovery");
@@ -183,7 +196,7 @@ describe("update recovery backup", () => {
             ),
           ).toBe(false);
           database.exec(
-            "ALTER TABLE workshop RENAME COLUMN workspace_dir TO owner_agent_id; DELETE FROM delivery_queue_entries; PRAGMA user_version=16;",
+            "ALTER TABLE workshop RENAME COLUMN workspace_dir TO owner_agent_id; DELETE FROM delivery_queue_entries; PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16 WHERE meta_key='primary';",
           );
           const nextConfig = '{"gateway":{"mode":"remote"}}\n';
           await withUpdateRecoveryConfigWrites(ref, authority, async () => {
@@ -252,7 +265,7 @@ describe("update recovery backup", () => {
             code: "ENOENT",
           });
           await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({
-            runId: "restore-open-driver",
+            runId,
           });
         } finally {
           declaration?.mockRestore();
@@ -266,12 +279,12 @@ describe("update recovery backup", () => {
     "refuses %s in a payload before changing any live file",
     async (damage) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
-        const { database, installRoot } = await fixture(state);
+        const { database, installRoot, runId } = await fixture(state);
         try {
           const ref = await createUpdateRecoveryBackup({
             ...authority,
             installRoot,
-            runId: "corrupt",
+            runId,
           });
           const manifest = await verifyUpdateRecoveryBackup(ref);
           const payload = manifest.entries.find((entry) => entry.kind === "file" && entry.sqlite);
@@ -313,10 +326,12 @@ describe("update recovery backup", () => {
           plugins: { enabled: false },
         });
         const rootBefore = await fs.readFile(state.configPath, "utf8");
+        await fs.mkdir(state.path("install"), { mode: 0o700 });
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
         const ref = await createUpdateRecoveryBackup({
           ...authority,
           installRoot: state.path("install"),
-          runId: "include-ownership",
+          runId: run.runId,
         });
         const immutableManifest = await fs.readFile(ref.manifestPath, "utf8");
         let owned = "";
@@ -414,10 +429,12 @@ describe("update recovery backup", () => {
       const coordinatorDir = state.path("coordinator");
       await fs.mkdir(coordinatorDir, { mode: 0o700 });
       resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
+      await fs.mkdir(state.path("install"), { mode: 0o700 });
+      const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
       const ref = await createUpdateRecoveryBackup({
         ...authority,
         installRoot: state.path("install"),
-        runId: "missing-config",
+        runId: run.runId,
       });
       await fs.writeFile(state.configPath, "");
       await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
@@ -427,49 +444,11 @@ describe("update recovery backup", () => {
     });
   });
 
-  it("retains the newest three completed sets and keeps their outcome out of the restored database", async () => {
-    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
-      const { database, installRoot } = await fixture(state);
-      try {
-        const refs = [];
-        for (let index = 0; index < 4; index++) {
-          const ref = await createUpdateRecoveryBackup({
-            ...authority,
-            installRoot,
-            runId: `retention-${index}`,
-          });
-          refs.push(ref);
-          await writeUpdateRecoveryBackupOutcome(ref, { status: "committed" }, authority);
-        }
-        await expect(fs.lstat(refs[0]!.directory)).rejects.toMatchObject({ code: "ENOENT" });
-        for (const ref of refs.slice(1)) {
-          await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({
-            kind: "update-recovery",
-          });
-        }
-        expect(await findPendingUpdateRecoveryBackup()).toBeNull();
-        await writeUpdateRecoveryBackupOutcome(
-          refs[3]!,
-          {
-            status: "restore-failed",
-            error: "synthetic restore failure",
-          },
-          authority,
-        );
-        await expect(findPendingUpdateRecoveryBackup()).rejects.toThrow(
-          "no matching update run exists",
-        );
-      } finally {
-        database.close();
-      }
-    });
-  });
-
   it.each(["corrupt database", "orphan WAL"] as const)(
     "refuses a declared extensionless SQLite resource with %s before migration",
     async (failure) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
-        const { database, installRoot } = await fixture(state);
+        const { database, installRoot, runId } = await fixture(state);
         const databasePath = state.path("external-index");
         const artifact = failure === "orphan WAL" ? `${databasePath}-wal` : databasePath;
         await fs.writeFile(artifact, "retained original bytes");
@@ -477,12 +456,24 @@ describe("update recovery backup", () => {
           .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
           .mockResolvedValue([{ path: databasePath, kind: "sqlite" }]);
         try {
-          await expect(
-            createUpdateRecoveryBackup({ ...authority, installRoot, runId: "invalid-database" }),
-          ).rejects.toMatchObject({
-            cause: expect.objectContaining({ message: expect.stringContaining("external-index") }),
-          });
+          const configBefore = await fs.readFile(state.configPath, "utf8");
+          const capture = createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+          if (failure === "orphan WAL") {
+            await expect(capture).rejects.toThrow(
+              `SQLite database has an orphaned sidecar: ${artifact}`,
+            );
+          } else {
+            await expect(capture).rejects.toMatchObject({
+              cause: expect.objectContaining({ message: expect.stringContaining(databasePath) }),
+            });
+          }
           expect(await fs.readFile(artifact, "utf8")).toBe("retained original bytes");
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
+          expect(database.prepare("SELECT rowid,workspace_dir FROM workshop").get()).toEqual({
+            rowid: 9,
+            workspace_dir: "original-workspace",
+          });
+          expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
         } finally {
           declaration.mockRestore();
           database.close();
@@ -490,4 +481,195 @@ describe("update recovery backup", () => {
       });
     },
   );
+});
+
+async function runLanceDb(databasePath: string, operation: string): Promise<string> {
+  // The plugin owns this dependency; separate processes release native database handles.
+  const result = await execFileAsync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { connect } from "@lancedb/lancedb";
+const connection = await connect(process.argv[1]);
+try {
+  ${operation}
+} finally {
+  connection.close();
+}`,
+      databasePath,
+    ],
+    { cwd: fileURLToPath(new URL("../../extensions/memory-lancedb", import.meta.url)) },
+  );
+  return result.stdout.trim();
+}
+
+describe("update recovery database directories", () => {
+  it("refuses a directory replaced by an outside symlink during pruning", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const coordinatorDir = state.path("coordinator");
+      await fs.mkdir(coordinatorDir, { mode: 0o700 });
+      resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
+      await state.writeConfig({ plugins: { enabled: false } });
+      const databasePath = state.path("database");
+      const outsidePath = state.path("outside");
+      await fs.mkdir(databasePath);
+      await fs.mkdir(outsidePath);
+      await fs.writeFile(path.join(databasePath, "original"), "captured data");
+      await fs.writeFile(path.join(outsidePath, "original"), "unrelated original");
+      await fs.writeFile(path.join(outsidePath, "new"), "unrelated new data");
+      const declaration = vi
+        .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+        .mockResolvedValue([{ path: databasePath, kind: "directory" }]);
+      try {
+        await fs.mkdir(state.path("install"), { mode: 0o700 });
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        const ref = await createUpdateRecoveryBackup({
+          ...authority,
+          installRoot: state.path("install"),
+          runId: run.runId,
+        });
+        await fs.writeFile(path.join(databasePath, "new"), "migration data");
+        const readdir = fs.readdir;
+        let swapped = false;
+        const listing = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          const result = await readdir(...args);
+          if (String(args[0]) === databasePath && !swapped) {
+            swapped = true;
+            await fs.rename(databasePath, state.path("moved-database"));
+            await fs.symlink(outsidePath, databasePath, "junction");
+          }
+          return result;
+        });
+        try {
+          await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+            /changed|alias/,
+          );
+          expect(swapped).toBe(true);
+          expect(await fs.readFile(path.join(outsidePath, "original"), "utf8")).toBe(
+            "unrelated original",
+          );
+          expect(await fs.readFile(path.join(outsidePath, "new"), "utf8")).toBe(
+            "unrelated new data",
+          );
+        } finally {
+          listing.mockRestore();
+        }
+      } finally {
+        declaration.mockRestore();
+      }
+    });
+  });
+
+  it("restores captured LanceDB schema and rows without newer manifests or changes outside its directory", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const coordinatorDir = state.path("coordinator");
+      await fs.mkdir(coordinatorDir, { mode: 0o700 });
+      resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
+      await state.writeConfig({
+        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+      });
+      const databasePath = state.path("memory", "lancedb");
+      await runLanceDb(
+        databasePath,
+        `const table = await connection.createTable("memories", [{ id: "original", text: "captured memory" }]);
+table.close();`,
+      );
+      const retainedCapture = path.join(databasePath, "retained-manual-capture");
+      await fs.mkdir(retainedCapture, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(retainedCapture, UPDATE_CAPTURE_PRIVACY_MARKER),
+        UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+      );
+      const retainedFile = path.join(retainedCapture, "private-state.txt");
+      await fs.writeFile(retainedFile, "retained original recovery state");
+      const versionsPath = path.join(databasePath, "memories.lance", "_versions");
+      const capturedManifests = (await fs.readdir(versionsPath)).toSorted();
+      const declaration = vi
+        .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+        .mockResolvedValue([{ path: databasePath, kind: "directory" }]);
+      try {
+        await fs.mkdir(state.path("install"), { mode: 0o700 });
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        const ref = await createUpdateRecoveryBackup({
+          ...authority,
+          installRoot: state.path("install"),
+          runId: run.runId,
+        });
+        const manifest = await verifyUpdateRecoveryBackup(ref);
+        expect(manifest.entries).toContainEqual({
+          kind: "directory",
+          sourcePath: databasePath,
+          mode: (await fs.stat(databasePath)).mode & 0o777,
+        });
+        expect(
+          manifest.entries.some(
+            (entry) =>
+              entry.sourcePath === retainedCapture ||
+              entry.sourcePath.startsWith(`${retainedCapture}${path.sep}`),
+          ),
+        ).toBe(false);
+        await runLanceDb(
+          databasePath,
+          `const table = await connection.openTable("memories");
+try {
+  await table.addColumns([{ name: "agentId", valueSql: "'main'" }]);
+  await table.add([{ id: "new", text: "migration memory", agentId: "main" }]);
+} finally {
+  table.close();
+}`,
+        );
+        expect((await fs.readdir(versionsPath)).length).toBeGreaterThan(capturedManifests.length);
+        const unrelatedPath = state.path("memory", "operator-note.txt");
+        await fs.writeFile(unrelatedPath, "new sibling data");
+        const outsidePath = state.path("unrelated-database");
+        await fs.mkdir(outsidePath);
+        await fs.writeFile(path.join(outsidePath, "keep.txt"), "outside link target");
+        await fs.symlink(outsidePath, path.join(databasePath, "new-link"), "junction");
+        await fs.mkdir(path.join(databasePath, "new-directory"));
+        await fs.writeFile(path.join(databasePath, "new-directory", "new-data"), "migration data");
+
+        await restoreUpdateRecoveryBackup(ref, authority);
+
+        const restored = JSON.parse(
+          await runLanceDb(
+            databasePath,
+            `const table = await connection.openTable("memories");
+try {
+  console.log(JSON.stringify({
+    columns: (await table.schema()).fields.map((field) => field.name),
+    rows: await table.query().toArray(),
+    version: await table.version(),
+  }));
+} finally {
+  table.close();
+}`,
+          ),
+        );
+        expect(restored).toEqual({
+          columns: ["id", "text"],
+          rows: [{ id: "original", text: "captured memory" }],
+          version: 1,
+        });
+        expect((await fs.readdir(versionsPath)).toSorted()).toEqual(capturedManifests);
+        expect(await fs.readFile(retainedFile, "utf8")).toBe("retained original recovery state");
+        expect(
+          await fs.readFile(path.join(retainedCapture, UPDATE_CAPTURE_PRIVACY_MARKER), "utf8"),
+        ).toBe(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
+        await expect(fs.lstat(path.join(databasePath, "new-directory"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.lstat(path.join(databasePath, "new-link"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await fs.readFile(unrelatedPath, "utf8")).toBe("new sibling data");
+        expect(await fs.readFile(path.join(outsidePath, "keep.txt"), "utf8")).toBe(
+          "outside link target",
+        );
+      } finally {
+        declaration.mockRestore();
+      }
+    });
+  });
 });

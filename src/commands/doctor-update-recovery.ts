@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { withConfigFileWriteCapture } from "../config/write-capture.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -17,7 +17,13 @@ import {
   inspectUpdateRunAbandonment,
   recordedUpdateRunDrivers,
 } from "../infra/update-run-activity.js";
-import { inspectUpdateRunDriver, type UpdateRunDriver } from "../infra/update-run-driver.js";
+import {
+  inspectUpdateRunDriver,
+  readUpdateRunDriver,
+  sameUpdateRunDriver,
+  type UpdateRunDriver,
+} from "../infra/update-run-driver.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import type { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -28,6 +34,8 @@ type DoctorRecoveryScope = {
   protected: boolean;
   storesClosed?: boolean;
   backup?: UpdateRecoveryBackupRef;
+  backupRunId?: string;
+  resolved?: UpdateRecoveryBackupRef;
   reference?: UpdateRecoveryBackupRef;
   assertRecoveryClaim?: () => void;
   revalidatePendingRecovery?: () => Promise<void>;
@@ -85,8 +93,6 @@ export async function withDoctorUpdateRecovery<T>(
           }
         }
         if (scope.backup) {
-          const { writeUpdateRecoveryBackupOutcome } =
-            await import("../infra/update-recovery-backup.js");
           if (failure) {
             await restoreDoctorBackup(scope, scope.backup);
           } else {
@@ -98,15 +104,23 @@ export async function withDoctorUpdateRecovery<T>(
               throw error;
             }
             try {
-              await writeUpdateRecoveryBackupOutcome(
-                scope.backup,
-                { status: "committed" },
-                { assertOwned: () => assertDoctorRecoveryCurrent(scope) },
+              const { recordUpdateRunRecoveryCapture } =
+                await import("../infra/update-run-ledger.js");
+              if (!scope.backupRunId) {
+                throw new Error("Doctor capture run identity is missing");
+              }
+              recordUpdateRunRecoveryCapture(
+                scope.backupRunId,
+                {
+                  manifestSha256: scope.backup.manifestSha256,
+                  doctorCompleted: true,
+                },
+                () => assertDoctorRecoveryCurrent(scope),
               );
             } catch (error) {
               assertDoctorRecoveryCurrent(scope);
               scope.runtime.error(
-                `Warning: Doctor completed, but its retained backup outcome could not be recorded at ${scope.backup.manifestPath}: ${String(error)}`,
+                `Warning: Doctor completed, but its capture outcome could not be recorded at ${scope.backup.manifestPath}: ${String(error)}. Inspect with openclaw update status --json; run npx openclaw@latest doctor --fix.`,
               );
             }
           }
@@ -134,6 +148,15 @@ export async function withDoctorUpdateRecovery<T>(
           { cause: failure ? failure.error : settlementErrors[0] },
         );
       }
+      if (scope.resolved && !failure && settlementErrors.length === 0) {
+        try {
+          await retireDoctorResolvedCapture(scope.resolved, scope.runtime);
+        } catch (error) {
+          scope.runtime.error(
+            `Warning: Doctor completed; capture cleanup requires inspection at ${scope.resolved.manifestPath}: ${String(error)}. Run openclaw update status --json.`,
+          );
+        }
+      }
       if (!outcome.ok) {
         throw toErrorObject(outcome.error, "Doctor failed");
       }
@@ -157,9 +180,15 @@ async function restoreDoctorBackup(
 ) {
   const { restoreUpdateRecoveryBackup, writeUpdateRecoveryBackupOutcome } =
     await import("../infra/update-recovery-backup.js");
+  const { recordUpdateRunRecoveryCapture, recordUpdateRunStep } =
+    await import("../infra/update-run-ledger.js");
   const maintenance = scope.maintenance;
   if (!maintenance) {
     throw new Error("Doctor recovery lost maintenance ownership.");
+  }
+  const runId = scope.backupRunId;
+  if (!runId) {
+    throw new Error("Doctor recovery lost its verified capture run identity.");
   }
   const authority = { assertOwned: () => assertDoctorRecoveryCurrent(scope) };
   if (scope.revalidatePendingRecovery) {
@@ -193,6 +222,35 @@ async function restoreDoctorBackup(
       errors,
       `Doctor could not restore the update backup at ${backup.manifestPath}. Keep the Gateway stopped and run \`npx openclaw@latest doctor --fix\` to retry recovery.`,
       { cause: error },
+    );
+  }
+  try {
+    recordUpdateRunRecoveryCapture(
+      runId,
+      {
+        manifestSha256: backup.manifestSha256,
+        restored: true,
+      },
+      authority.assertOwned,
+    );
+  } catch (error) {
+    assertDoctorRecoveryCurrent(scope);
+    scope.runtime.error(
+      `Warning: State was restored, but its recovery receipt could not be recorded at ${backup.manifestPath}: ${String(error)}`,
+    );
+  }
+  try {
+    // The 9.2 writer strips unknown origin fields but preserves this completed step.
+    authority.assertOwned();
+    recordUpdateRunStep(runId, {
+      step: "state rollback",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+  } catch (error) {
+    assertDoctorRecoveryCurrent(scope);
+    scope.runtime.error(
+      `Warning: State was restored, but its compatibility recovery step could not be recorded at ${backup.manifestPath}: ${String(error)}`,
     );
   }
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
@@ -254,6 +312,13 @@ async function activeUpdateRuns() {
   return runs;
 }
 
+function hasActiveDoctorStep(run: UpdateRunRecord | undefined): run is UpdateRunRecord {
+  return (
+    run?.status === "running" &&
+    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
+  );
+}
+
 function assertRecoveryDriversExited(drivers: readonly UpdateRunDriver[]): void {
   if (drivers.some((driver) => inspectUpdateRunDriver(driver) !== "dead")) {
     throw new Error(
@@ -290,6 +355,22 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
   }
   scope.prepared = true;
   if (!updating && options.repair !== true && options.yes !== true) {
+    try {
+      const { inspectUpdateRecoveryBackups } = await import("../infra/update-recovery-backup.js");
+      const inspections = await inspectUpdateRecoveryBackups();
+      for (const inspection of inspections) {
+        scope.runtime.error(inspection.message);
+      }
+      if (inspections.length > 0) {
+        scope.runtime.error(
+          "Inspect retained update captures with `openclaw update status --json`; resolve them with `npx openclaw@latest doctor --fix`.",
+        );
+      }
+    } catch (error) {
+      scope.runtime.error(
+        `Warning: Retained update captures could not be inspected: ${formatErrorMessage(error)}. Run \`openclaw update status --json\`; resolve with \`npx openclaw@latest doctor --fix\`.`,
+      );
+    }
     return;
   }
   if (updating) {
@@ -302,16 +383,28 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
     });
   }
   const backup = await import("../infra/update-recovery-backup.js");
+  if (!updating) {
+    for (const retirement of await backup.inspectUpdateRecoveryRetirements()) {
+      await retireDoctorResolvedCapture(retirement.ref, scope.runtime, retirement);
+    }
+  }
   const pending = !updating
     ? await backup.findPendingUpdateRecoveryBackup({
         warn: (message) => scope.runtime.error(message),
       })
     : null;
   if (!updating && !pending) {
+    const resolved = (await backup.inspectUpdateRecoveryBackups()).find(
+      (entry) => entry.status === "stale",
+    );
+    if (resolved) {
+      scope.resolved = resolved.ref;
+    }
     return;
   }
   if (pending) {
     const manifest = await backup.verifyUpdateRecoveryBackup(pending);
+    scope.backupRunId = manifest.runId;
     const runs = await activeUpdateRuns();
     const drivers = [
       manifest.creator,
@@ -374,30 +467,70 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
       assertDoctorRecoveryCurrent(scope);
     };
     await restoreDoctorBackup(scope, pending);
-    // Normal repair now owns the restored state; retain only its maintenance lease.
+    scope.resolved = pending;
+    // Normal repair owns the restored state; only successful explicit repair permits retirement.
     return;
   }
-  const reference =
-    supplied !== undefined
-      ? backup.readUpdateRecoveryBackupRef(supplied)
-      : await backup.createUpdateRecoveryBackup({
-          runId: randomUUID(),
-          installRoot: root,
-          drivers: (await activeUpdateRuns()).flatMap(recordedUpdateRunDrivers),
-          assertOwned: () => maintenance.assertCurrent(),
-        });
-  await backup.verifyUpdateRecoveryBackup(reference);
-  maintenance.assertCurrent();
+  let reference: UpdateRecoveryBackupRef;
+  if (supplied !== undefined) {
+    reference = backup.readUpdateRecoveryBackupRef(supplied);
+  } else {
+    const inheritedRunId = process.env[UPDATE_RUN_ID_ENV]?.trim();
+    // Shipped 9.2 records this step before spawning Doctor but has no driver identities.
+    const matchesDoctor = (run: UpdateRunRecord) =>
+      hasActiveDoctorStep(run) && (!inheritedRunId || run.runId === inheritedRunId);
+    const candidates = (await activeUpdateRuns()).filter(matchesDoctor);
+    const run = candidates[0];
+    if (!run || candidates.length !== 1) {
+      throw new Error(
+        "Doctor cannot identify one admitted update run with an active Doctor step for its capture. Inspect with openclaw update status --json; run npx openclaw@latest doctor --fix after resolving ownership.",
+      );
+    }
+    const parent = readUpdateRunDriver(process.ppid);
+    if (!parent) {
+      throw new Error(
+        "Doctor cannot identify its parent updater process for recovery. Inspect with openclaw update status --json; run npx openclaw@latest doctor --fix after resolving ownership.",
+      );
+    }
+    const { listUpdateRuns } = await import("../infra/update-run-ledger.js");
+    scope.assertRecoveryClaim = () => {
+      const active = listUpdateRuns({ active: true, limit: 100 });
+      const matching = active.filter(matchesDoctor);
+      if (
+        process.ppid !== parent.pid ||
+        active.length === 100 ||
+        matching.length !== 1 ||
+        matching[0]?.runId !== run.runId
+      ) {
+        throw new Error(
+          "Doctor's admitted update run or parent changed during recovery. Inspect with openclaw update status --json; run npx openclaw@latest doctor --fix after resolving ownership.",
+        );
+      }
+    };
+    const drivers = recordedUpdateRunDrivers(run);
+    if (!drivers.some((driver) => sameUpdateRunDriver(driver, parent))) {
+      drivers.push(parent);
+    }
+    reference = await backup.createUpdateRecoveryBackup({
+      runId: run.runId,
+      installRoot: root,
+      drivers,
+      assertOwned: () => assertDoctorRecoveryCurrent(scope),
+    });
+  }
+  const capturedManifest = await backup.verifyUpdateRecoveryBackup(reference);
+  assertDoctorRecoveryCurrent(scope);
   scope.reference = reference;
   if (supplied === undefined) {
     await backup.writeUpdateRecoveryBackupOutcome(
       reference,
       { status: "pending" },
       {
-        assertOwned: () => maintenance.assertCurrent(),
+        assertOwned: () => assertDoctorRecoveryCurrent(scope),
       },
     );
     scope.backup = reference;
+    scope.backupRunId = capturedManifest.runId;
   }
   scope.protected = true;
 }
@@ -407,7 +540,7 @@ export function hasVerifiedDoctorUpdateRecovery(): boolean {
   if (!scope?.protected) {
     return false;
   }
-  scope.maintenance?.assertCurrent();
+  assertDoctorRecoveryCurrent(scope);
   return true;
 }
 
@@ -422,4 +555,52 @@ export function doctorUpdateRecoveryRuntime(runtime: RuntimeEnv): RuntimeEnv {
       throw new ExitError(code);
     },
   };
+}
+
+/** Explicit Doctor completion resolves retained recovery without replaying terminal captures. */
+async function retireDoctorResolvedCapture(
+  ref: UpdateRecoveryBackupRef,
+  runtime: RuntimeEnv,
+  retirement?: { runId: string; installRoot: string },
+): Promise<void> {
+  const {
+    readUpdateRecoveryBackupManifest,
+    inspectUpdateRecoveryBackups,
+    retireUpdateRecoveryBackup,
+  } = await import("../infra/update-recovery-backup.js");
+  const { withUpdateCommandExecutor } =
+    await import("../cli/update-cli/update-command-executor.js");
+  const manifest = retirement
+    ? undefined
+    : await readUpdateRecoveryBackupManifest(ref, { assertOwned() {} });
+  const target = retirement ?? manifest;
+  if (!target) {
+    throw new Error("Capture retirement has no recorded identity");
+  }
+  const drivers = manifest ? [manifest.creator, ...manifest.drivers] : [];
+  const { assertUpdateRecoveryAdmission } =
+    await import("../infra/update-run-recovery-admission.js");
+  const { assertNoPendingUpdateRecovery } = await import("../infra/update-run-recovery.js");
+  await withUpdateCommandExecutor(target.runId, async (executor) => {
+    const fence = await executor.enter(target.installRoot);
+    await assertUpdateRecoveryAdmission({ env: process.env });
+    const assertOwned = () => {
+      fence.assertCurrent();
+      assertNoPendingUpdateRecovery({ env: process.env });
+      assertRecoveryDriversExited(drivers);
+    };
+    if (!retirement) {
+      const current = (await inspectUpdateRecoveryBackups()).find(
+        (entry) => entry.ref.manifestSha256 === ref.manifestSha256,
+      );
+      if (current?.status !== "stale") {
+        throw new Error(
+          `Capture resolution is ambiguous: ${ref.manifestPath}. Inspect with openclaw update status --json.`,
+        );
+      }
+    }
+    assertOwned();
+    await retireUpdateRecoveryBackup(ref, { assertOwned });
+    runtime.log(`Resolved update capture retired: ${ref.manifestPath}`);
+  });
 }

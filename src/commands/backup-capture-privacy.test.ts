@@ -1,19 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { createBackupArchive } from "../infra/backup-create.js";
+import * as diskSpace from "../infra/disk-space.js";
+import {
+  UPDATE_CAPTURE_PRIVACY_MARKER,
+  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
+} from "../infra/update-capture-privacy-marker.js";
+import { captureUpdateRecoveryBackup } from "../infra/update-recovery-backup-create.js";
+import { writeDiagnosticSupportExport } from "../logging/diagnostic-support-export.js";
 import { createGitBackup } from "../snapshot/git-backup.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { backupGitCreateCommand } from "./backup-git.js";
 import { backupSqliteCreateCommand } from "./backup-sqlite.js";
+import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
 import { verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -531,6 +545,162 @@ describe("private update capture exclusion", () => {
       await expect(createBackupArchive({ onlyConfig, dryRun: true })).rejects.toThrow(
         "Private update captures are excluded",
       );
+    },
+  );
+});
+
+describe("private lossless update captures", () => {
+  const authority = { assertOwned() {} };
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => vi.restoreAllMocks());
+
+  async function prepareRecoveryCaptureFixture(state: OpenClawTestState) {
+    await state.writeConfig({
+      agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+      plugins: { enabled: false },
+    });
+    const installRoot = state.path("install");
+    await fs.mkdir(installRoot, { mode: 0o700 });
+    await fs.writeFile(path.join(installRoot, "package.json"), '{"name":"openclaw"}');
+    return { installRoot, runId: "capture-proof", ...authority };
+  }
+
+  it.each(["ordinary", "containing", "nested"])(
+    "excludes a produced capture from an %s backup selection",
+    async (selection) => {
+      await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+        const input = await prepareRecoveryCaptureFixture(state);
+        const ref = await captureUpdateRecoveryBackup(input);
+        const privateArtifact = path.join(ref.directory, "private-update-capture-only.txt");
+        const privateBytes = "synthetic raw update recovery evidence excluded from user archives";
+        await fs.writeFile(privateArtifact, privateBytes, { mode: 0o600 });
+        const selected = selection === "containing" ? state.root : ref.directory;
+        if (selection !== "ordinary") {
+          await state.writeConfig({
+            agents: { ownership: "explicit", entries: { main: { workspace: selected } } },
+            plugins: { enabled: false },
+          });
+        }
+        const output = path.join(tempDirs.make("openclaw-capture-export-"), "export.tar.gz");
+        const archive = await createBackupArchive({ output });
+        const entries: string[] = [];
+        await tar.t({
+          file: archive.archivePath,
+          onReadEntry: (entry) => entries.push(entry.path),
+        });
+        expect(entries.some((entry) => entry.endsWith("/private-update-capture-only.txt"))).toBe(
+          false,
+        );
+        expect(entries.some((entry) => entry.includes("/capture-proof/"))).toBe(false);
+        await verifyBackupArchive(archive.archivePath);
+        expect(await fs.readFile(privateArtifact, "utf8")).toBe(privateBytes);
+        expect(ref.directory).toBe(path.join(`${state.stateDir}.update-captures`, input.runId));
+        for (const directory of [path.dirname(ref.directory), ref.directory]) {
+          expect(
+            await fs.readFile(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "utf8"),
+          ).toBe(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
+          if (process.platform !== "win32") {
+            expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+            expect(
+              (await fs.stat(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER))).mode & 0o777,
+            ).toBe(0o600);
+          }
+        }
+        const manifest = parseUpdateRecoveryBackupManifest(
+          await fs.readFile(ref.manifestPath, "utf8"),
+        );
+        expect(
+          manifest.entries.some(
+            (entry) => entry.kind === "file" && entry.sourcePath === state.configPath,
+          ),
+        ).toBe(true);
+        await expect(captureUpdateRecoveryBackup(input)).rejects.toThrow();
+      });
+    },
+  );
+
+  it("excludes produced raw config from support export after the artifact is relocated", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const input = await prepareRecoveryCaptureFixture(state);
+      const ref = await captureUpdateRecoveryBackup(input);
+      const manifest = parseUpdateRecoveryBackupManifest(
+        await fs.readFile(ref.manifestPath, "utf8"),
+      );
+      const config = manifest.entries.find(
+        (entry) => entry.kind === "file" && entry.sourcePath === state.configPath,
+      );
+      if (config?.kind !== "file") {
+        throw new Error("Missing captured config");
+      }
+      const relocated = state.path("relocated-artifact");
+      await fs.rename(ref.directory, relocated);
+      const rawConfig = path.join(relocated, config.archivePath);
+      const outputPath = state.path("support.zip");
+      await writeDiagnosticSupportExport({
+        stateDir: state.stateDir,
+        env: { OPENCLAW_CONFIG_PATH: rawConfig },
+        outputPath,
+        stabilityBundle: rawConfig,
+        readLogTail: async () => ({
+          file: rawConfig,
+          cursor: 1,
+          size: 1,
+          lines: [],
+          truncated: false,
+          reset: false,
+        }),
+      });
+      const zip = await JSZip.loadAsync(await fs.readFile(outputPath));
+      const text = (
+        await Promise.all(
+          Object.values(zip.files)
+            .filter((entry) => !entry.dir)
+            .map((entry) => entry.async("string")),
+        )
+      ).join("\n");
+      expect(text).toContain("Private update captures are excluded");
+      expect(await fs.readFile(rawConfig, "utf8")).toBe(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+    });
+  });
+
+  it.each(["unavailable", "insufficient", "package staging"])(
+    "refuses %s capacity without raw capture or data loss",
+    async (capacity) => {
+      await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+        const input = await prepareRecoveryCaptureFixture(state);
+        if (capacity === "package staging") {
+          const packageFile = await fs.open(path.join(input.installRoot, "package-data"), "wx");
+          try {
+            await packageFile.truncate(300 * 1024 * 1024);
+          } finally {
+            await packageFile.close();
+          }
+        }
+        const earlier = `${state.stateDir}.update-captures/earlier`;
+        await fs.mkdir(earlier, { recursive: true, mode: 0o700 });
+        await fs.writeFile(path.join(earlier, "evidence"), "unresolved recovery point");
+        const original = await fs.readFile(state.configPath, "utf8");
+        vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) =>
+          capacity === "unavailable"
+            ? null
+            : {
+                targetPath,
+                checkedPath: state.root,
+                availableBytes: (capacity === "package staging" ? 1.5 : 1) * 1024 * 1024 * 1024,
+                totalBytes: 2 * 1024 * 1024 * 1024,
+              },
+        );
+        await expect(captureUpdateRecoveryBackup(input)).rejects.toThrow(
+          /capacity.*(?:protected mutation refused|Protected mutation refused)/s,
+        );
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+        expect(await fs.readFile(path.join(earlier, "evidence"), "utf8")).toBe(
+          "unresolved recovery point",
+        );
+        expect(await fs.readdir(path.dirname(earlier))).toEqual(["earlier"]);
+      });
     },
   );
 });

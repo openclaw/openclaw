@@ -18,16 +18,22 @@ import { withSqliteSourceHandleAsync } from "./sqlite-source-handle.js";
 import {
   hasStateDatabaseSourceExclusion,
   prepareStateDatabaseMutationSnapshot,
+  prepareStateDatabaseCanonicalMutation,
 } from "./state-database-coordinator.js";
 
 // Keep parent launch orchestration out of the native snapshot child's import graph.
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
-  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
+  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal; stagingRoot?: string } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   let stagingRoot: string | undefined;
   try {
     options.signal?.throwIfAborted();
+    if (options.stagingRoot && prepareStateDatabaseCanonicalMutation(pathname)) {
+      throw new Error(
+        "Caller-owned SQLite snapshot staging requires a drained canonical mutation owner.",
+      );
+    }
     const ownedSnapshot = prepareStateDatabaseMutationSnapshot(pathname);
     if (ownedSnapshot) {
       const prepared = await ownedSnapshot;
@@ -41,8 +47,8 @@ export async function prepareSqliteReadOnlyLocation(
     }
     if (hasStateDatabaseSourceExclusion(pathname)) {
       const prepared = options.preserveSourceArtifacts
-        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname);
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, options.stagingRoot)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, options.stagingRoot);
       try {
         options.signal?.throwIfAborted();
         return prepared;
@@ -53,7 +59,7 @@ export async function prepareSqliteReadOnlyLocation(
     }
     // A stopped worker may never publish its random snapshot path. Allocate its
     // private parent first so cancellation can join the child and remove all copies.
-    stagingRoot = await createSqliteSnapshotStagingDirectory();
+    stagingRoot = await createSqliteSnapshotStagingDirectory(options.stagingRoot);
     options.signal?.throwIfAborted();
     const location = await runSqliteReadOnlyWorker(pathname, {
       mode: options.preserveSourceArtifacts ? "sync" : "async",
@@ -99,6 +105,7 @@ export function prepareSqliteReadOnlyLocationSync(
 
 async function prepareSqliteSnapshotSource(
   pathname: string,
+  stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation | undefined> {
   const canonicalPath = fs.realpathSync.native(pathname);
   const journalPath = `${canonicalPath}-journal`;
@@ -115,14 +122,15 @@ async function prepareSqliteSnapshotSource(
   if (!journal.isFile()) {
     throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
   }
-  return await prepareSqliteReadOnlyLocation(canonicalPath);
+  return await prepareSqliteReadOnlyLocation(canonicalPath, { stagingRoot });
 }
 
 export async function withSqliteSnapshotSource<T>(
   pathname: string,
   operation: (sourcePath: string) => Promise<T>,
+  options: { stagingRoot?: string } = {},
 ): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
+  let prepared = await prepareSqliteSnapshotSource(pathname, options.stagingRoot);
   try {
     try {
       return prepared
@@ -132,7 +140,7 @@ export async function withSqliteSnapshotSource<T>(
       if (prepared) {
         throw error;
       }
-      prepared = await prepareSqliteSnapshotSource(pathname);
+      prepared = await prepareSqliteSnapshotSource(pathname, options.stagingRoot);
       if (!prepared) {
         throw error;
       }

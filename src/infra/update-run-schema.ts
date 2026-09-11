@@ -6,6 +6,7 @@ import {
   UPDATE_RUN_STEP_STATUSES,
   UPDATE_RUN_TRIGGERS,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { updateRecoveryCaptureStateSchema } from "./update-recovery-backup-contract.js";
 
 const text = z.string().max(1024);
 const timestamp = z.number().int().nonnegative();
@@ -38,6 +39,7 @@ export const UpdateRunRecordSchema = z.object({
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
   origin: z.object({
+    updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
     previousDrivers: z
       .array(driver)
