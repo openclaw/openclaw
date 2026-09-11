@@ -144,7 +144,9 @@ Authorization stays server-owned. `model/list` advertises Daybreak to every
 client, so catalog presence does not prove entitlement: an unentitled workspace
 still receives `401`/`403` on use, and each such attempt costs the transport's
 full reconnect ladder. OpenClaw therefore treats the retry itself as the only
-evidence and reports an `unavailable` notice rather than a silent block.
+evidence and reports an `unavailable` notice rather than a silent block. If the
+fallback target is unavailable, OpenClaw keeps the original refusal even when
+the fallback produced no assistant message.
 
 Because entitlement belongs to the authenticated workspace and the target model
 rather than to any one conversation, an unauthorized target is remembered once
@@ -164,10 +166,10 @@ A closed, replaced, or retired client still cannot complete a stale handoff.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including
-for `/codex resume` of that chat's already-bound thread. Provider policy refusals
-end the current request without automatic retry or model fallback. A later user
-message is a separate turn; it does not supply a native policy override or user
-confirmation.
+for `/codex resume` of that chat's already-bound thread. Native provider policy refusals
+end the current attempt without a native retry. OpenClaw's configured cyber
+fallback described above is a separate attempt. A later user message is a
+separate turn; it does not supply a native policy override or user confirmation.
 
 With Codex app-server `0.153.4`, first-time adoption or changed configuration of a
 loaded failed thread still requires native unloading. OpenClaw preserves the

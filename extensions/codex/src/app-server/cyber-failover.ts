@@ -14,6 +14,7 @@
  * remembered per workspace so siblings do not each pay for it.
  */
 
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 
 export type CodexCyberFailoverConfig = {
@@ -157,24 +158,10 @@ export function planCodexCyberEscalation(params: {
   return { kind: "escalate", model: config.model };
 }
 
-/**
- * Structural view of the attempt outcome this owner reads. The runner's
- * `EmbeddedRunAttemptResult` satisfies it, so callers pass the real result and
- * the compiler still checks these accesses.
- */
-type AttemptMessage = {
-  role?: string;
-  diagnostics?: readonly { type: string; details?: Record<string, unknown> }[];
-  errorMessage?: string;
-  stopReason?: string;
-};
-
-export type CodexCyberAttemptOutcome = {
-  lastAssistant?: AttemptMessage | undefined;
-  currentAttemptAssistant?: AttemptMessage | undefined;
-  promptError?: unknown;
-  replayMetadata?: { replaySafe?: boolean } | undefined;
-};
+export type CodexCyberAttemptOutcome = Pick<
+  EmbeddedRunAttemptResult,
+  "terminal" | "lastAssistant" | "currentAttemptAssistant" | "replayMetadata"
+>;
 
 export type CodexCyberAttemptVerdict = {
   /** OpenAI refused this attempt under its cyber policy. */
@@ -204,7 +191,7 @@ export function readCodexCyberAttemptVerdict(
       d.details?.category === "cyber" &&
       d.details?.provider === "openai",
   );
-  const promptError = result?.promptError;
+  const promptError = result ? attemptTerminal.project(result.terminal).promptError : undefined;
   const failed = promptError !== undefined && promptError !== null;
   // Any refusal category is a refusal, not an answer, so bio and misalignment
   // never look like a successful escalation either.
