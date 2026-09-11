@@ -125,10 +125,11 @@ function importSqliteSessionRowsInTransaction(
         .select("session_key")
         .where("session_id", "=", params.entry.sessionId),
     )?.session_key;
-    if (owner && owner !== resolved.sessionKey)
+    if (owner && owner !== resolved.sessionKey) {
       throw new Error(
         `Historical transcript ${params.entry.sessionId} already belongs to ${owner}`,
       );
+    }
     preserveHistoricalNode = Boolean(
       executeSqliteQueryTakeFirstSync(
         database.db,

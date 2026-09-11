@@ -133,7 +133,11 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     const interrupted = vi
       .spyOn(migrationRun, "recordCompletedMigrationMoves")
       .mockImplementation((run, owner, moves) => {
-        if (moves.some((move) => move.artifact?.reason === "indexed-historical-primary")) {
+        if (
+          moves.some(
+            (candidateMove) => candidateMove.artifact?.reason === "indexed-historical-primary",
+          )
+        ) {
           throw new Error("simulated interruption before recovery receipt");
         }
         return completed(run, owner, moves);
@@ -203,7 +207,9 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
         transcript(duplicate, "secondambiguousneedle"),
       ],
     ]);
-    for (const [name, bytes] of files) fs.writeFileSync(path.join(sessions, name), bytes);
+    for (const [name, bytes] of files) {
+      fs.writeFileSync(path.join(sessions, name), bytes);
+    }
     const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
     expect(report.totals.importedEntries).toBe(1);
     expect(report.targets[0]!.issues.map((issue) => issue.code)).toEqual([
@@ -221,8 +227,9 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
       "mismatchneedle",
       "ambiguousneedle",
       "secondambiguousneedle",
-    ])
+    ]) {
       expect(searchSessionTranscripts({ ...scope, query }).hits).toEqual([]);
+    }
     const manifest = JSON.parse(fs.readFileSync(report.migrationRun!.manifestPath, "utf8"));
     const moves: SessionSqliteMigrationMove[] = manifest.targets.flatMap(
       (target: { completedMoves: SessionSqliteMigrationMove[] }) => target.completedMoves,
@@ -300,8 +307,9 @@ it("uses archived registry lineage without overwriting a newer SQLite session", 
       expect.objectContaining({ sessionId: id, sessionKey: key }),
     ]);
     expect(loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key })).toEqual(before);
-    for (const [archivePath, bytes] of saved)
+    for (const [archivePath, bytes] of saved) {
       expect(fs.readFileSync(archivePath, "utf8")).toBe(bytes);
+    }
   });
 });
 

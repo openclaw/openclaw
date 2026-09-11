@@ -117,28 +117,42 @@ export function readLegacyPrimaryTranscriptIdentity(
   let version = 1;
   let messages = 0;
   for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
-    if (!isRecord(raw) || raw.traceSchema !== undefined) return undefined;
+    if (!isRecord(raw) || raw.traceSchema !== undefined) {
+      return undefined;
+    }
     if (!sessionId) {
       const id = raw.id ?? raw.sessionId;
       if (
         raw.type !== "session" ||
         typeof id !== "string" ||
         !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
-      )
+      ) {
         return undefined;
-      if (id !== filenameId)
+      }
+      if (id !== filenameId) {
         throw new Error("Primary transcript header does not match its original filename");
+      }
       version = typeof raw.version === "number" ? raw.version : 1;
-      if (!Number.isInteger(version) || version < 1 || version > 3)
+      if (!Number.isInteger(version) || version < 1 || version > 3) {
         throw new Error("Unsupported primary transcript version");
+      }
       sessionId = id;
       continue;
     }
-    if (raw.type === "session") throw new Error("Multiple primary transcript headers");
+    if (raw.type === "session") {
+      throw new Error("Multiple primary transcript headers");
+    }
     const classified = classifySessionFileEntry(raw, version);
-    if (!classified.recognized && !parseOpaqueLeafEntry(raw) && !parseParentLinkedOpaqueEntry(raw))
+    if (
+      !classified.recognized &&
+      !parseOpaqueLeafEntry(raw) &&
+      !parseParentLinkedOpaqueEntry(raw)
+    ) {
       throw new Error("Unrecognized primary transcript record");
-    if (classified.recognized && classified.entry.type === "message") messages += 1;
+    }
+    if (classified.recognized && classified.entry.type === "message") {
+      messages += 1;
+    }
   }
   return sessionId && messages > 0
     ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
@@ -393,8 +407,9 @@ export function readOnlySqliteValidationSnapshot(
       for (const row of database
         .prepare("SELECT session_id, session_key FROM session_windows")
         .iterate()) {
-        if (typeof row.session_id === "string" && typeof row.session_key === "string")
+        if (typeof row.session_id === "string" && typeof row.session_key === "string") {
           sessionKeysBySessionId.set(row.session_id, row.session_key);
+        }
       }
     }
     const transcriptEventCountsBySessionId = new Map<string, number>();

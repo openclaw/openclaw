@@ -60,8 +60,9 @@ export function collectHistoricalArchiveSources(params: {
         (ref) =>
           !ref.trusted || ref.consumedByRestore || ref.move.artifact?.disposal.state !== "retained",
       )
-    )
+    ) {
       continue;
+    }
     // An acknowledged import stays acknowledged after explicit user deletion. Never resurrect it.
     if (
       refs.some(
@@ -69,8 +70,9 @@ export function collectHistoricalArchiveSources(params: {
           move.artifact?.reason === HISTORICAL_IMPORT_REASON &&
           target.completedMoves.some((completed) => completed.archivePath === move.archivePath),
       )
-    )
+    ) {
       continue;
+    }
     const first = refs[0]!;
     if (
       !refs.every(
@@ -79,14 +81,16 @@ export function collectHistoricalArchiveSources(params: {
           target.storePath === first.target.storePath &&
           move.sourcePath === first.move.sourcePath,
       )
-    )
+    ) {
       continue;
+    }
     if (
       first.move.kind !== "legacy-store" &&
       (first.move.kind !== "unreferenced-jsonl" ||
         !isPrimarySessionTranscriptFileName(path.basename(first.move.sourcePath)))
-    )
+    ) {
       continue;
+    }
     if (
       !refs.every(
         ({ move }) =>
@@ -94,8 +98,9 @@ export function collectHistoricalArchiveSources(params: {
           (move.kind === "legacy-store" || move.artifact.classification === "protected") &&
           sameMigrationArtifact(move.artifact.identity, first.move.artifact!.identity),
       )
-    )
+    ) {
       continue;
+    }
     const sources = result.get(first.target.storePath) ?? { transcripts: [], stores: [] };
     (first.move.kind === "legacy-store" ? sources.stores : sources.transcripts).push(first.move);
     result.set(first.target.storePath, sources);
@@ -129,16 +134,18 @@ export async function discoverLegacyHistoricalTranscripts(params: {
         item.isFile() &&
         isPrimarySessionTranscriptFileName(item.name) &&
         !referenced.has(canonicalMigrationFilePath(filename))
-      )
+      ) {
         sources.set(filename, { path: filename, originalPath: filename });
+      }
     }
   }
-  for (const move of params.archiveSources ?? [])
+  for (const move of params.archiveSources ?? []) {
     sources.set(move.archivePath, {
       path: move.archivePath,
       originalPath: move.sourcePath,
       archiveMove: move,
     });
+  }
   const owners = new Map<string, Set<string>>();
   try {
     for (const record of [...params.records, ...(params.ownershipRecords ?? [])]) {
@@ -165,12 +172,16 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       if (
         source.archiveMove &&
         !sameMigrationArtifact(identity, source.archiveMove.artifact!.identity)
-      )
+      ) {
         throw new Error("Archived original changed since migration; retained without importing");
+      }
       const primary = readLegacyPrimaryTranscriptIdentity(source.path, source.originalPath);
-      if (!primary) continue;
-      if (!sameMigrationArtifact(identity, readMigrationArtifactIdentity(source.path)))
+      if (!primary) {
+        continue;
+      }
+      if (!sameMigrationArtifact(identity, readMigrationArtifactIdentity(source.path))) {
         throw new Error("Primary transcript changed during discovery");
+      }
       if (
         params.records.some(
           (record) =>
@@ -185,14 +196,16 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       }
       const existingOwner = params.snapshot.sessionKeysBySessionId.get(primary.sessionId);
       const lineage = owners.get(primary.sessionId);
-      if (lineage && (lineage.size !== 1 || (existingOwner && !lineage.has(existingOwner))))
+      if (lineage && (lineage.size !== 1 || (existingOwner && !lineage.has(existingOwner)))) {
         throw new Error("Conflicting logical owners; retained without importing");
+      }
       const owner = existingOwner ?? lineage?.values().next().value;
       const pathOwner = resolveUnsuffixedSqliteTargetFromSessionStorePath(
         params.target.storePath,
       ).agentId;
-      if (!owner && pathOwner !== params.target.agentId)
+      if (!owner && pathOwner !== params.target.agentId) {
         throw new Error("No unambiguous agent owner for unregistered history");
+      }
       const sessionKey = owner ?? `agent:${params.target.agentId}:recovered:${primary.sessionId}`;
       const record: LegacySessionRecord = {
         sessionKey,
@@ -225,7 +238,9 @@ export async function discoverLegacyHistoricalTranscripts(params: {
         code: "historical_transcript_deferred",
         message: `${sessionId}: multiple primary files claim this identity; originals retained without importing`,
       });
-    } else discovered.push(records[0]!);
+    } else {
+      discovered.push(records[0]!);
+    }
   }
   return discovered;
 }

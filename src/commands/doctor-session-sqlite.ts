@@ -372,7 +372,9 @@ async function inspectOrMigrateTarget(params: {
     const ownershipRecords: LegacySessionRecord[] = [];
     let archiveOwnershipVerified = true;
     for (const move of archiveSources?.stores ?? []) {
-      if (!fs.existsSync(move.archivePath)) continue;
+      if (!fs.existsSync(move.archivePath)) {
+        continue;
+      }
       const ownershipIssues: DoctorSessionSqliteIssue[] = [];
       try {
         if (
@@ -380,8 +382,9 @@ async function inspectOrMigrateTarget(params: {
             readMigrationArtifactIdentity(move.archivePath),
             move.artifact!.identity,
           )
-        )
+        ) {
           throw new Error("archived registry identity changed");
+        }
         ownershipRecords.push(
           ...readLegacySessionRecords(params.target, ownershipIssues, {
             sourcePath: move.archivePath,
@@ -393,8 +396,9 @@ async function inspectOrMigrateTarget(params: {
             readMigrationArtifactIdentity(move.archivePath),
             move.artifact!.identity,
           )
-        )
+        ) {
           throw new Error("archived registry could not be verified");
+        }
       } catch (error) {
         archiveOwnershipVerified = false;
         issues.push({
@@ -645,8 +649,9 @@ function gatherLegacyArchiveCoverage(
     if (
       !fs.existsSync(storePath) &&
       storeTargets.every((target) => !shouldFilterLegacySessionRecordsByTarget(target))
-    )
+    ) {
       selectedStorePaths.add(storePath);
+    }
   }
   return {
     selectedStorePaths,
@@ -1329,7 +1334,9 @@ async function archiveImportedLegacySessionStores(
     byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
   }
   for (const [storePath, entries] of byStore) {
-    if (!fs.existsSync(storePath)) continue;
+    if (!fs.existsSync(storePath)) {
+      continue;
+    }
     if (
       !coverage.selectedStorePaths.has(storePath) ||
       entries.some(({ report }) => blockingIssueCount(report) > 0)
