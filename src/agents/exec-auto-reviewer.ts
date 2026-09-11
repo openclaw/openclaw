@@ -31,7 +31,7 @@ import {
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
-const EXEC_REVIEWER_MAX_TOKENS = 360;
+const EXEC_REVIEWER_MAX_TOKENS = 1_024;
 const MAX_EXEC_REVIEWER_INPUT_CHARS = 16_000;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
@@ -344,6 +344,18 @@ function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
   return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
 }
 
+/**
+ * Resolves a bounded completion budget for the exec auto-reviewer.
+ * Uses the default 1,024 tokens while clamping downward to the provider model's
+ * advertised maximum output token limit (floored to integer).
+ */
+function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
+  if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
+    return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
+  }
+  return EXEC_REVIEWER_MAX_TOKENS;
+}
+
 function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision {
   return {
     decision: "ask",
@@ -496,7 +508,7 @@ export function createModelExecAutoReviewer(params: {
               ],
             },
             options: {
-              maxTokens: EXEC_REVIEWER_MAX_TOKENS,
+              maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
               temperature: 0,
               signal: params.signal
                 ? AbortSignal.any([controller.signal, params.signal])
