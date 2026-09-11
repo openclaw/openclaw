@@ -440,6 +440,13 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         params.commitGuard?.();
         assertCurrent();
       };
+      const matchesPreparedTarget = (database: OpenClawAgentDatabase) => {
+        const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
+        return (
+          sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, targetSnapshot) &&
+          shouldDeleteSqliteSessionEntryLifecycle(database, targetSnapshot[0]?.entry, params)
+        );
+      };
       const historicalArchivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
       for (const sessionId of prepared.historicalGenerationIds) {
         const plan = await runExclusiveSqliteSessionWrite(
@@ -448,15 +455,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             withSqliteSessionDatabase(
               databaseOptions,
               (database) => {
-                const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
-                if (
-                  !sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, targetSnapshot) ||
-                  !shouldDeleteSqliteSessionEntryLifecycle(
-                    database,
-                    targetSnapshot[0]?.entry,
-                    params,
-                  )
-                ) {
+                if (!matchesPreparedTarget(database)) {
                   return DELETE_EXPECTED_ENTRY_MISMATCH;
                 }
                 const referencedAfterDelete = readReferencedSessionIdsAfterTargetMutation(
@@ -503,15 +502,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               withSqliteSessionDatabase(
                 databaseOptions,
                 (database) => {
-                  const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
-                  if (
-                    !sqliteLifecycleTargetSnapshotsEqual(prepared.targetSnapshot, targetSnapshot) ||
-                    !shouldDeleteSqliteSessionEntryLifecycle(
-                      database,
-                      targetSnapshot[0]?.entry,
-                      params,
-                    )
-                  ) {
+                  if (!matchesPreparedTarget(database)) {
                     return DELETE_EXPECTED_ENTRY_MISMATCH;
                   }
                   const protectedSessionIds = collectAdmissionProtectedSessionIds({
@@ -579,12 +570,30 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       const result = await runExclusiveSqliteSessionReclamation(async () => {
         const materializedPlans = await materializeSessionStateDeletePlans(prepared.entryPlans);
         const diagnostics: SqliteSessionReclamationDiagnostics = {};
-        const reclamationPlan = createSessionEntryReclamationPlan({
-          databaseOptions: toDatabaseOptions(resolved),
-          deleteParams: params,
-          materializedPlans,
-          preparedTargetSnapshot: prepared.targetSnapshot,
-        });
+        const reclamationPlan = await runExclusiveSqliteSessionWrite(
+          resolved,
+          async () =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) => {
+                if (!matchesPreparedTarget(database)) {
+                  return DELETE_EXPECTED_ENTRY_MISMATCH;
+                }
+                return createSessionEntryReclamationPlan({
+                  databaseOptions,
+                  deleteParams: params,
+                  materializedPlans,
+                  preparedTargetSnapshot: prepared.targetSnapshot,
+                });
+              },
+              assertDeletionCurrent,
+            ),
+          "session.lifecycle.reclamation-plan",
+          diagnostics,
+        );
+        if (reclamationPlan === DELETE_EXPECTED_ENTRY_MISMATCH) {
+          return expectedEntryMismatchResult([]);
+        }
         const reclaimed = await runSqliteSessionReclamation({
           diagnostics,
           assertCommitAllowed: assertDeletionCurrent,

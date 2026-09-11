@@ -48,6 +48,12 @@ uses the admitted handle. Coalesced callers retain their own guards. History
 eviction also uses this admission when reopening after archive materialization,
 then rereads candidate protection before preparing reclamation.
 
+After archive preparation, session deletion rereads its target before admitting
+the final reclamation worker. A missing or changed target returns the existing
+entry-mismatch result without starting that worker, while preserving archives
+already committed by the deletion. Admitted workers still recheck the target
+and current authority inside their deletion transaction.
+
 Prepared session-store updates, entry replacements, and lifecycle upserts use
 the same admission for cold snapshot reads and actual commits, retaining their
 existing writer position. Warm update callbacks remain direct. Result-only
