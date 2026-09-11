@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
+import { checkpointDoctorSqliteFile } from "../commands/doctor-sqlite-compact.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -104,10 +105,7 @@ function checkpoint(target: Target, maintenance: OpenClawStateLeaseContext): voi
     assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname: target.path });
     assertSqliteIntegrity(database, target.path);
     maintenance.assertOwned();
-    const result = database.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-    if (result?.busy !== 0) {
-      throw new Error(`SQLite checkpoint is busy: ${target.path}`);
-    }
+    checkpointDoctorSqliteFile(database, target.path);
   } finally {
     database.close();
   }
