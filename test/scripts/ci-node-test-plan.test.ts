@@ -15,6 +15,7 @@ import {
   createVitestCacheWarmGroups,
   isExclusiveCompactShardName,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
@@ -2246,6 +2247,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(readers[0]?.groups.flatMap((group) => group.includePatterns ?? [])).toEqual([
       PRIVATE_QA_TOOLING_TEST,
     ]);
+  });
+
+  it("packs serial groups within both the time and group-count budgets", () => {
+    const groups = [34, 33, 33, 32, 32, 32, 10, 21, 17, 17, 15, 10, 8, 7, 7, 7, 6, 5, 5];
+    const bins = packNodeTestGroups(
+      groups,
+      (bin, group) => bin.length < 10 && bin.reduce((sum, value) => sum + value, group) <= 210,
+      true,
+    );
+    expect(bins).toHaveLength(2);
+    expect(bins.flat().toSorted((a, b) => a - b)).toEqual(groups.toSorted((a, b) => a - b));
+    for (const bin of bins) {
+      expect(bin.length).toBeLessThanOrEqual(10);
+      expect(bin.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(210);
+    }
   });
 
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
