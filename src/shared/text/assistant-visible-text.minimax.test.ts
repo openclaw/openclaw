@@ -79,20 +79,15 @@ describe("encoded MiniMax tool envelopes", () => {
   it("stops searching after no closer exists for repeated incomplete openings", () => {
     const input = "]<]minimax[>[<tool_call>\n".repeat(256);
     const closeSource = "\\]?<\\]minimax\\[>\\[<\\/tool_call>";
-    const originalExec = RegExp.prototype.exec;
-    let closeSearches = 0;
-    const exec = vi
-      .spyOn(RegExp.prototype, "exec")
-      .mockImplementation(function (this: RegExp, value) {
-        if (this.source === closeSource) {
-          closeSearches += 1;
-        }
-        return originalExec.call(this, value);
-      });
+    const exec = vi.spyOn(RegExp.prototype, "exec");
 
     let output: string;
+    let closeSearches: number;
     try {
       output = stripMinimaxToolCallXml(input);
+      closeSearches = exec.mock.contexts.filter(
+        (context) => context instanceof RegExp && context.source === closeSource,
+      ).length;
     } finally {
       exec.mockRestore();
     }
