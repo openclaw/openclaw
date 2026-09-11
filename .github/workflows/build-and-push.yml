@@ -2,8 +2,8 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [ main ]   # runs when you push to main
-  workflow_dispatch:      # allows manual trigger
+    branches: [main] # runs when you push to main
+  workflow_dispatch: # allows manual trigger
 
 permissions:
   contents: read
