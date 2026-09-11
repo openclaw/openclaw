@@ -727,6 +727,54 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
+  it("previews files above the default cap when workspacePreviewMaxBytes is raised", async () => {
+    writeWorkspaceFile(workspaceRoot, "raised.log", "x".repeat(260 * 1024));
+    mockVisibleMessages([assistantToolCall("read", { path: "raised.log" })]);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "raised.log" },
+        {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main", default: true }] },
+            gateway: { workspacePreviewMaxBytes: 1024 * 1024 },
+          }),
+        },
+      ),
+    );
+
+    expect(payload.file).toMatchObject({
+      content: "x".repeat(260 * 1024),
+      path: "raised.log",
+      previewKind: "text",
+    });
+  });
+
+  it("reports the configured cap when a file exceeds workspacePreviewMaxBytes", async () => {
+    writeWorkspaceFile(workspaceRoot, "huge.log", "x".repeat(2 * 1024 * 1024));
+    mockVisibleMessages([assistantToolCall("read", { path: "huge.log" })]);
+
+    const error = expectError(
+      await invokeSessionFilesHandler(
+        "sessions.files.get",
+        { sessionKey: "agent:main:main", path: "huge.log" },
+        {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main", default: true }] },
+            gateway: { workspacePreviewMaxBytes: 1024 * 1024 },
+          }),
+        },
+      ),
+    );
+
+    expect(error.details).toMatchObject({
+      maxPreviewBytes: 1024 * 1024,
+      path: "huge.log",
+      type: "session_file_too_large",
+    });
+  });
+
   it.each([
     {
       name: "SQLite",

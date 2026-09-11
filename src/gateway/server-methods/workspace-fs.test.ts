@@ -2,11 +2,24 @@ import { open, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { readWorkspaceFilePrefix } from "./workspace-fs.js";
+import { readWorkspaceFilePrefix, resolveWorkspacePreviewMaxBytes } from "./workspace-fs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("resolveWorkspacePreviewMaxBytes", () => {
+  it("falls back to the shared default without configured value", () => {
+    expect(resolveWorkspacePreviewMaxBytes(undefined)).toBe(256 * 1024);
+    expect(resolveWorkspacePreviewMaxBytes({ gateway: {} })).toBe(256 * 1024);
+  });
+
+  it("returns the configured cap", () => {
+    expect(
+      resolveWorkspacePreviewMaxBytes({ gateway: { workspacePreviewMaxBytes: 1024 * 1024 } }),
+    ).toBe(1024 * 1024);
+  });
 });
 
 type FileHandleRead = (

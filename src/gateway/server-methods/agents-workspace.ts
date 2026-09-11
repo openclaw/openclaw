@@ -20,11 +20,11 @@ import {
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
+  resolveWorkspacePreviewMaxBytes,
   resolveWorkspacePath,
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
-  WORKSPACE_PREVIEW_MAX_BYTES,
   workspaceStatKind,
 } from "./workspace-fs.js";
 
@@ -200,7 +200,9 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
     const expectsImage = IMAGE_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
-    const maxBytes = expectsImage ? MAX_IMAGE_BYTES : WORKSPACE_PREVIEW_MAX_BYTES;
+    const maxBytes = expectsImage
+      ? MAX_IMAGE_BYTES
+      : resolveWorkspacePreviewMaxBytes(context.getRuntimeConfig());
     const read =
       stat.size > maxBytes
         ? "too-large"

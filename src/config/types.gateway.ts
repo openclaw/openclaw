@@ -459,6 +459,13 @@ export type GatewayConfig = {
   controlUi?: GatewayControlUiConfig;
   cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
+  /**
+   * Shared byte cap for Control UI workspace/session file preview content
+   * (sessions.files.*, agents.workspace.get). Files above the cap return
+   * metadata-only entries. Default: 256 KiB; hard max matches the Gateway WS
+   * frame limit so inline content always reaches clients.
+   */
+  workspacePreviewMaxBytes?: number;
   auth?: GatewayAuthConfig;
   /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
   roles?: GatewayOperatorRolesConfig;

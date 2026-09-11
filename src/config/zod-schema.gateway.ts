@@ -114,6 +114,14 @@ export const GatewayConfigSchema = z
         detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
       })
       .optional(),
+    workspacePreviewMaxBytes: z
+      .number()
+      .int()
+      .min(1)
+      // Inline preview content rides Gateway WS frames; bound the cap at the
+      // frame limit (MAX_PAYLOAD_BYTES) so configured previews always arrive.
+      .max(25 * 1024 * 1024)
+      .optional(),
     auth: z
       .strictObject({
         mode: z
