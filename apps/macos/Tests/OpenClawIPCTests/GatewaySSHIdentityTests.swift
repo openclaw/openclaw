@@ -60,7 +60,7 @@ struct GatewaySSHIdentityTests {
                     "mode": "remote", "port": port,
                     "remote": ["transport": "ssh", "sshTarget": "operator@gateway.example", "sshIdentity": ""],
                 ]]
-                #expect(OpenClawConfigFile.saveDict(root))
+                try #require(OpenClawConfigFile.saveDict(root, preserveExistingKeys: true))
                 let state = AppState(preview: true)
                 let destination = try RemotePortTunnel.configuration().remotePort
                 let owner = try #require(OnboardingSystemAgentResumeStore.selectedRouteIdentity(
