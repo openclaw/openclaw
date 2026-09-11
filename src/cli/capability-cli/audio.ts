@@ -31,14 +31,13 @@ async function runAudioTranscribe(params: {
     commandName: "infer audio transcribe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe"),
-  );
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentId,
     agentDir,
     language: params.language,
     activeModel,

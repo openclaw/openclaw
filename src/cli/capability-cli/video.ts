@@ -239,14 +239,13 @@ async function runVideoDescribe(params: { file: string; model?: string; agent?: 
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
   });
-  const agentDir = resolveAgentDir(
-    cfg,
-    resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe"),
-  );
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
+  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentId,
     agentDir,
     activeModel,
   });
