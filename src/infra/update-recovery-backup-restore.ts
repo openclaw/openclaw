@@ -3,17 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { UpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearOpenClawStateCopyLeases } from "../state/openclaw-state-copy-leases.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { root as safeRoot } from "./fs-safe.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
+  resolveExistingSqliteFileUri,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
-import { fileDigest, statOrMissing } from "./update-recovery-backup-files.js";
+import { canonicalEntryPath, fileDigest, statOrMissing } from "./update-recovery-backup-files.js";
 import { captureUpdateRecoveryConfigRestore } from "./update-recovery-config-writes.js";
 
 export async function restorePreparedUpdateRecoveryBackup(
@@ -198,6 +201,27 @@ export async function restorePreparedUpdateRecoveryBackup(
     } finally {
       await fs.rm(temporary, { force: true });
     }
+  }
+  const sharedPath = canonicalEntryPath(
+    resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: manifest.stateDir }),
+  );
+  const sharedEntry = manifest.entries.find((entry) => entry.sourcePath === sharedPath);
+  const restoredSharedPath =
+    sharedEntry?.kind === "symlink" ? await fs.realpath(sharedPath) : sharedPath;
+  if (
+    manifest.entries.some(
+      (entry) => entry.kind === "file" && entry.sqlite && entry.sourcePath === restoredSharedPath,
+    )
+  ) {
+    // Restored leases would appear held by processes whose state no longer exists.
+    await mutate(async () => {
+      const restored = openNodeSqliteDatabase(resolveExistingSqliteFileUri(restoredSharedPath));
+      try {
+        clearOpenClawStateCopyLeases(restored);
+      } finally {
+        restored.close();
+      }
+    });
   }
   authority.assertOwned();
 }

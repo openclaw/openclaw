@@ -15,16 +15,14 @@ import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { clearOpenClawStateCopyLeases } from "../state/openclaw-state-copy-leases.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  sanitizeOpenClawGlobalStateSnapshot,
-  sanitizeOpenClawStateLeaseRows,
-} from "../state/openclaw-state-snapshot-sanitizer.js";
+import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
 import {
   type OpenClawTestState,
   withOpenClawTestState,
@@ -313,7 +311,7 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
         INSERT INTO plugin_blob_entries VALUES ('keep', 1);
       `);
 
-      sanitizeOpenClawStateLeaseRows(database);
+      clearOpenClawStateCopyLeases(database);
 
       expect(database.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
         count: 0,

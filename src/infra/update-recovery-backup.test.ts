@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { transformConfigFile } from "../config/config.js";
 import { recordConfigFileWrite } from "../config/write-capture.js";
 import * as pluginBackupResources from "../plugins/doctor-contract-registry.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -46,7 +47,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
 
-async function fixture(state: OpenClawTestState) {
+async function fixture(state: OpenClawTestState, legacySchema = true) {
   const coordinatorDir = state.path("coordinator");
   await fs.mkdir(coordinatorDir, { mode: 0o700 });
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
@@ -62,15 +63,21 @@ async function fixture(state: OpenClawTestState) {
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA wal_autocheckpoint = 0;
-    PRAGMA user_version = 15;
-    UPDATE schema_meta SET schema_version=15, app_version='2026.9.2' WHERE meta_key='primary';
     CREATE TABLE workshop(workspace_dir TEXT);
     INSERT INTO workshop(rowid,workspace_dir) VALUES (9,'original-workspace');
     INSERT INTO delivery_queue_entries(queue_name,id,status,entry_json,enqueued_at,updated_at)
       VALUES ('test','pending-delivery','pending','{}',1,1);
     INSERT INTO state_leases(scope,lease_key,owner,created_at,updated_at)
       VALUES ('test','retained','fixture',1,1);
+    INSERT INTO agent_database_leases(lease_id,agent_id,path,owner_pid,opened_at)
+      VALUES ('source-agent','main','agents/main/agent/openclaw-agent.sqlite',1,1);
   `);
+  if (legacySchema) {
+    database.exec(`
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version=15, app_version='2026.9.2' WHERE meta_key='primary';
+    `);
+  }
   await fs.mkdir(state.path("install"), { mode: 0o700 });
   return { database, databasePath, installRoot: state.path("install"), runId: run.runId };
 }
@@ -186,6 +193,26 @@ describe("update recovery backup", () => {
           });
           const manifest = await verifyUpdateRecoveryBackup(ref);
           expect(manifest.kind).toBe("update-recovery");
+          const sharedPayload = manifest.entries.find(
+            (entry) => entry.kind === "file" && entry.sourcePath === databasePath,
+          );
+          if (!sharedPayload || sharedPayload.kind !== "file") {
+            throw new Error("Fixture has no shared database payload");
+          }
+          const captured = new (requireNodeSqlite().DatabaseSync)(
+            path.join(ref.directory, sharedPayload.archivePath),
+            { readOnly: true },
+          );
+          try {
+            expect(captured.prepare("SELECT lease_key FROM state_leases").all()).toEqual([
+              { lease_key: "retained" },
+            ]);
+            expect(captured.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
+              { lease_id: "source-agent" },
+            ]);
+          } finally {
+            captured.close();
+          }
           expect(manifest.entries.some((entry) => entry.sourcePath.startsWith(ref.directory))).toBe(
             false,
           );
@@ -250,9 +277,8 @@ describe("update recovery backup", () => {
           expect(database.prepare("SELECT id FROM delivery_queue_entries").all()).toEqual([
             { id: "pending-delivery" },
           ]);
-          expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([
-            { lease_key: "retained" },
-          ]);
+          expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([]);
+          expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
           expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
           expect((await fs.stat(databasePath)).ino).toBe(inode);
           expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
@@ -274,6 +300,83 @@ describe("update recovery backup", () => {
       });
     },
   );
+
+  it("keeps a held plugin lease in capture but permits immediate acquisition after restore", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, databasePath, installRoot, runId } = await fixture(state, false);
+      const pluginPath = state.path("plugin.sqlite");
+      const plugin = new (requireNodeSqlite().DatabaseSync)(pluginPath);
+      plugin.exec(`
+        CREATE TABLE state_leases (lease_key TEXT);
+        INSERT INTO state_leases VALUES ('plugin-data');
+        CREATE TABLE agent_database_leases (lease_id TEXT);
+        INSERT INTO agent_database_leases VALUES ('plugin-agent-data');
+      `);
+      const declaration = vi
+        .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+        .mockResolvedValue([{ path: pluginPath, kind: "sqlite" }]);
+      try {
+        const ref = await withPluginLifecycleLease({ waitMs: 0 }, async (lease) => {
+          const capture = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+          lease.assertOwned();
+          return capture;
+        });
+        const manifest = await verifyUpdateRecoveryBackup(ref);
+        const entry = manifest.entries.find(
+          (item) => item.kind === "file" && item.sourcePath === databasePath,
+        );
+        if (!entry || entry.kind !== "file") {
+          throw new Error("Fixture has no shared database payload");
+        }
+        const captured = new (requireNodeSqlite().DatabaseSync)(
+          path.join(ref.directory, entry.archivePath),
+          { readOnly: true },
+        );
+        try {
+          expect(
+            captured
+              .prepare("SELECT lease_key FROM state_leases WHERE scope='core:plugin-lifecycle'")
+              .all(),
+          ).toEqual([{ lease_key: "global" }]);
+          expect(captured.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
+            { lease_id: "source-agent" },
+          ]);
+        } finally {
+          captured.close();
+        }
+        expect(
+          database
+            .prepare("SELECT lease_key FROM state_leases WHERE scope='core:plugin-lifecycle'")
+            .all(),
+        ).toEqual([]);
+        database.exec("UPDATE workshop SET workspace_dir='migrated'");
+        plugin.exec("DELETE FROM state_leases; DELETE FROM agent_database_leases");
+
+        await restoreUpdateRecoveryBackup(ref, authority);
+
+        await expect(
+          withPluginLifecycleLease({ waitMs: 0 }, async (lease) => lease.assertOwned()),
+        ).resolves.toBeUndefined();
+        expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([]);
+        expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+        expect(database.prepare("SELECT rowid,workspace_dir FROM workshop").get()).toEqual({
+          rowid: 9,
+          workspace_dir: "original-workspace",
+        });
+        expect(plugin.prepare("SELECT * FROM state_leases").all()).toEqual([
+          { lease_key: "plugin-data" },
+        ]);
+        expect(plugin.prepare("SELECT * FROM agent_database_leases").all()).toEqual([
+          { lease_id: "plugin-agent-data" },
+        ]);
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toEqual(manifest);
+      } finally {
+        declaration.mockRestore();
+        database.close();
+        plugin.close();
+      }
+    });
+  });
 
   it.each(["changed bytes", "symlink"] as const)(
     "refuses %s in a payload before changing any live file",
