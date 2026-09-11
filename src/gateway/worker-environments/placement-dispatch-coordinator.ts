@@ -454,6 +454,7 @@ export function coordinateWorkerPlacementDispatch(
           Awaited<ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>>
         >();
       let providerSettlement = Promise.resolve();
+      let providerPending = false;
       // Reserve the queue in this stack, before admission can yield to a newer sweep.
       // Only foreground recovery holds that fence; a timed-out provider retains admission.
       const recover = async () => {
@@ -477,47 +478,50 @@ export function coordinateWorkerPlacementDispatch(
       }
       void queued.catch(ready.reject);
       const tracked = trackPlacementOperation(async (report) => {
-        try {
-          // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
-          const result = await service.resumeProvisioning(
-            placement,
-            async (signal) => {
-              await reconcileEnvironmentCore(signal, (settled) => {
-                providerSettlement = settled;
-              });
-            },
-            report,
-            (runRecovery) =>
-              admitDispatch(placement, async (signal) => {
-                try {
-                  await racePromiseWithAbortSignal(ready.promise, signal);
-                  signal?.throwIfAborted();
-                  const recovered = await runRecovery(signal);
-                  foreground.resolve(recovered);
-                  return recovered;
-                } catch (error) {
-                  foreground.reject(error);
-                  throw error;
-                } finally {
-                  // Caller timeouts finish the sweep, not the real provider or its Stop owner.
-                  await providerSettlement;
+        // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
+        return await service.resumeProvisioning(
+          placement,
+          async (signal) => {
+            await reconcileEnvironmentCore(signal, (settled) => {
+              providerSettlement = settled;
+              providerPending = true;
+              const markSettled = () => {
+                if (providerSettlement === settled) {
+                  providerPending = false;
                 }
-              }).catch(async (error: unknown) => {
-                if (error instanceof WorkerPlacementAdmissionTargetError) {
-                  // The failed reservation is released. Cleanup still follows its captured
-                  // predecessor, never a later Stop or the sweep that this recovery joins.
-                  await ready.promise;
+              };
+              void settled.then(markSettled, markSettled);
+            });
+          },
+          report,
+          (runRecovery) =>
+            admitDispatch(placement, async (signal) => {
+              try {
+                await racePromiseWithAbortSignal(ready.promise, signal);
+                signal?.throwIfAborted();
+                const recovered = await runRecovery(signal);
+                if (providerPending) {
+                  foreground.resolve(recovered);
+                }
+                return recovered;
+              } catch (error) {
+                if (providerPending) {
+                  foreground.reject(error);
                 }
                 throw error;
-              }),
-          );
-          // Never-admitted invalid owners still settle their exact cleanup before returning.
-          foreground.resolve(result);
-          return result;
-        } catch (error) {
-          foreground.reject(error);
-          throw error;
-        }
+              } finally {
+                // Caller timeouts finish the sweep, not the real provider or its Stop owner.
+                await providerSettlement;
+              }
+            }).catch(async (error: unknown) => {
+              if (error instanceof WorkerPlacementAdmissionTargetError) {
+                // The failed reservation is released. Cleanup still follows its captured
+                // predecessor, never a later Stop or the sweep that this recovery joins.
+                await ready.promise;
+              }
+              throw error;
+            }),
+        );
       });
       registerOperation({
         kind: "recovery",
@@ -525,6 +529,9 @@ export function coordinateWorkerPlacementDispatch(
         ...tracked,
         foreground: foreground.promise,
       });
+      // Ordinary completion must release the old operation before a caller can retry it.
+      // Only a still-running provider may publish foreground completion ahead of that release.
+      void tracked.operation.then(foreground.resolve, foreground.reject);
       return foreground.promise;
     },
   };
