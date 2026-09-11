@@ -128,9 +128,6 @@ work that was actually refused:
 - Only a refused turn is ever routed to Daybreak. Every turn starts on the model
   the session selected, and a turn that was not refused never reaches the weaker
   tier.
-- After an attempt, that session is damped for `cooloffMs`, so a burst of
-  refusals does not each pay for its own retry. A successful escalation clears
-  that damper, so a later refusal in the same session still escalates.
 - The retry does not mirror the prompt into the transcript a second time. The
   refused attempt's own terminal row is discarded with its result rather than
   staged, so a successful escalation returns the Daybreak answer; the refused
@@ -139,8 +136,9 @@ work that was actually refused:
 - Only OpenAI's own cyber refusal on the current attempt escalates. Another
   provider's refusal, another category, and a refusal inherited from an earlier
   turn all leave the result untouched.
-- Escalation never changes the session's stored model selection, and all of this
-  state is process-local rather than persisted.
+- Escalation never changes the session's stored model selection, and the only
+  retained state is the unauthorized-target record below, which is process-local
+  rather than persisted.
 
 Authorization stays server-owned. `model/list` advertises Daybreak to every
 client, so catalog presence does not prove entitlement: an unentitled workspace
@@ -151,10 +149,10 @@ evidence and reports an `unavailable` notice rather than a silent block.
 Because entitlement belongs to the authenticated workspace and the target model
 rather than to any one conversation, an unauthorized target is remembered once
 for every session under that workspace and cannot be displaced by session churn.
-A separate workspace that is entitled keeps escalating normally. Only one probe
-runs at a time for a given workspace and target, so sibling sessions refused at
-the same moment do not each pay the reconnect ladder before the first result
-lands.
+A separate workspace that is entitled keeps escalating normally, and the record
+releases on its own once `cooloffMs` elapses. Only one probe runs at a time for a
+given workspace and target, so sibling sessions refused at the same moment do not
+each pay the reconnect ladder before the first result lands.
 
 ## Parallel chats and thread ownership
 
