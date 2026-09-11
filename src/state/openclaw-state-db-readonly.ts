@@ -108,11 +108,29 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   const prepared = isArtifactPreservingStateRead()
     ? prepareSqliteReadOnlyLocationSync(pathname)
     : undefined;
+  let outcome: { value: T } | { cause: unknown };
   try {
-    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared?.location ?? pathname);
-  } finally {
-    prepared?.cleanup();
+    outcome = {
+      value: withOpenClawStateReadOnlyLocation(operation, pathname, prepared?.location ?? pathname),
+    };
+  } catch (cause) {
+    outcome = { cause };
   }
+  if (prepared && !prepared.cleanup()) {
+    // The exit retry is best-effort, not proof that this private copy was removed.
+    const readFailure =
+      "cause" in outcome
+        ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+        : "";
+    throw new Error(
+      `${readFailure}State database snapshot cleanup failed: ${path.dirname(prepared.location)}. Check directory permissions and available storage before retrying.`,
+      "cause" in outcome ? outcome : undefined,
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
 
 function openOpenClawStateReadOnlyLocation(pathname: string, location: string) {
@@ -269,12 +287,30 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
     });
+    let outcome: { value: T } | { cause: unknown };
     try {
       // Verification can quarantine the live path while the snapshot child is running.
       openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-      return withOpenClawStateReadOnlyLocation(operation, pathname, prepared.location);
-    } finally {
-      prepared.cleanup();
+      outcome = {
+        value: withOpenClawStateReadOnlyLocation(operation, pathname, prepared.location),
+      };
+    } catch (cause) {
+      outcome = { cause };
     }
+    if (!prepared.cleanup()) {
+      // The exit retry is best-effort, not proof that this private copy was removed.
+      const readFailure =
+        "cause" in outcome
+          ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+          : "";
+      throw new Error(
+        `${readFailure}State database snapshot cleanup failed: ${path.dirname(prepared.location)}. Check directory permissions and available storage before retrying.`,
+        "cause" in outcome ? outcome : undefined,
+      );
+    }
+    if ("cause" in outcome) {
+      throw outcome.cause;
+    }
+    return outcome.value;
   });
 }
