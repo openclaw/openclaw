@@ -86,7 +86,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.55.0" });
+            return commandResult({ stdout: "0.56.0" });
           }
           if (argv[1] === "providers") {
             expect(argv.slice(1)).toEqual(["providers", "--json"]);
@@ -243,7 +243,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
         expect(argv.slice(1)).toEqual(["--version"]);
-        return commandResult({ stdout: "0.55.0" });
+        return commandResult({ stdout: "0.56.0" });
       }
       calls.push(argv);
       if (argv[1] === "providers") {
@@ -380,7 +380,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.55.0" });
+            return commandResult({ stdout: "0.56.0" });
           }
           expect(argv.slice(1)).toEqual(["providers", "--json"]);
           return commandResult({ stdout: "[]" });

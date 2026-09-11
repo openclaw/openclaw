@@ -11,13 +11,14 @@ const handleLeases = resolveGlobalSingleton(
 
 export function openTrackedStateDatabase(
   pathname: string,
-  options?: { existingOnly?: boolean },
+  options?: { existingOnly?: boolean; readOnly?: boolean; timeout?: number },
 ): DatabaseSync {
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   try {
-    const database = openNodeSqliteDatabase(
-      options?.existingOnly ? resolveExistingSqliteFileUri(pathname) : pathname,
-    );
+    const location = options?.existingOnly ? resolveExistingSqliteFileUri(pathname) : pathname;
+    const database = options?.readOnly
+      ? openNodeSqliteDatabase(location, { readOnly: true, timeout: options.timeout })
+      : openNodeSqliteDatabase(location);
     handleLeases.set(database, lease);
     return database;
   } catch (error) {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,14 +32,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
 
 import { runPluginEmbeddedAgent } from "./runtime-embedded-agent.runtime.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 const config = {} as OpenClawConfig;
 const params = {
@@ -169,7 +162,7 @@ describe("plugin embedded-agent runtime admission", () => {
   });
 
   it("revokes admission immediately when a pending plugin run aborts", async () => {
-    const core = deferred<{ payloads: never[] }>();
+    const core = createDeferred<{ payloads: never[] }>();
     const admittedRunContext: AdmittedRunContext = {
       operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
       executionIdentityToken: {

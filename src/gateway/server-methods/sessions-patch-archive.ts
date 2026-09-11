@@ -273,9 +273,7 @@ export async function prepareSessionPatchArchive(params: {
     });
   } catch (error) {
     if (error instanceof SessionWorkerPlacementStopError) {
-      return err(
-        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: error.state !== "failed" }),
-      );
+      return err(errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }));
     }
     if (
       error instanceof SessionMutationAuthorizationChangedError ||

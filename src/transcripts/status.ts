@@ -110,7 +110,7 @@ export async function readTranscriptLibraryStatus(
   let activeBytes = 0;
   // Project each bounded row before reading the next to avoid retaining private descriptors.
   for (const capture of selectedCaptures) {
-    const entry = store.readEntry(transcriptSessionSelector(capture.session));
+    const entry = await store.readEntry(transcriptSessionSelector(capture.session));
     if (entry) {
       const projected = projectTranscriptSession(entry, undefined, undefined, captures);
       activeBytes += Buffer.byteLength(JSON.stringify(projected), "utf8");
@@ -191,7 +191,7 @@ export async function readTranscriptLibraryStatus(
       }
       return result;
     });
-  const latest = store.readLatestEntry();
+  const latest = await store.readLatestEntry();
   const result: TranscriptsStatusResult = {
     enabled: config.enabled,
     providers: allProviders.slice(0, TRANSCRIPTS_PAGE_MAX),

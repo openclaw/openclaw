@@ -354,7 +354,7 @@ test.each([
   }
 });
 
-test("sessions.delete rejects failed placement while its worker lease remains", async () => {
+test("sessions.delete retains failed placement when worker cleanup is unavailable", async () => {
   await createSessionStoreDir();
   const sessionKey = "discord:group:failed-worker-session";
   const sessionId = "sess-failed-worker-delete";
@@ -370,6 +370,8 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
       context: {
         workerEnvironmentService: {
           get: () => ({ state: "failed", leaseId: "lease-1" }),
+          hasInferenceForSession: () => false,
+          cancelInferenceForSession: () => [],
           resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
@@ -378,9 +380,9 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
   );
 
   expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message).toContain("cloud worker placement is failed");
+  expect(deleted.error?.message).toContain("cloud worker reclaim is unavailable");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 

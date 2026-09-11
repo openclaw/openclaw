@@ -203,6 +203,23 @@ export async function convergeUpdatePlugins(params: {
           ],
         };
       }
+      const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
+        (warning) => warning.reason === "plugin-target-unavailable",
+      );
+      resultWithPostUpdate = {
+        ...resultWithPostUpdate,
+        steps: [
+          ...resultWithPostUpdate.steps,
+          ...pluginAdvisories.map((warning, index) => ({
+            name: `finalize:plugins:${index}`,
+            command: "openclaw plugins update",
+            cwd: postUpdateRoot,
+            durationMs: 0,
+            exitCode: 0,
+            advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
+          })),
+        ],
+      };
       if (
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&

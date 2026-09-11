@@ -5,38 +5,22 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
+import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord, HangupCallInput } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 
-function createRealtimeConfig(): VoiceCallRealtimeConfig {
-  return {
-    enabled: true,
-    streamPath: "/voice/stream/realtime",
-    instructions: "Be helpful.",
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    fastContext: {
-      enabled: false,
-      timeoutMs: 800,
-      maxResults: 3,
-      sources: ["memory", "sessions"],
-      fallbackToConsult: false,
-    },
-    agentContext: {
-      enabled: false,
-      maxChars: 6000,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-    },
-    providers: {},
-  };
-}
+const updateCallMetadata: CallManager["updateCallMetadata"] = async (call, update) => {
+  call.metadata = update(call.metadata);
+};
+
+const createRealtimeConfig = () => ({
+  ...createVoiceCallBaseConfig().realtime,
+  enabled: true,
+  instructions: "Be helpful.",
+});
 
 const noOpStreamDisconnectLifecycle: StreamDisconnectLifecycle = {
   connect: () => {},
@@ -106,7 +90,7 @@ function createCarrierLifecycleHarness(
     processedEventIds: [],
     ...(options.initialMessage ? { metadata: { initialMessage: options.initialMessage } } : {}),
   };
-  const processEvent = vi.fn();
+  const processEvent = vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" }));
   const hangupCall = vi.fn(async (_input: HangupCallInput) => {});
   const endCall = vi.fn(
     options.endCall ??
@@ -114,7 +98,7 @@ function createCarrierLifecycleHarness(
         const reason = endOptions?.reason ?? "hangup-bot";
         try {
           await hangupCall({ callId, providerCallId: call.providerCallId!, reason });
-          processEvent({
+          await processEvent({
             id: `manager-ended-${call.providerCallId}`,
             type: "call.ended",
             callId,
@@ -132,6 +116,7 @@ function createCarrierLifecycleHarness(
     createRealtimeConfig(),
     {
       processEvent,
+      updateCallMetadata,
       endCall,
       getCallByProviderCallId: vi.fn(() => call),
     } as unknown as CallManager,
@@ -154,6 +139,54 @@ async function connectCarrierStream(handler: RealtimeCallHandler) {
 }
 
 describe("RealtimeCallHandler lifecycle", () => {
+  it.each(["continue", "shutdown"] as const)(
+    "waits for carrier admission persistence before bridge creation (%s)",
+    async (outcome) => {
+      const persistence = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+      const sendAudio = vi.fn();
+      const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>(() =>
+        createBridge(() => {}, { sendAudio }),
+      );
+      const { call, handler, processEvent, hangupCall } =
+        createCarrierLifecycleHarness(createBridgeForCall);
+      processEvent.mockReturnValueOnce(persistence.promise);
+      const { server, ws } = await connectCarrierStream(handler);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-pending-store", callSid: call.providerCallId },
+          }),
+        );
+        const audio = Buffer.from([0xff, 0xfe, 0xfd]);
+        ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
+        expect(createBridgeForCall).not.toHaveBeenCalled();
+        if (outcome === "shutdown") {
+          let closed = false;
+          const closing = handler.close().then(() => {
+            closed = true;
+          });
+          await waitForClose(ws);
+          expect(closed).toBe(false);
+          persistence.resolve({ kind: "processed" });
+          await closing;
+          expect(createBridgeForCall).not.toHaveBeenCalled();
+          expect(hangupCall).toHaveBeenCalledOnce();
+        } else {
+          persistence.resolve({ kind: "processed" });
+          await vi.waitFor(() => expect(sendAudio).toHaveBeenCalledWith(audio));
+          expect(createBridgeForCall).toHaveBeenCalledOnce();
+        }
+      } finally {
+        persistence.resolve({ kind: "processed" });
+        ws.terminate();
+        await handler.close();
+        await server.close();
+      }
+    },
+  );
+
   it.each(["completed", "error"] as const)(
     "ends the carrier call when the provider closes with %s",
     async (reason) => {
@@ -848,7 +881,8 @@ describe("RealtimeCallHandler lifecycle", () => {
     const handler = new RealtimeCallHandler(
       createRealtimeConfig(),
       {
-        processEvent: vi.fn(),
+        processEvent: vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" })),
+        updateCallMetadata,
         endCall: vi.fn(async () => ({ success: true })),
         getCallByProviderCallId: vi.fn(() => call),
       } as unknown as CallManager,
@@ -954,7 +988,8 @@ describe("RealtimeCallHandler lifecycle", () => {
     const handler = new RealtimeCallHandler(
       createRealtimeConfig(),
       {
-        processEvent: vi.fn(),
+        processEvent: vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" })),
+        updateCallMetadata,
         endCall: vi.fn(async () => ({ success: true })),
         getCallByProviderCallId: vi.fn(() => call),
       } as unknown as CallManager,
