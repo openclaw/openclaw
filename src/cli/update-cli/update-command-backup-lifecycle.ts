@@ -117,11 +117,8 @@ async function assertUpdateBackupWriters(params: UpdateBackupParams): Promise<vo
     (await gatewayServiceCommandUsesRoot({ root: params.root, command: service.command }));
   let ownsGateway = ownsRoot === true && runtimePid === gateway?.pid;
   if (gateway && ownsRoot && runtimePid !== undefined && !ownsGateway && launcherStart !== null) {
-    const [{ inspectPortUsage }, { listenerOwnedByRuntimePid }] = await Promise.all([
-      import("../../infra/ports-inspect.js"),
-      import("../daemon-cli/restart-port-ownership.js"),
-    ]);
-    const portUsage = await inspectPortUsage(gateway.port);
+    const { readProcessParentPidSync } = await import("../../infra/restart-stale-pids.js");
+    const parentPid = readProcessParentPidSync(gateway.pid);
     const currentGateway = await readActiveGatewayLockIdentity({
       env: params.env,
       requireInspection: true,
@@ -133,15 +130,12 @@ async function assertUpdateBackupWriters(params: UpdateBackupParams): Promise<vo
       isSameGatewayLockIdentity(gateway, currentGateway) &&
       currentGateway.pid === gateway.pid &&
       currentGateway.startTime === gateway.startTime &&
-      portUsage.listeners.some(
-        (listener) =>
-          listener.pid === gateway.pid && listenerOwnedByRuntimePid({ listener, runtimePid }),
-      );
+      parentPid === runtimePid;
   }
   const unknown = leases.find(
     (lease) =>
       !gateway ||
-      ownsGateway !== true ||
+      !ownsGateway ||
       lease.owner_pid !== gateway.pid ||
       lease.owner_start_time === null ||
       lease.owner_start_time !== gateway.startTime,

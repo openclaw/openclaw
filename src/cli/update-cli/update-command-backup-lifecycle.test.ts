@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as serviceState from "../../daemon/service.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as portInspection from "../../infra/ports-inspect.js";
+import * as processParents from "../../infra/restart-stale-pids.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -43,7 +44,8 @@ afterEach(() => vi.restoreAllMocks());
 it.each([
   "owned child",
   "foreign child",
-  "foreign listener",
+  "foreign Gateway",
+  "unreadable parent",
   "rebound lock",
   "reused launcher",
 ] as const)("admits only the verified service's Gateway writer: %s", async (scenario) => {
@@ -83,13 +85,17 @@ it.each([
             ? launcherStart + 1
             : originalStartTime(pid),
         );
-        vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockImplementation(async () => ({
-          pid: process.pid,
-          startTime,
-          ownerId: inspected && scenario === "rebound lock" ? "replacement" : "original",
-          createdAt: "2026-09-08T00:00:00.000Z",
-          port: 18792,
-        }));
+        let lockReads = 0;
+        vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockImplementation(async () => {
+          inspected = ++lockReads > 1;
+          return {
+            pid: scenario === "foreign Gateway" ? process.ppid : process.pid,
+            startTime: scenario === "foreign Gateway" ? launcherStart : startTime,
+            ownerId: inspected && scenario === "rebound lock" ? "replacement" : "original",
+            createdAt: "2026-09-08T00:00:00.000Z",
+            port: 18792,
+          };
+        });
         vi.spyOn(serviceState, "readGatewayServiceState").mockResolvedValue({
           installed: true,
           loadState: { status: "loaded" },
@@ -105,20 +111,17 @@ it.each([
           },
           runtime: { status: "running", pid: process.ppid },
         });
-        vi.spyOn(portInspection, "inspectPortUsage").mockImplementation(async (port) => {
-          inspected = true;
-          return {
-            port,
-            status: "busy",
-            listeners: [
-              {
-                pid: scenario === "foreign listener" ? process.pid + 1 : process.pid,
-                ppid: scenario === "foreign child" ? process.ppid + 1 : process.ppid,
-              },
-            ],
-            hints: [],
-          };
+        vi.spyOn(portInspection, "inspectPortUsage").mockResolvedValue({
+          port: 18792,
+          status: "busy",
+          listeners: [],
+          hints: ["Socket inspection tools are unavailable"],
         });
+        if (scenario === "foreign child" || scenario === "unreadable parent") {
+          vi.spyOn(processParents, "readProcessParentPidSync").mockReturnValue(
+            scenario === "foreign child" ? process.ppid + 1 : null,
+          );
+        }
         const preflight = preflightUpdateCommandBackup({ opts: { run }, root, env: state.env });
         if (scenario === "owned child") {
           await expect(preflight).resolves.toBeUndefined();
