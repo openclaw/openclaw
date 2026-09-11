@@ -67,6 +67,8 @@ export type McpCatalogTool = {
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   codexAnnotations?: McpCodexToolAnnotations;
+  /** Trusted requester OAuth sign-in bootstrap; never dispatches into the server's tools. */
+  oauthConnectBootstrap?: true;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */

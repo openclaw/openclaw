@@ -88,6 +88,7 @@ function buildRequesterConnectCatalog(
       description: `Connect your ${serverName} account.`,
       fallbackDescription: `Connect your ${serverName} account.`,
       inputSchema: Type.Object({}),
+      oauthConnectBootstrap: true,
     })),
   };
 }

@@ -88,9 +88,10 @@ function applyConfiguredMcpApproval(
 ): AnyAgentTool[] {
   return tools.flatMap((tool) => {
     const mcp = getPluginToolMeta(tool)?.mcp;
-    // The requester connect tool is an OAuth sign-in bootstrap, not an MCP server
-    // capability call; it never dispatches into the server's tools.
-    if (mcp?.operation !== "tool" || mcp.toolName === "connect") {
+    // Only the trusted requester OAuth sign-in bootstrap is exempt — identified by
+    // provenance, never by tool name, so a real server capability named "connect"
+    // stays behind the per-call approval gate.
+    if (mcp?.operation !== "tool" || mcp.oauthConnectBootstrap === true) {
       return [tool];
     }
     const projectedMode = resolveProjectedMcpCodexToolApprovalMode(

@@ -993,6 +993,85 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await result!.dispose();
   });
 
+  it("exempts only trusted OAuth bootstrap tools, not real server tools named connect", async () => {
+    const runtime = makeRuntime({
+      sessionId: "session-connect-provenance",
+      requesterSenderId: "authed",
+    });
+    const catalog = runtime.peekCatalog()!;
+    // Real server capability named "connect" — must stay behind the approval gate.
+    catalog.servers["drive"] = {
+      serverName: "drive",
+      launchSummary: "drive",
+      toolCount: 1,
+      codexApprovalMode: "prompt",
+    };
+    catalog.tools.push({
+      serverName: "drive",
+      safeServerName: "drive",
+      toolName: "connect",
+      description: "sync drive",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "sync drive",
+    });
+    // Trusted requester OAuth sign-in bootstrap — exempt by provenance, not by name.
+    catalog.servers["auth-hub"] = {
+      serverName: "auth-hub",
+      launchSummary: "auth-hub",
+      toolCount: 1,
+      codexApprovalMode: "prompt",
+    };
+    catalog.tools.push({
+      serverName: "auth-hub",
+      safeServerName: "auth-hub",
+      toolName: "connect",
+      description: "Connect your auth-hub account.",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "Connect your auth-hub account.",
+      oauthConnectBootstrap: true,
+    });
+    catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.setResolveImpl(async () => runtime);
+
+    // No callback: prompt-required tools drop from both surfaces; only the trusted
+    // bootstrap survives.
+    const failClosed = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect-provenance",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+    });
+    expect(failClosed!.tools.map((tool) => tool.name)).toEqual(["auth-hub__connect"]);
+    expect(failClosed!.advertisedTools.map((tool) => tool.name)).toEqual(["auth-hub__connect"]);
+    await failClosed!.dispose();
+
+    // With a callback: the real server capability named connect is gated like any
+    // other prompt-required tool and only reaches the server after approval.
+    const requestInteractiveCodexApproval = vi.fn(async (request) => {
+      if (request.toolCallId === "denied-connect") {
+        throw new Error("operator denied");
+      }
+    });
+    const gated = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect-provenance",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      requestInteractiveCodexApproval,
+    });
+    const realConnect = gated!.tools.find((tool) => tool.name === "drive__connect");
+    expect(realConnect).toBeDefined();
+    await expect(realConnect!.execute("denied-connect", {})).rejects.toThrow("operator denied");
+    expect(callTool).not.toHaveBeenCalled();
+    await expect(realConnect!.execute("allowed-connect", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "live:connect:authed" }],
+    });
+    expect(callTool).toHaveBeenCalledWith("drive", "connect", {});
+    expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({ serverName: "drive", toolName: "connect", mode: "prompt" }),
+    );
+    await gated!.dispose();
+  });
+
   it("dispatches auto-mode requester tools under full-permission posture without approval", async () => {
     const runtime = makeRuntime({ sessionId: "session-yolo", requesterSenderId: "authed" });
     const callTool = vi.spyOn(runtime, "callTool");
