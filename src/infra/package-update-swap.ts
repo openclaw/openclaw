@@ -5,14 +5,7 @@ import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import {
   collectPackageDistInventory,
   readPackageDistInventoryIfPresent,
-  readPackageDistContentInventoryIfPresent,
 } from "./package-dist-inventory.js";
-import {
-  captureLocalPackageOverrides,
-  applyLocalPackageOverrides,
-  prepareLocalOverrideRuntime,
-  type LocalPackageOverridesResult,
-} from "./package-local-overrides.js";
 import {
   activateStagedNpmPackageRoot,
   discardPackageUpdateBackup,
@@ -28,6 +21,7 @@ import {
   readPackageVersionIfPresent,
   type PackageRootIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
 import {
   createNpmPackageRootLinkLifecycle,
   verifyNpmRootRecovery,
@@ -35,14 +29,13 @@ import {
 import {
   PackageUpdateActivationError,
   type PackageUpdateTransaction,
-  type StagedPackageInstall,
   type StagedPackageSwapResult,
+  type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   verifyPackageUpdateRecovery,
-  type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import {
   finalizeNativePackageStage,
@@ -62,18 +55,9 @@ export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
-export async function swapStagedPackageInstall(params: {
-  stage: StagedPackageInstall;
-  installTarget: ResolvedGlobalInstallTarget;
-  packageName: string;
-  postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
-  beforeActivate?: () => Promise<void>;
-  onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  timeoutMs?: number;
-  localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
-  onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
-}): Promise<StagedPackageSwapResult> {
+export async function swapStagedPackageInstall(
+  params: StagedPackageSwapParams,
+): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;
@@ -121,7 +105,7 @@ export async function swapStagedPackageInstall(params: {
   );
   let shimBackupDir: string | undefined;
   let hadPackage = false;
-  let localOverrideRuntimeUrls: readonly string[] | undefined;
+  let replayLocalOverrides: (() => Promise<void>) | undefined;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
   let previousRoot: PackageRootIntegrityFingerprint | undefined;
@@ -291,19 +275,13 @@ export async function swapStagedPackageInstall(params: {
         (await readPackageDistInventoryIfPresent(params.installTarget.packageRoot!)) ??
         (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
-    if (hadPackage && !rootLink && params.localOverrides && params.installTarget.packageRoot) {
-      // Reject unsupported source topology while the old service can still serve.
-      await readPackageDistContentInventoryIfPresent(params.installTarget.packageRoot);
-      await collectPackageDistInventory(params.installTarget.packageRoot, {
-        includePackageExcludedFiles: true,
-      });
-      if (params.localOverrides.reapply) {
-        localOverrideRuntimeUrls = await prepareLocalOverrideRuntime({
-          sourceRoot: targetSwapRoot,
-          destinationRoot: backupRoot,
-        });
-      }
-    }
+    replayLocalOverrides = await preparePackageSwapLocalOverrides({
+      ...params,
+      hadPackage,
+      rootLinked: Boolean(rootLink),
+      targetSwapRoot,
+      backupRoot,
+    });
     packageRollbackVerified = hadPackage && previousVersion !== null;
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     const shimNames = new Set([params.packageName, "openclaw"]);
@@ -609,33 +587,7 @@ export async function swapStagedPackageInstall(params: {
         activePackageRoot = params.installTarget.packageRoot;
       }
     });
-    if (hadPackage && !rootLink && params.localOverrides) {
-      // Capture the retired tree after service drain and the actual move, so late
-      // edits are included. Replay touches only the private candidate, never the backup.
-      const oldPackageRoot = native
-        ? path.join(backupRoot, path.relative(targetSwapRoot, params.installTarget.packageRoot!))
-        : backupRoot;
-      const plan = await captureLocalPackageOverrides({
-        packageRoot: oldPackageRoot,
-        recordedPackageRoot: params.installTarget.packageRoot ?? undefined,
-        env: params.localOverrides.env,
-      });
-      if (plan) {
-        params.onLocalOverrides?.({ ...plan.result, status: "preserved" });
-      }
-      const result = await applyLocalPackageOverrides({
-        packageRoot: params.stage.packageRoot,
-        plan,
-        reapply: params.localOverrides.reapply,
-        runtimeUrls: localOverrideRuntimeUrls,
-      });
-      params.onLocalOverrides?.(result);
-      if (result.status === "error") {
-        throw new Error(
-          `Local overrides could not be safely replayed. Recovery bundle: ${result.recoveryDir}`,
-        );
-      }
-    }
+    await replayLocalOverrides?.();
     await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
     activePackageRoot = targetPackageRoot;
     projectActivated = true;
