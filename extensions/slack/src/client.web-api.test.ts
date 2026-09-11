@@ -335,9 +335,16 @@ describe("Slack Web API routing", () => {
       requestSignal = init?.signal;
       resolveFetchStarted();
       return new Promise<never>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-          once: true,
-        });
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error
+                ? init.signal.reason
+                : new Error("request aborted"),
+            ),
+          { once: true },
+        );
       });
     });
     const client = createSlackLookupClient("lookup-cancellation-fixture", {
