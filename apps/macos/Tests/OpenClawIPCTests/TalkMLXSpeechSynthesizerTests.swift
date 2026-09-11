@@ -635,6 +635,50 @@ struct TalkMLXSpeechSynthesizerTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `repeated memory pressure preserves every pending fallback`(_ pressureOnReplacement: Bool) async throws {
+        let first = TestMLXTransport(mode: .staleStreamLateChunk)
+        let replacement = TestMLXTransport(mode: .staleStreamLateChunk)
+        let factory = TestMLXTransportFactory([first, replacement])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let firstSynthesis = Task {
+            try await self.collectSynthesis(synthesizer, text: "first pressure fallback")
+        }
+        await first.waitForPendingEventRead()
+        await synthesizer.handleMemoryPressure()
+        let replacementSynthesis: Task<(sampleRate: Double, pcm: Data), Error>?
+        if pressureOnReplacement {
+            replacementSynthesis = Task {
+                try await self.collectSynthesis(synthesizer, text: "replacement pressure fallback")
+            }
+            await replacement.waitForPendingEventRead()
+        } else {
+            replacementSynthesis = nil
+        }
+        await synthesizer.handleMemoryPressure()
+        await first.cancelFirstSynthesis()
+        do {
+            _ = try await firstSynthesis.value
+            Issue.record("expected first request to require fallback")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed {} catch {
+            Issue.record("repeated pressure lost the first request's fallback: \(error)")
+        }
+        if let replacementSynthesis {
+            await replacement.cancelFirstSynthesis()
+            do {
+                _ = try await replacementSynthesis.value
+                Issue.record("expected replacement request to require fallback")
+            } catch TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed {} catch {
+                Issue.record("earlier request completion lost the replacement's fallback: \(error)")
+            }
+            #expect(await replacement.closeCount == 1)
+        }
+        #expect(await first.closeCount == 1)
+        await synthesizer.shutdown()
+    }
+
     @Test
     func `cancel can terminate helper before ready`() async throws {
         let transport = TestMLXTransport(mode: .startupHang)
