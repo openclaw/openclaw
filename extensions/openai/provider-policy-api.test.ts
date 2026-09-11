@@ -214,15 +214,15 @@ describe("OpenAI provider policy artifact", () => {
       },
     })?.levels.map((level) => level.id);
 
-    expect(solLevels).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
-    expect(terraLevels).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(solLevels).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(terraLevels).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
   it.each([
-    { efforts: [], expected: ["off"], defaultLevel: undefined },
+    { efforts: [], expected: [], defaultLevel: undefined },
     {
       efforts: ["high"],
-      expected: ["off", "low", "medium", "high", "xhigh", "max", "ultra"],
+      expected: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultLevel: "medium",
     },
   ])(
@@ -252,7 +252,7 @@ describe("OpenAI provider policy artifact", () => {
       },
     })?.levels.map((level) => level.id);
 
-    expect(levels).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(levels).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
   it("orders Platform before ChatGPT for unconfigured routable models", () => {
     const expected = {

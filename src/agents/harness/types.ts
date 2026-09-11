@@ -553,10 +553,28 @@ type AgentHarnessModelCatalogCapability = {
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
+   * When known, authMode describes this same account observation.
    */
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): { accountType: string } | undefined;
+  ): { accountType: string; authMode?: string } | undefined;
+};
+
+type AgentHarnessTaskHistoryCapability = {
+  /** Reads native task history without creating an OpenClaw child session. */
+  taskHistory?: {
+    taskKinds: readonly string[];
+    read(params: {
+      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
+      cfg: OpenClawConfig;
+      cursor?: string;
+      limit: number;
+      /** Revalidate the task, requester access, and registered owner after awaited work. */
+      assertCurrent: () => void;
+    }): Promise<
+      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
+    >;
+  };
 };
 
 /**
@@ -573,6 +591,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
@@ -586,6 +605,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
+  AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

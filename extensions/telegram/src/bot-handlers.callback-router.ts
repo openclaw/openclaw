@@ -524,10 +524,12 @@ async function handleTelegramModelCallback(params: {
       senderId,
       runtimeCfg,
     });
-    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId);
+    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
+      sessionEntry: session.sessionEntry,
+    });
     return { sessionState: session, modelData: providerData };
   });
-  const { byProvider, providers, modelNames, resolvedDefault: activeResolvedDefault } = modelData;
+  const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
@@ -538,9 +540,13 @@ async function handleTelegramModelCallback(params: {
       await retryModelAction(() => editMessageWithButtons("No providers available.", []));
       return true;
     }
+    const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
+      .map((provider) => provider.notice)
+      .filter(Boolean)
+      .join("\n");
     await retryModelAction(() =>
       editMessageWithButtons(
-        "Select a provider:",
+        ["Select a provider:", notice].filter(Boolean).join("\n\n"),
         buildTelegramModelsMenuButtons({ providers: providerInfos }),
       ),
     );
@@ -574,13 +580,14 @@ async function handleTelegramModelCallback(params: {
     const safePage = Math.max(1, Math.min(page, totalPages));
     const currentModel =
       sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+    const availability = modelData.modelMenu?.byProvider.get(provider);
     const buttons = buildModelsKeyboard({
       provider,
       models,
       currentModel,
       currentPage: safePage,
       totalPages,
-      modelNames,
+      modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
     });
     const text = `${formatModelsAvailableHeader({
       provider,
@@ -588,6 +595,7 @@ async function handleTelegramModelCallback(params: {
       cfg: runtimeCfg,
       agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
       sessionEntry: sessionState.sessionEntry,
+      availability,
     })}\nSelecting a model also applies its configured runtime.`;
     await retryModelAction(() => editMessageWithButtons(text, buttons));
     return true;

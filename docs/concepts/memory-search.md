@@ -56,11 +56,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
 | Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           |                                   |
+| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
 | OpenAI            | `openai`            | Yes           | Default                           |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           |                                   |
+| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
 ## How search works
 
@@ -166,8 +166,8 @@ Reduces redundant results. If five notes all mention the same router config,
 MMR favors a similarly relevant result with different content instead of
 repeating near-identical snippets. The fixed relevance-biased setting uses
 lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
-`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
-most 48 unique non-exact candidates before overlap; broader project and
+`O(k²)`: ordinary defaults request 200 candidates per retrieval leg, for at
+most 400 unique non-exact candidates before overlap; broader project and
 identifier searches remain separately capped.
 
 <Tip>
@@ -229,6 +229,7 @@ the managed server endpoints before rebuilding the index.
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Active memory](/concepts/active-memory)
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Memory configuration reference](/reference/memory-config)

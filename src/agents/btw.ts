@@ -27,6 +27,7 @@ import type {
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -42,12 +43,12 @@ import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resol
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
@@ -70,7 +71,7 @@ import {
 } from "./model-runtime-aliases.js";
 import { isOpenAIProvider } from "./openai-routing.js";
 import {
-  loadPreparedModelRuntimeSnapshot,
+  acquirePublishedPreparedModelRuntime,
   preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeStores,
@@ -432,6 +433,7 @@ async function materializeBtwRuntimeModel(
       ...(params.forceResolve !== undefined ? { forceResolve: params.forceResolve } : {}),
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, agentDir, config, {
+          modelIdSource: "selected",
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
           skipAgentDiscovery: true,
@@ -527,6 +529,7 @@ async function resolveRuntimeModel(params: {
     cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
+    agentId: params.agentId,
     harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
@@ -710,6 +713,21 @@ async function runCliBtwSideQuestion(params: {
   }
 }
 
+/** The visible answer may finish before cooperating provider and cleanup work settles. */
+async function withBtwPreparedRuntime(
+  input: Parameters<typeof acquirePublishedPreparedModelRuntime>[0],
+  run: (snapshot: PreparedModelRuntimeSnapshot) => Promise<ReplyPayload | undefined>,
+): Promise<ReplyPayload | undefined> {
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
+    const lease = await acquirePublishedPreparedModelRuntime(input);
+    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
+    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
+      captureWorkContext();
+      return run(lease.snapshot);
+    });
+  });
+}
+
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
   paramsInput: RunBtwSideQuestionParams,
@@ -736,7 +754,7 @@ export async function runBtwSideQuestion(
   }
 
   const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
+  const runtimeInput = {
     config: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,
@@ -744,8 +762,8 @@ export async function runBtwSideQuestion(
     // Gateway-published owners are keyed with this flag, so a gateway-hosted
     // request that omits it can never match one.
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
-  });
-  return await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
+  };
+  return await withBtwPreparedRuntime(runtimeInput, async (preparedModelRuntime) => {
     const sessionAgentId = preparedModelRuntime.agentId ?? params.agentId;
     const workspaceDir =
       preparedModelRuntime.workspaceDir ??

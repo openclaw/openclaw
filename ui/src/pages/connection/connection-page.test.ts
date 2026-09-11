@@ -162,6 +162,40 @@ describe("ConnectionPage credentials", () => {
 });
 
 describe("ConnectionPage Gateway lifecycle", () => {
+  it("shows pending host reads and keeps the last stats visible during refresh", async () => {
+    vi.useFakeTimers();
+    const firstResponse = deferred<SystemInfoResult>();
+    const refreshResponse = deferred<SystemInfoResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstResponse.promise)
+      .mockReturnValueOnce(refreshResponse.promise);
+    const current = source({ request } as unknown as GatewayBrowserClient);
+    const { page } = await mount(current.gateway);
+    const host = () => page.querySelector("#settings-connection-host");
+    const loading = () => host()?.querySelector('[role="status"]');
+    expect(loading()?.textContent).toContain("Loading…");
+    expect(host()?.getAttribute("aria-busy")).toBe("true");
+
+    firstResponse.resolve(deviceSystemInfo);
+    await settleLitElement(page);
+    expect(loading()).toBeNull();
+    expect(host()?.getAttribute("aria-busy")).toBe("false");
+    expect(host()?.textContent).toContain("Gateway");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settleLitElement(page);
+    expect(loading()?.textContent).toContain("Loading…");
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+    expect(page.querySelectorAll('[role="meter"]').length).toBeGreaterThan(0);
+
+    refreshResponse.reject(new Error("temporarily unavailable"));
+    await settleLitElement(page);
+    expect(loading()).toBeNull();
+    expect(host()?.getAttribute("aria-busy")).toBe("false");
+    expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+  });
+
   it("keeps an edited draft through reconnect and resets it for a replacement source", async () => {
     const request = vi.fn().mockResolvedValue(deviceSystemInfo);
     const client = { request } as unknown as GatewayBrowserClient;

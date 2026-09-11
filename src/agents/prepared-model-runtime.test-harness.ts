@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -22,6 +23,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginIds: [],
     index: { plugins: [] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    registryDiagnostics: [],
     declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
@@ -125,9 +127,10 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         setPreparedModelFullCatalogAuth(
           catalog,
           getPreparedModelFullCatalogAuth(catalog) ?? {
-            authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
-            authModes: {},
-            credentials: preparedModelRuntimeMocks.authStorage.getAll(),
+            providerAuthLabels: new Map(),
+            authStore: factoryArgs[0].agentFacts.authStore,
+            authModes: resolveUsableAgentCredentialModes(factoryArgs[0].agentFacts.credentials),
+            credentials: factoryArgs[0].agentFacts.credentials,
           },
         );
         return {
@@ -359,6 +362,10 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
+  acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
+    const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
+    return { registry, primaryRegistry: registry };
+  },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
     preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
@@ -438,7 +445,7 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     }));
   preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
-    .mockReturnValue(createEmptyPluginRegistry());
+    .mockImplementation(() => createEmptyPluginRegistry());
   preparedModelRuntimeMocks.loadStaticCatalog.mockReset().mockResolvedValue([]);
   preparedModelRuntimeMocks.planOpenClawModelsJsonSource
     .mockReset()

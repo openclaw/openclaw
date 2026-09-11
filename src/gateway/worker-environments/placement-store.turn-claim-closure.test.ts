@@ -28,6 +28,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
@@ -82,6 +83,11 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
       workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
       remoteWorkspaceDir: "/workspace/placement-claim-close",
     },
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "environment-placement-claim-close",
+    sessionId: SESSION.sessionId,
+    ownerEpoch: 7,
   });
   const active = store.transition({
     sessionId: SESSION.sessionId,

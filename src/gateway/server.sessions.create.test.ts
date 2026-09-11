@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -119,6 +120,7 @@ import {
   threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
@@ -1189,10 +1191,14 @@ test("sessions.create revalidates parent participation before committing a fork 
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const database = openOpenClawAgentDatabase({
     agentId: "main",
@@ -3563,6 +3569,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const persisted = persistReplySessionEntry({
@@ -4290,12 +4297,24 @@ test("sessions.create stores dashboard model, thinking, fast mode, and parent li
 test.each([undefined, "main"])(
   "sessions.create parents dashboard sessions to agent main when dmScope is %s",
   async (dmScope) => {
-    await createSessionStoreDir();
+    const { storePath } = await createSessionStoreDir();
     testState.sessionConfig = dmScope ? { dmScope } : undefined;
+    testState.agentConfig = { model: { primary: "openai/current-model" } };
+    await writeSessionStore({
+      entries: {
+        "agent:main:main": {
+          ...sessionStoreEntry("sess-grouping-parent"),
+          providerOverride: "anthropic",
+          modelOverride: "parent-model",
+          modelOverrideSource: "user",
+        },
+      },
+    });
 
     const created = await directSessionReq<{
       key?: string;
       entry?: { parentSessionKey?: string; spawnDepth?: number };
+      resolved?: { modelProvider?: string; model?: string };
     }>("sessions.create", { agentId: "main" });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
@@ -4305,6 +4324,39 @@ test.each([undefined, "main"])(
     // their operator identity and makes explicit finite spawn-depth caps apply
     // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
+    const key = requireNonEmptyString(created.payload?.key, "created session key");
+    const child = expectDefined(
+      loadSessionEntry({ sessionKey: key, storePath }),
+      "created session",
+    );
+    const parent = expectDefined(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
+      "grouping parent session",
+    );
+    const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
+    const cfg = getRuntimeConfig();
+    const reply = await createModelSelectionState({
+      cfg,
+      agentId: "main",
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry: child,
+      sessionStore: { "agent:main:main": parent },
+      sessionKey: key,
+      parentSessionKey: child.parentSessionKey,
+      defaultProvider: "openai",
+      defaultModel: "current-model",
+      provider: "openai",
+      model: "current-model",
+      hasModelDirective: false,
+    });
+    expect(created.payload?.resolved).toMatchObject({
+      modelProvider: "openai",
+      model: "current-model",
+    });
+    expect({ provider: reply.provider, model: reply.model }).toEqual({
+      provider: "openai",
+      model: "current-model",
+    });
   },
 );
 
@@ -4626,10 +4678,14 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const creating = directSessionReq(
     "sessions.create",
@@ -4662,13 +4718,17 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
 test("sessions.create commits no child after its worker turn closes", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:worker-turn-race";
-  const placements = createWorkerSessionPlacementStore({
-    database: openOpenClawStateDatabase(),
-  });
+  const database = openOpenClawStateDatabase();
+  const placements = createWorkerSessionPlacementStore({ database });
   let placement = placements.startDispatch({
     agentId: "main",
     sessionId: "worker-source-session",
     sessionKey: "agent:main:dashboard:worker-source",
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "worker-environment",
+    sessionId: placement.sessionId,
+    ownerEpoch: 7,
   });
   for (const [from, to, patch] of [
     ["requested", "provisioning", { environmentId: "worker-environment" }],
@@ -4706,6 +4766,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const creating = directSessionReq(

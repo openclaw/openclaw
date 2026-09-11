@@ -103,10 +103,14 @@ describe("pending spawn preparation authority", () => {
       spawnTesting.setDepsForTest({
         forkSessionEntryFromParent: async (params) => {
           // Hold a genuine preceding database writer, then enqueue the real fork owner.
-          blocker = runExclusiveSqliteSessionWrite(resolveSqliteStoreScope(storePath), async () => {
-            writerEntered.resolve();
-            await releaseWriter.promise;
-          });
+          blocker = runExclusiveSqliteSessionWrite(
+            resolveSqliteStoreScope(storePath),
+            async () => {
+              writerEntered.resolve();
+              await releaseWriter.promise;
+            },
+            "session.transcript.batch",
+          );
           await writerEntered.promise;
           const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
           const pending = forkSessionEntryFromParent(params);

@@ -132,6 +132,7 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
     normalizeString(record.agentRuntimeOverride) !== undefined ||
     record.cliSessionBindings !== undefined ||
     record.cliSessionIds !== undefined ||
+    normalizeString(record.claudeCliSessionId) !== undefined ||
     normalizeString(record.authProfileOverride) !== undefined ||
     normalizeString(record.authProfileOverrideSource) !== undefined
   );
@@ -213,6 +214,8 @@ function hasOwnedCliSession(params: {
   return params.cliSessionKeys.some((key) => {
     const normalized = normalizeProviderId(key);
     return (
+      (normalized === "claude-cli" &&
+        normalizeString(params.entry.claudeCliSessionId) !== undefined) ||
       (bindings !== null &&
         typeof bindings === "object" &&
         normalized in bindings &&
@@ -466,6 +469,10 @@ function applySessionRouteStateRepair(params: {
       clearRecordKeys(params.entry, "cliSessionBindings", params.repair.cliSessionKeys) || changed;
     changed =
       clearRecordKeys(params.entry, "cliSessionIds", params.repair.cliSessionKeys) || changed;
+    if (params.repair.cliSessionKeys.includes("claude-cli")) {
+      // Doctor's later binding migration must not restore a conversation this repair cleared.
+      clear("claudeCliSessionId");
+    }
   }
   if (params.repair.reasons.includes("auto auth profile override")) {
     clear("authProfileOverride");

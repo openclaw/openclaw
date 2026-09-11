@@ -14,7 +14,7 @@ import {
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -36,6 +36,7 @@ import {
   type LoadInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
+import { prepareInstalledPluginCandidateResolver } from "./manifest-registry-installed.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
@@ -164,21 +165,32 @@ function fileContentMatches(
   return safeHashFile({ filePath, diagnostics: [], required: false }) === hash;
 }
 
-function hasStaleDoctorContractFile(
-  plugin: InstalledPluginIndexRecord,
-  rootExists: boolean,
+function hasStaleDoctorContractFiles(
+  index: InstalledPluginIndex,
+  params: LoadPluginRegistryParams,
 ): boolean {
-  if (!rootExists && !plugin.enabled) {
-    return false;
-  }
-  const contractPath = resolvePluginDoctorContractArtifactPath(plugin.rootDir);
-  return contractPath
-    ? !plugin.doctorContractHash ||
-        !fileContentMatches(contractPath, plugin.doctorContractHash, plugin.doctorContractFile)
-    : plugin.doctorContractHash !== undefined || plugin.doctorContractFile !== undefined;
+  const resolveCandidate = prepareInstalledPluginCandidateResolver({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return index.plugins.some((plugin) => {
+    if (!plugin.enabled && !fs.existsSync(plugin.rootDir)) {
+      return false;
+    }
+    const artifact = resolvePluginDoctorContractArtifact(resolveCandidate(plugin));
+    return artifact
+      ? !plugin.doctorContractHash ||
+          !fileContentMatches(
+            artifact.modulePath,
+            plugin.doctorContractHash,
+            plugin.doctorContractFile,
+          )
+      : plugin.doctorContractHash !== undefined || plugin.doctorContractFile !== undefined;
+  });
 }
 
-function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
+function hasStalePersistedPluginMetadataFiles(index: InstalledPluginIndex): boolean {
   const realpathCache = new Map<string, string>();
   return index.plugins.some((plugin) => {
     if (!isContainedPluginPath(plugin.rootDir, plugin.rootDir, realpathCache)) {
@@ -210,9 +222,6 @@ function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
       ) {
         return true;
       }
-    }
-    if (hasStaleDoctorContractFile(plugin, rootExists)) {
-      return true;
     }
     if (!plugin.packageJson) {
       return false;
@@ -426,7 +435,12 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const persistedIndex = readPersistedInstalledPluginIndexSync(params);
   let stalePluginFiles: boolean | undefined;
   const hasStalePluginFiles = () =>
-    (stalePluginFiles ??= persistedIndex ? hasStalePersistedPluginFiles(persistedIndex) : false);
+    (stalePluginFiles ??= persistedIndex
+      ? // Check metadata before configured discovery can cache its bytes. That scanner
+        // never reads Doctor bytes, which remain fresh until the second check below.
+        hasStalePersistedPluginMetadataFiles(persistedIndex) ||
+        hasStaleDoctorContractFiles(persistedIndex, params)
+      : false);
   if (!persistedIndex) {
     diagnostics.push({
       level: "info",

@@ -118,7 +118,9 @@ suite.define(() => {
       await whereTrigger.click();
       await device.waitFor();
       expect(await device.isDisabled()).toBe(true);
-      expect(await device.textContent()).toContain("No worker slots are available");
+      expect(await tooltipTitleText(device)).toBe(
+        "No worker slots are available. Wait for a slot or pick another device.",
+      );
       expect(await restrictedDevice.isEnabled()).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
       await page.keyboard.press("Escape");
@@ -151,9 +153,9 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
-      await expect
-        .poll(() => device.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["This runtime does not support paired devices"]);
+      expect(await device.locator(".session-menu__description").textContent()).toContain(
+        "This runtime does not support paired devices",
+      );
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
@@ -248,35 +250,95 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
+      const openPicker = async () => {
+        const afterShow = place.evaluate(
+          (element) =>
+            new Promise<void>((resolve) => {
+              element.addEventListener("wa-after-show", () => resolve(), { once: true });
+            }),
+        );
+        await page.locator("#new-session-where-trigger").click();
+        await afterShow;
+      };
+      await openPicker();
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
       await captureEnvironmentMetadataUiProof(suite, page);
 
       expect(await row("alpha-device").isEnabled()).toBe(true);
       await expect
-        .poll(() => row("alpha-device").locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["macOS", "Camera", "Screen capture"]);
+        .poll(() => row("alpha-device").locator(".session-menu__description").textContent())
+        .toBe(" · alpha-de · macOS");
       await expect
         .poll(() => row("alpha-device").locator(".capacity-meter-pips").getAttribute("aria-label"))
         .toBe("2 of 4 slots busy");
-      expect(await row("alpha-device").locator(".session-menu__sub").textContent()).toBe(
-        "alpha-de",
+      expect(await row("beta-device").locator(".session-menu__description").textContent()).toBe(
+        " · beta-dev",
       );
-      expect(await row("beta-device").locator(".session-menu__sub").textContent()).toBe("beta-dev");
-      expect(await row("saturated").locator(".session-menu__sub").count()).toBe(0);
       expect(await row("saturated").isDisabled()).toBe(true);
       await expect
-        .poll(() => row("saturated").locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+        .poll(() => tooltipTitleText(row("saturated")))
+        .toBe("No worker slots are available. Wait for a slot or pick another device.");
       await expect
         .poll(() => row("saturated").locator(".capacity-meter-pips").getAttribute("aria-label"))
         .toBe("Slot utilization unavailable");
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
+      expect(await row("offline").locator(".session-menu__description").textContent()).toMatch(
+        /^ · Offline for .+ · Device unavailable\. Reconnect it and try again\.$/,
+      );
+      expect(await tooltipTitleText(row("offline"))).toBe(
+        "Device unavailable. Reconnect it and try again.",
+      );
+      expect(await row("offline").locator(".session-menu__description").isVisible()).toBe(true);
+      expect(
+        await row("offline").evaluate((element) => element.getBoundingClientRect().height),
+      ).toBe(32);
+      expect(
+        await row("offline")
+          .locator(".session-menu__text")
+          .evaluate((element) => ({
+            truncated: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+          })),
+      ).toEqual({ truncated: true, overflow: "ellipsis" });
       expect(await row("disabled").isDisabled()).toBe(true);
       expect(await row("outdated").isDisabled()).toBe(true);
+
+      const selectedRow = row("alpha-device");
+      const selectionLayout = () =>
+        selectedRow.evaluate((element) =>
+          [
+            element,
+            ...[".session-menu__text", ".capacity-meter-pips", ".session-menu__check"].map(
+              (selector) => {
+                const part = element.querySelector(selector);
+                if (!part) {
+                  throw new Error(`Missing environment row part: ${selector}`);
+                }
+                return part;
+              },
+            ),
+          ].map((part) => {
+            const { x, width } = part.getBoundingClientRect();
+            return { x, width };
+          }),
+        );
+      await selectedRow.hover();
+      const beforeSelection = await selectionLayout();
+      expect(beforeSelection.every(({ width }) => width > 0)).toBe(true);
+      expect(await selectedRow.locator(".session-menu__check svg").count()).toBe(0);
+      await selectedRow.click();
+      await selectedRow.waitFor({ state: "hidden" });
+      await openPicker();
+      await selectedRow.hover();
+      expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
+      expect(await selectedRow.locator(".capacity-meter-pips").getAttribute("aria-label")).toBe(
+        "2 of 4 slots busy",
+      );
+      expect(await selectedRow.locator(".session-menu__check svg").isVisible()).toBe(true);
+      expect(await selectionLayout()).toEqual(beforeSelection);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

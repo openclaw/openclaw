@@ -6,6 +6,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { execution } from "./commands.test-helpers.js";
+import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
 import { ClickButton, EscalationReason } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
@@ -132,6 +134,82 @@ function sessionState(scope: "window" | "desktop") {
 }
 
 describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
+  it.each([
+    {
+      outcome: "verified activation",
+      structured: {
+        status: "activated",
+        code: "bring_to_front_exact_window_verified",
+        activated: true,
+      },
+      isError: false,
+      error: undefined,
+    },
+    {
+      outcome: "unverified activation",
+      structured: {
+        status: "partial",
+        code: "bring_to_front_exact_window_unverified",
+        activated: false,
+      },
+      isError: true,
+      error: "COMPUTER_REFUSED_bring_to_front_exact_window_unverified",
+    },
+    {
+      outcome: "structured refusal",
+      structured: { status: "refused", refusal: { code: "permission_denied" } },
+      isError: false,
+      error: "COMPUTER_REFUSED_permission_denied",
+    },
+  ])("preserves $outcome through computer.act", async ({ structured, isError, error }) => {
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, {
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fake-cua-driver", version: "0.22.2" },
+        });
+      } else if (request.method === "tools/call") {
+        switch (request.params?.name) {
+          case "start_session":
+            fake.respond(request, sessionState("window"));
+            break;
+          case "list_windows":
+            fake.respond(request, toolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
+            break;
+          case "bring_to_front":
+            fake.respond(request, {
+              ...toolResult({ pid: 4242, window_id: 99, ...structured }),
+              isError,
+            });
+            break;
+          case "end_session":
+            fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
+            break;
+          default:
+            break;
+        }
+      }
+    });
+    const driver = createCuaMcpDriver({ ...endpoint, env: process.env });
+    onTestFinished(() => driver.dispose());
+    const computer = await execution(driver, "darwin");
+    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
+      details: { windows: Array<{ windowRef: string }> };
+    };
+    const result = computer.act(
+      JSON.stringify({
+        action: "bring_to_front",
+        windowRef: listed.details.windows[0]!.windowRef,
+      }),
+    );
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      expect(JSON.parse(await result)).toEqual({ ok: true });
+    }
+  });
+
   it("initializes the bundled proxy and translates tool results through CuaDriverSession", async () => {
     let closed = false;
     const endpoint = await createFakeEndpoint((request, fake) => {

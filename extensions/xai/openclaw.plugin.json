@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
@@ -180,6 +181,8 @@
       "personalAccount": true,
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",

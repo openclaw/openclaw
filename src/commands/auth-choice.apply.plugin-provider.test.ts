@@ -275,7 +275,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
       .mockResolvedValueOnce({ config: params.config, enabled: false, pluginId: entry.pluginId });
     try {
-      await prepareAuthChoiceLoadedPluginProvider(params);
+      await prepareAuthChoiceLoadedPluginProvider(params, (prepared) => prepared);
       const consent = expectDefined(
         enable.mock.calls[0]?.[2]?.onCapabilityConsent,
         "selected provider capability callback",
@@ -355,7 +355,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
-    const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+    const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
 
     expect(prepared?.authProfiles).toEqual([
       {
@@ -706,7 +706,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       method,
     });
 
-    const result = await prepareAuthChoiceLoadedPluginProvider(buildParams());
+    const result = await prepareAuthChoiceLoadedPluginProvider(
+      buildParams(),
+      (prepared) => prepared,
+    );
     expect(result?.pendingPluginInstalls).toEqual({ "local-provider-plugin": installRecord });
     expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
@@ -745,6 +748,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
       const prepared = await prepareAuthChoiceLoadedPluginProvider(
         buildParams({ config: entryConfig }),
+        (result) => result,
       );
 
       expect(prepared?.config).toBe(entryConfig);

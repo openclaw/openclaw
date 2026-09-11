@@ -71,7 +71,7 @@ async function runDevicesApprove(argv: string[]) {
 }
 
 async function runDevicesCommand(argv: string[]) {
-  const program = new Command();
+  const program = new Command().exitOverride();
   registerDevicesCli(program);
   await program.parseAsync(["devices", ...argv], { from: "user" });
 }
@@ -759,6 +759,38 @@ describe("devices cli clear", () => {
 });
 
 describe("devices cli tokens", () => {
+  it.each([
+    { name: "omitted", flags: [], requestedScopes: undefined },
+    { name: "explicitly empty", flags: ["--no-scopes"], requestedScopes: [] },
+  ])("preserves $name rotation scope intent", async ({ flags, requestedScopes }) => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+
+    await runDevicesCommand(["rotate", "--device", "device-1", "--role", "node", ...flags]);
+
+    expectGatewayCall(0, {
+      method: "device.token.rotate",
+      params: { deviceId: "device-1", role: "node", scopes: requestedScopes },
+      scopes: ["operator.admin"],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("rejects conflicting scope options before rotating a token", async () => {
+    await expect(
+      runDevicesCommand([
+        "rotate",
+        "--device",
+        "device-1",
+        "--role",
+        "node",
+        "--scope",
+        "node.read",
+        "--no-scopes",
+      ]),
+    ).rejects.toThrow("cannot be used with option");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   describe.each(["rotate", "revoke"])("%s", (command) => {
     it.each([
       { role: "node", scopes: ["operator.admin"] },

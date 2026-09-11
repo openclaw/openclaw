@@ -211,7 +211,7 @@ it("does not revive an inspection released by an earlier selection getter", asyn
   });
   try {
     expect(() => fixture.resolve(inspection.registry, host, ["synthetic-runtime-alias"])).toThrow(
-      "inspection resources have been released",
+      "reloaded or disabled",
     );
     expect(reads).toBeGreaterThan(0);
     await released;
@@ -222,28 +222,65 @@ it("does not revive an inspection released by an earlier selection getter", asyn
   }
 });
 
-it("releases its temporary native claim when provider projection throws", async () => {
-  const fixture = nativeProviderFixture();
-  const host = new LegacyPluginSdkResourceHost();
-  const inspection = await fixture.load();
-  const failure = new Error("synthetic provider projection failure");
-  Object.defineProperty(inspection.registry.providers[0]!.provider, "sdkProjection", {
-    enumerable: true,
-    get() {
-      throw failure;
-    },
-  });
-  try {
-    expect(() => fixture.resolve(inspection.registry, host)).toThrow(failure);
-    await inspection.release();
-    expect(fixture.state.disposals).toBe(1);
-    expect(fixture.state.database?.isOpen).toBe(false);
-    await host.close();
-  } finally {
-    await Promise.allSettled([host.close(), inspection.release()]);
-    fixture.cleanup();
-  }
-});
+it.each([
+  { name: "first projection", previouslyAdopted: false, tail: false },
+  { name: "adopted view", previouslyAdopted: true, tail: false },
+  { name: "tracked tail", previouslyAdopted: false, tail: true },
+])(
+  "releases a failed temporary projection after its owned work ($name)",
+  async ({ previouslyAdopted, tail }) => {
+    const fixture = nativeProviderFixture();
+    const host = new LegacyPluginSdkResourceHost();
+    const inspection = await fixture.load();
+    const previous = previouslyAdopted ? fixture.resolve(inspection.registry, host)[0] : undefined;
+    const failure = new Error("synthetic provider projection failure");
+    const finishTail = createDeferredCore();
+    let tailWork: Promise<void> | undefined;
+    Object.defineProperty(inspection.registry.providers[0]!.provider, "sdkProjection", {
+      enumerable: true,
+      get() {
+        if (tail) {
+          tailWork = trackAsyncWork(async () => {
+            await finishTail.promise;
+            const provider = inspection.registry.providers[0]!.provider;
+            expect(
+              provider.isCacheTtlEligible?.({ provider: provider.id, modelId: "synthetic-model" }),
+            ).toBe(true);
+          });
+        }
+        throw failure;
+      },
+    });
+    try {
+      expect(() => fixture.resolve(inspection.registry, host)).toThrow(failure);
+      await inspection.release();
+      expect(fixture.state.disposals).toBe(previouslyAdopted || tail ? 0 : 1);
+      expect(fixture.state.database?.isOpen).toBe(previouslyAdopted || tail);
+      if (previous) {
+        expect(readProvider(previous)).toBe(true);
+      }
+      let closed = false;
+      const closing = host.close().then(() => {
+        closed = true;
+      });
+      if (tail) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).toBe(false);
+        finishTail.resolve();
+        await tailWork;
+      }
+      await closing;
+      expect(fixture.state.disposals).toBe(1);
+      expect(fixture.state.database?.isOpen).toBe(false);
+    } finally {
+      finishTail.resolve();
+      await Promise.allSettled([tailWork, host.close(), inspection.release()]);
+      fixture.cleanup();
+    }
+  },
+);
 
 it.each([false, true])(
   "joins a temporary claim when a projection getter closes the exact host (disposal fails: %s)",

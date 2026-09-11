@@ -1,4 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  SystemAgentSetupActivateStartParams,
+  WizardNextParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,6 +11,7 @@ import type { CallGatewayCliOptions } from "../gateway/call.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { WizardSession } from "../wizard/session.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
 
@@ -152,6 +158,104 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
+  it.each(["accept", "decline", "cancel"] as const)(
+    "relays saved replacement confirmation through the Gateway wizard: %s",
+    async (choice) => {
+      let session: WizardSession | undefined;
+      let sessionId: string | undefined;
+      let activeKey = "working-key";
+      const savedKey = "replacement-key";
+      const confirmation = "Connection verified. Activate this saved sign-in?";
+      const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
+        if (options.method === "openclaw.setup.activate.start") {
+          const input = options.params as SystemAgentSetupActivateStartParams;
+          sessionId = input.sessionId;
+          expect(input.kind).toBe("saved-auth:openai:setup-replacement");
+          session = new WizardSession(async (prompter, _signal, runnerSession) => {
+            await prompter.note("Connection verified.");
+            const accepted = await prompter.confirm({ message: confirmation, initialValue: false });
+            if (!accepted) {
+              runnerSession.setActivationRejection({
+                disposition: "rejected-before-promotion",
+                status: "unavailable",
+              });
+              throw new Error("Activation declined. Your current connection is unchanged.");
+            }
+            activeKey = savedKey;
+            runnerSession.setModelActivation({ modelRef: "openai/gpt-5.5" });
+          });
+          return { sessionId, done: false, status: "running" };
+        }
+        if (options.method === "wizard.next") {
+          const input = options.params as WizardNextParams;
+          expect(input.sessionId).toBe(sessionId);
+          const running = expectDefined(session, "activation session");
+          if (input.answer) {
+            await running.answer(input.answer.stepId, input.answer.value);
+          }
+          const result = await running.next();
+          if (result.done) {
+            await running.whenSettled();
+          }
+          return result;
+        }
+        if (options.method === "wizard.cancel") {
+          expect(options.params).toEqual({ sessionId, closeInput: true });
+          const running = expectDefined(session, "activation session");
+          running.close(new WizardCancelledError("cancelled"));
+          await running.whenSettled();
+          return { status: running.getStatus() };
+        }
+        if (options.method === "openclaw.setup.verify") {
+          expect(activeKey).toBe(savedKey);
+          return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };
+        }
+        throw new Error(`unexpected Gateway method ${options.method}`);
+      });
+      const prompter = createWizardPrompter({
+        confirm: vi.fn(async () => {
+          if (choice === "cancel") {
+            throw new WizardCancelledError("cancelled");
+          }
+          return choice === "accept";
+        }),
+      });
+      const runGuidedOnboarding: RunGuidedOnboarding = async (_opts, runtime, deps) => {
+        const activate = expectDefined(deps?.activate, "remote activation adapter");
+        const result = await activate({
+          kind: "saved-auth:openai:setup-replacement",
+          modelRef: "openai/gpt-5.5",
+          surface: "cli",
+          runtime,
+          prompter,
+        });
+        expect(result).toMatchObject(
+          choice === "accept"
+            ? { ok: true, modelRef: "openai/gpt-5.5" }
+            : { ok: false, status: "unavailable" },
+        );
+      };
+      const onboarding = runRemoteGatewayInferenceOnboarding(
+        makeTarget(makeLocalConfig(), { token: "selected-token" }),
+        makeRuntime(),
+        { callGateway: asGatewayCall(callGatewayMock), runGuidedOnboarding },
+      );
+      if (choice === "cancel") {
+        await expect(onboarding).rejects.toThrow("cancelled");
+      } else {
+        await onboarding;
+      }
+      expect(prompter.confirm).toHaveBeenCalledWith({ message: confirmation, initialValue: false });
+      expect(activeKey).toBe(choice === "accept" ? savedKey : "working-key");
+      expect(
+        callGatewayMock.mock.calls.filter(
+          ([options]) => options.method === "openclaw.setup.verify",
+        ),
+      ).toHaveLength(choice === "accept" ? 1 : 0);
+      expect(expectDefined(session, "activation session").isSettled()).toBe(true);
+    },
+  );
+
   it.each([
     { label: "token", auth: { token: "selected-token" }, secret: "selected-token" },
     {
@@ -179,19 +283,26 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           expect(options.timeoutMs).toBe(40_000);
           return detectResult();
         }
-        if (options.method === "openclaw.setup.activate") {
+        if (options.method === "openclaw.setup.activate.start") {
           expect(options.timeoutMs).toBe(150_000);
           expect(options.params).toEqual({
+            sessionId: expect.any(String),
             kind: "claude-cli",
             modelRef: "claude-cli/opus",
             workspace: "/gateway/workspace",
           });
+          return {
+            sessionId: (options.params as { sessionId: string }).sessionId,
+            done: false,
+            status: "running",
+          };
+        }
+        if (options.method === "wizard.next") {
           remoteConfig.modelRef = "claude-cli/opus";
           return {
-            ok: true,
-            modelRef: remoteConfig.modelRef,
-            latencyMs: 250,
-            lines: ["Default model: claude-cli/opus"],
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: remoteConfig.modelRef },
           };
         }
         if (options.method === "openclaw.setup.verify") {
@@ -246,7 +357,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
 
       expect(order).toEqual([
         "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
+        "wizard.next",
         "openclaw.setup.verify",
         "openclaw.chat",
         "tui",
@@ -291,13 +403,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 250,
-          lines: ["Default model: openai/gpt-5.5"],
-          gatewayRestartRequired: true,
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          done: false,
+          status: "running",
+        };
+      }
+      if (options.method === "wizard.next") {
+        return {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "openai/gpt-5.5", gatewayRestartRequired: true },
         };
       }
       if (options.method === "openclaw.setup.verify" && verifyAttempts++ === 0) {
@@ -334,7 +451,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
 
     expect(methods).toEqual([
       "openclaw.setup.detect",
-      "openclaw.setup.activate",
+      "openclaw.setup.activate.start",
+      "wizard.next",
       "openclaw.setup.verify",
       "openclaw.setup.verify",
     ]);
@@ -353,7 +471,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     let verificationConnections = 0;
     let bootId: string | undefined = "old-boot";
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      if (options.method === "openclaw.setup.activate" && mode === "missing activation identity") {
+      if (
+        options.method === "openclaw.setup.activate.start" &&
+        mode === "missing activation identity"
+      ) {
         bootId = undefined;
       }
       if (options.method === "openclaw.setup.verify") {
@@ -369,13 +490,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Saved inference settings"],
-          gatewayRestartRequired: true,
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          done: false,
+          status: "running",
+        };
+      }
+      if (options.method === "wizard.next") {
+        return {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "claude-cli/opus", gatewayRestartRequired: true },
         };
       }
       if (options.method === "openclaw.setup.verify") {
@@ -405,14 +531,19 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           : "Inference settings were saved, but the Gateway did not provide a boot identity",
       );
       expect(verifiedBoots).toEqual([]);
-      expect(sent).toEqual(["openclaw.setup.detect", "openclaw.setup.activate"]);
+      expect(sent).toEqual([
+        "openclaw.setup.detect",
+        "openclaw.setup.activate.start",
+        "wizard.next",
+      ]);
       return;
     }
     await onboarding;
     expect(verifiedBoots).toEqual(["new-boot"]);
     expect(sent).toEqual([
       "openclaw.setup.detect",
-      "openclaw.setup.activate",
+      "openclaw.setup.activate.start",
+      "wizard.next",
       "openclaw.setup.verify",
       "openclaw.chat",
     ]);
@@ -428,13 +559,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 250,
-          lines: ["Default model: openai/gpt-5.5"],
-          gatewayRestartRequired: true,
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          done: false,
+          status: "running",
+        };
+      }
+      if (options.method === "wizard.next") {
+        return {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "openai/gpt-5.5", gatewayRestartRequired: true },
         };
       }
       if (options.method === "openclaw.setup.verify") {
@@ -477,12 +613,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          done: false,
+          status: "running",
+        };
+      }
+      if (options.method === "wizard.next") {
+        return {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "claude-cli/opus" },
         };
       }
       if (options.method === "openclaw.setup.verify") {
@@ -540,12 +682,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "claude-cli/opus",
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          done: false,
+          status: "running",
+        };
+      }
+      if (options.method === "wizard.next") {
+        return {
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "claude-cli/opus" },
         };
       }
       if (options.method === "openclaw.setup.verify") {
@@ -570,7 +718,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
 
     expect(methods).toEqual([
       "openclaw.setup.detect",
-      "openclaw.setup.activate",
+      "openclaw.setup.activate.start",
+      "wizard.next",
       "openclaw.setup.verify",
     ]);
     expect(runTui).not.toHaveBeenCalled();
@@ -584,8 +733,12 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "openclaw.setup.activate") {
+      if (options.method === "openclaw.setup.activate.start") {
         throw new Error("gateway connection closed after request");
+      }
+      if (options.method === "wizard.cancel") {
+        expect(options.params).toEqual({ sessionId: expect.any(String), closeInput: true });
+        return { status: "cancelled" };
       }
       throw new Error(`unexpected Gateway method ${options.method}`);
     });
@@ -604,7 +757,11 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       ),
     ).rejects.toThrow("gateway connection closed after request");
 
-    expect(methods).toEqual(["openclaw.setup.detect", "openclaw.setup.activate"]);
+    expect(methods).toEqual([
+      "openclaw.setup.detect",
+      "openclaw.setup.activate.start",
+      "wizard.cancel",
+    ]);
     expect(runTui).not.toHaveBeenCalled();
   });
 
@@ -624,12 +781,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         if (options.method === "openclaw.setup.detect") {
           return detectResult();
         }
-        if (options.method === "openclaw.setup.activate") {
+        if (options.method === "openclaw.setup.activate.start") {
           return {
-            ok: true,
-            modelRef: "claude-cli/opus",
-            latencyMs: 250,
-            lines: ["Default model: claude-cli/opus"],
+            sessionId: (options.params as { sessionId: string }).sessionId,
+            done: false,
+            status: "running",
+          };
+        }
+        if (options.method === "wizard.next") {
+          return {
+            done: true,
+            status: "done",
+            modelActivation: { modelRef: "claude-cli/opus" },
           };
         }
         if (options.method === "openclaw.setup.verify") {
@@ -676,7 +839,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
 
       expect(methods).toEqual([
         "openclaw.setup.detect",
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
+        "wizard.next",
         "openclaw.setup.verify",
         "openclaw.chat",
         "openclaw.chat",

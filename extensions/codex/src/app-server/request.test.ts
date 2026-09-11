@@ -378,6 +378,29 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("does not let an expired attempt abort its replacement", async () => {
+    const firstClient = {
+      request: vi.fn(async () => {
+        throw new sharedClientMocks.CodexAppServerStartSelectionChangedError();
+      }),
+    };
+    const secondClient = { request: vi.fn(async () => ({ ok: true })) };
+    sharedClientMocks.getSharedCodexAppServerClient
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient);
+    let abortPrevious: ((reason: Error) => void) | undefined;
+
+    const result = await withCodexAppServerJsonClient({}, async (request, _client, scope) => {
+      abortPrevious?.(new Error("old account changed"));
+      abortPrevious = scope.abort;
+      return await request({ method: "account/read" });
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(secondClient.request).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one deadline across a selection retry and suppresses a late request", async () => {
     vi.useFakeTimers();
     const firstRequest = vi.fn(
@@ -659,5 +682,21 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
     expect(request).toHaveBeenNthCalledWith(2, "account/read", {}, expectDeadlineOptions());
     expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
+  });
+
+  it("guards isolated usage startup before login when request authority is revoked", async () => {
+    const login = vi.fn();
+    const assertCurrent = () => {
+      throw new Error("Account removed");
+    };
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(async (options) => {
+      options.assertCurrent?.();
+      login();
+      throw new Error("unguarded login");
+    });
+    await expect(readCodexAppServerUsage({ timeoutMs: 1_000, assertCurrent })).rejects.toThrow(
+      "Account removed",
+    );
+    expect(login).not.toHaveBeenCalled();
   });
 });

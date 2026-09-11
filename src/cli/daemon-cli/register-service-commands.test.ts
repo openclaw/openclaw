@@ -46,6 +46,7 @@ function createGatewayParentLikeCommand(program?: Command) {
   gateway.option("--token <token>", "Gateway token");
   gateway.option("--password <password>", "Gateway password");
   gateway.option("--force", "Gateway run --force", false);
+  gateway.option("--allow-unconfigured", "Gateway run without local mode", false);
   addGatewayServiceCommands(gateway);
   return gateway;
 }
@@ -89,6 +90,22 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["install", "restart", "stop"])(
+    "probes %s update custody without invoking the action",
+    async (action) => {
+      const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      await createGatewayParentLikeCommand().parseAsync([action, "--update-executor", "check"], {
+        from: "user",
+      });
+      expect(output).toHaveBeenCalledWith(
+        JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
+      );
+      expect(runDaemonInstall).not.toHaveBeenCalled();
+      expect(runDaemonRestart).not.toHaveBeenCalled();
+      expect(runDaemonStop).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "forwards install option collisions from parent gateway command",
@@ -99,6 +116,31 @@ describe("addGatewayServiceCommands", () => {
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
         expect(opts.runtime).toBe("bun");
+      },
+    },
+    {
+      name: "preserves an omitted service start-mode override during updater reinstall",
+      argv: ["install", "--force", "--json"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+          force: true,
+          json: true,
+          allowUnconfigured: undefined,
+        });
+      },
+    },
+    {
+      name: "forwards an explicit service start-mode override",
+      argv: ["install", "--allow-unconfigured"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
+      },
+    },
+    {
+      name: "inherits the parent service start-mode override",
+      argv: ["--allow-unconfigured", "install"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall).allowUnconfigured).toBe(true);
       },
     },
     {

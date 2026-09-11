@@ -335,6 +335,10 @@ export function registerDirectoryCli(program: Command) {
     .action((opts) =>
       runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
+        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
+        if (!groupId) {
+          throw new Error("Missing --group-id");
+        }
         const resolved = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
@@ -346,10 +350,6 @@ export function registerDirectoryCli(program: Command) {
         const fn = plugin.directory?.listGroupMembers;
         if (!fn) {
           throw new Error(`Channel ${channelId} does not support group members listing`);
-        }
-        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
-        if (!groupId) {
-          throw new Error("Missing --group-id");
         }
         const result = await fn({
           cfg,

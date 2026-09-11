@@ -19,6 +19,7 @@ type AuditCliCase = {
   anchors?: boolean;
   diagnostics?: string[];
   files?: Record<string, string>;
+  navigation?: string[];
   redirects?: Array<{ source: string; destination: string }>;
 };
 
@@ -200,6 +201,28 @@ describe("docs-link-audit", () => {
       broken: 1,
     },
     { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+    ...[false, true].map((anchors) => ({
+      name: `fenced raw HTML boundaries (anchors=${anchors})`,
+      anchors,
+      source: [
+        "```html",
+        "",
+        "<code>",
+        "```",
+        "",
+        '<ParamField path="live" type="string">',
+        "[Visible](/missing-page)",
+        "</ParamField>",
+        "",
+        "```html",
+        "</code>",
+        "```",
+        "",
+        "[valid](/page)",
+      ],
+      broken: 1,
+      diagnostics: ["page.mdx:7 :: /missing-page :: route/file not found"],
+    })),
     {
       name: "repeated occurrences beside protected literals",
       source: [
@@ -313,6 +336,26 @@ describe("docs-link-audit", () => {
         ":: /missing-page :: route/file not found",
       ],
     })),
+    ...[false, true].map((anchors) => ({
+      name: `unpublished permalink routes (anchors=${anchors})`,
+      anchors,
+      source: [
+        "---",
+        "permalink: /unpublished",
+        "---",
+        "[unpublished](/unpublished)",
+        "[fragment](/unpublished#connection)",
+        "[valid](/page#connection)",
+        '<a id="connection" />',
+      ],
+      navigation: ["unpublished"],
+      broken: 3,
+      diagnostics: [
+        "page.mdx:4 :: /unpublished :: route/file not found",
+        "page.mdx:5 :: /unpublished#connection :: route/file not found",
+        "docs.json:unknown :: unpublished :: navigation page not published",
+      ],
+    })),
     {
       name: "shared emitted fragments",
       anchors: true,
@@ -352,7 +395,7 @@ describe("docs-link-audit", () => {
     },
   ])(
     "audits real CLI links after $name",
-    ({ source, broken, anchors = false, diagnostics, files = {}, redirects }) => {
+    ({ source, broken, anchors = false, diagnostics, files = {}, navigation = [], redirects }) => {
       const tempDirs: string[] = [];
       const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
       const docsRoot = path.join(fixtureRoot, "docs");
@@ -364,7 +407,7 @@ describe("docs-link-audit", () => {
       fs.writeFileSync(
         path.join(docsRoot, "docs.json"),
         JSON.stringify({
-          navigation: [],
+          navigation: [{ pages: navigation }],
           redirects:
             redirects ??
             (anchors && !diagnostics
@@ -409,7 +452,7 @@ describe("docs-link-audit", () => {
         );
         expect(result.error).toBeUndefined();
         expect(result.stderr).toBe("");
-        expect(result.status).toBe(broken ? 1 : 0);
+        expect(result.status, result.stdout).toBe(broken ? 1 : 0);
         if (!anchors) {
           expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
         }

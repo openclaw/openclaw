@@ -8,6 +8,7 @@ export type ChatMetadataSessionEntry = Partial<
     SessionEntry,
     | "sessionId"
     | "agentHarnessId"
+    | "agentRuntimeOverride"
     | "modelSelectionLocked"
     | "pluginOwnerId"
     | "providerOverride"

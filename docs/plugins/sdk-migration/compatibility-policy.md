@@ -94,6 +94,29 @@ result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;
 callers must carry prepared rows forward rather than reconstructing them from IDs.
 
+Use `getModelsRuntimeChoices(data, provider, model)` from the same SDK subpath
+for a selected model. A nonempty array contains that model's eligible runtime
+choices. An empty array means the current observation permits no runtime for
+that model. `undefined` means the choice is unknown: the model has no observation,
+the caller supplied the older result shape, or `data.isCurrent()` reports that
+the prepared owner has retired. Do not replace either result with a provider
+default or a runtime inferred from its name. Refresh retired data through its
+owning catalog before selecting again.
+
+Omitting `model` returns the provider's browsing union. That union does not
+authorize a runtime for every model in the provider. Pass `sessionEntry` to the
+builder when browsing for a session so its profile preference, explicit profile
+pin, and runtime override participate in the choices. Keep the prepared physical
+row and revalidate the selection through the normal command owner; a displayed
+choice is not authority to use a retired generation or bypass a session lock.
+
+Provider plugins can publish native login presence through `prepareSyntheticAuth`
+with `nativeAuth: { runtime, mode }`, where `mode` is `api-key`, `oauth`, or
+`token`. These facts apply only to the named runtime in the prepared generation.
+They do not supply a provider bearer credential or authorize importing one into
+an OpenClaw profile. The optional `pluginRoot` context comes from the plugin
+loader; use it to resolve the declared dependency from that plugin's installation.
+
 ### Memory read missing results
 
 Memory managers now return `status: "ok"` for successful excerpts and
@@ -189,20 +212,22 @@ diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
 The dated compatibility registry also tracks shipped annotations that do not
-belong to one legacy subpath. These records use 2026-10-01 as the earliest
-review date; removal still requires the reader condition in the final column.
+belong to one legacy subpath. Unless a later date is listed below, these records
+use 2026-10-01 as the earliest review date; removal still requires the reader
+condition in the final column.
 
-| Compatibility code                        | Replacement                                                                                    | Removal condition                                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-sdk-broad-runtime-barrels`        | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                |
-| `plugin-sdk-provider-owned-helper-shims`  | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins. |
-| `message-presentation-legacy-bridges`     | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.   |
-| `plugin-sdk-focused-compat-aliases`       | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                               |
-| `agent-harness-terminal-result-aliases`   | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.           |
-| `official-plugin-export-aliases`          | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                     |
-| `memory-host-compatibility-aliases`       | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.              |
-| `plugin-runtime-api-compat-aliases`       | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                     |
-| `plugin-provider-manifest-compat-aliases` | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                            |
+| Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk-broad-runtime-barrels`                | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                                        |
+| `plugin-sdk-provider-owned-helper-shims`          | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins.                         |
+| `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
+| `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                                                       |
+| `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
+| `official-plugin-export-aliases`                  | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                                             |
+| `memory-host-compatibility-aliases`               | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.                                      |
+| `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                                             |
+| `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
+| `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                                                     | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
 
 ### Published channel setup compatibility
 

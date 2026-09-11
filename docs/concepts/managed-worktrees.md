@@ -90,13 +90,17 @@ Remote sessions started from a Gateway folder retain a durable managed-worktree 
 
 The Control UI offers **Worktree** only after confirming a usable Git checkout with at least one commit, or when a selected remote Git repository is awaiting cloning. Plain folders and newly initialized repositories without commits can run directly on the Gateway. A failed Git check also leaves direct execution available if the folder is accessible; a `.git` entry or saved project alone does not enable isolation. If you already selected **Worktree** and a later check fails, that selection stays visible and starting is blocked. Clear **Worktree** to run directly, or reselect the folder to check it again.
 
+The base-ref field suggests up to 100 local and 100 remote refs, plus the default and current branches. You can enter any branch or commit even when it is not suggested. If branch suggestions cannot be loaded, the Control UI explains that you can enter a ref manually; a verified Git checkout remains available for worktrees. The selected ref must still resolve to a commit before session creation.
+
 Group **New session defaults** checks the agent workspace the same way as a custom folder. If verification fails, retry before saving the group defaults. A remembered cloud destination cannot block a new local draft in a plain folder; a transient Git-check failure leaves the saved destination intact for the next visit.
 
-The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at `operator.write`; selecting an arbitrary host folder still requires `operator.admin`.
+The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at [`operator.write`](/gateway/operator-scopes); selecting an arbitrary host folder still requires `operator.admin`.
 
 Agents can also call `suggest_task` when they discover confirmed follow-up work outside the current task. The Control UI and Gateway-backed TUI offer **Start in a new session**. This starts the task directly in the suggested folder without creating a worktree or requiring Git. The new session is instructed to explain the need and ask the user before creating or switching to a worktree later. Dismissing a suggestion starts nothing. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
 
-Both clients send `taskSuggestions.accept` with `mode: "local"`. Existing RPC clients retain the explicit `worktree`, `local`, `cloud`, and `session` modes. Omitted mode still means `worktree` for callers that used the original worktree action; the current Control UI and TUI never omit it. These compatibility modes are not launch choices in the suggestion UI.
+In the Control UI, the arrow beside **Start in a new session** offers two additional actions: **Start in a new worktree** creates an isolated session from the suggested Git checkout, and **Start in this session** sends the task to the current conversation. If the current session is running, the task follows its normal steering behavior. Worktree creation requires a usable Git checkout; a failed start displays an error and keeps the suggestion available to retry.
+
+The primary action and the Gateway-backed TUI send `taskSuggestions.accept` with `mode: "local"`. The Control UI menu sends explicit `worktree` or `session` modes for those choices. RPC clients also retain `cloud` mode. Omitted mode still means `worktree` for callers that used the original worktree action; the Control UI and TUI never omit it.
 
 OpenClaw exposes these tools only to operator sessions with an actionable Gateway UI. Channel sessions and local/embedded TUI sessions do not receive them, because those surfaces have no portable typed task-action contract.
 
@@ -112,7 +116,9 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch.
 
-Accepted child sessions retain their saved repository choice across parent archive, replacement, or worktree changes. A retry must still be authorized for the current child session and uses the current caller's setup permissions.
+For a same-agent `sessions_spawn` with `worktree: true`, omitting `cwd` uses the parent's live managed repository or its directly selected registered project. The child gets its own managed worktree. An explicit source selection takes precedence; other spawns use the target agent workspace. A parent working directory alone does not authorize inheritance outside that workspace.
+
+The parent session and its managed-worktree or registered-project binding must remain current until the child is accepted. Accepted child sessions retain their saved repository choice across parent archive, replacement, or worktree changes. A retry must still be authorized for the current child session and uses the current caller's setup permissions.
 
 ## Troubleshoot creation
 

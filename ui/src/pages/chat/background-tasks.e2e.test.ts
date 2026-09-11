@@ -35,17 +35,17 @@ function withoutElapsedLabels(text: string | null): string {
   return (text ?? "").replaceAll(/\d+(?:\.\d+)?\s*(?:ms|[smhd])\b/g, "<elapsed>");
 }
 
-function requestSessionKey(request: MockGatewayRequest): string | undefined {
+function requestTaskId(request: MockGatewayRequest): string | undefined {
   const { params } = request;
   if (
     typeof params !== "object" ||
     params === null ||
-    !("sessionKey" in params) ||
-    typeof params.sessionKey !== "string"
+    !("taskId" in params) ||
+    typeof params.taskId !== "string"
   ) {
     return undefined;
   }
-  return params.sessionKey;
+  return params.taskId;
 }
 
 const runningSubagent = {
@@ -304,6 +304,11 @@ suite.define(() => {
         // round-trip below; live relative ages ("11s") tick across second
         // boundaries on slow runners. Fix Date while keeping timers running.
         await page.clock.setFixedTime(baseTime);
+        const nativeSubagent = {
+          ...runningSubagent,
+          childSessionKey: undefined,
+          hasTranscript: true,
+        };
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
@@ -313,25 +318,62 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "chat.history": {
+            "tasks.history": {
               cases: [
                 {
-                  match: { sessionKey: runningSubagent.childSessionKey },
+                  match: { taskId: nativeSubagent.id, cursor: "task-earlier" },
+                  response: {
+                    messages: [
+                      {
+                        role: "user",
+                        messageId: "task-prompt",
+                        content: "Inspect the model routing boundary.",
+                        timestamp: baseTime - 3_000,
+                      },
+                      {
+                        role: "assistant",
+                        messageId: "task-check",
+                        content: [
+                          {
+                            type: "toolCall",
+                            id: "routing-check",
+                            name: "exec",
+                            arguments: {
+                              command: "pnpm test routing\npnpm tsgo:ui",
+                              title: "Check model routing",
+                            },
+                          },
+                        ],
+                        timestamp: baseTime - 2_000,
+                      },
+                      {
+                        role: "toolResult",
+                        messageId: "task-check-result",
+                        toolCallId: "routing-check",
+                        toolName: "exec",
+                        content: [{ type: "text", text: "Routing boundary checks passed." }],
+                        timestamp: baseTime - 1_000,
+                      },
+                    ],
+                  },
+                },
+                {
+                  match: { taskId: runningSubagent.id },
                   response: {
                     messages: [
                       {
                         content: [{ type: "text", text: taskReviewMarkdown }],
                         role: "assistant",
+                        messageId: "task-review",
                         timestamp: Date.now(),
                       },
                     ],
-                    sessionId: "subagent-transcript",
-                    thinkingLevel: null,
+                    nextCursor: "task-earlier",
                   },
                 },
               ],
             },
-            "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
+            "tasks.list": { tasks: [nativeSubagent, queuedCron, finishedCli] },
             "tasks.cancel": {
               found: true,
               cancelled: true,
@@ -397,7 +439,12 @@ suite.define(() => {
         await detailPanel.waitFor({ state: "visible" });
         await detailPanel.getByRole("heading", { name: "Task Review layout proof" }).waitFor();
         expect(await detailPanel.textContent()).toContain("Map model routing code");
-        expect(await detailPanel.textContent()).toContain("Subagent");
+        expect(await detailPanel.locator(".chat-task-detail__meta").textContent()).toContain(
+          "12 tool calls",
+        );
+        expect(await detailPanel.locator(".chat-task-feed__now").textContent()).toContain(
+          "Reading provider catalogs",
+        );
         expect(await openRow.getAttribute("aria-current")).toBe("true");
         expect(
           await openRow.evaluate((element) =>
@@ -406,17 +453,17 @@ suite.define(() => {
         ).toBe(true);
         await expect
           .poll(async () =>
-            (await gateway.getRequests("chat.history")).some(
-              (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
+            (await gateway.getRequests("tasks.history")).some(
+              (request) => requestTaskId(request) === runningSubagent.id,
             ),
           )
           .toBe(true);
-        const transcriptRequest = (await gateway.getRequests("chat.history")).find(
-          (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
+        const transcriptRequest = (await gateway.getRequests("tasks.history")).find(
+          (request) => requestTaskId(request) === runningSubagent.id,
         );
         expect(transcriptRequest?.params).toEqual({
-          sessionKey: runningSubagent.childSessionKey,
-          limit: 800,
+          taskId: runningSubagent.id,
+          limit: 100,
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
@@ -439,6 +486,39 @@ suite.define(() => {
           path.join(railFlowDir, "02-task-detail-expanded.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [detailPanel]),
         );
+        await detailPanel.getByRole("button", { name: "Show earlier", exact: true }).click();
+        await detailPanel
+          .getByText("Inspect the model routing boundary.", { exact: true })
+          .waitFor();
+        const toolRow = detailPanel.locator(".chat-task-feed__tool-group", {
+          hasText: "pnpm test routing",
+        });
+        await toolRow.waitFor();
+        const toolSummary = toolRow.locator("summary");
+        expect((await toolSummary.textContent())?.trim()).toBe("pnpm test routing");
+        const toolBody = toolRow.locator(".chat-task-feed__calls");
+        expect(await toolBody.isVisible()).toBe(false);
+        await toolSummary.click();
+        await toolBody.waitFor();
+        expect(await toolBody.locator("code").textContent()).toBe(
+          "pnpm test routing\npnpm tsgo:ui",
+        );
+        expect(await detailPanel.textContent()).not.toContain("Routing boundary checks passed.");
+        expect(
+          await detailPanel.getByRole("button", { name: "Show earlier", exact: true }).count(),
+        ).toBe(0);
+        expect((await gateway.getRequests("tasks.history")).at(-1)?.params).toEqual({
+          taskId: nativeSubagent.id,
+          limit: 100,
+          cursor: "task-earlier",
+        });
+        await writeFile(
+          path.join(railFlowDir, "02-native-transcript-with-expanded-command.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            detailPanel,
+            toolBody,
+          ]),
+        );
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect
           .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
@@ -448,13 +528,16 @@ suite.define(() => {
         await gateway.emitGatewayEvent("task", {
           action: "upserted",
           task: {
-            ...runningSubagent,
+            ...nativeSubagent,
             status: "completed",
             updatedAt: baseTime + 1_000,
             terminalSummary: "Routing map complete",
           },
         });
-        await detailPanel.getByText("Completed").waitFor({ state: "visible" });
+        await detailPanel
+          .locator(".chat-tasks-rail__task-status")
+          .filter({ hasText: "Completed" })
+          .waitFor({ state: "visible" });
         await page
           .locator(".side-panel__header .tabstrip wa-tab")
           .filter({ hasText: "Tasks" })
@@ -530,10 +613,10 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "chat.history": {
+            "tasks.history": {
               cases: [
                 {
-                  match: { sessionKey: "agent:main:subagent:parallel-one" },
+                  match: { taskId: "task-parallel-one" },
                   response: {
                     messages: [
                       {
@@ -544,8 +627,6 @@ suite.define(() => {
                         timestamp: Date.now(),
                       },
                     ],
-                    sessionId: "parallel-one-child",
-                    thinkingLevel: null,
                   },
                 },
               ],
@@ -604,17 +685,17 @@ suite.define(() => {
         expect(await detailPanel.locator(".chat-diffstat__del").textContent()).toBe("-3");
         await expect
           .poll(async () =>
-            (await gateway.getRequests("chat.history")).some(
-              (request) => requestSessionKey(request) === first.childSessionKey,
+            (await gateway.getRequests("tasks.history")).some(
+              (request) => requestTaskId(request) === first.id,
             ),
           )
           .toBe(true);
-        const childHistoryRequest = (await gateway.getRequests("chat.history")).find(
-          (request) => requestSessionKey(request) === first.childSessionKey,
+        const childHistoryRequest = (await gateway.getRequests("tasks.history")).find(
+          (request) => requestTaskId(request) === first.id,
         );
         expect(childHistoryRequest?.params).toEqual({
-          sessionKey: first.childSessionKey,
-          limit: 800,
+          taskId: first.id,
+          limit: 100,
         });
 
         await gateway.emitGatewayEvent("task", {

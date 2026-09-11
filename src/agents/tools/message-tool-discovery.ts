@@ -330,6 +330,8 @@ export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actio
   return buildMessageToolSchemaFromActions(
     actions.length > 0 ? actions : ["send"],
     {
+      includeClawHub:
+        normalizeMessageChannel(params.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL,
       includePresentation,
       includeDeliveryPin,
       includeBestEffort,

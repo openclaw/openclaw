@@ -211,6 +211,7 @@ export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
   finalMessage = false,
+  preparedText?: string,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
@@ -218,7 +219,10 @@ export function emitAssistantCommentaryStreamData(
   const commentaryMessage = isResponsesCommentary
     ? scopeAssistantMessageToStreamBlock(message, index, itemId)
     : message;
-  const text = extractAssistantCommentaryText(commentaryMessage);
+  const text =
+    !isResponsesCommentary && preparedText !== undefined
+      ? preparedText
+      : extractAssistantCommentaryText(commentaryMessage);
   if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
     // Generic commentary must carry the identity the phase tagger generated so
     // the Control UI can key the live row to the persisted fallback row; without
@@ -358,15 +362,28 @@ export function resolveStreamingReply(params: {
   visibleDelta: string;
   appendDelta: string | null;
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
-}): { text: string; delta: string; replace: boolean; hasText: boolean } {
+}): {
+  text: string;
+  delta: string;
+  replace: boolean;
+  hasText: boolean;
+  replyDirectives: ReplyDirectiveParseResult | null;
+} {
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
     const text = params.previousCleaned;
-    return { text, delta: "", replace: false, hasText: Boolean(text.trim()) };
+    return {
+      text,
+      delta: "",
+      replace: false,
+      hasText: Boolean(text.trim()),
+      replyDirectives: null,
+    };
   }
 
   let text: string | undefined;
   let delta: string | undefined;
   let isAppend = false;
+  let replyDirectives = params.parsedStreamDirectives;
   if (
     params.evtType !== "text_end" &&
     params.parsedStreamDirectives &&
@@ -383,9 +400,22 @@ export function resolveStreamingReply(params: {
     isAppend = true;
   }
 
-  text ??= parseReplyDirectives(
-    params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
-  ).text;
+  if (text === undefined) {
+    const parsed = parseReplyDirectives(
+      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
+    );
+    text = parsed.text;
+    if (replyDirectives) {
+      // Reply targeting needs the same code context as visible text. Audio stays
+      // scoped to its streaming chunk rather than replaying earlier voice tags.
+      replyDirectives = {
+        ...replyDirectives,
+        replyToId: parsed.replyToId,
+        replyToCurrent: parsed.replyToCurrent,
+        replyToTag: parsed.replyToTag,
+      };
+    }
+  }
   const replace = Boolean(
     !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
   );
@@ -394,5 +424,6 @@ export function resolveStreamingReply(params: {
     delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
     replace,
     hasText: Boolean(isAppend ? text : text.trim()),
+    replyDirectives,
   };
 }

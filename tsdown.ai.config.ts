@@ -38,6 +38,7 @@ const config = {
   format: "esm",
   outDir: "packages/ai/dist",
   platform: "node",
+  target: "node22",
   deps: {
     neverBundle(id) {
       return externalDependencies.some(

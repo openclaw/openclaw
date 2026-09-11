@@ -441,12 +441,15 @@ describe("diagnostic-events", () => {
       const skillFile = "/workspace/skills/daily-brief/SKILL.md";
       const publicEvents: DiagnosticEventPayload[] = [];
       const sharedEvents: DiagnosticEventPayload[] = [];
+      const metadataOnly = vi.fn();
+      const readSkillFile = vi.fn(() => skillFile);
       const trustedEvents: Array<{
         event: DiagnosticEventPayload;
         privateData: DiagnosticEventPrivateData;
       }> = [];
       onDiagnosticEvent((event) => publicEvents.push(event));
       onInternalDiagnosticEvent((event) => sharedEvents.push(event));
+      onTrustedInternalDiagnosticEvent(metadataOnly, undefined, { includePrivateData: false });
       onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
         trustedEvents.push({ event, privateData });
       });
@@ -459,7 +462,13 @@ describe("diagnostic-events", () => {
           skillSource: "workspace",
           activation: "read",
         },
-        { skillUsage: { skillFile } },
+        {
+          skillUsage: {
+            get skillFile() {
+              return readSkillFile();
+            },
+          },
+        },
       );
       await waitForDiagnosticEventsDrained();
 
@@ -469,6 +478,13 @@ describe("diagnostic-events", () => {
       expect(trustedEvents).toHaveLength(1);
       expect(trustedEvents[0]?.event).not.toHaveProperty("skillFile");
       expect(trustedEvents[0]?.privateData.skillUsage?.skillFile).toBe(skillFile);
+      expect(readSkillFile).toHaveBeenCalledOnce();
+      expect(metadataOnly).toHaveBeenCalledExactlyOnceWith(
+        trustedEvents[0]?.event,
+        expect.objectContaining({ trusted: true }),
+        {},
+      );
+      expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[2])).toBe(true);
     },
   );
 

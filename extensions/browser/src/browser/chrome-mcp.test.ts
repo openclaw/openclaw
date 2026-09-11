@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -766,14 +767,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("serializes compound operations on one MCP session", async () => {
-    let releaseFirst!: () => void;
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstStarted, resolve: markFirstStarted } = createDeferred<void>();
+    const { promise: firstGate, resolve: releaseFirst } = createDeferred<void>();
     let listCalls = 0;
     const session = createPageSession({
       pid: 132,
@@ -805,14 +800,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("fails queued work closed after transport loss and reconnects on the next call", async () => {
-    let releaseFirst!: () => void;
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstStarted, resolve: markFirstStarted } = createDeferred<void>();
+    const { promise: firstGate, resolve: releaseFirst } = createDeferred<void>();
     let factoryCalls = 0;
     let firstSession: ChromeMcpSession | undefined;
     setChromeMcpSessionFactoryForTest(async () => {
@@ -857,11 +846,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("stops a session without waiting for a hung active operation", async () => {
-    let markListStarted!: () => void;
     let rejectList!: (reason: Error) => void;
-    const listStarted = new Promise<void>((resolve) => {
-      markListStarted = resolve;
-    });
+    const { promise: listStarted, resolve: markListStarted } = createDeferred<void>();
     const pendingList = new Promise<never>((_resolve, reject) => {
       rejectList = reject;
     });
@@ -892,14 +878,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("does not let work queued before stop recreate the session", async () => {
-    let markListStarted!: () => void;
-    let releaseList!: () => void;
-    const listStarted = new Promise<void>((resolve) => {
-      markListStarted = resolve;
-    });
-    const listGate = new Promise<void>((resolve) => {
-      releaseList = resolve;
-    });
+    const { promise: listStarted, resolve: markListStarted } = createDeferred<void>();
+    const { promise: listGate, resolve: releaseList } = createDeferred<void>();
     let factoryCalls = 0;
     let listCalls = 0;
     setChromeMcpSessionFactoryForTest(async () => {
@@ -937,22 +917,10 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("fails queued work closed while a transport failure is closing", async () => {
-    let markListStarted!: () => void;
-    let releaseList!: () => void;
-    let markCloseStarted!: () => void;
-    let releaseClose!: () => void;
-    const listStarted = new Promise<void>((resolve) => {
-      markListStarted = resolve;
-    });
-    const listGate = new Promise<void>((resolve) => {
-      releaseList = resolve;
-    });
-    const closeStarted = new Promise<void>((resolve) => {
-      markCloseStarted = resolve;
-    });
-    const closeGate = new Promise<void>((resolve) => {
-      releaseClose = resolve;
-    });
+    const { promise: listStarted, resolve: markListStarted } = createDeferred<void>();
+    const { promise: listGate, resolve: releaseList } = createDeferred<void>();
+    const { promise: closeStarted, resolve: markCloseStarted } = createDeferred<void>();
+    const { promise: closeGate, resolve: releaseClose } = createDeferred<void>();
     let factoryCalls = 0;
     const session = createPageSession({
       pid: 141,
@@ -1001,14 +969,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("cancels queued admission before dispatch on abort or timeout", async () => {
-    let releaseFirst!: () => void;
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstStarted, resolve: markFirstStarted } = createDeferred<void>();
+    const { promise: firstGate, resolve: releaseFirst } = createDeferred<void>();
     let listCalls = 0;
     const session = createPageSession({
       pid: 138,
@@ -2266,10 +2228,7 @@ describe("chrome MCP page parsing", () => {
 
   it("reset waits for an already-detached pending factory and its exact cleanup", async () => {
     let factoryCalls = 0;
-    let releaseFactory!: () => void;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
     const closeMock = vi.fn().mockResolvedValue(undefined);
     setChromeMcpSessionFactoryForTest(async () => {
       factoryCalls += 1;
@@ -2303,10 +2262,7 @@ describe("chrome MCP page parsing", () => {
 
   it("blocks replacement after an aborted pending factory fails exact cleanup", async () => {
     let factoryCalls = 0;
-    let releaseFactory!: () => void;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
     const closeMock = vi
       .fn()
       .mockRejectedValueOnce(new Error("pending cleanup failed"))
@@ -2392,14 +2348,8 @@ describe("chrome MCP page parsing", () => {
 
   it("holds ephemeral probes behind cancelled pending-session cleanup", async () => {
     let factoryCalls = 0;
-    let releaseFactory!: () => void;
-    let releaseClose!: () => void;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
-    const closeGate = new Promise<void>((resolve) => {
-      releaseClose = resolve;
-    });
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
+    const { promise: closeGate, resolve: releaseClose } = createDeferred<void>();
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     setChromeMcpSessionFactoryForTest(async () => {
       factoryCalls += 1;

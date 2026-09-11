@@ -31,6 +31,7 @@ type StreamMessageOptions = Pick<
   | "boardProvider"
   | "agentId"
   | "runActive"
+  | "asyncQuestions"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
@@ -44,6 +45,7 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "pluginToolIcons"
   | "githubRepo"
   | "onOpenWorkspaceFile"
 >;

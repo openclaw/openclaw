@@ -27,13 +27,35 @@ aligned:
 
 ### Validation and activation
 
-If the resolved package version equals the installed version without changing
+If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+`HEAD`, plugin convergence still runs; if plugins remain unchanged, the run finishes `skipped` with reason `already-current`. A same-version
 explicit `--channel` or installation-method change finishes successfully.
-Neither path stops or restarts the Gateway unless the installation method
-changes. Read-only plugin convergence checks can still report repair needs; use
-`openclaw update repair` to apply them.
+Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
+
+Explicit package artifacts, such as tarball paths and URLs, still pass through
+validation and installation when their version matches the installed version.
+A matching version alone does not establish artifact equality.
+
+Updates continue with recorded warnings when disposable validation-copy cleanup,
+retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the
+reported cause, then run the warning's exact cleanup command or
+`openclaw doctor --fix`. Invalid ownership, unsafe state migrations, and a Gateway
+that cannot boot or pass readiness still block completion. See
+[Status and history](/cli/update/status-and-history) to inspect recorded warnings.
+
+The baseline package fingerprint is best effort. If its bounded scan times out,
+the update records a warning and continues with the retained package copy.
+Rollback then verifies the restored directory identity, package version, and
+affected launchers, and records that full fingerprint verification was unavailable.
+A timeout alone does not fail the update or rollback; detected changes to the
+retained copy still refuse restoration.
+
+Interrupting a fresh local update before activation records a failed,
+`interrupted` history entry while its installation owner is still held.
+An interrupted update is not a successful update or a verified rollback.
+Unresolved effects remain visible in the update report. Unsupported pending
+checkpoint records block further mutable update work and remain unchanged.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -43,16 +65,33 @@ boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
 copied; the rehearsal install records point to those copies, and their OpenClaw
-host links target the staged candidate. The live plugin files and host links stay
-unchanged. Channels, cron, automatic updates, and other side services are
-suppressed in this canary.
+host links target the staged candidate. Path aliases that resolve to a running
+package's bundled plugin use the staged bundled plugin with the same ID when
+available, preserving bundled trust. External path installs keep their existing
+classification. The live plugin files and host links stay unchanged. Channels,
+cron, automatic updates, and other side services are suppressed in this canary.
+
+Snapshot preparation budgets time for the SQLite database and journal bytes,
+including copying and verification passes, with a five-minute startup floor.
+It uses the larger of that allowance and the configured per-step timeout.
+The deadline extends while private files continue changing. A stalled snapshot
+reports its size and applied budget. Snapshot time does not consume the separate
+runtime validation budget, which also honors the configured per-step timeout.
+
+Before copying databases, the updater estimates space for the SQLite snapshot
+set, temporary copies, and the candidate Doctor backup. If the system temporary
+filesystem is too small, it uses an OpenClaw-owned directory under the selected
+state directory's `tmp` folder. If neither filesystem has enough space, it
+refuses with the required size and the available space at both locations.
+Capacity estimates cannot reserve space against other processes writing to the
+same filesystem.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
 30-second deadline; if compatibility cannot be verified, rollback is refused.
 
 The canary binds a free loopback port and must report `/startupz` as `started`,
-then `/readyz` as ready within a five-minute total budget. Failure records the
+then `/readyz` as ready within the configured per-step timeout. Failure records the
 phase, elapsed time, and bounded diagnostics; the canary process group and
 temporary state are cleaned up. This proves candidate startup on copied state;
 live channel and provider behavior are checked after activation.
@@ -70,8 +109,9 @@ repair discards the candidate and leaves the serving Gateway untouched.
 Pre-activation repair uses disposable rehearsal state and configuration, then
 independently validates surviving candidate changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require
-operator-run `openclaw doctor --fix` or `openclaw triage`; post-activation repair
-uses the live installation. See
+operator-run `openclaw doctor --fix` or `openclaw triage`. Post-activation
+finalization may use live repair when compatibility-checked package rollback is
+unsafe or fails. See
 [Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
 budgets, permitted repairs, and attempt reports.
 
@@ -88,11 +128,39 @@ A candidate can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
 
-Plugin packages download and sync after the core Gateway is serving. When the
-plugin snapshot changes, the updater stops the service for a second measured
-activation window, runs the required full Doctor migration pass under exclusive
-maintenance, then restarts and verifies the final snapshot. Unchanged plugins
-use read-only validation and readiness checks without another full Doctor pass.
+Plugin packages download and sync against the installed target before the managed
+Gateway restarts. The service remains stopped through channel/config writes,
+plugin convergence, and any required full Doctor migrations. Downloads therefore
+count toward downtime. Unchanged plugins use read-only validation and readiness
+checks without another full Doctor pass. Service ownership is revalidated after
+convergence, and final runtime verification checks the resulting snapshot.
+
+<a id="durable-serving-recovery" />
+
+### Recovery limits
+
+Automatic rollback restores a retained package only when the current schema and
+configuration are compatible with the previous release. This update path does
+not capture or replay a full-state checkpoint and cannot reverse database
+migrations. Private snapshots used for validation are disposable and are not a
+recovery backup. Before a significant update, create an
+[independent verified backup](/install/updating#before-updating-create-a-verified-backup).
+
+Unknown or changed schema/configuration does not authorize a restore. When
+compatibility cannot be established, the updater refuses rollback, preserves
+state and retained package material, and reports the failed operation. Restoring
+an older package alone is not proof that the service can safely start.
+
+Existing pending records that require checkpoint replay are unsupported by this
+update path. `openclaw update` reports them before ordinary mutable update work;
+it does not replay, rewrite, retire, or clear their retained state. `update
+finalize` does not bypass that refusal. Preserve the records and any named
+recovery artifacts for recovery with a compatible implementation or a verified
+backup. A later invocation must not label an unresolved interrupted run successful.
+
+<a id="legacy-package-rollback" />
+
+### Compatibility-checked package rollback
 
 The previous package tree remains available until activation or package restoration
 is verified. If activation fails before a working package is confirmed and rollback
@@ -156,6 +224,11 @@ that change the target of the global package link. The helper retains the
 original installation identity for recovery; a child running from a different
 installation is still rejected.
 
+Updates from stable 2026.9.2 and 2026.9.3 retain support for their service handoff
+records, which predate the recorded Linux service-manager UID. The candidate
+still revalidates service ownership, profile, unit, and protected launcher data.
+When the handoff records a manager UID, a different UID blocks service mutation.
+
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground
 Gateway keeps update hints but leaves installation and activation to the
@@ -176,6 +249,8 @@ start a handoff, restart the Gateway, use stable delay/jitter, or use beta
 polling cadence. Explicit foreground updates, bare foreground updates with
 stored `update.channel: "extended-stable"`, on-demand status, and their managed
 Gateway handoff remain supported.
+
+#### Candidate validation and service definitions
 
 With a local managed service and restart enabled, candidate validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`
@@ -198,9 +273,13 @@ Run `openclaw gateway status --deep` and ask the deployment owner to restart it
 through its native manager or repair stale metadata; do not retry without the
 preservation option unless definition repair is intended.
 
+#### Shell installers
+
 Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
+
+#### Linux without a service manager
 
 On Linux without a service manager, updates proceed when native inspection proves
 the service is absent and the selected Gateway has no active lock or listener.
@@ -218,12 +297,16 @@ The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
 Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway
 is running; the new CLI cannot fix the old CLI's pre-update inspection.
 
+#### Node runtime for package-manager updates
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,
 a restart-enabled update uses the current Node for finalization and rewrites
 the service metadata to that runtime. `--no-restart` cannot repair service
 metadata, so the same runtime mismatch stops before package mutation.
+
+#### macOS LaunchAgent verification
 
 On macOS, the post-update check also verifies the LaunchAgent is
 loaded/running for the active profile and the configured loopback port is
@@ -236,6 +319,8 @@ a failed native activation or health check does not trigger a later plist rewrit
 the Gateway still does not become healthy, the command exits non-zero and
 prints the restart log path plus restart, reinstall, and package rollback
 instructions.
+
+#### When restart is skipped or fails
 
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
 `Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
@@ -312,23 +397,22 @@ the sentinel.
     Runs candidate Doctor lint, config and plugin planning, and the isolated migration rehearsal and canary described above. Validation failure leaves the old Gateway serving.
   </Step>
   <Step title="Activate and verify">
-    Stops the managed service, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. It starts and verifies the Gateway without reinstalling dependencies or rebuilding the checkout during downtime.
+    Stops the managed service, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
 
   </Step>
   <Step title="Sync plugins">
-    With the core serving, syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot uses the second maintenance and verification window described above; unchanged plugins do not run another full Doctor pass.
+    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot runs fresh Doctor migrations; unchanged plugins do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
   </Step>
 </Steps>
 
-### Plugin sync details
+## Plugin sync details
 
 On stable updates, a configured OpenClaw-owned official plugin with no install
 record is repaired from the selected core release cohort. This also applies to
-`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
-checks that package target before stopping the Gateway; post-core reconciliation
-installs it before restart. Existing install records retain their source and
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Post-core
+reconciliation installs it before restart. Existing install records retain their source and
 selector policy. Verified official packages use the existing
 [capability-consent exemption](/plugins/manage-plugins#capability-consent).
 
@@ -359,6 +443,27 @@ includes the observed installed and available versions and an explicit command
 to replace the pin. Keep the pin if intentional. This advisory does not establish
 incompatibility, change the pin, or fail an otherwise successful core update.
 
+An unavailable npm target or unreachable registry does not block the core update
+when a compatible, runnable plugin is already installed. Plugin sync retains that
+installed version and its recorded selector. The summary, warning log, and run
+history name the plugin, requested target, resolution failure, and
+`openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
+with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
+
+Before mutation, an installed plugin whose declared `openclaw.compat.pluginApi`
+range or `openclaw.install.minHostVersion` excludes the target core can block the
+update if the requested replacement is unavailable or also incompatible. The
+`plugin-incompatible` refusal names the installed version and requirement.
+When the installed plugin is known to be incompatible, a registry outage also
+blocks the update because a compatible replacement cannot be resolved. Retry
+when the registry is reachable, pin a compatible plugin version, explicitly
+disable the plugin, or wait for a compatible release. Compatible installed
+plugins still follow the advisory path described above.
+
+Older updaters may still refuse with `plugin-target-unavailable` before candidate
+code runs. Use your installation's [manual update method](/install/updating/update-methods),
+then run `openclaw update repair` from the updated installation.
+
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.
 </Warning>
@@ -366,7 +471,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 <Note>
 Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`. When a failed update leaves a managed plugin unusable, OpenClaw disables its runtime entry and resets active slots without changing the operator-authored `plugins.allow` or `plugins.deny` policy.
 
-After the core Gateway is serving, `openclaw update` runs mandatory **post-core convergence**: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable and its declared `openclaw.extensions` entries are loadable. When a package does not declare OpenClaw extensions, the check instead verifies any explicitly declared npm `main`. Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits nonzero and does not restart with the unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update. A changed plugin snapshot completes the exclusive Doctor maintenance, restart, and runtime verification sequence described above before the run succeeds.
+After installing the core and before restarting the managed Gateway, `openclaw update` runs mandatory **post-core convergence**: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable and its declared `openclaw.extensions` entries are loadable. When a package does not declare OpenClaw extensions, the check instead verifies any explicitly declared npm `main`. Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits nonzero and does not restart with the unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update. A changed plugin snapshot completes the fresh Doctor, restart, and runtime verification sequence described above before the run succeeds.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts are handed to the CLI managed-service path, so the package swap happens outside the old Gateway process and the service health checks decide whether the update can be reported as complete.
 </Note>
@@ -377,6 +482,8 @@ version. For default/`latest` intent, OpenClaw does not query plugin
 `@extended-stable` or fall back to npm `latest`; it derives the package version
 from the installed core. Explicit version pins, explicit non-`latest` tags,
 third-party packages, custom registries, and other sources keep their existing intent.
+
+## Package-manager installs
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -397,7 +504,7 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
-A matching installed version is an `already-current` no-op. Real updates also
+A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.
 
@@ -411,3 +518,46 @@ Switching a pnpm- or Bun-owned package install to Git with `--channel dev` is
 also rejected before activation. Staged source-checkout exposure currently
 requires an npm-owned package symlink; package-to-package updates remain
 supported through the owning manager.
+
+### Local packaged overrides
+
+Package updates preserve local `dist` edits in a recovery bundle before replacing
+the old package. Capture happens after service drain and the old-tree move, so
+edits made while the candidate installs are included. The report names the bundle
+under the selected state directory's `update-recovery/` directory. Keep it until
+you have checked the updated installation; removal is manual.
+
+By default, the update installs the new package without replaying local code.
+To replay edits you trust during that update:
+
+```bash
+openclaw update --reapply-local-overrides
+```
+
+Packages that advertise a content inventory record shipped file hashes and
+executable status. Replay requires the new package's corresponding baseline and
+actual bytes to match; upstream changes, unsafe paths, and hardlinked targets
+prevent replay. A conflict leaves the whole override set in the recovery bundle.
+Unreferenced content-hashed additions also require manual recovery. Replay runs
+against the private candidate before it replaces the live package. Publication
+and restoration refuse to overwrite a destination created concurrently. Replay
+does not establish that local code remains compatible with the new release.
+
+Older packages without content inventories cannot distinguish local edits from
+vendor files. Their regular `dist` files are preserved for manual inspection,
+with no automatic replay, even when the flag is set. Keep enough free space for
+that copy; recovery bundles are not automatically pruned. Dependency trees and
+inventory metadata are not local override payloads. Symlinks and other unsupported
+entries can refuse the update, including entries in otherwise excluded `dist`
+subtrees; repair those entries before retrying. Normal package-manager permission changes,
+such as applying the installer's umask, are not treated as local edits.
+
+Preserved overrides are separate from automatic package rollback. A failed update
+still follows the existing ownership, configuration, schema, and retained-package
+checks. If late edits invalidate rollback verification, keep both the named package
+backup and override bundle; the report does not authorize restarting an unverified
+installation.
+
+This behavior belongs to the updater already running. Back up local edits before
+the first upgrade from an older updater that does not include it. Git checkouts
+continue to use the existing clean-worktree and Git update rules.

@@ -8,6 +8,12 @@ openclaw-chat-question-panel {
   display: block;
 }
 
+openclaw-chat-async-question {
+  display: block;
+  width: 620px;
+  max-width: 100%;
+}
+
 .chat-question-panel {
   display: grid;
   gap: 12px;
@@ -152,6 +158,14 @@ openclaw-chat-question-panel {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+.chat-question-panel__external {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-question-panel__progress {

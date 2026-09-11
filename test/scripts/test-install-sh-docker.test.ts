@@ -2651,6 +2651,10 @@ if (args[0] === "--version") {
   console.log(JSON.stringify({ payloads: [{ text: process.env.SUCCESS_MARKER }] }));
 } else if (args[0] === "gateway" && args[1] === "health") {
   console.log('{"ok":true}');
+} else if (args[0] === "gateway" && args[1] === "call" && args[2] === "status") {
+  console.log(JSON.stringify({ eventLoop: {
+    cpuCoreRatio: 0.1, utilization: 0.2, delayP99Ms: 20, delayMaxMs: 21, intervalMs: 1000,
+  } }));
 } else if (args[0] === "gateway") {
   const port = Number(args[args.indexOf("--port") + 1]);
   http.createServer((_req, res) => {

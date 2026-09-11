@@ -11,7 +11,7 @@ const inventoryMocks = vi.hoisted(() => {
   };
   return {
     runtimeModel,
-    release: vi.fn(),
+    release: vi.fn(async () => {}),
     resolveRuntimeModelContext: vi.fn(async (_params: unknown) => ({
       modelApi: runtimeModel.api,
       runtimeModel,
@@ -50,7 +50,7 @@ vi.mock("../../agents/tools-effective-inventory.js", () => ({
     const context = await inventoryMocks.resolveRuntimeModelContext(params);
     return {
       run: <T>(project: (value: typeof context) => T): T => project(context),
-      release: inventoryMocks.release,
+      [Symbol.asyncDispose]: inventoryMocks.release,
     };
   },
 }));

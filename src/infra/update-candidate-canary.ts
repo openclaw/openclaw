@@ -18,6 +18,7 @@ import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -111,8 +112,8 @@ export async function validateUpdateCandidateCanary(params: {
 }): Promise<CanaryResult> {
   const started = Date.now();
   const budget = Math.max(1, params.timeoutMs ?? 300_000);
-  const deadline = started + budget;
-  const workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
+  let deadline = started + budget;
+  let workDeadline = deadline - Math.min(2_000, Math.floor(budget / 10));
   const remaining = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -262,15 +263,21 @@ export async function validateUpdateCandidateCanary(params: {
     if (!policy.fix) {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
+    const snapshotStarted = Date.now();
     rehearsal ??= await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,
       nodeRunner: params.nodeRunner,
-      timeoutMs: remaining(),
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
     });
+    // Copying private state has its own size/progress budget; preserve the
+    // runtime validation budget after large snapshots finish.
+    const snapshotDuration = Date.now() - snapshotStarted;
+    deadline += snapshotDuration;
+    workDeadline += snapshotDuration;
     env = { ...rehearsal.env };
     const { port } = rehearsal;
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
@@ -345,9 +352,10 @@ export async function validateUpdateCandidateCanary(params: {
         }
       }
       if (code === 0 && phase === "runtime") {
-        candidateSchemaVersions = running.outputExceeded()
+        const contract: unknown = running.outputExceeded()
           ? undefined
-          : parseOpenClawSchemaVersions(JSON.parse(running.stdout()));
+          : JSON.parse(running.stdout());
+        candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
         if (!candidateSchemaVersions) {
           code = 1;
           capture("Candidate migration continuation did not report its schema contract");
@@ -465,8 +473,16 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } finally {
-    if (!params.rehearsal) {
-      await rehearsal?.cleanup();
+    if (!params.rehearsal && rehearsal) {
+      await cleanupUpdateTemporaryDirectory({
+        directory: rehearsal.stateDir,
+        root: params.root,
+        name: "candidate rehearsal cleanup",
+        onWarning: (step) => {
+          steps.push(step);
+          params.onStep?.(step);
+        },
+      });
     }
   }
 }

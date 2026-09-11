@@ -273,7 +273,7 @@ function buildDefaultCollaborationInstructions(): string {
     "",
     "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
     "",
-    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
+    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. When a missing preference, constraint, or clarification warrants a question, use `request_user_input_async` if it is available and continue independent work. Answers arrive as ordinary user messages. A suggested or preselected answer is not consent; wait for explicit approval before dependent actions that require it. If neither question tool is available, ask a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
   ].join("\n");
 }
 

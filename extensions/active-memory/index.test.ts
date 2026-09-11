@@ -794,6 +794,52 @@ describe("active-memory plugin", () => {
     expect(hasInfoLine("active-memory: recall skipped reason=policy-disabled")).toBe(true);
   });
 
+  it("skips recall for inter-session deliveries that reuse the user trigger", async () => {
+    const result = await runPromptBuild(
+      {
+        prompt:
+          "[Inter-session message] sourceSession=agent:main:other sourceTool=sessions_send isUser=false\nHandoff payload",
+      },
+      {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:other",
+          sourceTool: "sessions_send",
+        },
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(hasInfoLine("active-memory: recall skipped reason=session-ineligible")).toBe(true);
+  });
+
+  it("skips recall for subagent settlement deliveries into a visible session", async () => {
+    const result = await runPromptBuild(
+      { prompt: "[Subagent Context] subagent_settle\nTask finished" },
+      {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+        },
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hasInfoLine("active-memory: recall skipped reason=session-ineligible")).toBe(true);
+  });
+
+  it("still recalls for external-user provenance", async () => {
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order?" },
+      { inputProvenance: { kind: "external_user" } },
+    );
+
+    expectPrependContextContains(result, "lemon pepper wings");
+  });
+
   it("does not inject recall that completes after the turn authority closes", async () => {
     let releaseRecall: () => void = () => {
       throw new Error("recall gate was not initialized");

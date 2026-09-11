@@ -3,6 +3,7 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
@@ -959,6 +960,45 @@ describe("createImageGenerateTool", () => {
     },
   );
 
+  it("does not acquire image providers when the caller aborts a pending duplicate lookup", async () => {
+    const acquireProviders = vi.mocked(
+      mediaGenerationToolProviders.acquireImageGenerationToolProviders,
+    );
+    const lookup = createDeferred<[]>();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue(lookup.promise);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const scheduleBackgroundWork = vi.fn();
+    const agentSessionKey = "agent:main:discord:direct:123";
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } },
+          },
+        },
+        agentSessionKey,
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork,
+      }),
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("image requester cancelled during task lookup");
+
+    const pending = tool.execute("call-image-lookup", { prompt: "an image" }, controller.signal);
+    expect(taskRuntimeInternalMocks.listFreshTasksForOwnerKey).toHaveBeenCalledWith(
+      agentSessionKey,
+    );
+    expect(acquireProviders).not.toHaveBeenCalled();
+    controller.abort(abortReason);
+    lookup.resolve([]);
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(acquireProviders).not.toHaveBeenCalled();
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
   it("stops loading later image references when the caller aborts a pending reference", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("GEMINI_API_KEY", "google-test");
@@ -1762,6 +1802,18 @@ describe("createImageGenerateTool", () => {
 
   it.each([
     {
+      model: "openai/gpt-image-2.5/flare/text-to-image",
+      primaryRef: "fal/openai/gpt-image-2.5/flare/text-to-image",
+      maxInputImages: 16,
+      disablesResolution: true,
+    },
+    {
+      model: "openai/gpt-image-2.5/sunburst/edit",
+      primaryRef: "fal/openai/gpt-image-2.5/sunburst/edit",
+      maxInputImages: 16,
+      disablesResolution: true,
+    },
+    {
       model: "fal-ai/nano-banana-2",
       primaryRef: "fal/fal-ai/nano-banana-2",
       maxInputImages: 14,
@@ -1828,6 +1880,16 @@ describe("createImageGenerateTool", () => {
     });
 
     expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(maxInputImages);
+    await expect(
+      tool.execute("call-too-many-references", {
+        prompt: "combine references",
+        images: Array.from(
+          { length: maxInputImages + 1 },
+          (_, index) => `./fixtures/ref-${index + 1}.png`,
+        ),
+      }),
+    ).rejects.toThrow(/reference image/);
+    expect(generateImage).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {

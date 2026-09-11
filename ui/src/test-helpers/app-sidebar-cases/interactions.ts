@@ -9,7 +9,6 @@ import {
   loadStoredHiddenSessionCatalogIds,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -574,7 +573,7 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
-  it("routes terminal-preferred clicks to a typed terminal toggle", async () => {
+  it("routes terminal-preferred clicks to the main terminal page", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -585,26 +584,13 @@ describe("AppSidebar catalog session rows", () => {
       sidebar.terminalAvailable = true;
       const navigate = vi.fn();
       sidebar.onNavigate = navigate;
-      let detail: unknown;
-      const listener = (event: Event) => {
-        detail = (event as CustomEvent).detail;
-      };
-      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      try {
-        await sidebar.updateComplete;
-        // The rendered row owns this catalog even if the global selection changes
-        // before its already-rendered click handler runs.
-        (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
-        (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
-      } finally {
-        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      }
-      expect(detail).toEqual({
-        open: true,
-        agentId: "main",
-        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      await sidebar.updateComplete;
+      (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
+      expect(navigate).toHaveBeenCalledWith("terminal", {
+        pathname: "/terminal",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
+        hash: "",
       });
-      expect(navigate).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

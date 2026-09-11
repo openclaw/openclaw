@@ -10,17 +10,28 @@ title: "Store maintenance and retention"
 
 `session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-| Key                     | Default               | Notes                                                                                       |
-| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
-| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                       |
-| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                      |
-| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid      |
+| Key                     | Default               | Notes                                                                                             |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                            |
+| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                            |
+| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                             |
+| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                            |
+| `preserveRecent`        | disabled              | inactivity window protecting interactive sessions and their history generations; `false` disables |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion       |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                                   |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid            |
 
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
+
+Archiving a session changes its visibility and retention metadata while keeping
+its transcript rows in SQLite. Converting reclaimed history to a transcript
+archive replaces those rows with a compressed canonical blob in SQLite's
+`session_transcript_archives` table and a derived JSONL file in the sessions
+directory. The compressed payload therefore still occupies database space; the
+file is not its only copy. Runtimes without zstd support write plain JSONL
+archives. There is currently no age setting that moves transcript payloads
+entirely out of SQLite; `pruneAfter` controls session retention, and
+`resetArchiveRetention` controls archive deletion.
 
 `maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total. This is a cleanup budget, not a guaranteed physical ceiling: protected history and database pages that cannot yet be reclaimed can keep usage above the target.
 
@@ -29,6 +40,13 @@ Gateway model-run probe sessions (keys matching `agent:*:explicit:model-run-<uui
 When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup stores the compressed archive in the same write transaction that removes the session row and its transcript, trajectory, active, index, and FTS projections. It publishes, syncs, and reads back the derived file after commit. This includes sessions that contain trajectory events but no transcript events. If those tiers are insufficient, cleanup permanently deletes the oldest sessions whose recorded archive reason is `active-session-cap`. Manual, legacy, age-retention, stale-dashboard, and recovery archives protect every history generation. Cleanup rechecks entry identity and admission references at deletion time, remeasures physical usage after each victim, and stops at `highWaterBytes`.
 
 Committed writes and deletion first land in the WAL. Cleanup checkpoints it so the WAL can shrink immediately, then uses incremental vacuum to return eligible free tail pages from the main file; pages that are not yet reclaimable stay in the main file and therefore remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
+
+For a full file rewrite after substantial cleanup, use Doctor's offline
+[`--session-sqlite compact` mode](/cli/doctor/sqlite-maintenance#session-sqlite-migration).
+It checkpoints the WAL and runs `VACUUM`; it does not select additional history
+for deletion or replace conversation content with summaries. See
+[testing cleanup on a copy](/cli/sessions#test-cleanup-on-a-copy) before changing
+retention on a large installation.
 
 Run maintenance on demand:
 

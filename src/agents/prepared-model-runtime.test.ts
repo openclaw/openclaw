@@ -127,30 +127,31 @@ describe("prepared model runtime snapshots", () => {
     );
 
     expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
-    lease.release();
+    await lease[Symbol.asyncDispose]();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
-    const selectedPluginRegistry = createEmptyPluginRegistry();
-    selectedPluginRegistry.agentHarnesses.push({
-      pluginId: "codex",
-      source: "test",
-      harness: {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("unused");
-        },
-      },
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
+      // Fresh acquisitions cannot reuse the registry retired by an earlier generation.
+      const registry = createEmptyPluginRegistry();
+      if ((params as { selections?: unknown }).selections) {
+        registry.agentHarnesses.push({
+          pluginId: "codex",
+          source: "test",
+          harness: {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => {
+              throw new Error("unused");
+            },
+          },
+        });
+      }
+      return registry;
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
-      (params as { selections?: unknown }).selections
-        ? selectedPluginRegistry
-        : createEmptyPluginRegistry(),
-    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -187,22 +188,24 @@ describe("prepared model runtime snapshots", () => {
         selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
       }),
     );
-    lease.release();
+    await lease[Symbol.asyncDispose]();
   });
 
-  it("loads provider runtime for an isolated native-harness probe", () => {
+  it("loads provider runtime for an isolated native-harness probe", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries(
-        {
-          config: {},
-          agentDir: "/tmp/native-provider-probe",
-          readOnly: true,
-          loadRuntimePlugins: true,
-        },
-        mocks.pluginMetadataSnapshot as never,
+      (
+        await prepareWorkspacePluginRegistries(
+          {
+            config: {},
+            agentDir: "/tmp/native-provider-probe",
+            readOnly: true,
+            loadRuntimePlugins: true,
+          },
+          mocks.pluginMetadataSnapshot as never,
+        )
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(
@@ -866,7 +869,7 @@ describe("prepared model runtime snapshots", () => {
     });
     expect(secondLease.snapshot).not.toBe(first);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
-    secondLease.release();
+    await secondLease[Symbol.asyncDispose]();
   });
 
   it("keeps synchronous read-only snapshots isolated by config", async () => {

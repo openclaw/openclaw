@@ -28,6 +28,19 @@ openclaw gateway restart --wait 30s
 
 `--force` skips the active-work drain and restarts immediately. Plain `restart` normally uses the service-manager restart path.
 
+During an upgrade, restart records its reason and drain options in the existing
+Gateway state without starting a schema migration while the old Gateway is still
+running. If no state database exists, it logs that intent recording was skipped
+and continues the restart.
+
+When an updater invokes the installed `gateway restart` command, its existing
+update marker enables the five-minute startup watchdog after the managed process
+is observed running. This lets an older updater complete a slow first-hop startup
+without passing a new option. The watchdog includes migration, listener, and health
+phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
+by newer update callers take precedence. Ordinary standalone restarts keep their
+existing deadlines. See [Restart recovery](/gateway/restart-recovery).
+
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
 On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
@@ -92,7 +105,7 @@ OPENCLAW_SUPERVISOR_MODE=external \
   openclaw database ownership claim --manager gateway-supervisor --json
 ```
 
-Before claiming, stop and verify every older Gateway, CLI, Doctor, updater, and native app process that can write the shared state database. Pre-contract processes do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
+Before claiming, stop and verify every Gateway, CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
 
 The claim is idempotent for the same stable manager identifier and refuses a different manager. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
 

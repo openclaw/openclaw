@@ -210,6 +210,8 @@ Agents use the same actions through the `google_meet` tool (`export`, `create` w
 
 ### Live smoke test
 
+`pnpm test:live` requires a source checkout of the OpenClaw repo; the `openclaw googlemeet` commands below run from any install.
+
 ```bash
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_GOOGLE_MEET_LIVE_MEETING=https://meet.google.com/abc-defg-hij \

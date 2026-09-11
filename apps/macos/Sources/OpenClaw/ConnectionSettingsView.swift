@@ -13,6 +13,7 @@ struct ConnectionSettingsView: View {
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
+    @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
@@ -54,6 +55,7 @@ struct ConnectionSettingsView: View {
                     isActive: self.isActive)
             case .remote:
                 self.remoteAccessSection
+                self.localHostingSection
                 self.nearbyGatewaysSection
             }
 
@@ -235,43 +237,22 @@ struct ConnectionSettingsView: View {
     }
 
     private var gatewayInstallerRow: some View {
-        LabeledContent {
-            Button("Recheck") { self.refreshGatewayStatus() }
-        } label: {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(self.gatewayStatusColor)
-                    .frame(width: 8, height: 8)
-                Text(self.gatewayStatus.message)
-            }
-            if let detail = self.gatewayInstallerDetail {
-                Text(detail)
-            }
-            if let failure = self.gatewayManager.lastFailureReason {
-                Text(String(format: String(localized: "Last failure: %@"), failure))
-                    .foregroundStyle(.red)
-            }
-        }
-    }
-
-    private var gatewayInstallerDetail: String? {
-        var parts: [String] = []
-        if let gatewayVersion = self.gatewayStatus.gatewayVersion,
-           let required = self.gatewayStatus.requiredGateway,
-           gatewayVersion != required
-        {
-            parts.append(String(
-                format: String(localized: "Installed: %@ · Required: %@"), gatewayVersion, required))
-        } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
-            parts.append(String(format: String(localized: "Gateway %@ detected"), gatewayVersion))
-        }
-        if let node = self.gatewayStatus.nodeVersion {
-            parts.append("Node \(node)")
-        }
-        if case let .attachedExisting(details) = self.gatewayManager.status {
-            parts.append(details ?? String(localized: "Using existing gateway instance"))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        GatewayInstallerView(
+            status: self.gatewayStatus,
+            failure: self.gatewayManager.lastFailureReason,
+            existingGatewayDetails: {
+                if case let .attachedExisting(details) = self.gatewayManager.status {
+                    return details ?? String(localized: "Using existing gateway instance")
+                }
+                return nil
+            }(),
+            isInstalling: CLIInstallPrompter.shared.isPrompting,
+            installStatus: CLIInstallPrompter.shared.installStatus,
+            onInstall: {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(
+                    reason: "connection-settings", userInitiated: true)
+            },
+            onRecheck: self.refreshGatewayStatus)
     }
 
     private func refreshGatewayStatus() {
@@ -279,16 +260,36 @@ struct ConnectionSettingsView: View {
         self.gatewayManager.refreshEnvironmentStatus(force: true)
     }
 
-    private var gatewayStatusColor: Color {
-        if self.localGatewayFailure != nil { return .red }
-        switch self.gatewayStatus.kind {
-        case .ok: return .green
-        case .checking: return .secondary
-        case .missingNode, .missingGateway, .incompatible, .error: return .orange
+    // MARK: - Remote
+
+    private var localHostingSection: some View {
+        Section {
+            Toggle("Also run a Gateway on this Mac", isOn: Binding(
+                get: { self.state.hostsLocalGatewayWithRemotePrimary },
+                set: { enabled in
+                    do {
+                        try self.state.setHostsLocalGatewayWithRemotePrimary(enabled)
+                        self.localHostingError = nil
+                    } catch {
+                        self.localHostingError = error.localizedDescription
+                    }
+                }))
+            Text(String(
+                format: String(
+                    localized: "Local port %lld. This Mac’s node capabilities and Talk Mode stay with the primary."),
+                GatewayEnvironment.gatewayPort()))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let notice = self.state.localGatewayHostingNotice {
+                Text(notice).font(.caption)
+            }
+            if let error = self.localHostingError ?? (self.state.hostsLocalGatewayWithRemotePrimary
+                ? self.gatewayManager.lastFailureReason : nil)
+            {
+                Text(error).foregroundStyle(.red)
+            }
         }
     }
-
-    // MARK: - Remote
 
     private var remoteAccessSection: some View {
         Section {

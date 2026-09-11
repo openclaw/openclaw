@@ -717,7 +717,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toBe(sourceManifest);
     await expect(fs.access(fixture.destinationBackupDir)).rejects.toMatchObject({ code: "ENOENT" });
     const workspaceMigration = await migrateLegacyWorkspaceState({
-      detected: detectLegacyWorkspaceState({
+      detected: await detectLegacyWorkspaceState({
         cfg: fixture.config,
         stateDir: testState.stateDir,
         env: testState.env,

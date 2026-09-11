@@ -34,6 +34,9 @@ import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js"
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { defaultRuntime } from "./runtime.js";
 
+// Recovery must not select executables from workspace/global dotenv values.
+const inheritedRuntimeEnv = { ...process.env };
+
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.mjs" },
@@ -129,6 +132,7 @@ if (
   if (earlyProfile.ok && earlyProfile.profile) {
     applyCliProfileEnv({ profile: earlyProfile.profile });
   }
+  const startupEnv = { ...process.env };
   const { assertSupportedRuntime, isCurrentRuntimeSupported } =
     await import("./infra/runtime-guard.js");
   if (!isCurrentRuntimeSupported()) {
@@ -136,12 +140,13 @@ if (
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
-  await assertSupportedRuntime();
+  await assertSupportedRuntime(undefined, undefined, process.argv, false, inheritedRuntimeEnv);
   gatewayEntryStartupTrace.mark("bootstrap");
 
   const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
     currentFile: entryFile,
     installRoot,
+    env: startupEnv,
     prepareWriteError: async () => {
       // The child environment was already snapshotted. Load dotenv only to format
       // the parent trace; command-specific dotenv ordering remains child-owned.
@@ -164,7 +169,7 @@ if (
     }
 
     async function ensureCliRespawnReady(): Promise<boolean> {
-      const plan = buildCliRespawnPlan();
+      const plan = buildCliRespawnPlan({ env: startupEnv });
       if (!plan) {
         return false;
       }
@@ -178,6 +183,8 @@ if (
     }
 
     if (!(await ensureCliRespawnReady())) {
+      // Only the final child emits the diagnostic warning; parents still enforce admission.
+      await assertSupportedRuntime(undefined, undefined, process.argv, true, inheritedRuntimeEnv);
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
@@ -310,6 +317,7 @@ export async function runMainOrRootHelp(
       commandStarted = true;
       await runCli(argv, {
         additionalStartupTrace: gatewayEntryStartupTrace,
+        runtimeRecoveryEnv: inheritedRuntimeEnv,
         // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
         retainConsoleRoutingUntilProcessExit: true,
       });

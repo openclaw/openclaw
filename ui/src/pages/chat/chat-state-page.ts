@@ -183,6 +183,7 @@ export function createPageState(
     chatBranchesConnectionEpoch: null,
     chatToolMessages: [],
     guardianNotices: [],
+    providerPolicyNotice: null,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatQueueModeOverride: undefined,
@@ -390,7 +391,7 @@ export function createPageState(
     const normalized = normalizeSidebarLayout(layout);
     // Every close route commits here; tab switches retain the pending selection.
     if (
-      state.sidebarContent?.kind === "loading" &&
+      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
       !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
     ) {
       state.sidebarContent = null;

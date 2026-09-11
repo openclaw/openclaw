@@ -329,25 +329,8 @@ function buildAuditIndex(
 
   for (const abs of markdownFiles) {
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    const text = fs.readFileSync(abs, "utf8");
     const slug = rel.replace(/\.(md|mdx)$/i, "");
     addRoute(routes, slug);
-
-    if (!text.startsWith("---")) {
-      continue;
-    }
-
-    const end = text.indexOf("\n---", 3);
-    if (end === -1) {
-      continue;
-    }
-    const frontMatter = text.slice(3, end);
-    const match = frontMatter.match(/^permalink:\s*(.+)\s*$/m);
-    if (!match) {
-      continue;
-    }
-    const permalink = (match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
-    routes.add(normalizeRoute(permalink));
   }
 
   // Without a ClawHub checkout the mirrored tree is absent, so its pages cannot be

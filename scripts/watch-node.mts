@@ -17,7 +17,6 @@ import {
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
 const WATCH_RESTARTABLE_CHILD_EXIT_CODES = new Set([143]);
-const WATCH_RESTARTABLE_CHILD_SIGNALS = new Set(["SIGTERM"]);
 const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
 const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
@@ -27,6 +26,7 @@ const WATCH_DIST_ENTRY_POLL_MS = 1_000;
 const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 type ProcessSignal = `SIG${string}`;
+type WatchExit = number | ProcessSignal;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 type WatchChild = {
@@ -156,9 +156,13 @@ const isIgnoredWatchPath = (
   return !pathClassifier.isRestartRelevantRunNodePath(repoPath);
 };
 
-const shouldRestartAfterChildExit = (exitCode: number | null, exitSignal: ProcessSignal | null) =>
+const shouldRestartAfterChildExit = (
+  exitCode: number | null,
+  exitSignal: ProcessSignal | null,
+  platform: NodeJS.Platform,
+) =>
   (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
-  (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
+  (platform === "win32" && exitSignal === "SIGTERM");
 
 const isGatewayWatchCommand = (args: string[]) => args[0] === "gateway";
 
@@ -329,7 +333,7 @@ const releaseWatchLock = (lockHandle: { lockPath: string; pid: number } | null) 
 /**
  * Runs the watch loop and restarts the child process on relevant changes.
  */
-export async function runWatchMain(params: WatchMainParams = {}): Promise<number> {
+export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchExit> {
   const cwd = params.cwd ?? process.cwd();
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -353,7 +357,8 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
 
   const childEnv = { ...deps.env };
   const watchSession = `${deps.now()}-${deps.process.pid}`;
-  const useChildProcessGroup = process.platform !== "win32" && !deps.process.stdin?.isTTY;
+  const platform = deps.process.platform ?? process.platform;
+  const useChildProcessGroup = platform !== "win32" && !deps.process.stdin?.isTTY;
   childEnv.OPENCLAW_WATCH_MODE = "1";
   childEnv.OPENCLAW_WATCH_SESSION = watchSession;
   // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
@@ -363,7 +368,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
 
-  return await new Promise<number>((resolve, reject) => {
+  return await new Promise<WatchExit>((resolve, reject) => {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
@@ -375,6 +380,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
     let autoDoctorAttempted = false;
     let shutdownExitCode: number | null = null;
     let shutdownKillTimer: TimerHandle | null = null;
+    let watcherStartupError: Error | null = null;
 
     const signalWatchProcess = (child: WatchChild, signal: ProcessSignal) => {
       if (!child || typeof child.kill !== "function") {
@@ -406,7 +412,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
       }
     };
 
-    const settle = (code: number) => {
+    const settle = (outcome: WatchExit) => {
       if (settled) {
         return;
       }
@@ -422,7 +428,32 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
       }
       releaseWatchLock(lockHandle);
       watcher?.close?.()?.catch?.(() => {});
-      resolve(code);
+      if (watcherStartupError && typeof outcome !== "string") {
+        reject(watcherStartupError);
+      } else {
+        resolve(outcome);
+      }
+    };
+
+    const settleIfSignaled = (child: WatchChild | null, signal: ProcessSignal | null) => {
+      // Windows emulates SIGTERM with unconditional termination, including
+      // ordinary requested restarts. It has no Unix completion distinction.
+      if (!signal || platform === "win32") {
+        return false;
+      }
+      // The native implementation normally acknowledges stop with an exit
+      // code. Its signal death cannot prove its detached workers have stopped,
+      // even when we requested a restart or were already shutting down.
+      try {
+        forceKillWatchProcessGroup(child);
+      } catch (error) {
+        logWatcher(
+          `Failed to stop the exited runner's process group: ${errorMessage(error)}`,
+          deps,
+        );
+      }
+      settle(signal);
+      return true;
     };
 
     const requestShutdown = (code: number) => {
@@ -480,10 +511,10 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
         if (settled) {
           return;
         }
-        if (settleIfShuttingDown(exitedProcess)) {
+        if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
           return;
         }
-        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
+        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
           deferredRestartGeneration += 1;
@@ -528,20 +559,10 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
       if (settled) {
         return;
       }
-      settled = true;
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
-      }
-      releaseWatchLock(lockHandle);
-      watcher?.close?.()?.catch?.(() => {});
-      if (onSigInt) {
-        deps.process.off("SIGINT", onSigInt);
-      }
-      if (onSigTerm) {
-        deps.process.off("SIGTERM", onSigTerm);
-      }
-      reject(toErrorObject(err, "Non-Error rejection"));
+      // Source already started before the asynchronous watcher was loaded.
+      // Keep its exit observable until cleanup acknowledges this startup error.
+      watcherStartupError = toErrorObject(err, "Non-Error rejection");
+      requestShutdown(1);
     };
 
     const resolveCreateWatcher = async () => {
@@ -585,7 +606,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
         if (settled) {
           return;
         }
-        if (settleIfShuttingDown(exitedProcess)) {
+        if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
           return;
         }
         if (exitCode === 0 && !exitSignal) {
@@ -755,7 +776,13 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runWatchMain()
-    .then((code) => process.exit(code))
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
     .catch((err: unknown) => {
       if (!isInvalidPackageConfigError(err)) {
         console.error(err);

@@ -1,15 +1,18 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
-import { attachPluginApiFacades } from "./api-facades.js";
-import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
-import { unwrapDefaultModuleExport } from "./module-export.js";
+import { runPluginRegistration } from "./api-lifecycle.js";
+import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import {
+  bindPluginInstanceModuleLoader,
+  getCachedPluginModuleLoader,
+} from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
 import type {
@@ -22,7 +25,7 @@ import {
   type PluginSdkResolutionPreference,
   resolvePluginRuntimeModulePathWithDiagnostics,
 } from "./sdk-alias.js";
-import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
+import type { OpenClawPluginDefinition } from "./types.js";
 
 // Preserve the existing enumeration order, appending surfaces added to the runtime contract.
 // Scoped runtime proxies also ask for descriptors after their get trap returns.
@@ -54,79 +57,45 @@ const LAZY_RUNTIME_PROPERTIES = {
   modelConfig: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
-function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
-  api: OpenClawPluginApi;
-  close: () => void;
-} {
-  let closed = false;
-  const guardedApi = attachPluginApiFacades(
-    new Proxy(api, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver);
-        if (typeof value !== "function") {
-          return value;
-        }
-        if (typeof prop === "string" && isLateCallablePluginApiMethod(prop)) {
-          return (...args: unknown[]) => Reflect.apply(value, target, args);
-        }
-        return (...args: unknown[]) => {
-          if (closed) {
-            return undefined;
-          }
-          return Reflect.apply(value, target, args);
-        };
-      },
-    }),
-  );
-  return {
-    api: guardedApi,
-    close: () => {
-      closed = true;
-    },
-  };
-}
-
-function runPluginRegisterSync(
-  register: NonNullable<OpenClawPluginDefinition["register"]>,
-  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
-  registry: PluginRegistry,
-): void {
-  const guarded = createGuardedPluginRegistrationApi(api);
-  try {
-    const result = register(guarded.api);
-    if (isPromiseLike(result)) {
-      const pending = Promise.resolve(result);
-      getPluginRegistryInspectionResources(registry)?.trackRegistration(pending);
-      void pending.catch(() => {});
-      throw new Error("plugin register must be synchronous");
-    }
-  } finally {
-    guarded.close();
-  }
-}
-
 export function runPluginRegisterSyncInRegistry(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
   api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
   registry: PluginRegistry,
   pluginId: string,
 ): void {
-  withPluginRegistrationContext(
-    registry,
-    pluginId,
-    () => {
-      const inspection = getPluginRegistryInspectionResources(registry);
-      const run = () => runPluginRegisterSync(register, api, registry);
-      if (inspection) {
-        inspection.runRegistration(pluginId, run);
-      } else {
-        run();
-      }
-    },
-    {
-      registerMemoryCapability: api.registerMemoryCapability,
-    },
-  );
+  const owner = getPluginValueInstance(api);
+  const run = () =>
+    withPluginRegistrationContext(
+      registry,
+      pluginId,
+      () => {
+        const inspection = getPluginRegistryInspectionResources(registry);
+        const registerPlugin = () =>
+          runPluginRegistration(register, api, "reject", (pending) => {
+            inspection?.trackRegistration(pending);
+          });
+        if (inspection) {
+          inspection.runRegistration(
+            pluginId,
+            registerPlugin,
+            owner ? (cleanup) => owner.runCleanup(cleanup) : undefined,
+          );
+        } else {
+          registerPlugin();
+        }
+      },
+      {
+        registerMemoryCapability: api.registerMemoryCapability,
+        instance: owner,
+      },
+    );
+  if (owner) {
+    owner.run(run);
+    owner.toolRegistrationComplete ||=
+      api.registrationMode === "full" || api.registrationMode === "tool-discovery";
+  } else {
+    run();
+  }
 }
 
 export function createPluginModuleLoader(options: {
@@ -157,8 +126,42 @@ export function createPluginModuleLoader(options: {
       ...(captured.tryNative !== undefined ? { tryNative: captured.tryNative } : {}),
     });
   };
-  return (modulePath: string): unknown =>
-    withPluginCache(cache, () => createLoaderForModule(modulePath)(toSafeImportPath(modulePath)));
+  return (
+    modulePath: string,
+    owner?: {
+      record: PluginRecord;
+      rootDir: string;
+      registry: PluginRegistry;
+      standalone?: boolean;
+    },
+  ): unknown =>
+    withPluginCache(cache, () => {
+      if (!owner) {
+        return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
+      }
+      let instance = getPluginInstance(owner.record);
+      if (!instance) {
+        instance = new PluginInstance(owner.record.id, owner);
+        if (owner.record.origin === "bundled" && isJavaScriptModulePath(modulePath)) {
+          // Core-shipped JS chunks keep process identity; source plugins own a reloadable graph.
+          const loadHostModule = createLoaderForModule(modulePath);
+          instance.bindModuleLoader((source) =>
+            withPluginCache(cache, () => loadHostModule(toSafeImportPath(source))),
+          );
+        } else {
+          bindPluginInstanceModuleLoader({
+            instance,
+            origin: owner.record.origin,
+            source: modulePath,
+            rootDir: owner.rootDir,
+            standalone: owner.standalone,
+            devSourceRoot: captured.devSourceRoot,
+            pluginSdkResolution: captured.pluginSdkResolution,
+          });
+        }
+      }
+      return instance.loadModule(modulePath);
+    });
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -299,42 +302,6 @@ export function createLazyPluginRuntime(params: {
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
-}
-
-export function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: OpenClawPluginDefinition;
-  register?: OpenClawPluginDefinition["register"];
-} {
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [unwrapDefaultModuleExport(moduleExport), moduleExport];
-  for (let index = 0; index < candidates.length && index < 12; index += 1) {
-    const resolved = candidates[index];
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
-    if (typeof resolved === "function") {
-      return { register: resolved as OpenClawPluginDefinition["register"] };
-    }
-    if (resolved && typeof resolved === "object") {
-      const definition = resolved as OpenClawPluginDefinition;
-      const register = definition.register;
-      if (typeof register === "function") {
-        return { definition, register };
-      }
-      for (const key of ["default", "module"]) {
-        if (key in definition) {
-          candidates.push((definition as Record<string, unknown>)[key]);
-        }
-      }
-    }
-  }
-  const resolved = candidates[0];
-  if (resolved && typeof resolved === "object") {
-    const definition = resolved as OpenClawPluginDefinition;
-    return { definition, register: definition.register };
-  }
-  return {};
 }
 
 function kindIncludes(kind: unknown, target: string): boolean {

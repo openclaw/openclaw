@@ -55,7 +55,7 @@ Related:
 
 ## Dashboard control UI connectivity
 
-When the dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
+When the dashboard/control UI will not connect, validate its URL, authentication, and device identity.
 
 ```bash
 openclaw gateway status
@@ -69,7 +69,7 @@ Look for:
 
 - Correct probe URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
-- HTTP usage where device identity is required.
+- Clients that connect without the required device identity. The current Control UI can create and sign identity over plain HTTP; see [Insecure HTTP](/web/control-ui#insecure-http).
 
 If a local browser cannot connect to `127.0.0.1:18789` after an update, first recover the local Gateway service and confirm it is serving the dashboard:
 
@@ -83,8 +83,8 @@ If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue 
 
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">
-    - `device identity required` → non-secure context or missing device auth.
-    - `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins` (or you are connecting from a non-loopback browser origin without an explicit allowlist).
+    - `device identity required` → the client did not provide the identity required by its role and auth policy. Plain HTTP alone is not the cause. In token/password mode, the Control UI still requires browser device identity; the shared secret does not replace it.
+    - `origin not allowed` → the browser `Origin` is not allowed and is not a private same-origin load. Private same-origin loads, including private LAN/Tailscale addresses and `.local` or `.ts.net` hosts, do not need an allowlist entry. Public or cross-origin browser deployments need an entry in `gateway.controlUi.allowedOrigins`.
     - `device nonce required` / `device nonce mismatch` → client is not completing the challenge-based device auth flow (`connect.challenge` + `device.nonce`).
     - `device signature invalid` / `device signature expired` → client signed the wrong payload (or stale timestamp) for the current handshake.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
@@ -146,6 +146,7 @@ Related:
 
 - [Configuration](/gateway/configuration) (gateway auth modes)
 - [Control UI](/web/control-ui)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract behind `AUTH_TOKEN_MISMATCH` and `AUTH_SCOPE_MISMATCH`
 - [Devices](/cli/devices)
 - [Remote access](/gateway/remote)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)

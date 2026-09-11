@@ -35,7 +35,15 @@ describe("command handler registration", () => {
       params.skillCommands = [];
       expect(params.command.isAuthorizedSender).toBe(!suppressed);
       expect(params.command.senderIsOwner).toBe(false);
-      return withPluginRuntimeRegistryScope(registry, () => handleCommands(params));
+      return withPluginRuntimeRegistryScope(registry, () =>
+        handleCommands({
+          ...params,
+          resolveModelLevels: async () => ({
+            resolvedThinkLevel: params.resolvedThinkLevel,
+            resolvedReasoningLevel: params.resolvedReasoningLevel,
+          }),
+        }),
+      );
     };
 
     expect(observation).toEqual({ imports: 0, loads: 0 });
@@ -66,7 +74,7 @@ describe("command handler registration", () => {
     expect(await dispatch("/login ignored")).toMatchObject({
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
       },
     });
     expect(plugin).toHaveBeenCalledTimes(1);

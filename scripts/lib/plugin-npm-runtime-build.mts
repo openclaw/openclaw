@@ -10,6 +10,7 @@ import {
   resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
+import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module-refs.mts";
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { isRecord } from "./record-shared.mjs";
 
@@ -23,7 +24,12 @@ export type PluginPackageJson = JsonRecord & {
   dependencies?: JsonRecord;
   openclaw?: {
     assetScripts?: { build?: unknown };
-    build?: { bundledDist?: unknown; openclawVersion?: unknown; runtimeFormat?: unknown };
+    build?: {
+      bundledDist?: unknown;
+      openclawVersion?: unknown;
+      runtimeFormat?: unknown;
+      workerEntries?: unknown;
+    };
     compat?: { pluginApi?: unknown };
     release?: {
       bundleRuntimeDependencies?: unknown;
@@ -399,6 +405,14 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
       neverBundle: createNeverBundleDependencyMatcher(plan.packageJson),
     },
     entry: plan.entry,
+    plugins: [createPluginInventoryModuleRefsPlugin(plan.packageDir)],
+    outputOptions: {
+      chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+      entryFileNames: (chunk) =>
+        Object.hasOwn(plan.entry, chunk.name)
+          ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
+          : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+    },
     env,
     fixedExtension: plan.runtimeFormat === "cjs",
     format: plan.runtimeFormat,

@@ -1,7 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -351,7 +354,7 @@ test.each([
   }
 });
 
-test("sessions.delete rejects failed placement while its worker lease remains", async () => {
+test("sessions.delete retains failed placement when worker cleanup is unavailable", async () => {
   await createSessionStoreDir();
   const sessionKey = "discord:group:failed-worker-session";
   const sessionId = "sess-failed-worker-delete";
@@ -367,6 +370,8 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
       context: {
         workerEnvironmentService: {
           get: () => ({ state: "failed", leaseId: "lease-1" }),
+          hasInferenceForSession: () => false,
+          cancelInferenceForSession: () => [],
           resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
@@ -375,9 +380,9 @@ test("sessions.delete rejects failed placement while its worker lease remains", 
   );
 
   expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message).toContain("cloud worker placement is failed");
+  expect(deleted.error?.message).toContain("cloud worker reclaim is unavailable");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 
@@ -857,7 +862,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const release = vi.fn();
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       afterReconcile: () => {
@@ -923,7 +928,9 @@ test.each(["worker-turn", "remote-exec"] as const)(
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const harness = createHarness(placementStore, { verifyFails: true });
+    const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
+      verifyFails: true,
+    });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");
     const deleted = await directSessionReq(
@@ -963,7 +970,7 @@ test("sessions.delete retains reclaimed placement when runtime cleanup fails bef
     entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
   });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const harness = createHarness(placementStore, {
+  const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
     reconcileChanged: false,
     reconcileCommitsManifest: false,
   });

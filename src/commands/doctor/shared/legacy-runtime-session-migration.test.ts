@@ -5,8 +5,6 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,8 +13,6 @@ import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
 afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
   }
@@ -70,8 +66,9 @@ describe("legacy runtime session model migration", () => {
       agentRuntimeOverride: row.expectedRuntime,
       authProfileOverride: "authored:account",
       authProfileOverrideSource: "user",
-      claudeCliSessionId: "retained-binding",
+      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
     });
+    expect(entry).not.toHaveProperty("claudeCliSessionId");
     expect(entry?.agentHarnessId).toBeUndefined();
     expect(
       (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
@@ -171,8 +168,9 @@ describe("legacy runtime session model migration", () => {
       agentHarnessId: "codex",
       agentRuntimeOverride: "codex",
       authProfileOverride: "authored:account",
-      claudeCliSessionId: "retained-binding",
+      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
     });
+    expect(loadSessionEntry(scope)).not.toHaveProperty("claudeCliSessionId");
   });
 
   it.each([
@@ -287,8 +285,9 @@ describe("legacy runtime session model migration", () => {
         authProfileOverride: "authored:account",
         authProfileOverrideSource: "user",
         agentRuntimeOverride: row.expectedRuntime,
-        claudeCliSessionId: "retained-binding",
+        cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
       });
+      expect(loadSessionEntry(scope)).not.toHaveProperty("claudeCliSessionId");
       expect(
         (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
           .repairedSessions,

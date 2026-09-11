@@ -1,12 +1,13 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
+  createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
@@ -14,12 +15,11 @@ import {
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
-import { createModelsProviderData } from "./model-picker.test-utils.js";
+import { createModelsProviderData, setFixtureRuntimeChoices } from "./model-picker.test-utils.js";
 import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
-  toDiscordModelPickerMessagePayload,
 } from "./model-picker.view.js";
 
 const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
@@ -36,12 +36,28 @@ function parseDiscordModelPickerCustomId(customId: string) {
 
 const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
-  buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
-}));
+const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
+  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
+  return {
+    ...sdk,
+    get getModelsRuntimeChoices() {
+      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
+    },
+    buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
+  };
+});
+
+afterEach(() => {
+  hostSdk.runtimeChoicesAvailable = true;
+});
 
 type SerializedComponent = {
   type: number;
+  label?: string;
+  content?: string;
+  disabled?: boolean;
   custom_id?: string;
   options?: Array<{ label?: string; value: string; default?: boolean }>;
   components?: SerializedComponent[];
@@ -68,7 +84,7 @@ function renderModelsViewRows(
   params: Parameters<typeof renderDiscordModelPickerModelsView>[0],
 ): SerializedComponent[] {
   const rendered = renderDiscordModelPickerModelsView(params);
-  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+  const payload = serializePayload(rendered) as {
     components?: SerializedComponent[];
   };
   return extractContainerRows(payload.components);
@@ -78,7 +94,7 @@ function renderRecentsViewRows(
   params: Parameters<typeof renderDiscordModelPickerRecentsView>[0],
 ): SerializedComponent[] {
   const rendered = renderDiscordModelPickerRecentsView(params);
-  const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+  const payload = serializePayload(rendered) as {
     components?: SerializedComponent[];
   };
   return extractContainerRows(payload.components);
@@ -100,7 +116,7 @@ describe("loadDiscordModelPickerData", () => {
     const result = await loadDiscordModelPickerData(cfg, "support");
 
     expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledTimes(1);
-    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
+    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support", undefined);
     expect(result).toBe(expected);
   });
 });
@@ -450,7 +466,7 @@ describe("Discord model picker rendering", () => {
       currentModel: "provider-01/model-1",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       content?: string;
       components?: SerializedComponent[];
     };
@@ -502,7 +518,7 @@ describe("Discord model picker rendering", () => {
       currentModel: "provider-01/model-1",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 
@@ -531,7 +547,7 @@ describe("Discord model picker rendering", () => {
       userId: "42",
       data,
     });
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const providerSelect = requireValue(
@@ -594,7 +610,7 @@ describe("Discord model picker rendering", () => {
       modelBucket: "21-30",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -627,7 +643,7 @@ describe("Discord model picker rendering", () => {
       pendingRuntime: "codex",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -641,24 +657,27 @@ describe("Discord model picker rendering", () => {
   it("runtime select preserves bucket state without exceeding Discord's customId limit", () => {
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ google: models });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "google",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "google-gemini-cli",
-            label: "Google Gemini CLI",
-            description:
-              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "google",
+          [
+            {
+              id: "google-gemini-cli",
+              label: "Google Gemini CLI",
+              description:
+                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -694,24 +713,27 @@ describe("Discord model picker rendering", () => {
   it("model bucket select keeps long runtime state compact", () => {
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ "google-gemini-cli": models });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "google-gemini-cli",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "google-gemini-cli",
-            label: "Google Gemini CLI",
-            description:
-              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "google-gemini-cli",
+          [
+            {
+              id: "google-gemini-cli",
+              label: "Google Gemini CLI",
+              description:
+                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -741,7 +763,8 @@ describe("Discord model picker rendering", () => {
 
     expect(bucketCustomId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
     expect(parsed.runtime).toBeUndefined();
-    expect(parsed.runtimeIndex).toBe(1);
+    expect(parsed.runtimeIndex).toBeUndefined();
+    expect(parsed.runtimeToken).toBe(createDiscordModelPickerRuntimeToken("google-gemini-cli"));
   });
 
   it("model pagination derives provider buckets to stay under Discord's customId limit", () => {
@@ -828,7 +851,7 @@ describe("Discord model picker rendering", () => {
       providerBucket: "p",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
     const rows = extractContainerRows(payload.components);
@@ -859,29 +882,6 @@ describe("Discord model picker rendering", () => {
     }
   });
 
-  it("supports classic fallback rendering with content + action rows", () => {
-    const data = createModelsProviderData({ openai: ["gpt-4o"], anthropic: ["claude-sonnet-4-5"] });
-
-    const rendered = renderDiscordModelPickerProvidersView({
-      command: "model",
-      userId: "99",
-      data,
-      layout: "classic",
-    });
-
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      content?: string;
-      components?: SerializedComponent[];
-    };
-
-    expect(payload.content).toContain("Model Picker");
-    const firstComponent = requireValue(
-      payload.components?.[0],
-      "classic provider view should render an action row",
-    );
-    expect(firstComponent.type).toBe(ComponentType.ActionRow);
-  });
-
   it("preserves the stored model suffix spacing in Discord current-model text", () => {
     const data = createModelsProviderData({ openai: [" gpt-5", "gpt-4o"] });
 
@@ -890,14 +890,17 @@ describe("Discord model picker rendering", () => {
       userId: "99",
       data,
       currentModel: " OpenAI/ gpt-5 ",
-      layout: "classic",
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
-      content?: string;
+    const payload = serializePayload(rendered) as {
+      components?: SerializedComponent[];
     };
+    const text = payload.components
+      ?.flatMap((component) => component.components ?? [])
+      .map((component) => component.content ?? "")
+      .join("\n");
 
-    expect(payload.content).toContain("Current model: openai/ gpt-5");
+    expect(text).toContain("Current model: openai/ gpt-5");
   });
 
   it("keeps provider navigation available when model bucketing drops the provider select", () => {
@@ -969,7 +972,7 @@ describe("Discord model picker rendering", () => {
       pendingModelIndex: 3,
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 
@@ -1031,23 +1034,26 @@ describe("Discord model picker rendering", () => {
       openai: ["gpt-4.1", "gpt-4o", "o3"],
       anthropic: ["claude-sonnet-4-5"],
     });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "codex",
-            label: "OpenAI Codex",
-            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "openai",
+          [
+            {
+              id: "codex",
+              label: "OpenAI Codex",
+              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -1091,23 +1097,26 @@ describe("Discord model picker rendering", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o"],
     });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "codex",
-            label: "OpenAI Codex",
-            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "openai",
+          [
+            {
+              id: "codex",
+              label: "OpenAI Codex",
+              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -1125,16 +1134,19 @@ describe("Discord model picker rendering", () => {
     );
     const modelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
     expect(modelSelectState?.runtime).toBeUndefined();
-    expect(modelSelectState?.runtimeIndex).toBe(2);
+    expect(modelSelectState?.runtimeIndex).toBeUndefined();
+    expect(modelSelectState?.runtimeToken).toBe("lqS8JgJl");
     const submitState = parseDiscordModelPickerCustomId(
       rows[3]?.components?.at(-1)?.custom_id ?? "",
     );
     expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.runtimeIndex).toBe(2);
+    expect(submitState?.runtimeIndex).toBeUndefined();
+    expect(submitState?.runtimeToken).toBe("lqS8JgJl");
     const resetState = parseDiscordModelPickerCustomId(rows[3]?.components?.[2]?.custom_id ?? "");
     expect(resetState?.action).toBe("reset");
     expect(resetState?.runtime).toBeUndefined();
-    expect(resetState?.runtimeIndex).toBe(2);
+    expect(resetState?.runtimeIndex).toBeUndefined();
+    expect(resetState?.runtimeToken).toBe("lqS8JgJl");
   });
 
   it("renders not-found model view with a back button", () => {
@@ -1148,7 +1160,7 @@ describe("Discord model picker rendering", () => {
       providerPage: 3,
     });
 
-    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+    const payload = serializePayload(rendered) as {
       components?: SerializedComponent[];
     };
 
@@ -1400,7 +1412,7 @@ describe("Discord model picker recents view", () => {
       quickModels: ["google-gemini-cli/qwen3-02"],
       currentModel: "google-gemini-cli/qwen3-02",
       provider: "google-gemini-cli",
-      runtimeIndex: 1,
+      runtimeToken: "runtime1",
     });
 
     const states = rows.map((row) => {
@@ -1411,9 +1423,9 @@ describe("Discord model picker recents view", () => {
         "recents custom id should parse",
       );
     });
-    expect(states[0]?.runtimeIndex).toBe(1);
-    expect(states[1]?.runtimeIndex).toBe(1);
-    expect(states[2]?.runtimeIndex).toBe(1);
+    expect(states[0]?.runtimeToken).toBe("runtime1");
+    expect(states[1]?.runtimeToken).toBe("runtime1");
+    expect(states[2]?.runtimeToken).toBe("runtime1");
   });
 
   it("includes (default) suffix on default model button label", () => {
@@ -1466,3 +1478,94 @@ describe("Discord model picker recents view", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("model-specific runtime view", () => {
+  const builtin = { id: "openclaw", label: "OpenClaw", description: "Built-in runtime" };
+  const native = { id: "codex", label: "Codex", description: "Native runtime" };
+  it("renders the selected model's choices instead of the provider union", () => {
+    const data = {
+      ...createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] }),
+      runtimeChoicesByProvider: new Map([["openai", [native, builtin]]]),
+      runtimeChoicesByModel: new Map([
+        ["openai/gpt-4o", [builtin]],
+        ["openai/gpt-4.1", [native]],
+      ]),
+      isCurrent: () => true,
+    };
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "owner",
+      data,
+      provider: "openai",
+      currentModel: "openai/gpt-4o",
+      pendingModel: "openai/gpt-4o",
+      pendingModelIndex: 2,
+    });
+    const runtime = rows
+      .flatMap((row) => row.components ?? [])
+      .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime");
+    expect(runtime).toBeUndefined();
+    const payload = JSON.stringify(
+      renderDiscordModelPickerModelsView({
+        command: "model",
+        userId: "owner",
+        data,
+        provider: "openai",
+        pendingModel: "openai/gpt-4o",
+        pendingModelIndex: 2,
+      }),
+    );
+    expect(payload).toContain("runtime openclaw");
+  });
+  it.each(["unknown", "empty", "retired"])(
+    "disables Submit for %s model runtime choices",
+    (mode) => {
+      const data = {
+        ...createModelsProviderData({ openai: ["gpt-4o"] }),
+        runtimeChoicesByProvider: new Map([["openai", [builtin]]]),
+        runtimeChoicesByModel: new Map(
+          mode === "unknown" ? [] : [["openai/gpt-4o", mode === "empty" ? [] : [builtin]]],
+        ),
+        isCurrent: () => mode !== "retired",
+      };
+      const rows = renderModelsViewRows({
+        command: "model",
+        userId: "owner",
+        data,
+        provider: "openai",
+        pendingModel: "openai/gpt-4o",
+        pendingModelIndex: 1,
+      });
+      expect(
+        rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit")?.disabled,
+      ).toBe(true);
+    },
+  );
+});
+
+describe("declared minimum host", () => {
+  it("keeps model-only Submit available without the new SDK helper", () => {
+    hostSdk.runtimeChoicesAvailable = false;
+    const data = createModelsProviderData({ openai: ["gpt-4o"] });
+    delete data.runtimeChoicesByModel;
+    delete data.isCurrent;
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "owner",
+      data,
+      provider: "openai",
+      pendingModel: "openai/gpt-4o",
+      pendingModelIndex: 1,
+    });
+
+    const submit = rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit");
+    expect(submit).toBeDefined();
+    expect(submit?.disabled).not.toBe(true);
+    expect(
+      rows
+        .flatMap((row) => row.components ?? [])
+        .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime"),
+    ).toBeUndefined();
+  });
+});

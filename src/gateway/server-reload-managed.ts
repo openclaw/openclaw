@@ -58,6 +58,7 @@ export function startManagedGatewayConfigReloader(
   const lifecycle = new AbortController();
   if (params.minimalTestGateway) {
     return {
+      ready: Promise.resolve(),
       stop: async () => {
         lifecycle.abort(new GatewayConfigReloadSupersededError());
       },
@@ -327,6 +328,7 @@ export function startManagedGatewayConfigReloader(
     initialIncludedPaths: params.initialIncludedPaths ?? [],
     initialSnapshotValid: params.initialSnapshotValid,
     initialSnapshotIssues: params.initialSnapshotIssues,
+    initialPluginInstallRecords: params.initialPluginInstallRecords,
     // Single notification point for every persisted config change — gateway
     // RPC writes, agent/CLI config_set, doctor, and hand edits all land here
     // once the candidate is accepted. Hash-only; clients refresh via config.get.
@@ -522,6 +524,7 @@ export function startManagedGatewayConfigReloader(
     watchPath: params.watchPath,
   });
   return {
+    ready: configReloader.ready,
     stop: async () => {
       lifecycle.abort(new GatewayConfigReloadSupersededError());
       stopRestartRetries();
@@ -535,6 +538,9 @@ export function startManagedGatewayConfigReloader(
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
     // Equal config revisions can still owe a plugin/runtime restart.
     isConfigReloadSettled: () =>
-      !lifecycle.signal.aborted && !hasConfigCandidatePending() && !hasOutstandingGatewayRestart(),
+      configReloader.isReady() &&
+      !lifecycle.signal.aborted &&
+      !hasConfigCandidatePending() &&
+      !hasOutstandingGatewayRestart(),
   };
 }

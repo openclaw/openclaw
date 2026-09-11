@@ -110,7 +110,7 @@ shared durable delivery; run inspection merges those sources. Chunking and
 adapter fan-out are aggregated in terminal `resultCount`. Ambiguous sends reach
 a terminal only after acknowledgement, dead
 letter, or reconciliation. Plugin-local and direct-send paths that bypass those
-shared boundaries are not yet covered. The bounded process-owned async queue is
+shared boundaries are not covered. The bounded process-owned async queue is
 best-effort and may drop records on saturation, terminal persistence failure,
 or shutdown timeout, so this surface is not a lossless compliance archive.
 

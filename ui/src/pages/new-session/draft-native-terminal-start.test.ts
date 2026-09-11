@@ -38,7 +38,17 @@ function mountNativeTerminal(context: ApplicationContext) {
   const panel = document.createElement(nativeTerminalElement) as OpenClawTerminalPanel;
   panel.client = client;
   panel.available = true;
-  document.body.append(panel);
+  panel.page = true;
+  panel.fullscreen = true;
+  panel.embedded = true;
+  Object.assign(context, {
+    replace: vi.fn((routeId, options) => {
+      if (routeId === "terminal") {
+        panel.routeTarget = { sessionId: options.pathname.split("/").at(-1) };
+        document.body.append(panel);
+      }
+    }),
+  });
   return {
     panel,
     emit: (event: string, payload: unknown) => {
@@ -95,8 +105,10 @@ describe("DraftSubmissionFlow native terminal", () => {
       flow.setMessage("start this task");
       await flow.submit();
 
-      expect(controller.write).toHaveBeenCalledWith(
-        new TextEncoder().encode("Native CLI startup text"),
+      await vi.waitFor(() =>
+        expect(controller.write).toHaveBeenCalledWith(
+          new TextEncoder().encode("Native CLI startup text"),
+        ),
       );
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.startTerminal",
@@ -117,7 +129,7 @@ describe("DraftSubmissionFlow native terminal", () => {
       expect(terminal.panel.renderRoot.textContent).toContain(exitLabel);
       expect(terminal.panel.renderRoot.textContent).not.toContain("Could not attach");
       expect(request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
-      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBeNull();
       expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();
     },
   );
@@ -156,17 +168,15 @@ describe("DraftSubmissionFlow native terminal", () => {
     await submitting;
     expect(flow.message).toBe("keep my prompt");
     expect(flow.error).toContain("Native CLI is unavailable");
-    await panel.updateComplete;
-    expect(panel.renderRoot.textContent).toContain("Native CLI is unavailable");
-    expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
+    expect(context.replace).not.toHaveBeenCalled();
+    expect(panel.isConnected).toBe(false);
   });
 
-  it("does not start a cancelled native draft after the terminal finishes loading", async () => {
-    let finishTerminal!: (controller: ReturnType<typeof createTerminalController>) => void;
-    const loading = new Promise<ReturnType<typeof createTerminalController>>((resolve) => {
-      finishTerminal = resolve;
+  it("does not navigate a cancelled draft when its native start returns", async () => {
+    let finishStart!: (result: ReturnType<typeof terminalOpenResult>) => void;
+    const starting = new Promise<ReturnType<typeof terminalOpenResult>>((resolve) => {
+      finishStart = resolve;
     });
-    nativeTerminalController.mockReturnValueOnce(loading);
     const { context, flow, request } = createDraftFixture({
       scopes: ["operator.admin"],
       methods: ["sessions.catalog.startTerminal", "terminal.open"],
@@ -179,26 +189,22 @@ describe("DraftSubmissionFlow native terminal", () => {
         startTerminal: true,
         terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
       },
-      request: async () => terminalOpenResult("cancelled-start"),
+      request: async (method) => (method === "sessions.catalog.startTerminal" ? starting : {}),
     });
-    const { panel } = mountNativeTerminal(context);
-    const previousBoots = nativeTerminalController.mock.calls.length;
-    flow.setMessage("do not launch this stale draft");
+    mountNativeTerminal(context);
+    flow.setMessage("do not navigate this stale draft");
     const submitting = flow.submit();
     await vi.waitFor(() =>
-      expect(nativeTerminalController.mock.calls.length).toBe(previousBoots + 1),
+      expect(
+        request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal"),
+      ).toBe(true),
     );
     flow.invalidate("gateway-changed");
-    const controller = createTerminalController();
-    finishTerminal(controller);
+    finishStart(terminalOpenResult("cancelled-start"));
     await submitting;
-    expect(request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal")).toBe(
-      false,
-    );
-    expect(flow.message).toBe("do not launch this stale draft");
-    expect(controller.dispose).toHaveBeenCalledOnce();
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
+    expect(context.replace).not.toHaveBeenCalled();
+    expect(flow.message).toBe("do not navigate this stale draft");
+    expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "cancelled-start" });
   });
 
   it("provisions the chosen local worktree before opening the native CLI", async () => {

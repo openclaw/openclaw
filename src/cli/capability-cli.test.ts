@@ -108,7 +108,11 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<
     typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog
   >(async () => []),
-  prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+  releaseSimpleCompletion: vi.fn(),
+  acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
+    async [Symbol.asyncDispose]() {
+      mocks.releaseSimpleCompletion();
+    },
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -325,6 +329,13 @@ vi.mock("./command-secret-targets.js", () => ({
   getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
 }));
 
+// Account-secret snapshot preparation is covered by dedicated
+// model.account-secrets.* tests; keep this command-wiring suite on the
+// pre-existing mocked world instead of loading the real secrets runtime.
+vi.mock("./capability-cli/model-local-secrets.js", () => ({
+  prepareLocalModelRunAccountSecrets: vi.fn(async () => {}),
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: mocks.resolveAgentDir,
@@ -348,8 +359,8 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent:
-    mocks.prepareSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent:
+    mocks.acquireSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
     mocks.completeWithPreparedSimpleCompletionModel as unknown as typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
 }));
@@ -641,7 +652,8 @@ describe("capability cli", () => {
         return store;
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
-    mocks.prepareSimpleCompletionModelForAgent.mockClear();
+    mocks.acquireSimpleCompletionModelForAgent.mockClear();
+    mocks.releaseSimpleCompletion.mockClear();
     mocks.completeWithPreparedSimpleCompletionModel.mockClear();
     mocks.callGateway.mockReset().mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
@@ -769,7 +781,7 @@ describe("capability cli", () => {
   }
 
   function firstPreparedModelParams() {
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     return calls[0]?.[0];
@@ -1102,10 +1114,15 @@ describe("capability cli", () => {
       },
     });
 
-    await expect(runCapability("audio", "providers", "--json")).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("inference provider inspection has no explicit owner");
-    expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
+    // Agent selection is an expected CLI condition rendered by the root failure
+    // owner; the command rethrows instead of printing its own copy.
+    await expect(runCapability("audio", "providers", "--json")).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /inference provider inspection has no explicit owner[\s\S]*Pass --agent <id> or set agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
@@ -1218,7 +1235,7 @@ describe("capability cli", () => {
   it("defaults model run to local transport", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
@@ -1262,11 +1279,13 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("model", "run", "--local", "--prompt", "hi", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("infer model run");
-    expectRuntimeErrorContains("--agent");
-    expectRuntimeErrorContains("agents.defaults.systemAgent.agentId");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /infer model run[\s\S]*--agent[\s\S]*agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
   });
 
   it("lets explicit model run agents override the system agent", async () => {
@@ -1311,7 +1330,7 @@ describe("capability cli", () => {
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
@@ -1341,7 +1360,10 @@ describe("capability cli", () => {
   });
 
   it("adds minimal instructions only for openai local model probes", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1519,7 +1541,10 @@ describe("capability cli", () => {
   });
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
-    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",
@@ -1542,6 +1567,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Codex app-server agent runtime");
+    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -1554,7 +1580,7 @@ describe("capability cli", () => {
       );
 
       expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -1579,7 +1605,7 @@ describe("capability cli", () => {
       ).rejects.toThrow("exit 1");
 
       expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
-      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
@@ -1743,7 +1769,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("Invalid thinking level.");
-    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -2149,9 +2175,11 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("image", "generate", "--prompt", "friendly lobster", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("Multiple agents are configured");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringContaining("Multiple agents are configured"),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 

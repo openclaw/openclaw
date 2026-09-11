@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { bindExecutionOwnerLifecycleMetadata } from "../audit/execution-owner-lifecycle-binding-store.js";
@@ -48,6 +49,7 @@ import {
   listFreshTasksForOwnerKey,
   listTaskRecords,
   markTaskTerminalById,
+  publishTaskRecordAfterAtomicStore,
   reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
@@ -401,13 +403,14 @@ describe("task-registry store runtime", () => {
     expect(cleanLoad).toHaveBeenCalledTimes(1);
   });
 
-  it("uses scoped owner lookups for fresh owner task reads", () => {
+  it("uses scoped owner lookups for fresh owner task reads", async () => {
     const storedTask = createStoredTask();
     const loadSnapshot = vi.fn(() => ({
       tasks: new Map(),
       deliveryStates: new Map(),
     }));
-    const listTasksForOwnerKey = vi.fn(() => [storedTask]);
+    const lookup = createDeferred<TaskRecord[]>();
+    const listTasksForOwnerKey = vi.fn(() => lookup.promise);
     configureTaskRegistryRuntime({
       store: {
         ...createInMemoryTaskRegistryStore(),
@@ -416,11 +419,31 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    const tasks = listFreshTasksForOwnerKey("agent:main:main");
+    const pending = listFreshTasksForOwnerKey("agent:main:main");
+    lookup.resolve([storedTask]);
+    const tasks = await pending;
 
     expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
     expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the current memory snapshot when a delayed owner lookup fails", async () => {
+    const storedTask = createStoredTask();
+    const lookup = createDeferred<TaskRecord[]>();
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore({
+          tasks: new Map([[storedTask.taskId, storedTask]]),
+          deliveryStates: new Map(),
+        }),
+        listTasksForOwnerKey: () => lookup.promise,
+      },
+    });
+    const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
+    updateTaskNotifyPolicyById({ taskId: storedTask.taskId, notifyPolicy: "silent" });
+    lookup.reject(new Error("owner lookup unavailable"));
+    expect(await pending).toMatchObject([{ taskId: storedTask.taskId, notifyPolicy: "silent" }]);
   });
 
   it("does not clone non-blocker details when inspecting restart blockers", () => {
@@ -968,7 +991,7 @@ describe("task-registry store runtime", () => {
           deliveryStatus: "not_applicable",
           notifyPolicy: "silent",
         });
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -992,7 +1015,7 @@ describe("task-registry store runtime", () => {
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow(
           /integrity_check failed.*idx_task_runs_owner_key/iu,
         );
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -1001,28 +1024,32 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("emits incremental observer events for restore, mutation, and delete", () => {
+  it("emits detached observer metadata while retaining full task records", () => {
     const events: TaskRegistryObserverEvent[] = [];
+    const detail = { notes: [["retained task detail"]] };
+    const restored = { ...createStoredTask(), detail };
+    const store = createInMemoryTaskRegistryStore({
+      tasks: new Map([[restored.taskId, restored]]),
+      deliveryStates: new Map(),
+    });
     configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
-          deliveryStates: new Map(),
-        }),
-      },
+      store,
       observers: {
         onEvent: (event) => {
           events.push(event);
+          if (event.kind === "upserted") {
+            event.task.label = "observer mutation";
+            if (event.previous) {
+              event.previous.label = "previous observer mutation";
+            }
+          } else if (event.kind === "deleted") {
+            event.previous.label = "deleted observer mutation";
+          }
         },
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toMatchObject({
-      runId: "run-restored",
-      taskId: "task-restored",
-      task: "Restored task",
-    });
+    expect(findTaskByRunId("run-restored")?.detail).toEqual(detail);
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",
@@ -1030,24 +1057,66 @@ describe("task-registry store runtime", () => {
       childSessionKey: "agent:codex:acp:new",
       runId: "run-new",
       task: "New task",
+      label: "Original label",
       status: "running",
       deliveryStatus: "pending",
+      detail,
     });
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+    expect(created.label).toBe("Original label");
+    expect(created.detail).toEqual(detail);
+    expect(created.detail).not.toBe(detail);
+    expect(getTaskById(created.taskId)?.label).toBe("Original label");
 
-    expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "deleted"]);
-    expect(events[0]).toMatchObject({
-      kind: "restored",
-      tasks: [expect.objectContaining({ taskId: "task-restored" })],
+    const updated = updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy: "silent" });
+    expect(updated).toMatchObject({ label: "Original label", notifyPolicy: "silent", detail });
+    const completed: TaskRecord = {
+      ...created,
+      notifyPolicy: "silent",
+      status: "succeeded",
+      endedAt: Date.now(),
+    };
+    store.upsertTaskWithDeliveryState({ task: completed });
+    const deferredObserverEvents: Array<() => void> = [];
+    const published = publishTaskRecordAfterAtomicStore(completed, { deferredObserverEvents });
+    expect(published).toMatchObject({ status: "succeeded", label: "Original label", detail });
+    expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "upserted"]);
+    expect(deferredObserverEvents).toHaveLength(1);
+    deferredObserverEvents[0]!();
+    expect(getTaskById(created.taskId)).toMatchObject({
+      status: "succeeded",
+      label: "Original label",
+      detail,
     });
-    expect(events[1]).toMatchObject({
+    expect(store.loadSnapshot().tasks.get(created.taskId)?.detail).toEqual(detail);
+    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+    expect(getTaskById(created.taskId)).toBeUndefined();
+    expect(store.loadSnapshot().tasks.has(created.taskId)).toBe(false);
+
+    expect(events.map((event) => event.kind)).toEqual([
+      "restored",
+      "upserted",
+      "upserted",
+      "upserted",
+      "deleted",
+    ]);
+    for (const event of events) {
+      if (event.kind === "upserted") {
+        expect(event.task).not.toHaveProperty("detail");
+        if (event.previous) {
+          expect(event.previous).not.toHaveProperty("detail");
+        }
+      } else if (event.kind === "deleted") {
+        expect(event.previous).not.toHaveProperty("detail");
+      }
+    }
+    expect(events[0]).toEqual({ kind: "restored" });
+    expect(events[3]).toMatchObject({
       kind: "upserted",
-      task: expect.objectContaining({ taskId: created.taskId }),
+      task: { taskId: created.taskId, status: "succeeded" },
+      previous: { taskId: created.taskId, status: "running" },
     });
-    expect(events[2]).toMatchObject({
-      kind: "deleted",
-      taskId: created.taskId,
-    });
+    expect(events[4]).toMatchObject({ kind: "deleted", taskId: created.taskId });
+    expect(getTaskById(restored.taskId)?.detail).toEqual(detail);
   });
 
   it("uses atomic task-plus-delivery store methods", async () => {
@@ -1572,7 +1641,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("does not throw or diverge sqlite-direct reads when an upsert persist fails", () => {
+  it("does not throw or diverge sqlite-direct reads when an upsert persist fails", async () => {
     const ownerKey = "agent:main:main";
     // sqlite holds the source-of-truth row. status=running (current). When the
     // upsert throws, sqlite keeps this value (withWriteTransaction ROLLBACK +
@@ -1600,7 +1669,7 @@ describe("task-registry store runtime", () => {
     });
     // sqlite-direct reader (listFreshTasksForOwnerKey -> store.listTasksForOwnerKey).
     // Always returns the sqlite source of truth.
-    const listTasksForOwnerKey = vi.fn((key: string) =>
+    const listTasksForOwnerKey = vi.fn(async (key: string) =>
       [...sqliteState.values()].filter((task) => task.ownerKey === key),
     );
 
@@ -1618,7 +1687,7 @@ describe("task-registry store runtime", () => {
     });
 
     // in-memory loads the same row via loadSnapshot. Start state: both running.
-    const initial = listFreshTasksForOwnerKey(ownerKey);
+    const initial = await listFreshTasksForOwnerKey(ownerKey);
     expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
 
     // Attempt a transition running -> succeeded. updateTask must persist before
@@ -1643,7 +1712,7 @@ describe("task-registry store runtime", () => {
 
     // The sqlite-direct reader (used by media-generation-task-status-shared)
     // also keeps "running", so both read paths agree.
-    const after = listFreshTasksForOwnerKey(ownerKey);
+    const after = await listFreshTasksForOwnerKey(ownerKey);
     const seen = after.find((task) => task.taskId === "task-diverge");
     expect(seen?.status).toBe("running");
   });

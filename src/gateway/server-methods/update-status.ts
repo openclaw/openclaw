@@ -11,9 +11,9 @@ import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
-  findActiveUpdateRun,
-  getUpdateRun,
-  listUpdateRuns,
+  getUpdateRunWithReconciliationAsync,
+  listUpdateRunsAsync,
+  reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import {
   getUpdateAvailable,
@@ -65,8 +65,15 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         );
       }
     }
-    const activeRun = findActiveUpdateRun();
-    const [lastRun] = listUpdateRuns({ limit: 1 });
+    try {
+      await reconcileAbandonedUpdateRunsAsync();
+    } catch (error) {
+      context?.logGateway?.warn(
+        `update.status reconciliation failed: ${formatErrorMessage(error)}`,
+      );
+    }
+    const [activeRun] = await listUpdateRunsAsync({ active: true, limit: 1 });
+    const [lastRun] = await listUpdateRunsAsync({ limit: 1 });
     const result = {
       sentinel,
       ...(activeRun ? { activeRun } : {}),
@@ -120,16 +127,20 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     }
     respond(true, result);
   },
-  "update.runs.get": ({ params, respond }) => {
+  "update.runs.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
-    respond(true, { run: getUpdateRun(params.runId) ?? null });
+    const { run, reconciliationError } = await getUpdateRunWithReconciliationAsync(params.runId);
+    if (reconciliationError) {
+      context?.logGateway?.warn(`update.runs.get reconciliation failed: ${reconciliationError}`);
+    }
+    respond(true, { run: run ?? null });
   },
-  "update.runs.list": ({ params, respond }) => {
+  "update.runs.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateRunsListParams, "update.runs.list", respond)) {
       return;
     }
-    respond(true, { runs: listUpdateRuns(params) });
+    respond(true, { runs: await listUpdateRunsAsync(params) });
   },
 };

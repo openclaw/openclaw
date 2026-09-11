@@ -23,6 +23,7 @@ import {
   startBrowser,
 } from "./browser-client.ts";
 import { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
+import { BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
 import {
   BrowserPanelOperationOwnership,
@@ -64,6 +65,7 @@ export class BrowserPanelController implements ReactiveController {
   readonly native: BrowserPanelNativeController;
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
+  readonly download = new BrowserPanelDownload(this);
   private readonly input: BrowserPanelInputController;
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
@@ -152,6 +154,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private invalidateViewOperations(): void {
+    this.download.cancel();
     this.stream.close();
     this.operations.invalidate();
     this.pendingInput.clear();
@@ -649,10 +652,6 @@ export class BrowserPanelController implements ReactiveController {
         this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
       }
     });
-  }
-
-  setUrlDraft(value: string): void {
-    this.setState("urlDraft", value);
   }
 
   setUrlDraftEditing(editing: boolean): void {

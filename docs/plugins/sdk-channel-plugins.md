@@ -325,9 +325,10 @@ raw callback string. Actor and source-message checks remain channel-owned.
     so their handlers, command catalogs, and routes use the new generation.
     Manually stopped accounts stay stopped. Ordinary channel config changes
     still restart only the affected channel or accounts.
-    `retainNativeCatalog(provider)` is deprecated and will be removed in the
-    next breaking SDK release; existing calls only assert that the captured
-    registry generation is still active.
+    `retainNativeCatalog(provider)` has been deprecated since 2026.9.2 and
+    will be removed in the next breaking SDK release; it is retained for
+    callers written against 2026.9.1, and existing calls only assert that the
+    captured registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.
@@ -515,8 +516,8 @@ Write colocated tests in `src/channel.test.ts`:
 ## Advanced topics
 
 <CardGroup cols={2}>
-  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-entrypoints#registration-mode">
-    Fixed, account-scoped, or custom reply modes
+  <Card title="Threading options" icon="git-branch" href="/plugins/sdk-channel-plugins#what-createchatchannelplugin-does-for-you">
+    `threading.topLevelReplyToMode`: fixed, account-scoped, or custom reply modes
   </Card>
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery

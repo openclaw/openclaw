@@ -6,7 +6,7 @@ read_when:
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
 title: "Plugin internals"
-sidebarTitle: "Internals"
+sidebarTitle: "Architecture"
 ---
 
 This is the **deep architecture reference** for the OpenClaw plugin system. For practical guides, start with one of the focused pages below.
@@ -114,7 +114,7 @@ OpenClaw's plugin system has four layers:
     Core decides whether a discovered plugin is enabled, disabled, blocked, or selected for an exclusive slot such as memory.
   </Step>
   <Step title="Runtime loading">
-    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Packaged JavaScript loads through native `require`; third-party local source TypeScript is the emergency Jiti fallback. Compatible bundles are normalized into registry records without importing runtime code.
+    Native OpenClaw plugins are loaded in-process and register capabilities into a central registry. Managed instances load JavaScript through Node and compile TypeScript source when needed. Compatible bundles are normalized into registry records without importing runtime code.
   </Step>
   <Step title="Surface consumption">
     The rest of OpenClaw reads the registry to expose tools, channels, provider setup, hooks, HTTP routes, CLI commands, and services.
@@ -162,17 +162,104 @@ Activation policy and runtime bindings have a separate lifetime. Hot reload can 
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then restart the Gateway to load the repaired plugin.
 
+Read-only model validation, effective tool inventory, and isolated model probes acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations.
+
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Cleanup waits for the issued startup work to settle, even if a caller has stopped waiting. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown waits up to five seconds before continuing independent teardown, then joins the same cleanup before retiring shared plugin state, registries, secrets, and metadata. It does not invoke the service's stop handler again. If a service restart fails, an explicit reload retry still includes selected services whose restart had not begun.
 
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
 
 Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
 
+Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.
+
 Hot registry publication does not wait for retired host cleanup; terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
 Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. Their snapshots and installed-index writes do not replace the running Gateway's inventory. Runtime flows must use the startup snapshot or its lookup table instead of falling back to those cold management paths.
+
+### Runtime instance and source lifetime
+
+A managed runtime instance owns its module results, registered callables, and
+runtime-store slots. With Node's synchronous module hooks, it also owns a captured
+source artifact. Package plugins capture their package inputs when the instance
+is created. Standalone files and compiled setup artifacts
+capture their entry and statically known inputs without copying the surrounding
+workspace. Conditional package aliases retain their package metadata, and native
+Node conditions select the target from that captured metadata. Legacy packages
+without an exports map also prefetch their existing main or index entry as raw
+bytes; this can read a large native entry, but does not execute unselected code.
+The selected package's remaining body is captured before execution.
+
+After the existing runtime, setup, or executable-discovery checks admit an entry,
+its instance captures imported shared files and dependency modules on demand.
+Relative, absolute, and file-URL imports use captured files; TypeScript dependency
+entries compile in their own package scope. Metadata and install inspection remain
+confined and do not acquire executable shared inputs.
+
+Executable loading can follow a shared-module link by capturing its selected
+module separately. Cold source snapshots still reject links outside the plugin
+root, so deferred install batches and install-digest settlement require those
+inputs to be packaged as dependencies. Linked non-module resources outside the
+plugin root are not captured by this module-loading path.
+
+A first-demand `import()` or `require()` can observe later source edits; captured
+metadata and entry bytes remain unchanged. Invalid optional package metadata fails
+only when selected. Module acquisition uses the instance's current admission, and
+disposal closes further capture.
+
+Loading metadata alone does not execute every plugin, and registration remains
+synchronous. Synchronously loaded TypeScript entries and their synchronous
+TypeScript imports retain Jiti's CommonJS compilation behavior, including `.mts`
+and `.mtsx` entries. Node evaluates the captured output. Keep top-level await out
+of synchronous entrypoints; start asynchronous work through lifecycle callbacks
+or a later dynamic import.
+
+Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
+top-level await and `module.exports`, while source loaded from native JavaScript
+follows Node's module format. The first evaluation fixes that mode for the
+instance; resolving a module alone does not evaluate it. Source
+`import.meta.resolve` retains Jiti's optional parent URL and resolution options,
+including custom conditions and `try`. The one-argument resolver uses the
+source's directory and package scope.
+Entries loaded from captured source retain evaluation failures for their instance
+instead of retrying through another loader. Core-shipped JavaScript and libraries
+loaded outside a captured plugin instance keep their existing native/Jiti loading
+behavior.
+
+Managed TypeScript filename metadata (`import.meta.url`, `import.meta.filename`,
+`import.meta.dirname`, `__filename`, and `__dirname`) identifies the captured
+source so relative asset reads stay within that generation. Node executes compiled
+JavaScript from a separate directory; its module URLs and CommonJS cache keys can
+differ from the source filenames.
+
+Runtimes without synchronous Node module hooks, including Bun 1.4.2, use the
+existing native/Jiti loader instead of the captured source graph. Managed
+callbacks retain the same instance admission and lifecycle disposal. Retired
+CommonJS/Jiti cache records remain until the last managed native loader closes,
+because Jiti does not record every shared dependency edge. Cleanup then removes
+only those exact records within their plugin roots, preserving replacement cache
+entries. Fresh instances can then pick up TypeScript entry and helper edits;
+while another managed native loader remains active, cached modules may be reused.
+Module resolution and caching otherwise follow that runtime and Jiti's behavior.
+
+When using Jiti's TypeScript path settings, keep the original tsconfig files and
+configuration dependencies available while the plugin is active. Loaded modules
+retain their selected path mappings; previously unvisited modules may read those
+configuration files on first use. Newly loaded instances select the current
+path settings.
+
+Registry retirement revokes managed execution separately from physical resource
+release. An acquired inspection can release its execution authority while a
+borrower still holds the underlying registration resources; the last physical
+claim owns their disposal. Bare SDK provider results retain their own instance
+consumer, so their callbacks remain usable until the owning SDK host closes.
+That host joins admitted callback work before releasing consumers and resources;
+releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies
+until the owners that still need them have joined. These ownership rules do not
+make native plugins a sandbox or automatically close plugin-created resources.
+See [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup)
+for the plugin author's cleanup contract.
 
 ### Activation planning
 
@@ -452,7 +539,7 @@ For bundled workspace package names, keep the plugin id anchored in the npm name
 
 For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies, while bundled plugins from `OPENCLAW_DEV_SOURCE_ROOT` retain priority over tracked globals. See [Discovery precedence](/plugins/manifest/package-json#discovery-precedence-duplicate-plugin-ids) for the full order.
 
-An alias of the same independently validated bundled entry retains bundled provenance; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
+A configured path or install record pointing to the host’s own bundled plugin tree retains bundled provenance, including source and compiled entries; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 
 Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
 </Note>

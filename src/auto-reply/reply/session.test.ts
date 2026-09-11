@@ -2208,8 +2208,8 @@ describe("initSessionState RawBody", () => {
       slug: "label",
       sessionKey: "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77",
       chatType: "direct",
-      entry: { label: "Other", displayName: "Dashboard Chat" },
-      expected: { label: "Other", displayName: "Dashboard Chat" },
+      entry: { label: "Other", autoLabel: "Device", displayName: "Dashboard Chat" },
+      expected: { label: "Other", autoLabel: "Device", displayName: "Dashboard Chat" },
       persisted: true,
     },
     {
@@ -2670,7 +2670,21 @@ describe("initSessionState RawBody", () => {
   it.each([
     { name: "opaque plugin target", targetSessionKey: "plugin-binding:fixture-runtime:thread-17" },
     { name: "adopted agent target", targetSessionKey: "agent:main:external-runtime:thread-17" },
-  ])("keeps escaped commands on the core session for $name", async ({ targetSessionKey }) => {
+    { name: "ACP status", targetSessionKey: "agent:claude:acp:thread-17", command: "/acp status" },
+    {
+      name: "ACP unbind",
+      targetSessionKey: "agent:claude:acp:thread-17",
+      command: "/session unbind",
+    },
+    {
+      name: "ACP reset",
+      targetSessionKey: "agent:claude:acp:thread-17",
+      command: "/new",
+      reset: true,
+    },
+  ])("keeps escaped commands on the core session for $name", async (scenario) => {
+    const { targetSessionKey } = scenario;
+    const command = "command" in scenario ? scenario.command : "/fixture status";
     setMinimalCurrentConversationBindingRegistryForTests();
     registerCurrentConversationBindingAdapterForTest({ channel: "slack", accountId: "default" });
     const storePath = await createStorePath("openclaw-plugin-command-session-");
@@ -2698,16 +2712,19 @@ describe("initSessionState RawBody", () => {
       targetSessionKey,
       targetKind: "session",
       conversation,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "fixture-runtime",
-        pluginRoot: "/plugins/fixture-runtime",
-      },
+      metadata:
+        "command" in scenario
+          ? undefined
+          : {
+              pluginBindingOwner: "plugin",
+              pluginId: "fixture-runtime",
+              pluginRoot: "/plugins/fixture-runtime",
+            },
     });
     const ctx = {
-      Body: "/fixture status",
-      RawBody: "/fixture status",
-      CommandBody: "/fixture status",
+      Body: command,
+      RawBody: command,
+      CommandBody: command,
       CommandSource: "text",
       CommandAuthorized: true,
       SessionKey: sourceSessionKey,
@@ -2731,10 +2748,16 @@ describe("initSessionState RawBody", () => {
 
     expect(result.sessionKey).toBe(sourceSessionKey);
     expect(result.sessionId).toBe(sourceSessionId);
+    if ("reset" in scenario) {
+      expect(result.resetTriggered).toBe(true);
+    }
     expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
     expect(
       resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
-    ).toMatchObject({ sessionKey: sourceSessionKey, sessionEntry: { sessionId: sourceSessionId } });
+    ).toMatchObject({
+      sessionKey: sourceSessionKey,
+      sessionEntry: { sessionId: result.sessionId },
+    });
     expect({ ...readSessionStoreFast(storePath) }[targetSessionKey]).toEqual(targetBefore);
     expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(binding);
   });
@@ -3756,7 +3779,6 @@ describe("initSessionState reset authorization", () => {
           workspaceDir: path.dirname(storePath),
           defaultGroupActivation: () => "mention",
           resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
           resolveDefaultThinkingLevel: async () => undefined,
           provider: "openai",
           model: "test-model",

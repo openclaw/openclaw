@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -23,13 +25,23 @@ import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-tas
 const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
+  serviceState: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
+  revalidateService:
+    vi.fn<
+      typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+    >(),
   reachable: vi.fn(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
 vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: mocks.serviceState,
+}));
 vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
   createWindowsTaskAutoStartGuard: () => async () => {},
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
@@ -95,6 +107,25 @@ describe("verified package rollback", () => {
       `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
     );
     vi.resetAllMocks();
+    mocks.serviceState.mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      env: {},
+      command: {
+        programArguments: [
+          process.execPath,
+          path.join(previousRoot, "dist", "index.js"),
+          "gateway",
+        ],
+      },
+    });
+    mocks.revalidateService.mockResolvedValue({
+      kind: "owned",
+      root: previousRoot,
+      fingerprint: "fixture",
+      refreshDefinition: true,
+    });
     mocks.reachable.mockResolvedValue({ reachable: true });
     mocks.stop.mockResolvedValue({
       stopped: true,
@@ -665,14 +696,13 @@ describe("verified package rollback", () => {
           resolveUpdateResultNextAction({ result: outcome.result, env: process.env }),
         ).toContain(configPath);
       }
-      expect(outcome.rolledBack).toBe(restored);
+      expect(outcome.rolledBack, JSON.stringify(outcome)).toBe(restored);
       expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
         change === "none" ||
           change === "readonly-config" ||
           change === "doctor" ||
           change === "doctor-unchanged" ||
           change === "doctor-include" ||
-          change === "doctor-locked-edit" ||
           change === "doctor-restore-edit" ||
           change === "identity-read-failed" ||
           change === "new-agent"
@@ -727,6 +757,95 @@ describe("verified package rollback", () => {
       }
     },
   );
+
+  it("excludes a competing config writer across package rollback and config restoration", async () => {
+    const stateDir = dirs.make("rollback-config-owner-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const configPath = path.join(stateDir, "openclaw.json");
+    const original = '{"gateway":{"mode":"local","port":19101}}\n';
+    const candidate = '{"gateway":{"mode":"local","port":19102}}\n';
+    fs.writeFileSync(configPath, original);
+    const configSnapshot = await readPreviousConfig(env);
+    const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+    fs.writeFileSync(configPath, candidate);
+    const lockOptions = {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    };
+    let foreignWrite = false;
+    const outcome = await rollbackFailedUpdate({
+      result: {
+        status: "error",
+        mode: "npm",
+        root: candidateRoot,
+        reason: "readyz-unhealthy",
+        steps: [],
+        durationMs: 1,
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.3" },
+      },
+      previousRoot,
+      configSnapshot,
+      schemaVersions,
+      timeoutMs: 1000,
+      activationConfig: {
+        path: configPath,
+        raw: original,
+        hash: hashConfigRaw(candidate),
+        doctorOwned: true,
+      },
+      opts: { json: true },
+      preManagedServiceStop: {
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        stopped: false,
+        serviceEnv: env,
+      },
+      packageTransaction: {
+        backupRoot: previousRoot,
+        complete: async () => {},
+        rollback: async () => {
+          try {
+            await withFileLock(configPath, lockOptions, async () => {
+              foreignWrite = true;
+              fs.writeFileSync(configPath, '{"gateway":{"mode":"local","port":19103}}\n');
+            });
+          } catch (error) {
+            if (
+              !(
+                error instanceof Error &&
+                "code" in error &&
+                error.code === FILE_LOCK_TIMEOUT_ERROR_CODE
+              )
+            ) {
+              throw error;
+            }
+          }
+          return {
+            name: "package rollback",
+            command: "restore",
+            cwd: previousRoot,
+            durationMs: 1,
+            exitCode: 0,
+            activePackageRoot: previousRoot,
+          };
+        },
+      },
+    });
+    expect(foreignWrite).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(outcome.result).toMatchObject({
+      root: previousRoot,
+      recovery: { packageRollbackVerified: true },
+    });
+    expect(mocks.restart).not.toHaveBeenCalled();
+    await withFileLock(configPath, lockOptions, async () => {
+      fs.writeFileSync(configPath, candidate);
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(candidate);
+  });
 
   it("leaves a failed rollback's task recovery with finalization", async () => {
     const complete = vi.fn(async () => {});

@@ -925,6 +925,13 @@ describe("callGateway url resolution", () => {
   });
 
   it.each([
+    ["plain environment inventory", "environments.list", {}, ["operator.read"]],
+    [
+      "runtime-aware environment inventory",
+      "environments.list",
+      { runtimeId: "openclaw" },
+      ["operator.write"],
+    ],
     [
       "device dispatch",
       "sessions.dispatch",

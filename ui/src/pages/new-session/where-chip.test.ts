@@ -1,12 +1,16 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { deviceIcons } from "../../components/icons-devices.ts";
+import { icons } from "../../components/icons.ts";
+import { readDraftCloudProfiles } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 function renderPicker(
   isAdmin: boolean,
   autoPlacementMode?: "least-busy" | "eligible-order",
   selection: Partial<Parameters<typeof resolveWhereChip>[0]> = {},
+  presentation: Partial<Parameters<typeof renderWhereChip>[0]> = {},
 ) {
   const state = resolveWhereChip({
     environments: [
@@ -45,8 +49,11 @@ function renderPicker(
     renderWhereChip({
       state,
       gatewayName: "",
+      environmentQuery: "",
+      onEnvironmentQueryInput: vi.fn(),
       cloudProfileId: selection.cloudProfileId ?? "",
-      deviceId: "",
+      deviceId: selection.deviceId ?? "",
+      autoDevice: selection.autoDevice,
       worktreeAvailable: true,
       submitting: false,
       pendingPlacement: false,
@@ -62,6 +69,7 @@ function renderPicker(
       onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
+      ...presentation,
     }),
     container,
   );
@@ -69,6 +77,383 @@ function renderPicker(
 }
 
 describe("Where chip", () => {
+  it.each([
+    { label: "Work MacBook Pro", platform: "darwin", icon: deviceIcons.laptop, form: "laptop" },
+    {
+      label: "Personal MacBook Air",
+      platform: undefined,
+      icon: deviceIcons.laptop,
+      form: "laptop",
+    },
+    { label: "Office Mac-mini", platform: "darwin", icon: deviceIcons.macMini, form: "mini" },
+    { label: "Build Mac Studio", platform: "macOS", icon: deviceIcons.macStudio, form: "studio" },
+    { label: "Development workstation", platform: "darwin", icon: icons.monitor, form: null },
+    { label: "MacBookish workstation", platform: "darwin", icon: icons.monitor, form: null },
+    { label: "Studio runner", platform: "darwin", icon: icons.monitor, form: null },
+    { label: "Build Mac Studio", platform: "linux", icon: icons.monitor, form: null },
+  ])(
+    "uses the same device outline in the selected row and trigger: $label / $platform",
+    ({ label, platform, icon, form }) => {
+      const container = renderPicker(true, undefined, {
+        deviceId: "model-device",
+        environments: [
+          {
+            id: "node:model-device",
+            type: "node",
+            label,
+            platform,
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+        ],
+      });
+      const expected = document.createElement("div");
+      render(icon, expected);
+      const expectedSvg = expected.querySelector("svg")!;
+
+      expect(
+        expectedSvg.isEqualNode(
+          container.querySelector('[data-value="device:model-device"] .session-menu__icon svg'),
+        ),
+      ).toBe(true);
+      expect(
+        expectedSvg.isEqualNode(
+          container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
+        ),
+      ).toBe(true);
+      for (const selector of [
+        '[data-value="device:model-device"] .session-menu__icon',
+        "#new-session-where-trigger .new-session-page__target-icon",
+      ]) {
+        const marker = container.querySelector(`${selector} .new-session-page__device-icon`);
+        if (form) {
+          expect(marker?.getAttribute("data-form")).toBe(form);
+        } else {
+          expect(marker).toBeNull();
+        }
+      }
+    },
+  );
+
+  it.each([
+    { cloudProfileId: "", value: "gateway", icon: icons.home },
+    { cloudProfileId: "aws", value: "cloud:aws", icon: icons.cloud },
+  ])(
+    "keeps destination-type icons for $value even with a Mac-named Gateway",
+    ({ cloudProfileId, value, icon }) => {
+      const container = renderPicker(
+        true,
+        undefined,
+        { cloudProfileId },
+        { gatewayName: "Gateway Mac Studio" },
+      );
+      const expected = document.createElement("div");
+      render(icon, expected);
+      const expectedSvg = expected.querySelector("svg")!;
+
+      expect(
+        expectedSvg.isEqualNode(
+          container.querySelector(`[data-value="${value}"] .session-menu__icon svg`),
+        ),
+      ).toBe(true);
+      expect(
+        expectedSvg.isEqualNode(
+          container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
+        ),
+      ).toBe(true);
+      expect(
+        container.querySelector(`[data-value="${value}"] .new-session-page__device-icon`),
+      ).toBeNull();
+      expect(
+        container.querySelector("#new-session-where-trigger .new-session-page__device-icon"),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    { query: "  local  ", expected: ["gateway"] },
+    { query: "STUDIO", expected: ["gateway"] },
+    { query: "device", expected: ["device:runner", "device:alpha-device", "device:beta-device"] },
+    { query: "beta-device", expected: ["device:beta-device"] },
+    { query: "cloud", expected: ["cloud:aws"] },
+    { query: "AWS", expected: ["cloud:aws"] },
+    { query: "crabbox", expected: ["cloud:aws"] },
+    { query: "persistent", expected: ["cloud:aws"] },
+  ])("searches destination names, types, IDs and facts: $query", ({ query, expected }) => {
+    const container = renderPicker(
+      true,
+      undefined,
+      { cloudProfiles: [{ id: "aws", providerId: "crabbox", trust: "persistent" }] },
+      { gatewayName: "Build Studio", environmentQuery: query },
+    );
+
+    expect(
+      [
+        ...container.querySelectorAll(
+          '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
+        ),
+      ].map((row) => row.getAttribute("data-value")),
+    ).toEqual(expected);
+    expect(container.querySelector('[data-value="auto-device"]')).not.toBeNull();
+  });
+
+  it("keeps matching Local, Devices and Cloud in order with device facts searchable", () => {
+    const container = renderPicker(
+      true,
+      undefined,
+      {
+        environments: [
+          {
+            id: "node:zulu",
+            type: "node",
+            label: "Zulu runner",
+            platform: "linux",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+          {
+            id: "node:alpha",
+            type: "node",
+            label: "Alpha runner",
+            platform: "linux",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+        ],
+        cloudProfiles: [{ id: "linux-worker", providerId: "crabbox" }],
+      },
+      { gatewayName: "Linux Studio", environmentQuery: "LINUX" },
+    );
+
+    expect(
+      [...container.querySelectorAll(".new-session-page__environment-list [data-value]")].map(
+        (row) => row.getAttribute("data-value"),
+      ),
+    ).toEqual(["gateway", "device:alpha", "device:zulu", "auto-device", "cloud:linux-worker"]);
+    expect(container.querySelector('[data-value="device:alpha"]')?.textContent).toContain("Linux");
+    const cloudTitle = container.querySelector(".new-session-page__menu-title");
+    expect(cloudTitle?.textContent).toBe("Cloud");
+    expect(cloudTitle?.previousElementSibling?.getAttribute("data-value")).toBe("auto-device");
+    expect(cloudTitle?.nextElementSibling?.getAttribute("data-value")).toBe("cloud:linux-worker");
+    expect(
+      cloudTitle?.nextElementSibling?.querySelector(".session-menu__text")?.textContent?.trim(),
+    ).toBe("linux-worker");
+  });
+
+  it("keeps Auto selectable and Connect available when no environments match", () => {
+    const container = renderPicker(true, undefined, {}, { environmentQuery: "no-such-runner" });
+    const results = container.querySelector(".new-session-page__environment-list");
+
+    expect(results?.querySelectorAll("[data-value]")).toHaveLength(1);
+    expect(results?.textContent).toContain("No matching environments");
+    for (const value of ["auto-device", "connect-machine"]) {
+      const action = container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+      expect(action).not.toBeNull();
+      expect(action?.disabled).toBe(false);
+      expect(results?.contains(action)).toBe(value === "auto-device");
+    }
+  });
+
+  it("forwards search input without changing the selected destination", () => {
+    const onEnvironmentQueryInput = vi.fn();
+    const onSelectDevice = vi.fn();
+    const container = renderPicker(
+      true,
+      undefined,
+      { deviceId: "runner" },
+      { onEnvironmentQueryInput, onSelectDevice },
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[placeholder="Search environments"]',
+    )!;
+
+    input.value = "cloud";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onEnvironmentQueryInput).toHaveBeenCalledExactlyOnceWith("cloud");
+    expect(onSelectDevice).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-value="device:runner"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("keeps slot indicators and reserves the checkmark column when selecting a device", () => {
+    const container = renderPicker(true, undefined, { deviceId: "runner" });
+    const selected = container.querySelector('[data-value="device:runner"]');
+    const unselected = container.querySelector('[data-value="device:alpha-device"]');
+
+    expect(selected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
+    );
+    expect(selected?.getAttribute("aria-pressed")).toBe("true");
+    expect(unselected?.getAttribute("aria-pressed")).toBe("false");
+    expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
+    expect(unselected?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "0 of 1 slots busy",
+    );
+    expect(unselected?.querySelector(".session-menu__check")).not.toBeNull();
+    expect(unselected?.querySelector(".session-menu__check svg")).toBeNull();
+  });
+
+  it.each([false, true])("selects automatic placement with Auto initially %s", (autoDevice) => {
+    const onSelectDevice = vi.fn();
+    const onSelectAutoDevice = vi.fn();
+    const container = renderPicker(
+      true,
+      undefined,
+      { autoDevice },
+      { onSelectDevice, onSelectAutoDevice },
+    );
+    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]')!;
+
+    expect(automatic.getAttribute("role")).toBeNull();
+    expect(automatic.getAttribute("aria-pressed")).toBe(String(autoDevice));
+    expect(automatic.textContent).toContain("Auto");
+    expect(automatic.textContent).toContain("Least-busy device");
+    automatic.click();
+
+    expect(onSelectAutoDevice).toHaveBeenCalledExactlyOnceWith(expect.any(MouseEvent));
+    expect(onSelectDevice).not.toHaveBeenCalled();
+  });
+
+  it("allows choosing a destination directly while Auto is selected", () => {
+    const onSelectDevice = vi.fn();
+    const onSelectCloudProfile = vi.fn();
+    const onEnvironmentQueryInput = vi.fn();
+    const onConnectMachine = vi.fn();
+    const container = renderPicker(
+      true,
+      undefined,
+      { autoDevice: true },
+      { onSelectDevice, onSelectCloudProfile, onEnvironmentQueryInput, onConnectMachine },
+    );
+    const destinations = container.querySelectorAll<HTMLButtonElement>(
+      ".new-session-page__environment-list [data-value]",
+    );
+
+    expect(destinations).toHaveLength(6);
+    for (const destination of destinations) {
+      expect(destination.disabled).toBe(false);
+      destination.click();
+    }
+    expect(onSelectDevice.mock.calls).toEqual([
+      [""],
+      ["runner"],
+      ["alpha-device"],
+      ["beta-device"],
+    ]);
+    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws");
+
+    const meter = container.querySelector('[data-value="device:runner"] [role="img"]');
+    expect(meter?.getAttribute("aria-label")).toBe("1 of 2 slots busy");
+    expect(meter?.classList.contains("session-context-meter--stale")).toBe(false);
+
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(search.disabled).toBe(false);
+    search.value = "cloud";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onEnvironmentQueryInput).toHaveBeenCalledExactlyOnceWith("cloud");
+
+    const connect = container.querySelector<HTMLButtonElement>('[data-value="connect-machine"]')!;
+    expect(connect.disabled).toBe(false);
+    connect.click();
+    expect(onConnectMachine).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("preserves destination eligibility with Auto set to %s", (autoDevice) => {
+    const container = renderPicker(
+      true,
+      undefined,
+      {
+        autoDevice,
+        environments: [
+          {
+            id: "node:ready",
+            type: "node",
+            label: "Ready runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+          {
+            id: "node:offline",
+            type: "node",
+            label: "Offline runner",
+            status: "unavailable",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+        ],
+        cloudProfiles: [
+          { id: "aws", providerId: "crabbox" },
+          { id: "blocked", providerId: "static-ssh" },
+        ],
+      },
+      {
+        cloudProfileDisabledReason: (profile) =>
+          profile.id === "blocked" ? "Runtime unavailable" : undefined,
+      },
+    );
+
+    for (const value of ["gateway", "device:ready", "cloud:aws"]) {
+      expect(container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)?.disabled).toBe(
+        false,
+      );
+    }
+    for (const value of ["device:offline", "cloud:blocked"]) {
+      expect(container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)?.disabled).toBe(
+        true,
+      );
+    }
+    expect(
+      container.querySelector('[data-value="cloud:blocked"] .session-menu__description')
+        ?.textContent,
+    ).toBe(" · Runtime unavailable");
+    expect(container.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
+      String(!autoDevice),
+    );
+  });
+
+  it.each([false, true])(
+    "omits Auto without devices even when its remembered state is %s",
+    (autoDevice) => {
+      const container = renderPicker(true, undefined, { environments: [], autoDevice });
+      expect(container.querySelector('[data-value="auto-device"]')).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>('[data-value="gateway"]')?.disabled).toBe(
+        false,
+      );
+    },
+  );
+
+  it("keeps unavailable operating systems visible with the provider's repair hint", () => {
+    const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+    const container = renderPicker(true, undefined, {
+      cloudProfileId: "aws",
+      cloudProfiles: readDraftCloudProfiles([
+        {
+          id: "aws",
+          providerId: "crabbox",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: true },
+            { id: "macos", label: "macOS", disabledReason: reason },
+            { id: "windows/wsl2", label: "Windows (WSL2)", disabledReason: reason },
+          ],
+        },
+      ]),
+    });
+    expect(container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')?.disabled).toBe(
+      false,
+    );
+    for (const os of ["macos", "windows/wsl2"]) {
+      const row = container.querySelector<HTMLButtonElement>(`[data-value="os:${os}"]`);
+      expect(row?.disabled).toBe(true);
+      expect(row?.textContent).toContain(reason);
+    }
+  });
+
   it.each([
     { os: undefined, machineClass: undefined, label: "aws", machine: "Tiny Linux" },
     { os: "linux", machineClass: "tiny", label: "aws · Tiny Linux", machine: "Tiny Linux" },
@@ -84,38 +469,49 @@ describe("Where chip", () => {
       label: "aws · Windows (WSL2) · Tiny Windows",
       machine: "Tiny Windows",
     },
-  ])("renders OS and class choices for $label", ({ os, machineClass, label, machine }) => {
-    const container = renderPicker(true, undefined, {
-      cloudProfileId: "aws",
-      os,
-      machineClass,
-      cloudProfiles: [
+  ])(
+    "keeps OS and class choices for $label during environment search",
+    ({ os, machineClass, label, machine }) => {
+      const container = renderPicker(
+        true,
+        undefined,
         {
-          id: "aws",
-          providerId: "crabbox",
-          operatingSystems: [
-            { id: "linux", label: "Linux", default: true },
-            { id: "windows/wsl2", label: "Windows (WSL2)" },
-          ],
-          machines: [
-            { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
-            { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
-            { id: "custom", label: "Custom" },
+          cloudProfileId: "aws",
+          os,
+          machineClass,
+          cloudProfiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              operatingSystems: [
+                { id: "linux", label: "Linux", default: true },
+                { id: "windows/wsl2", label: "Windows (WSL2)" },
+              ],
+              machines: [
+                { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
+                { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
+                { id: "custom", label: "Custom" },
+              ],
+            },
           ],
         },
-      ],
-    });
-    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
-    expect(container.querySelectorAll('[data-value="machine:tiny"]')).toHaveLength(1);
-    expect(container.querySelector('[data-value="machine:tiny"]')?.textContent).toContain(machine);
-    expect(container.querySelector('[data-value="machine:custom"]')).not.toBeNull();
-    const osRow = container.querySelector('[data-value="os:linux"]');
-    expect(osRow?.textContent).toContain("Default");
-    expect(osRow?.hasAttribute("data-popover")).toBe(false);
-    expect(
-      osRow?.compareDocumentPosition(container.querySelector('[data-value="machine:tiny"]')!),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  });
+        { environmentQuery: "unmatched-environment" },
+      );
+      expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
+      expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
+      expect(container.querySelectorAll('[data-value="machine:tiny"]')).toHaveLength(1);
+      expect(container.querySelector('[data-value="machine:tiny"]')?.textContent).toContain(
+        machine,
+      );
+      expect(container.querySelector('[data-value="machine:custom"]')).not.toBeNull();
+      const osRow = container.querySelector('[data-value="os:linux"]');
+      expect(osRow?.textContent).toContain("Default");
+      expect(osRow?.hasAttribute("data-popover")).toBe(false);
+      expect(
+        osRow?.compareDocumentPosition(container.querySelector('[data-value="machine:tiny"]')!),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    },
+  );
 
   it("keeps capacity structured and exposes busy slots without an ambiguous visible fraction", () => {
     const state = resolveWhereChip({
@@ -150,21 +546,25 @@ describe("Where chip", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
     expect(autoRow?.textContent).toContain("Auto");
-    expect(autoRow?.querySelector(".session-menu__sub")?.textContent).toContain(
+    expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
+    expect(autoRow?.querySelector(".session-menu__description")?.textContent).toContain(
       "Least-busy device",
     );
     const remoteExec = renderPicker(false, "eligible-order");
     expect(
-      remoteExec.querySelector('[data-value="auto-device"] .session-menu__sub')?.textContent,
+      remoteExec.querySelector('[data-value="auto-device"] .session-menu__description')
+        ?.textContent,
     ).toContain("First eligible device");
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
     expect(
-      writer.querySelector('[data-value="device:alpha-device"] .session-menu__sub')?.textContent,
-    ).toBe("alpha-de");
+      writer.querySelector('[data-value="device:alpha-device"] .session-menu__description')
+        ?.textContent,
+    ).toContain("alpha-de");
     expect(
-      writer.querySelector('[data-value="device:beta-device"] .session-menu__sub')?.textContent,
-    ).toBe("beta-dev");
+      writer.querySelector('[data-value="device:beta-device"] .session-menu__description')
+        ?.textContent,
+    ).toContain("beta-dev");
     expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
     expect(writer.querySelector('[data-value="connect-machine"]')).toBeNull();
 
@@ -196,6 +596,8 @@ describe("Where chip", () => {
       renderWhereChip({
         state,
         gatewayName: "",
+        environmentQuery: "",
+        onEnvironmentQueryInput: vi.fn(),
         cloudProfileId: "",
         deviceId: "",
         worktreeAvailable: true,
@@ -218,43 +620,11 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("This runtime does not support paired devices");
+    expect(device?.querySelector(".session-menu__description")?.textContent).toBe(
+      " · This runtime does not support paired devices",
+    );
     // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
     expect(device?.title).toBe("This runtime does not support paired devices");
-  });
-
-  it("omits the devices section entirely when no devices are paired", () => {
-    const state = resolveWhereChip({
-      environments: [],
-      cloudProfiles: [],
-      cloudProfileId: "",
-      deviceId: "",
-    });
-    const emptyContainer = document.createElement("div");
-    render(
-      renderWhereChip({
-        state,
-        gatewayName: "",
-        cloudProfileId: "",
-        deviceId: "",
-        worktreeAvailable: true,
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        popoverHiding: false,
-        isAdmin: false,
-        onGuardTransition: vi.fn(),
-        onPopoverShow: vi.fn(),
-        onPopoverHide: vi.fn(),
-        onPopoverAfterHide: vi.fn(),
-        onSelectDevice: vi.fn(),
-        onSelectAutoDevice: vi.fn(),
-        onSelectCloudProfile: vi.fn(),
-        onConnectMachine: vi.fn(),
-      }),
-      emptyContainer,
-    );
-    expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
   });
 
   it.each([
@@ -296,6 +666,8 @@ describe("Where chip", () => {
       renderWhereChip({
         state,
         gatewayName: "",
+        environmentQuery: "",
+        onEnvironmentQueryInput: vi.fn(),
         cloudProfileId: "",
         deviceId: "",
         worktreeAvailable: true,
@@ -319,7 +691,7 @@ describe("Where chip", () => {
     const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
     expect(automatic?.disabled).toBe(true);
     expect(automatic?.title).toMatch(reason);
-    expect(automatic?.textContent).toMatch(reason);
+    expect(automatic?.querySelector(".session-menu__description")?.textContent).toMatch(reason);
   });
 
   it.each([
@@ -418,6 +790,8 @@ describe("Where chip", () => {
         renderWhereChip({
           state,
           gatewayName: "",
+          environmentQuery: "",
+          onEnvironmentQueryInput: vi.fn(),
           cloudProfileId: "",
           deviceId: "",
           worktreeAvailable: true,

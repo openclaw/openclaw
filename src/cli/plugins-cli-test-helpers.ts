@@ -171,6 +171,7 @@ export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
 export const buildPluginInspectReportMock: UnknownMock = vi.fn();
 export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
+export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
 export const withPluginDiagnosticsReportForInspectionMock =
   vi.fn<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReportForInspection"]>();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
@@ -511,9 +512,15 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/status.js", () => ({
-  withPluginDiagnosticsReportForInspection: (
+  withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
-  ) => withPluginDiagnosticsReportForInspectionMock(...args),
+  ) => {
+    try {
+      return await withPluginDiagnosticsReportForInspectionMock(...args);
+    } finally {
+      await retirePluginDiagnosticsMock();
+    }
+  },
   buildPluginSnapshotReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) =>
@@ -556,16 +563,16 @@ vi.mock("../plugins/status.js", () => ({
       buildAllPluginInspectReportsMock,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildAllPluginInspectReports"],
-  buildPluginDiagnosticsReport: ((
-    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"]>,
-      ReturnType<(typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"]>
-    >(
-      buildPluginDiagnosticsReportMock,
-      ...args,
-    )) as (typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"],
+  withPluginDiagnosticsReport: async <T>(
+    params: Parameters<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReport"]>[0],
+    consume: (report: import("../plugins/status.js").PluginStatusReport) => T | Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await consume(invokeMock(buildPluginDiagnosticsReportMock, params));
+    } finally {
+      await retirePluginDiagnosticsMock();
+    }
+  },
   buildPluginCompatibilityNotices: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>
   ) =>
@@ -947,6 +954,7 @@ export function resetPluginsCliTestState() {
   buildPluginInspectReportMock.mockReset();
   buildAllPluginInspectReportsMock.mockReset();
   buildPluginDiagnosticsReportMock.mockReset();
+  retirePluginDiagnosticsMock.mockReset();
   withPluginDiagnosticsReportForInspectionMock.mockReset();
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
     formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),

@@ -485,7 +485,9 @@ final class ControlChannel {
 
         let mode = ConnectionModeResolver.resolve(root: configRoot).mode
         let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
-        let localPort = GatewayEnvironment.gatewayPort()
+        let localPort = mode == .remote
+            ? RemotePortTunnel.localPort(root: configRoot)
+            : GatewayEnvironment.gatewayPort()
         let directURL = mode == .remote && transport.transport == .direct ? transport.directURL : nil
         let endpoint = if let url = directURL, let host = url.host,
                           let port = GatewayRemoteConfig.defaultPort(for: url)

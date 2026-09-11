@@ -138,89 +138,103 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
-  it("loads plugin metadata and package icons for channel presentation", async () => {
-    const gateway = createGateway();
-    gateway.emit({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-      } as unknown as ApplicationGatewaySnapshot["hello"],
-    });
-    const source = createContext(gateway);
-    source.channels.state.channelsSnapshot = {
-      ts: 0,
-      channelOrder: ["slack"],
-      channelLabels: { slack: "slack" },
-      channelDetailLabels: { slack: "Legacy channel subtitle" },
-      channels: { slack: { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    };
-    const request = vi.spyOn(gateway.snapshot.client!, "request");
-    const baseRequest = request.getMockImplementation();
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      if (method === "plugins.list") {
-        return {
-          plugins: [
-            {
-              id: "slack",
-              name: "Slack",
-              description: "OpenClaw Slack channel plugin.",
-              origin: "bundled",
-              installed: true,
-              enabled: false,
-              state: "disabled",
-              hasIcon: true,
-            },
-            {
-              id: "firecrawl",
-              name: "FireCrawl",
-              description: "Crawl websites.",
-              origin: "global",
-              installed: false,
-              enabled: false,
-              state: "available",
-              hasIcon: true,
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        };
-      }
-      return await baseRequest?.(method, params);
-    });
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL) =>
-        new Response(new Uint8Array([137, 80, 78, 71]), {
-          status: 200,
-          headers: { "Content-Type": "image/png" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
-    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
-    page.context = source.context;
-    document.body.append(page);
+  it.each([false, true])(
+    "prefers the exact plugin icon with owner first: %s",
+    async (ownerFirst) => {
+      const gateway = createGateway();
+      gateway.emit({
+        hello: {
+          auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        } as unknown as ApplicationGatewaySnapshot["hello"],
+      });
+      const source = createContext(gateway);
+      source.channels.state.channelsSnapshot = {
+        ts: 0,
+        channelOrder: ["slack"],
+        channelLabels: { slack: "slack" },
+        channelDetailLabels: { slack: "Legacy channel subtitle" },
+        channels: { slack: { configured: false } },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      const request = vi.spyOn(gateway.snapshot.client!, "request");
+      const baseRequest = request.getMockImplementation();
+      const owner = {
+        id: "slack-suite",
+        name: "Suite",
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        hasIcon: true,
+        channelIds: ["slack"],
+      };
+      request.mockImplementation(async (method: string, params?: unknown) => {
+        if (method === "plugins.list") {
+          return {
+            plugins: [
+              ...(ownerFirst ? [owner] : []),
+              {
+                id: "slack",
+                name: "Slack",
+                description: "OpenClaw Slack channel plugin.",
+                origin: "bundled",
+                installed: true,
+                enabled: false,
+                state: "disabled",
+                hasIcon: true,
+              },
+              {
+                id: "firecrawl",
+                name: "FireCrawl",
+                description: "Crawl websites.",
+                origin: "global",
+                installed: false,
+                enabled: false,
+                state: "available",
+                hasIcon: true,
+              },
+              ...(ownerFirst ? [] : [owner]),
+            ],
+            diagnostics: [],
+            mutationAllowed: true,
+          };
+        }
+        return await baseRequest?.(method, params);
+      });
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL) =>
+          new Response(new Uint8Array([137, 80, 78, 71]), {
+            status: 200,
+            headers: { "Content-Type": "image/png" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
+      const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+      page.context = source.context;
+      document.body.append(page);
 
-    await vi.waitFor(() => {
-      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
-      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
-        "OpenClaw Slack channel plugin.",
-      );
-      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
-        "blob:slack-plugin-icon",
-      );
-    });
-    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
-    expect(
-      fetchMock.mock.calls
-        .map(([input]) =>
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-        )
-        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
-    ).toEqual(["/__openclaw__/plugin-icon/slack"]);
-    source.runtimeConfig.dispose();
-    source.channels.dispose();
-  });
+      await vi.waitFor(() => {
+        expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+        expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+          "OpenClaw Slack channel plugin.",
+        );
+        expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+          "blob:slack-plugin-icon",
+        );
+      });
+      expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
+      expect(
+        fetchMock.mock.calls
+          .map(([input]) =>
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+          )
+          .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+      ).toEqual(["/__openclaw__/plugin-icon/slack"]);
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
 
   it("loads an icon when channel status arrives after plugin metadata", async () => {
     const gateway = createGateway();
@@ -295,6 +309,194 @@ describe("ChannelsPage lifecycle", () => {
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });
+
+  it("loads a channel icon through its distinct owning plugin id", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["agent-system-github"],
+      channelLabels: { "agent-system-github": "GitHub Notifications" },
+      channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
+      channels: { "agent-system-github": { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    let includeSecondChannel = false;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "agent-system",
+              name: "Agent System",
+              description: "Manage agent workspaces.",
+              origin: "global",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              hasIcon: true,
+              channelIds: ["agent-system-github", "agent-system-chat"],
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      if (method === "channels.status" && includeSecondChannel) {
+        return {
+          ts: 1,
+          channelOrder: ["agent-system-github", "agent-system-chat"],
+          channelLabels: {
+            "agent-system-github": "GitHub Notifications",
+            "agent-system-chat": "Project Chat",
+          },
+          channelDetailLabels: {
+            "agent-system-github": "GitHub notification channel",
+            "agent-system-chat": "Project conversations",
+          },
+          channels: {
+            "agent-system-github": { configured: false },
+            "agent-system-chat": { configured: false },
+          },
+          channelAccounts: {},
+          channelDefaultAccountId: {},
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:agent-system-plugin-icon")
+      .mockReturnValue("blob:duplicate-plugin-icon");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("GitHub Notifications");
+      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+        "GitHub notification channel",
+      );
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:agent-system-plugin-icon",
+      );
+    });
+    expect(
+      fetchMock.mock.calls
+        .map(([input]) =>
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        )
+        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+    ).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
+    includeSecondChannel = true;
+    await source.channels.refresh(false);
+    await vi.waitFor(() => {
+      expect(
+        ["GitHub Notifications", "Project Chat"].map((label) => {
+          const row = Array.from(page.querySelectorAll(".channels-item")).find(
+            (item) => item.querySelector(".settings-row__title")?.textContent === label,
+          );
+          return row?.querySelector("img")?.getAttribute("src");
+        }),
+      ).toEqual(["blob:agent-system-plugin-icon", "blob:agent-system-plugin-icon"]);
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    page.remove();
+    expect(revoke.mock.calls).toEqual([["blob:agent-system-plugin-icon"]]);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it.each(["disconnect", "timeout"])(
+    "cancels the owning plugin icon request on %s",
+    async (cause) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const gateway = createGateway();
+      const source = createContext(gateway);
+      source.channels.state.channelsSnapshot = {
+        ts: 0,
+        channelOrder: ["agent-system-github"],
+        channelLabels: { "agent-system-github": "GitHub Notifications" },
+        channels: { "agent-system-github": { configured: false } },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      const request = vi.spyOn(gateway.snapshot.client!, "request");
+      const baseRequest = request.getMockImplementation();
+      request.mockImplementation(async (method: string, params?: unknown) => {
+        if (method === "plugins.list") {
+          return {
+            plugins: [
+              {
+                id: "agent-system",
+                name: "Agent System",
+                installed: true,
+                enabled: true,
+                state: "enabled",
+                hasIcon: true,
+                channelIds: ["agent-system-github"],
+              },
+            ],
+            diagnostics: [],
+            mutationAllowed: true,
+          };
+        }
+        return await baseRequest?.(method, params);
+      });
+      const aborted = createDeferred<unknown>();
+      const fetchMock = vi.fn<typeof fetch>(
+        async (_input, init) =>
+          await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              throw new Error("Expected icon request AbortSignal");
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted.resolve(signal.reason);
+                reject(new DOMException("The operation was aborted.", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const createUrl = vi.spyOn(URL, "createObjectURL");
+      const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+      page.context = source.context;
+      document.body.append(page);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      if (cause === "disconnect") {
+        gateway.emit({ phase: "stopped" });
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      expect(await aborted.promise).toMatchObject({
+        name: cause === "disconnect" ? "AbortError" : "TimeoutError",
+      });
+      expect(createUrl).not.toHaveBeenCalled();
+      page.remove();
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
 
   it("loads schema again when the runtime-config source changes", async () => {
     const gateway = createGateway();

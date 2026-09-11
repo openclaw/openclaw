@@ -51,7 +51,12 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
         const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await expect.poll(() => textarea.isDisabled()).toBe(true);
+        const send = page.getByRole("button", { name: "Send message", exact: true });
+        const draft = "Continue our conversation.";
+        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await textarea.fill(draft);
+        await expect.poll(() => send.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         const startupCount = (await gateway.getRequests("chat.startup")).length;
         const socketCount = await gateway.getSocketCount();
 
@@ -62,9 +67,14 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent(event, {});
         await gateway.waitForRequest("models.list", { after: 1 });
-        expect(await textarea.isDisabled()).toBe(true);
+        expect(await textarea.isDisabled()).toBe(false);
+        expect(await textarea.inputValue()).toBe(draft);
+        expect(await send.isDisabled()).toBe(true);
         await gateway.resolveDeferred("models.list");
-        await expect.poll(() => textarea.isDisabled()).toBe(false);
+        await expect.poll(() => send.isDisabled()).toBe(false);
+        expect(await textarea.isDisabled()).toBe(false);
+        expect(await textarea.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
         expect(await gateway.getRequests("models.list")).toHaveLength(2);
@@ -297,7 +307,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps an auth-cold configured catalog visible and blocks chat until setup", async () => {
+  it("keeps an auth-cold configured catalog visible and blocks messages until setup", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [
         {
@@ -348,6 +358,11 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
+      const textarea = composer.locator("textarea");
+      const send = composer.getByRole("button", { name: "Send message", exact: true });
+      const draft = "Continue our conversation.";
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill(draft);
       const picker = composer.locator("details.chat-controls__model-picker");
       const options = picker.locator(
         "button[data-chat-model-option]:not([data-chat-model-target])",
@@ -385,7 +400,9 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
         .toContain("No models available");
-      await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
+      expect(await textarea.isDisabled()).toBe(false);
+      expect(await textarea.inputValue()).toBe(draft);
+      await expect.poll(() => send.isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -687,6 +704,12 @@ suite.define(() => {
   it("reads a newer account catalog on reopen without a cooldown or provider discovery", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const existing = { id: "existing", name: "Existing", provider: "example", available: true };
+      const firstOpen = {
+        id: "first-open",
+        name: "First open",
+        provider: "example",
+        available: true,
+      };
       const published = {
         id: "published",
         name: "Published",
@@ -702,15 +725,71 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/existing"]').count())
         .toBe(1);
+      const picker = composer.locator("details.chat-controls__model-picker");
       const trigger = composer.locator('[data-chat-model-select="true"]');
+      await gateway.setMethodResponse("models.list", { models: [existing, firstOpen] });
       await trigger.click();
-      await gateway.waitForRequest("models.list", { after: 1 });
-      await trigger.click();
-      await gateway.setMethodResponse("models.list", { models: [existing, published] });
-      await trigger.click();
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="example/first-open"]').isVisible())
+        .toBe(true);
+      await gateway.setMethodResponse("models.list", { models: [existing, firstOpen, published] });
+      const previousRequestCount = (await gateway.getRequests("models.list")).length;
+
+      const reopened = await picker.evaluate(async (details: HTMLDetailsElement) => {
+        const pane = details.closest<
+          HTMLElement & { requestUpdate(): void; updateComplete: Promise<boolean> }
+        >("openclaw-chat-pane");
+        const summary = details.querySelector<HTMLElement>(":scope > summary");
+        if (!pane || !summary) {
+          throw new Error("Expected the native picker and its chat pane");
+        }
+        if (document.visibilityState !== "visible") {
+          throw new Error("Expected a visible document before native picker activation");
+        }
+        await pane.updateComplete;
+        if (!details.open || !details.isConnected) {
+          throw new Error("Expected the first-open catalog to remain rendered");
+        }
+        const listeners = new Set<() => void>();
+        const nextToggle = () =>
+          new Promise<void>((resolve) => {
+            const listener = () => {
+              listeners.delete(listener);
+              resolve();
+            };
+            listeners.add(listener);
+            details.addEventListener("toggle", listener, { once: true });
+          });
+        try {
+          const closed = nextToggle();
+          summary.click();
+          if (details.open) {
+            throw new Error("Expected native close activation to close the picker");
+          }
+          await closed;
+          const opened = nextToggle();
+          summary.click();
+          if (!details.open) {
+            throw new Error("Expected native reopen activation to open the picker");
+          }
+          // A normal render must not overwrite a newer native open before its queued toggle.
+          pane.requestUpdate();
+          await pane.updateComplete;
+          await opened;
+          return { open: details.open, connected: details.isConnected };
+        } finally {
+          for (const listener of listeners) {
+            details.removeEventListener("toggle", listener);
+          }
+        }
+      });
+
+      expect(reopened).toEqual({ open: true, connected: true });
+      await gateway.waitForRequest("models.list", { after: previousRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/published"]').isVisible())
         .toBe(true);
+      expect(await gateway.getRequests("models.list")).toHaveLength(previousRequestCount + 1);
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).toMatchObject({
           view: "configured",

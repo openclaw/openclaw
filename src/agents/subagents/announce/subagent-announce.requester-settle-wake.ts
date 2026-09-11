@@ -22,6 +22,7 @@ import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   countActiveDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
@@ -320,6 +321,34 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const selectedState = readSharedBatchState(settledBatch);
+  const getRequesterRun = () =>
+    getLatestLiveSubagentRunByChildSessionKey(
+      requesterSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+    ) ?? getLatestLiveSubagentRunByChildSessionKey(requesterSessionKey);
+  const requesterRun = getRequesterRun();
+  const requesterGeneration = requesterRun?.generation;
+  const requesterCreatedAt = requesterRun?.createdAt;
+  const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
+  const isBatchDeliveryClosed = () => {
+    const currentRequester = getRequesterRun();
+    return (
+      requesterRun?.killReconciliation?.suppressTaskDelivery === true ||
+      requesterRun?.suppressCompletionDelivery === true ||
+      currentRequester?.killReconciliation?.suppressTaskDelivery === true ||
+      currentRequester?.suppressCompletionDelivery === true ||
+      // This marker is written by requester-wide abort/reset, so even a
+      // completed sibling cannot keep the old frozen obligation alive.
+      settledBatch.some((entry) => entry.killReconciliation?.suppressTaskDelivery === true) ||
+      settledBatch.every((entry) => entry.suppressCompletionDelivery === true)
+    );
+  };
+  if (isBatchDeliveryClosed()) {
+    // Cancellation already owns the task result; only consume its obsolete wake.
+    completeBatch(settledBatch, currentRearmGeneration);
+    finalizeRequesterAttachment(batchRunIds, selectedState);
+    return false;
+  }
   function deferBatch(state: RequesterSettleWakeBatchState): void {
     const countTowardsLimit =
       countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0;
@@ -511,6 +540,56 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const directIdempotencyKey = buildAnnounceIdempotencyKey(
       attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
     );
+    const requesterSessionId = requesterEntry.sessionId;
+    const requesterLifecycleRevision = requesterEntry.lifecycleRevision;
+    const isRequesterCurrent = () => {
+      const currentRequester = getRequesterRun();
+      // Normal admission adopts a paused requester before execution starts.
+      // Only this admitted continuation may replace its captured task owner.
+      if (
+        (currentRequester !== requesterRun ||
+          currentRequester?.generation !== requesterGeneration ||
+          currentRequester?.createdAt !== requesterCreatedAt) &&
+        (!requesterRun ||
+          !currentRequester ||
+          currentRequester.runId !== directIdempotencyKey ||
+          currentRequester.taskRunId !== requesterTaskRunId ||
+          currentRequester.requesterSessionKey !== requesterRun.requesterSessionKey ||
+          currentRequester.requesterAgentId !== requesterRun.requesterAgentId)
+      ) {
+        return false;
+      }
+      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
+      return (
+        currentSession?.sessionId === requesterSessionId &&
+        currentSession?.lifecycleRevision === requesterLifecycleRevision
+      );
+    };
+    const isBatchCurrent = () => {
+      const currentRuns = listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId });
+      return settledBatch.every(
+        (entry) =>
+          currentRuns.includes(entry) &&
+          entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+      );
+    };
+    const isSourceSessionEffectsAllowed = () =>
+      !params.signal?.aborted &&
+      !isGatewayClosed() &&
+      isBatchCurrent() &&
+      isRequesterCurrent() &&
+      !isBatchDeliveryClosed();
+    const settleRevokedBatch = (): boolean => {
+      if (isGatewayClosed() || !isBatchCurrent()) {
+        return true;
+      }
+      if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
+        completeBatch(settledBatch, currentRearmGeneration);
+        finalizeRequesterAttachment(batchRunIds, state);
+        return true;
+      }
+      return false;
+    };
     if (requesterAgentId && state.requesterYieldBatch && state.rearmGeneration !== undefined) {
       transferRequesterFinalAttachment({
         requesterAgentId,
@@ -542,8 +621,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         directIdempotencyKey,
         signal: params.signal,
         resolveGatewayContext,
+        isSourceSessionEffectsAllowed,
       });
     } catch (error) {
+      if (settleRevokedBatch()) {
+        return false;
+      }
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);
@@ -583,6 +666,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       completeBatch(settledBatch, state.rearmGeneration, delivery);
       finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return true;
+    }
+    if (settleRevokedBatch()) {
+      return false;
     }
     if (
       delivery.disposition === "ambiguous" ||

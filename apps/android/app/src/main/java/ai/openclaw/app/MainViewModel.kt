@@ -20,6 +20,7 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
@@ -29,6 +30,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
@@ -47,6 +49,7 @@ import android.Manifest
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -530,6 +533,8 @@ class MainViewModel private constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val sessionDiffAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
     runtimeState(initial = SessionCatalogState()) { it.sessionCatalogState }
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
@@ -1016,10 +1021,24 @@ class MainViewModel private constructor(
   }
 
   internal fun openConversationNotification(target: ConversationNotificationTarget) {
+    // Like the picker, an explicit open supersedes older queued UI navigation.
+    // Runtime selection separately protects already accepted connections.
     launchGatewayConnectionOperation { runtime, isCurrent ->
-      if (runtime.openConversationNotificationTarget(target, isCurrent) && isCurrent()) {
-        runtime.finishGatewayConnectionOperation(isCurrent, unlessHandedOff = true)
-        _requestedHomeDestination.value = HomeDestination.Chat
+      when (val selection = runtime.openConversationNotificationTarget(target, isCurrent)) {
+        is GatewayTargetSelection.Selected -> {
+          if (isCurrent() && selection.isCurrent()) {
+            runtime.finishGatewayConnectionOperation(isCurrent, unlessHandedOff = true)
+            _requestedHomeDestination.value = HomeDestination.Chat
+          }
+        }
+
+        GatewayTargetSelection.Unavailable -> {
+          showUnavailableGateway(isCurrent)
+        }
+
+        GatewayTargetSelection.Retired -> {
+          return@launchGatewayConnectionOperation
+        }
       }
     }
   }
@@ -1291,8 +1310,20 @@ class MainViewModel private constructor(
   }
 
   fun switchToGateway(stableId: String) {
-    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.switchToGateway(stableId, isCurrent) }
+    launchGatewayConnectionOperation { runtime, isCurrent ->
+      if (runtime.switchToGateway(stableId, isCurrent) == GatewayTargetSelection.Unavailable) {
+        showUnavailableGateway(isCurrent)
+      }
+    }
   }
+
+  private suspend fun showUnavailableGateway(isCurrent: () -> Boolean) =
+    withContext(Dispatchers.Main) {
+      if (!isCurrent()) return@withContext
+      Toast.makeText(nodeApp, nativeString("Gateway unavailable"), Toast.LENGTH_LONG).show()
+      requestedSettingsRouteState.value = SettingsRoute.Gateway
+      _requestedHomeDestination.value = HomeDestination.Settings
+    }
 
   fun setGatewayConnectionEnabled(
     stableId: String,
@@ -1341,16 +1372,19 @@ class MainViewModel private constructor(
     }
   }
 
-  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
-    runtimeRef.value?.acceptGatewayTrustPrompt(manualFingerprint)
+  fun acceptGatewayTrustPrompt(
+    prompt: NodeRuntime.GatewayTrustPrompt,
+    manualFingerprint: String? = null,
+  ) {
+    runtimeRef.value?.acceptGatewayTrustPrompt(prompt, manualFingerprint)
   }
 
-  fun useSystemGatewayTrustPrompt() {
-    runtimeRef.value?.useSystemGatewayTrustPrompt()
+  fun useSystemGatewayTrustPrompt(prompt: NodeRuntime.GatewayTrustPrompt) {
+    runtimeRef.value?.useSystemGatewayTrustPrompt(prompt)
   }
 
-  fun declineGatewayTrustPrompt() {
-    runtimeRef.value?.declineGatewayTrustPrompt()
+  fun declineGatewayTrustPrompt(prompt: NodeRuntime.GatewayTrustPrompt) {
+    runtimeRef.value?.declineGatewayTrustPrompt(prompt)
   }
 
   internal suspend fun resolveInlineWidgetResource(
@@ -1640,7 +1674,7 @@ class MainViewModel private constructor(
 
   suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = ensureRuntime().switchChatSessionBranch(leafEntryId)
 
-  internal fun isCurrentChatBranchTarget(
+  internal fun isCurrentChatSelection(
     owner: ChatComposerOwner,
     selectionGeneration: Long,
   ): Boolean {
@@ -1653,7 +1687,7 @@ class MainViewModel private constructor(
     selectionGeneration: Long,
   ): Boolean {
     val runtime = runtimeRef.value ?: return false
-    return isCurrentChatBranchTarget(owner, selectionGeneration) && runtime.canSwitchChatSessionBranch(owner.sessionKey)
+    return isCurrentChatSelection(owner, selectionGeneration) && runtime.canSwitchChatSessionBranch(owner.sessionKey)
   }
 
   internal fun canSwitchChatSessionBranch(
@@ -1667,6 +1701,12 @@ class MainViewModel private constructor(
       !runtime.chatSessionBranchesLoading.value &&
       runtime.chatSessionBranches.value.any { it.leafEntryId == leafEntryId && !it.active }
   }
+
+  suspend fun loadSessionDiff(
+    sessionKey: String,
+    agentId: String?,
+    expectedGatewayStableId: String,
+  ): SessionDiffSnapshot = ensureRuntime().loadSessionDiff(sessionKey, agentId, expectedGatewayStableId)
 
   suspend fun listWorkspaceFiles(
     path: String?,
@@ -1784,6 +1824,15 @@ class MainViewModel private constructor(
       currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
     ) == expected
 
+  internal fun createProviderAuthController(owner: ChatComposerOwner): ProviderAuthController? {
+    val runtime = ensureRuntime()
+    if (!owner.routingVerified || !isCurrentChatComposerOwner(owner) || !runtime.operatorAdminScopeAvailable.value) return null
+    val selectionGeneration = runtime.chatSelectionGeneration.value
+    return runtime.createProviderAuthController(owner) {
+      runtimeRef.value === runtime && isCurrentChatSelection(owner, selectionGeneration) && runtime.operatorAdminScopeAvailable.value
+    }
+  }
+
   internal fun resolveChatComposerOwnerAliases(
     to: ChatComposerOwner,
     mainSessionKey: String,
@@ -1812,7 +1861,7 @@ class MainViewModel private constructor(
     sources.forEach { source -> chatShareDraftQueue.migrateOwner(from = source, to = to) }
   }
 
-  /** The ViewModel owns image decoding so Activity recreation cannot cancel an accepted picker result. */
+  /** The ViewModel owns attachment loading so Activity recreation cannot cancel an accepted picker result. */
   internal fun importChatComposerAttachments(
     owner: ChatComposerOwner,
     mediaAuthorizationId: String,

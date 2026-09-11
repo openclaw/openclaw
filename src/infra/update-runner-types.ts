@@ -1,6 +1,7 @@
 import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
@@ -9,7 +10,7 @@ import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory =
   | PackageUpdateStepAdvisory
-  | { kind: "candidate-runtime-unavailable"; message: string };
+  | { kind: "candidate-runtime-unavailable" | "recoverable-maintenance"; message: string };
 
 export type UpdateStepResult = {
   name: string;
@@ -23,9 +24,12 @@ export type UpdateStepResult = {
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: UpdateStepAdvisory;
+  /** Complete owner-classified warnings when one step reports several outcomes. */
+  warnings?: string[];
 };
 
 export type UpdateRunResult = {
+  localOverrides?: LocalPackageOverridesResult;
   runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
@@ -120,6 +124,8 @@ export type UpdateRunnerOptions = {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;
   }) => Promise<void>;
+  /** Admit the built candidate after validation, before retention or activation. */
+  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: (
     candidateRoot: string,

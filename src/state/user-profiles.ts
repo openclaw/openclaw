@@ -460,15 +460,19 @@ async function adoptAvatarIfEmpty(params: {
   options: OpenClawStateDatabaseOptions;
   fetchOptions: TailscaleAvatarFetchOptions;
 }): Promise<UserProfile> {
-  const { db } = openOpenClawStateDatabase(params.options);
-  const beforeFetch = requireResolvedUserProfileById(db, params.profileId);
+  const database = openOpenClawStateDatabase(params.options);
+  const beforeFetch = requireResolvedUserProfileById(database.db, params.profileId);
   if (beforeFetch.avatar !== null || !params.profilePic) {
     return toUserProfile(beforeFetch);
   }
+  // Remote work may outlive a cached handle or a change to the state-directory selector.
+  const options = { ...params.options, path: database.path };
   const avatar = await fetchTailscaleAvatar(params.profilePic, params.fetchOptions);
   if (!avatar) {
+    const { db } = openOpenClawStateDatabase(options);
     return toUserProfile(requireResolvedUserProfileById(db, params.profileId));
   }
+  const sha256 = createHash("sha256").update(avatar.bytes).digest("hex");
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
@@ -476,7 +480,6 @@ async function adoptAvatarIfEmpty(params: {
       if (profile.avatar !== null) {
         return toUserProfile(profile);
       }
-      const sha256 = createHash("sha256").update(avatar.bytes).digest("hex");
       executeSqliteQuerySync(
         transactionDb,
         userProfilesDb(transactionDb)
@@ -498,7 +501,7 @@ async function adoptAvatarIfEmpty(params: {
         updated_at: now,
       });
     },
-    params.options,
+    options,
     { operationLabel: "user-profiles.adopt-avatar" },
   );
 }

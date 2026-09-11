@@ -904,9 +904,6 @@ function resolveCacheRetention(
  * whose ARNs don't contain the model name.
  */
 function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
   if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
     return true;
   }
@@ -948,7 +945,7 @@ function buildSystemPrompt(
   const split = splitSystemPromptCacheBoundary(systemPrompt);
   const stablePrefix = split?.stablePrefix ?? systemPrompt;
   const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stablePrefix) }]
+    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
     : [];
 
   if (stablePrefix && cachePoint) {

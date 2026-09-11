@@ -1708,7 +1708,7 @@ describe("plugin-clawhub-publish.sh", () => {
 
     expect(output.trim()).toBe(
       [
-        "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+        "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]",
         "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>",
       ].join("\n"),
     );

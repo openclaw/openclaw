@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { register } from "tsx/esm/api";
-import type { Plugin } from "vite";
+import { fileURLToPath } from "node:url";
+import { runnerImport, type Alias, type Plugin } from "vite";
 import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
@@ -13,7 +11,9 @@ import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan
 import type { TranslationMap } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
+const localeConfigHintsModulePrefix = "virtual:openclaw-control-ui-locale-config-hints/";
 const resolvedLocaleModulePrefix = `\0${localeModulePrefix}`;
+export const resolvedLocaleConfigHintsModulePrefix = `\0${localeConfigHintsModulePrefix}`;
 // Vitest rewrites new URL(relative, import.meta.url) to browser self.location.
 const i18nAssetsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -21,70 +21,156 @@ const i18nAssetsDir = path.resolve(
 );
 const locales = new Set(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const sourceCatalogUrl = pathToFileURL(
-  path.join(repoRoot, "scripts/lib/control-ui-i18n-catalog.ts"),
-).href;
+const sourceCatalogPath = path.join(repoRoot, "scripts/lib/control-ui-i18n-catalog.ts");
 
-async function loadCurrentSourceCatalog(): Promise<{
+async function loadCurrentSourceCatalog(aliases: Alias[]): Promise<{
   catalog: TranslationMap;
   watchFiles: Set<string>;
 }> {
-  const watchFiles = new Set<string>();
-  const loader = register({
-    namespace: `openclaw-control-ui-source-catalog-${randomUUID()}`,
-    onImport(url) {
-      if (url.startsWith("file:")) {
-        watchFiles.add(fileURLToPath(url));
-      }
-    },
-    tsconfig: path.join(repoRoot, "tsconfig.json"),
+  // Each runner owns a fresh source graph without Node-only loader hooks.
+  // Resolved aliases keep workspace sources in the graph, not installed package outputs.
+  const { module, dependencies } = await runnerImport<
+    typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+  >(sourceCatalogPath, {
+    root: repoRoot,
+    resolve: { alias: aliases },
   });
-  try {
-    const module = (await loader.import(
-      sourceCatalogUrl,
-      import.meta.url,
-    )) as typeof import("../../scripts/lib/control-ui-i18n-catalog.ts");
-    return { catalog: module.loadControlUiSourceCatalog(), watchFiles };
-  } finally {
-    await loader.unregister();
+  return {
+    catalog: module.loadControlUiSourceCatalog(),
+    // Vite reports transitive files separately from the entry that also needs watching.
+    watchFiles: new Set([sourceCatalogPath, ...dependencies]),
+  };
+}
+
+type ControlUiLocaleCatalogPartition = {
+  base: TranslationMap;
+  configHints: TranslationMap;
+};
+
+function partitionControlUiLocaleCatalog(catalog: TranslationMap): ControlUiLocaleCatalogPartition {
+  const { configHints, ...base } = catalog;
+  return { base, configHints: configHints === undefined ? {} : { configHints } };
+}
+
+async function loadControlUiLocaleCatalogPartition(
+  locale: string,
+  sourceCatalog: TranslationMap,
+  memoryPath: string,
+): Promise<ControlUiLocaleCatalogPartition> {
+  // Source PRs omit generated memory until the post-merge refresh runs.
+  // Existing empty or malformed memory stays fatal below so drift cannot hide.
+  if (!existsSync(memoryPath)) {
+    return partitionControlUiLocaleCatalog(sourceCatalog);
   }
+  const memory = loadControlUiTranslationMemory(memoryPath);
+  if (memory.size === 0) {
+    throw new Error(`Control UI ${locale} translation memory is missing or empty`);
+  }
+  return partitionControlUiLocaleCatalog(
+    materializeControlUiLocaleCatalog(flattenTranslations(sourceCatalog), memory),
+  );
+}
+
+function parseResolvedLocaleModuleId(id: string): { locale: string; configHints: boolean } | null {
+  const configHints = id.startsWith(resolvedLocaleConfigHintsModulePrefix);
+  const prefix = configHints ? resolvedLocaleConfigHintsModulePrefix : resolvedLocaleModulePrefix;
+  if (!id.startsWith(prefix)) {
+    return null;
+  }
+  const locale = id.slice(prefix.length);
+  return locales.has(locale) ? { locale, configHints } : null;
 }
 
 export function controlUiLocaleModulesPlugin(): Plugin {
+  let sourceAliases: Alias[] = [];
+  // Both modules must share one materialization. Replacing the cache object
+  // fences resolved and rejected work from an invalidated build generation.
+  const createCatalogCache = () => ({
+    sourceCatalogLoad: null as ReturnType<typeof loadCurrentSourceCatalog> | null,
+    partitionLoads: new Map<string, Promise<ControlUiLocaleCatalogPartition>>(),
+  });
+  let catalogCache = createCatalogCache();
+  const invalidateCatalogs = () => {
+    catalogCache = createCatalogCache();
+  };
   return {
     name: "control-ui-locale-modules",
     enforce: "pre",
+    configResolved(config) {
+      sourceAliases = config.resolve.alias;
+    },
+    buildStart() {
+      invalidateCatalogs();
+    },
+    watchChange() {
+      invalidateCatalogs();
+    },
     resolveId(id) {
-      if (id.startsWith(localeModulePrefix) && locales.has(id.slice(localeModulePrefix.length))) {
-        return `\0${id}`;
+      for (const prefix of [localeModulePrefix, localeConfigHintsModulePrefix]) {
+        if (id.startsWith(prefix) && locales.has(id.slice(prefix.length))) {
+          return `\0${id}`;
+        }
       }
       return null;
     },
     async load(id) {
-      if (!id.startsWith(resolvedLocaleModulePrefix)) {
+      const request = parseResolvedLocaleModuleId(id);
+      if (!request) {
         return null;
       }
-      const locale = id.slice(resolvedLocaleModulePrefix.length);
-      if (!locales.has(locale)) {
-        return null;
+      const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
+      while (true) {
+        const activeCache = catalogCache;
+        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog(sourceAliases).catch(
+          (error: unknown) => {
+            // A later request can retry a corrected source without a watched-file change.
+            activeCache.sourceCatalogLoad = null;
+            throw error;
+          },
+        );
+        let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
+        try {
+          sourceCatalogResult = await activeCache.sourceCatalogLoad;
+        } catch (error) {
+          if (activeCache !== catalogCache) {
+            continue;
+          }
+          throw error;
+        }
+        if (activeCache !== catalogCache) {
+          continue;
+        }
+        for (const watchFile of sourceCatalogResult.watchFiles) {
+          this.addWatchFile(watchFile);
+        }
+        this.addWatchFile(memoryPath);
+        let partitionLoad = activeCache.partitionLoads.get(request.locale);
+        if (!partitionLoad) {
+          partitionLoad = loadControlUiLocaleCatalogPartition(
+            request.locale,
+            sourceCatalogResult.catalog,
+            memoryPath,
+          );
+          activeCache.partitionLoads.set(request.locale, partitionLoad);
+        }
+        let partition: ControlUiLocaleCatalogPartition;
+        try {
+          partition = await partitionLoad;
+        } catch (error) {
+          if (activeCache !== catalogCache) {
+            continue;
+          }
+          throw error;
+        }
+        if (activeCache !== catalogCache) {
+          continue;
+        }
+        if (request.configHints) {
+          return `export default ${JSON.stringify(partition.configHints)};`;
+        }
+        return `import configHints from ${JSON.stringify(`${localeConfigHintsModulePrefix}${request.locale}`)};
+export default { ...${JSON.stringify(partition.base)}, ...configHints };`;
       }
-      const memoryPath = path.join(i18nAssetsDir, `${locale}.tm.jsonl`);
-      const { catalog: sourceCatalog, watchFiles } = await loadCurrentSourceCatalog();
-      for (const watchFile of watchFiles) {
-        this.addWatchFile(watchFile);
-      }
-      this.addWatchFile(memoryPath);
-      // Source PRs omit generated memory until the post-merge refresh runs.
-      // Existing empty or malformed memory stays fatal below so drift cannot hide.
-      if (!existsSync(memoryPath)) {
-        return `export default ${JSON.stringify(sourceCatalog)};`;
-      }
-      const memory = loadControlUiTranslationMemory(memoryPath);
-      if (memory.size === 0) {
-        throw new Error(`Control UI ${locale} translation memory is missing or empty`);
-      }
-      const catalog = materializeControlUiLocaleCatalog(flattenTranslations(sourceCatalog), memory);
-      return `export default ${JSON.stringify(catalog)};`;
     },
   };
 }

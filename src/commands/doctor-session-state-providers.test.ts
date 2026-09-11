@@ -135,6 +135,43 @@ describe("doctor session state provider routes", () => {
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "legacy-only", binding: {} },
+    {
+      label: "canonical and legacy",
+      binding: {
+        cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
+        cliSessionIds: { "claude-cli": "Map-ID" },
+      },
+    },
+  ])("clears $label conversation state without leaving a migration source", async ({ binding }) => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:stale-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      store: { [key]: entry({ ...binding, claudeCliSessionId: "Obsolete-ID" }) },
+    });
+
+    expect(result.store[key]?.sessionId).toBe("session-1");
+    expect(result.store[key]?.claudeCliSessionId).toBeUndefined();
+    expect(result.store[key]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(result.store[key]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+  });
+
+  it("leaves legacy conversation IDs available for migration on a configured Anthropic route", async () => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:configured-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } } },
+      store: { [key]: entry({ claudeCliSessionId: "Configured-MixedCase-ID" }) },
+    });
+
+    expect(result.store[key]?.claudeCliSessionId).toBe("Configured-MixedCase-ID");
+    expect(result.changes).toEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
   it("keeps owner state when the configured provider selects the owner runtime", async () => {
     const store = {
       "agent:main:telegram:direct:1": entry({

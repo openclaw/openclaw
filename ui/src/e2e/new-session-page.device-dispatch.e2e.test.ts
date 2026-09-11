@@ -24,7 +24,7 @@ const gitRepository = {
 };
 
 suite.define(() => {
-  it("spaces destination section headings consistently", async () => {
+  it("lists Local, devices, Auto, then grouped Cloud profiles", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -53,20 +53,41 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
 
-      const headings = page.locator(
-        ".new-session-page__where-popover .new-session-page__menu-title",
-      );
+      const picker = page.locator(".new-session-page__where-popover");
+      const destinations = picker.locator(".new-session-page__environment-list");
       await expect
-        .poll(() => headings.allTextContents())
-        .toEqual(["Environments", "Your devices", "Cloud"]);
-      const spacing = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--space-2").trim(),
-      );
+        .poll(() =>
+          destinations
+            .locator("[data-value]")
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("data-value")),
+            ),
+        )
+        .toEqual(["gateway", "device:paired-runner", "auto-device", "cloud:aws"]);
+      expect(await picker.locator(".new-session-page__menu-title").allTextContents()).toEqual([
+        "Cloud",
+      ]);
+      const auto = destinations.getByRole("button", {
+        name: "Auto · Least-busy device",
+        exact: true,
+      });
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
+      expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
+      await auto.click();
+      const trigger = page.locator("#new-session-where-trigger");
+      await expect.poll(() => trigger.getAttribute("data-auto-device")).toBe("true");
+      await trigger.click();
+      await expect.poll(() => auto.getAttribute("aria-pressed")).toBe("true");
+      await destinations.locator('[data-value="device:paired-runner"]').click();
+      await expect.poll(() => trigger.getAttribute("data-device-id")).toBe("paired-runner");
+      expect(await trigger.getAttribute("data-auto-device")).toBeNull();
+      await trigger.click();
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
       expect(
-        await headings.evaluateAll((elements) =>
-          elements.map((element) => getComputedStyle(element).marginTop),
-        ),
-      ).toEqual(["0px", spacing, spacing]);
+        await destinations
+          .locator('[data-value="device:paired-runner"]')
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
     } finally {
       await context.close();
     }
@@ -411,7 +432,7 @@ suite.define(() => {
       reason: "No worker slots are available",
     },
   ])(
-    "keeps a remembered $name blocked until Local is explicitly selected",
+    "keeps a remembered $name blocked until the user explicitly switches to Local",
     async ({ preference, status, availableSlots, attribute, value, reason }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -468,7 +489,11 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await where.click();
-        await page.locator('[data-value="gateway"]').click();
+        const local = page.locator('[data-value="gateway"]');
+        expect(await local.isEnabled()).toBe(true);
+        await local.click();
+        await expect.poll(() => where.getAttribute("data-auto-device")).toBeNull();
+        await expect.poll(() => where.getAttribute("data-device-id")).toBeNull();
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
         await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({

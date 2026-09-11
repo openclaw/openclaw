@@ -64,7 +64,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
@@ -85,7 +85,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("wa-popover.new-session-page__where-popover")
-            .getByRole("button", { name: "Cloud · aws" })
+            .locator('[data-value="cloud:aws"]')
             .isDisabled(),
         )
         .toBe(true);
@@ -163,7 +163,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
@@ -410,7 +410,7 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Cloud · aws" })
+        .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");
       await expect

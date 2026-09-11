@@ -1,6 +1,7 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-sqlite.mjs";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { tryReadJson } from "./json-files.js";
 import { nodeVersionSatisfiesEngine } from "./runtime-guard.js";
@@ -30,19 +31,20 @@ export async function checkGitCandidateNodeRuntime(
   }
   const engine = await readCandidateNodeEngine(root);
   const currentVersion = process.versions.node;
-  if (nodeVersionSatisfiesEngine(currentVersion, engine) !== false || !engine) {
+  const capabilityError = nodeRuntimeFailure(currentVersion, detectCurrentSqliteCapabilities());
+  if (!capabilityError && nodeVersionSatisfiesEngine(currentVersion, engine) !== false) {
     return null;
   }
 
   const systemNode = await resolveSystemNodeInfo({
-    acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) === true,
+    acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
   });
   let systemDiagnostic: string;
   if (systemNode?.status === "probe-failed") {
     systemDiagnostic = `System Node compatibility remains unknown because its probe failed: ${systemNode.error.message}`;
   } else if (
     systemNode?.status === "supported" &&
-    nodeVersionSatisfiesEngine(systemNode.version, engine) === true
+    nodeVersionSatisfiesEngine(systemNode.version, engine) !== false
   ) {
     systemDiagnostic =
       "OpenClaw did not select or activate another runtime. " +
@@ -58,6 +60,6 @@ export async function checkGitCandidateNodeRuntime(
     durationMs: Date.now() - startedAt,
     exitCode: 1,
     stdoutTail: `Node ${currentVersion} (${process.execPath}); requires engines.node ${engine}`,
-    stderrTail: `Activate a compatible Node for the CLI, then retry. ${systemDiagnostic}`,
+    stderrTail: `${capabilityError ? `${capabilityError}\n` : ""}Activate a compatible Node for the CLI, then retry. ${systemDiagnostic}`,
   };
 }

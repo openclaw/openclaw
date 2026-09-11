@@ -9,6 +9,10 @@ import {
   withOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { DREAMS_FILENAMES, readDreamsFile } from "./dreaming-dreams-file.js";
+import {
+  ensureMemorySessionTombstones,
+  memorySessionTombstonesExist,
+} from "./memory-session-tombstones.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
@@ -52,7 +56,6 @@ type MemoryOriginDatabase = {
   memory_index_chunks: { text: string; source: string };
 };
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-const ensuredTombstoneDatabases = new WeakSet<DatabaseSync>();
 
 function openMemoryOriginDatabase(agentId: string): DatabaseSync {
   const db = openOpenClawAgentDatabase({ agentId }).db;
@@ -121,7 +124,7 @@ export function listMemorySessionTombstones(params: {
     return [];
   }
   const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-    if (!ensuredTombstoneDatabases.has(db) && !tableExists(db, "memory_session_tombstones")) {
+    if (!memorySessionTombstonesExist(db)) {
       return [];
     }
     const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
@@ -153,15 +156,7 @@ export function recordMemorySessionTombstones(params: {
     return 0;
   }
   const db = openOpenClawAgentDatabase({ agentId: params.agentId }).db;
-  if (!ensuredTombstoneDatabases.has(db)) {
-    db.exec(`CREATE TABLE IF NOT EXISTS memory_session_tombstones (
-      session_id TEXT NOT NULL PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    ) STRICT`);
-    ensuredTombstoneDatabases.add(db);
-  }
+  ensureMemorySessionTombstones(db);
   const reason = params.reason ?? "forgotten";
   const createdAt = params.createdAt ?? Date.now();
   return runSqliteImmediateTransactionSync(db, () => {
@@ -195,27 +190,6 @@ export function recordMemorySessionTombstones(params: {
     }
     return recorded;
   });
-}
-
-export function hasMemorySessionTombstone(
-  db: DatabaseSync,
-  agentId: string,
-  sessionId: string,
-): boolean {
-  if (!ensuredTombstoneDatabases.has(db) && !tableExists(db, "memory_session_tombstones")) {
-    return false;
-  }
-  const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
-  return (
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("memory_session_tombstones")
-        .select("session_id")
-        .where("agent_id", "=", agentId)
-        .where("session_id", "=", sessionId),
-    ).rows.length > 0
-  );
 }
 
 export function recordMemoryEntryOrigins(params: {

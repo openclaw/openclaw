@@ -32,6 +32,7 @@ import "../test-helpers/app-sidebar-cases/presence.ts";
 import "../test-helpers/app-sidebar-cases/section-reordering.ts";
 import "../test-helpers/app-sidebar-cases/session-delete-access.ts";
 import "../test-helpers/app-sidebar-cases/session-indicators.ts";
+import "../test-helpers/app-sidebar-cases/session-delegated-activity.ts";
 import "../test-helpers/app-sidebar-cases/session-mutations.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-scroll.ts";
 import "../test-helpers/app-sidebar-cases/sessions.ts";

@@ -12,6 +12,36 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "plugin-state-sync-keyed-store",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-29",
+    deprecated: "2026-09-11",
+    warningStarts: "2026-09-11",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
+    surfaces: [
+      "api.runtime.state.openSyncKeyedStore",
+      "PluginStateSyncKeyedStore",
+      "createPluginStateSyncKeyedStore",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and state-store migration documentation",
+      "plugin compatibility inventory; no new runtime warnings",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugin-state/plugin-state-store.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
+      "src/plugin-sdk/plugin-state-store-runtime.test.ts",
+      "src/plugins/loader.runtime-registry.test.ts",
+    ],
+    releaseNote:
+      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+  },
+  {
     code: "memory-read-result-statusless-success",
     status: "deprecated",
     owner: "sdk",
@@ -169,6 +199,24 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugin-sdk/agent-scope-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
     releaseNote:
       "Legacy Plugin SDK session-agent resolver names preserve ambient system-agent fallback while published plugins migrate to strict owner-required aliases.",
+  },
+  {
+    code: "agent-harness-credential-prompt-string-argument",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-08",
+    deprecated: "2026-09-09",
+    warningStarts: "2026-09-09",
+    removeAfter: "2026-11-30",
+    replacement: "options object `{ controlToolsAvailable }`",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#credential-prompt-builder",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-harness-runtime buildCredentialSafetyPrompt string argument",
+    ],
+    diagnostics: ["JSDoc parameter deprecation", "plugin compatibility registry"],
+    tests: ["src/agents/credential-safety-prompt.test.ts"],
+    releaseNote:
+      "The credential prompt helper remains available with private login-code handoff and capability-aware terminal setup guidance; its ignored legacy string argument is supported through 2026-11-30.",
   },
   {
     code: "removed-session-transcript-file-api",

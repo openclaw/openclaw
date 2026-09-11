@@ -246,6 +246,40 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard let lease = await self.connection.captureServerLease(),
+              await self.connection.supportsServerMethod("models.authLogin", ifCurrentServerLease: lease) == true,
+              let agentID = agentID ?? self.routingIdentity.currentAgentID()
+        else { return nil }
+        let connection = self.connection
+        return OpenClawChatModelSignInContext(
+            agentID: agentID,
+            request: { method, params in
+                try await connection.request(
+                    method: method, params: params, timeoutMs: 26 * 60 * 1000, ifCurrentServerLease: lease)
+            },
+            isCurrent: { await connection.isCurrentServerLease(lease) })
+    }
+
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let lease = try await self.connection.acquireServerLease()
+        guard await self.connection.supportsServerCapability(
+            .publishedModelCatalog, ifCurrentServerLease: lease) == true
+        else {
+            return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
+        }
+        let request = OpenClawChatGatewayRequests.modelsList(agentID: agentID, sessionKey: sessionKey)
+        let data = try await self.connection.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
+        return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(data)
+    }
+
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
         guard let lease = await self.connection.captureServerLease() else { return nil }
         let transport = self

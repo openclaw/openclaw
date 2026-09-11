@@ -1,5 +1,6 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -40,22 +41,19 @@ export function readConfigValueAtPath(
   path: string,
 ): { found: boolean; value?: unknown } {
   let current: unknown = config;
-  for (const rawSegment of path.split(".")) {
-    // Support foo[0] style array segments alongside dotted keys.
-    const parts = rawSegment.split(/[[\]]/).filter(Boolean);
-    for (const part of parts) {
-      if (current === null || typeof current !== "object") {
-        return { found: false };
-      }
-      const index = /^\d+$/.test(part) ? Number(part) : undefined;
-      if (index !== undefined && Array.isArray(current)) {
-        current = current[index];
-      } else {
-        current = (current as Record<string, unknown>)[part];
-      }
-      if (current === undefined) {
-        return { found: false };
-      }
+  for (const part of parseConfigSetPath(path)) {
+    if (current === null || typeof current !== "object") {
+      return { found: false };
+    }
+    // Reads allow array properties and indices beyond the CLI writer's sparse-write limit.
+    const index = /^\d+$/.test(part) ? Number(part) : undefined;
+    if (index !== undefined && Array.isArray(current)) {
+      current = current[index];
+    } else {
+      current = (current as Record<string, unknown>)[part];
+    }
+    if (current === undefined) {
+      return { found: false };
     }
   }
   return { found: true, value: current };
@@ -358,7 +356,6 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>,
 ): Promise<void> {
-  const { parseConfigSetPath } = await import("../cli/config-cli.js");
   const segments = parseConfigSetPath(operation.path);
   const verdict: InferenceRoutePathVerdict = classifyInferenceRouteConfigPath(segments);
   if (verdict === "allowed") {

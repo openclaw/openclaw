@@ -21,7 +21,7 @@ transcription providers.
 audio mode per call.
 </Warning>
 
-Current runtime behavior:
+Runtime behavior:
 
 - `realtime.enabled` is supported for Twilio and Telnyx.
 - `realtime.provider` is optional. If unset, Voice Call selects the first configured realtime voice provider in provider priority order. Providers named in `realtime.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
@@ -208,7 +208,7 @@ The classic streaming path requires `provider: "twilio"`; configuration with
 Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
 authenticated `realtime.enabled` path instead.
 
-Current runtime behavior:
+Runtime behavior:
 
 - `streaming.provider` is optional. If unset, Voice Call selects the first configured realtime transcription provider in provider priority order. Providers named in `streaming.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.

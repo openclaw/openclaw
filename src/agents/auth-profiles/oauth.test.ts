@@ -22,7 +22,6 @@ const resolveProviderOAuthCredentialWithPlugin = vi.hoisted(() =>
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({

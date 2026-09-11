@@ -30,11 +30,8 @@ import type { SessionGroupSettings } from "./custom-groups.ts";
 import type { GitHubPublicationPresentationBinding } from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
-import type {
-  SessionChangedResult,
-  SessionReconcileOptions,
-  SessionRunTerminal,
-} from "./reconcile.ts";
+import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 export type SessionState = {
   result: SessionsListResult | null;
@@ -91,6 +88,20 @@ export type SessionRefreshOptions = SessionListOptions & {
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+
+export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
+
+type SessionRowReadOutcome =
+  | { status: "current"; row: GatewaySessionRow | null }
+  | { status: "invalidated" }
+  | { status: "retired" };
+
+export type SessionRowObservation = {
+  readonly row: GatewaySessionRow | null;
+  isCurrent: () => boolean;
+  captureReconcile: () => (row: GatewaySessionRow | undefined) => SessionRowReadOutcome;
+  dispose: () => void;
+};
 
 export type SessionDeleteOptions = {
   agentId?: string;
@@ -189,6 +200,21 @@ export type SessionCapability = {
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ) => boolean;
+  /** Captures request ordering before a supplemental row read begins. */
+  captureReconcile: () => SessionCapability["reconcile"];
+  /** Owns a routed descriptor through reads and events until its consumer retires. */
+  observeRow: (
+    target: SessionRowTarget,
+    listener: (row: GatewaySessionRow | null) => void,
+  ) => SessionRowObservation;
+  /** Preserve an existing row observation through a local presentation copy. */
+  inheritRow: (
+    row: GatewaySessionRow,
+    previous: GatewaySessionRow | undefined,
+    donor?: GatewaySessionRow,
+  ) => GatewaySessionRow;
+  /** Projects held field observations without changing the input rows' keys or membership. */
+  projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;

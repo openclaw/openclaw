@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeOpenClawConfigFixture } from "./embedded-agent-runner/model.test-harness.js";
+import {
+  makeModel,
+  makeOpenClawConfigFixture,
+} from "./embedded-agent-runner/model.test-harness.js";
 
 const runtimeMocks = vi.hoisted(() => {
   const createLease = (owner: string) => {
@@ -11,7 +14,7 @@ const runtimeMocks = vi.hoisted(() => {
       snapshot: {
         createStores: vi.fn(() => ({ authStorage, modelRegistry })),
       },
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     };
   };
   const requestLease = createLease("request");
@@ -66,8 +69,8 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
     runtimeMocks.requestLease.snapshot.createStores.mockClear();
     runtimeMocks.publishedLease.snapshot.createStores.mockClear();
     runtimeMocks.resolveModelAsync.mockClear();
-    runtimeMocks.requestLease.release.mockClear();
-    runtimeMocks.publishedLease.release.mockClear();
+    runtimeMocks.requestLease[Symbol.asyncDispose].mockClear();
+    runtimeMocks.publishedLease[Symbol.asyncDispose].mockClear();
     runtimeMocks.staticCatalogModel.mockReset();
   });
 
@@ -115,10 +118,10 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       loadRuntimePlugins: true,
       runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
     });
-    expect(lease.release).not.toHaveBeenCalled();
-    acquired.release();
-    acquired.release();
-    expect(lease.release).toHaveBeenCalledTimes(1);
+    expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+    await acquired[Symbol.asyncDispose]();
+    await acquired[Symbol.asyncDispose]();
+    expect(lease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
     expect(() => acquired.run(() => undefined)).toThrow("has been released");
   });
 
@@ -134,50 +137,113 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       ...input,
     });
     expect(acquired.run((context) => context)).toEqual({});
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
     expect(runtimeMocks.acquire).not.toHaveBeenCalled();
     expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
+    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
   });
 
-  it("uses configured model context without acquiring a runtime lease", async () => {
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          custom: {
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "configured",
-                name: "Configured",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
+  it.each([
+    ["prefixed sibling", "custom", "configured", "configured", "custom/configured"],
+    ["case-distinct sibling", "custom", "configured", "configured", "Configured"],
+    ["prefixed fallback", "custom", "configured", "custom/configured", undefined],
+    ["case-insensitive fallback", "custom", "configured", "Configured", undefined],
+    ["static alias", "xai", "grok-4.3-latest", "grok-4.3", undefined],
+    ["exact provider key", "custom", "configured", "configured", undefined, "custom", "Custom"],
+    ["provider case fallback", "custom", "configured", "configured", undefined, "Custom"],
+    [
+      "merged trimmed provider keys",
+      "custom",
+      "configured",
+      "configured",
+      undefined,
+      " custom ",
+      "custom",
+    ],
+  ] as const)(
+    "uses configured model context without acquiring a runtime lease (%s)",
+    async (
+      _case,
+      provider,
+      modelId,
+      rowId,
+      siblingId,
+      providerKey?: string,
+      siblingProviderKey?: string,
+    ) => {
+      const { acquireEffectiveToolInventoryRuntimeModelContext, resolveConfiguredModelCompat } =
+        await import("./tools-effective-inventory.js");
+      const configuredModel = {
+        ...makeModel(rowId),
+        name: "Configured",
+        contextWindow: 8192,
+        maxTokens: 1024,
+        compat: { supportsTools: true },
+      };
+      const cfg = makeOpenClawConfigFixture({
+        models: {
+          providers: {
+            ...(siblingProviderKey
+              ? {
+                  [siblingProviderKey]: {
+                    baseUrl: "https://sibling.example.invalid",
+                    api: "openai-completions" as const,
+                    models: [
+                      {
+                        ...configuredModel,
+                        name: "Sibling provider",
+                        compat: { supportsTools: false },
+                      },
+                    ],
+                  },
+                }
+              : {}),
+            [providerKey ?? provider]: {
+              baseUrl: "https://configured.example.invalid",
+              api: "anthropic-messages",
+              models: [
+                ...(siblingId
+                  ? [
+                      {
+                        ...configuredModel,
+                        id: siblingId,
+                        name: "Sibling",
+                        api: "openai-completions" as const,
+                        compat: { supportsTools: false },
+                      },
+                    ]
+                  : []),
+                configuredModel,
+              ],
+            },
           },
         },
-      },
-    });
+      });
 
-    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-      cfg,
-      modelProvider: "custom",
-      modelId: "configured",
-    });
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "anthropic-messages",
-      runtimeModel: { id: "configured", provider: "custom" },
-    });
-    acquired.release();
-    expect(runtimeMocks.acquire).not.toHaveBeenCalled();
-    expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
-  });
+      const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+        cfg,
+        modelProvider: provider,
+        modelId,
+      });
+      expect(acquired.run((context) => context)).toMatchObject({
+        modelApi: "anthropic-messages",
+        runtimeModel: {
+          id: modelId,
+          name: "Configured",
+          provider,
+          compat: { supportsTools: true },
+        },
+      });
+      expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual({
+        supportsTools: true,
+      });
+      expect(configuredModel.id).toBe(rowId);
+      await acquired[Symbol.asyncDispose]();
+      expect(runtimeMocks.acquire).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
+      expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses bundled model context without acquiring a runtime lease", async () => {
     runtimeMocks.staticCatalogModel.mockReturnValue({
@@ -199,10 +265,10 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       modelApi: "openai-responses",
       runtimeModel: { id: "bundled", provider: "openai" },
     });
-    acquired.release();
+    await acquired[Symbol.asyncDispose]();
     expect(runtimeMocks.acquire).not.toHaveBeenCalled();
     expect(runtimeMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(runtimeMocks.requestLease.release).not.toHaveBeenCalled();
+    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
   });
 
   it("releases the runtime lease when dynamic model resolution fails", async () => {
@@ -218,6 +284,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
         modelId: "chat-latest",
       }),
     ).rejects.toBe(failure);
-    expect(runtimeMocks.requestLease.release).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
   });
 });

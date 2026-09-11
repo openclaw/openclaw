@@ -23,7 +23,7 @@ const exitAfterOutputTimeoutMs = 30_000;
 const exitOnlyTimeoutMs = 60_000;
 
 afterEach(async () => {
-  nativeHookRelayTesting.clearNativeHookRelaysForTests();
+  await nativeHookRelayTesting.clearNativeHookRelaysForTests();
   await Promise.all(Array.from(activeChildren, terminateChild));
 });
 
@@ -398,7 +398,10 @@ describe("hooks CLI process lifecycle", () => {
         allowedEvents: ["post_tool_use"],
       });
       await expect
-        .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
+        .poll(
+          async () =>
+            await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId),
+        )
         .toBeDefined();
 
       const fixture = await createRelayPreloadFixture();

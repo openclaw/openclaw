@@ -439,13 +439,18 @@ export async function runSqliteSessionReclamation(params: {
           },
         });
       },
+      "session.reclamation.in-process",
       params.diagnostics,
     );
   }
-  const retained = await runExclusiveSqliteSessionWrite(params.plan.databaseOptions, async () => {
-    params.assertCommitAllowed?.();
-    return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
-  });
+  const retained = await runExclusiveSqliteSessionWrite(
+    params.plan.databaseOptions,
+    async () => {
+      params.assertCommitAllowed?.();
+      return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
+    },
+    "session.reclamation.retain",
+  );
   if (!retained.found) {
     throw new Error("SQLite session reclamation lost its prepared database");
   }
@@ -480,7 +485,7 @@ export async function runSqliteSessionReclamation(params: {
           diagnostics: params.diagnostics,
           expectedMessageType: "reclaimed",
           onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
-          withWriteAdmission: async (run) =>
+          withWriteAdmission: async (run, reclamationAdmission) =>
             await runExclusiveSqliteSessionWrite(
               plan.databaseOptions,
               async () => {
@@ -496,7 +501,8 @@ export async function runSqliteSessionReclamation(params: {
                   publishCommitted?.();
                 }
               },
-              params.diagnostics,
+              "session.reclamation.worker-commit",
+              { ...params.diagnostics, reclamationAdmission },
             ),
           transferList: prepareReclamationWorkerTransferList(plan),
           workerData: {

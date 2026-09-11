@@ -232,6 +232,12 @@ export async function completeEmbeddedAttemptAfterTurn(
           aborted: lifecycleState.aborted,
           yieldAborted,
           isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
+          runtimeContext: {
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelContextWindow: attempt.modelContextWindow,
+            tokenBudget: attempt.contextTokenBudget,
+          },
         });
       }
     } else {

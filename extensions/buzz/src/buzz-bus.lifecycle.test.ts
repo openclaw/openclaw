@@ -395,24 +395,17 @@ describe("Buzz bus lifecycle", () => {
     const onMessage = vi.fn(async () => {});
     const onFatalError = vi.fn();
 
-    const bus = await startTestBus({
-      onMessage,
-      onFatalError,
-    });
-
-    await vi.waitFor(() => {
-      expect(onFatalError).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Buzz inbound replay exceeded the 1024-message pending limit",
-        }),
-      );
-    });
+    await expect(startTestBus({ onMessage, onFatalError })).rejects.toThrow(
+      "Buzz inbound replay exceeded the 1024-message pending limit",
+    );
+    expect(onFatalError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Buzz inbound replay exceeded the 1024-message pending limit",
+      }),
+    );
     expect(onFatalError).toHaveBeenCalledOnce();
     expect(onMessage).not.toHaveBeenCalled();
-    expect(relayMocks.close).not.toHaveBeenCalled();
-
-    await bus.close();
-    expect(relayMocks.close).toHaveBeenCalledOnce();
+    expect(relayMocks.close).toHaveBeenCalled();
   });
 
   it("aborts active inbound dispatch and waits for its cleanup before completing shutdown", async () => {

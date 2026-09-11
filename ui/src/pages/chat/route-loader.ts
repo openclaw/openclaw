@@ -508,12 +508,7 @@ export async function loadChatRoute(
   }
   const resolution = localRow
     ? ({ kind: "unique", session: localRow } as const)
-    : await resolveShortSessionReference(
-        context,
-        target,
-        signal,
-        face === "chat" && !preferenceDerived,
-      );
+    : await resolveShortSessionReference(context, target, signal);
   if (resolution.kind === "not-found") {
     // A mechanically composed literal, notably a full UUID, can match the short grammar.
     // Only after the authoritative short lookup misses may its exact decoded key win.
@@ -561,5 +556,7 @@ export async function loadChatRoute(
     preferenceDerived,
     shortId: target.shortId,
   });
-  return resolved ?? notFound({ routeId: face });
+  return resolved
+    ? { ...resolved, ...(!localRow ? { routeLoadingSkeleton: true as const } : {}) }
+    : notFound({ routeId: face });
 }

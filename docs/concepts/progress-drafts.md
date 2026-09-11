@@ -358,6 +358,12 @@ Limit how many lines stay visible (default 8):
 }
 ```
 
+With `toolProgress: true`, command exit rows use ordinary tool-log capacity,
+including exits with a code other than `0`. Older exits scroll out as newer
+activity arrives and do not reduce the plan's line budget. Approval requests
+and explicit `failed`, `error`, or `blocked` states still take priority. With
+the tool log hidden, non-zero exits remain visible as attention lines.
+
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120

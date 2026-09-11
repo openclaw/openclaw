@@ -124,6 +124,8 @@ export function renderNewSessionPlaceControls({
         })
       : renderWhereChip({
           state: whereState,
+          environmentQuery: browser.environmentQuery,
+          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
           gatewayName: gateway.gatewayName,
           cloudProfileId: place.cloudProfileId,
           machineClass,

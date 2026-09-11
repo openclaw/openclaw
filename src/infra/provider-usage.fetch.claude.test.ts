@@ -168,6 +168,28 @@ describe("fetchClaudeUsage", () => {
     ]);
   });
 
+  it("accepts absent activity flags and deduplicates normalized model labels", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        seven_day_sonnet: { utilization: 40 },
+        limits: [
+          { percent: 80, scope: { model: { display_name: " sonnet " } } },
+          { percent: 27, scope: { model: { display_name: " ", id: " Fable " } } },
+          { percent: 90, scope: { model: { display_name: "FABLE" } } },
+          { percent: 12, is_active: "false", scope: { model: { id: "Other" } } },
+        ],
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "Sonnet", usedPercent: 40 },
+      { label: "Fable", usedPercent: 27, resetAt: undefined },
+      { label: "Other", usedPercent: 12, resetAt: undefined },
+    ]);
+  });
+
   it("keeps the extra usage window when credit amounts are missing", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

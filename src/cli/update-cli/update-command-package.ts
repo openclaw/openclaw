@@ -15,6 +15,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -48,7 +49,6 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
-
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
     readPackageVersion(root),
@@ -147,6 +147,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     killed: completedDoctorStep.killed,
     termination: completedDoctorStep.termination,
     advisory: completedDoctorStep.advisory,
+    warnings: completedDoctorStep.warnings,
   });
   return completedDoctorStep;
 }
@@ -203,6 +204,7 @@ export async function prepareGitPackageExposure(
 }
 
 export type PackageInstallUpdateParams = {
+  reapplyLocalOverrides?: boolean;
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -223,8 +225,81 @@ export type PackageInstallUpdateParams = {
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
 };
 
+/** Retain one staged target while its runtime initializes a fresh profile. */
+export async function stagePackageInstallUpdate(
+  params: Omit<
+    PackageInstallUpdateParams,
+    "validateCandidate" | "beforeActivate" | "onTransaction" | "onConfigSnapshot"
+  >,
+) {
+  const staged = createDeferredCore<string>();
+  const continuation = createDeferredCore<PackageInstallUpdateParams | undefined>();
+  let continued = false;
+  let active: PackageInstallUpdateParams | undefined;
+  const requireActive = () => {
+    if (!active) {
+      throw new Error("Staged update has not been admitted for activation.");
+    }
+    return active;
+  };
+  const completed = runPackageInstallUpdate(
+    {
+      ...params,
+      progress: {
+        onStepStart: (step) => (active?.progress ?? params.progress)?.onStepStart?.(step),
+        onStepComplete: (step) => (active?.progress ?? params.progress)?.onStepComplete?.(step),
+        onHeartbeat: () => (active?.progress ?? params.progress)?.onHeartbeat?.(),
+      },
+      validateCandidate: async (root) => {
+        staged.resolve(root);
+        active = await continuation.promise;
+        if (!active) {
+          throw new Error("Fresh-state initialization stopped before package activation.");
+        }
+        return await active.validateCandidate(root);
+      },
+      beforeActivate: () => requireActive().beforeActivate(),
+      onTransaction: (transaction) => requireActive().onTransaction(transaction),
+      onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
+    },
+    () => requireActive(),
+  );
+  const ready = await Promise.race([
+    staged.promise.then((root) => ({ root })),
+    completed.then((result) => ({ result })),
+  ]);
+  if ("result" in ready) {
+    throw new UpdatePreMutationError(
+      ready.result.reason ?? "package-staging-failed",
+      ready.result.steps.find((step) => step.exitCode !== 0)?.stderrTail ??
+        "Package staging did not produce a target runtime.",
+    );
+  }
+  return {
+    root: ready.root,
+    async run(next: PackageInstallUpdateParams) {
+      if (continued) {
+        throw new Error("A staged update can be activated only once.");
+      }
+      continued = true;
+      continuation.resolve(next);
+      return await completed;
+    },
+    async close() {
+      if (!continued) {
+        continued = true;
+        continuation.resolve(undefined);
+      }
+      await completed;
+    },
+  };
+}
+
+export type StagedPackageInstallUpdate = Awaited<ReturnType<typeof stagePackageInstallUpdate>>;
+
 export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
+  resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   let installTarget = params.installTarget;
@@ -269,6 +344,13 @@ export async function runPackageInstallUpdate(
   }
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
+    localOverrides: {
+      reapply: params.reapplyLocalOverrides === true,
+      env: resolveUpdateTargetEnv({
+        serviceEnv: params.managedServiceEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    },
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
@@ -276,7 +358,9 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    requirePackageReplacement: params.installKind === "git",
+    // Explicit artifacts identify the payload; an equal version is not artifact equality.
+    requirePackageReplacement:
+      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),
@@ -285,7 +369,7 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    postVerifyStep: (root) => runPackageUpdateDoctor({ ...params, root }),
+    postVerifyStep: (root: string) => runPackageUpdateDoctor({ ...resolveDoctorOptions(), root }),
   });
 
   const afterBuildId = packageUpdate.activePackageRoot
@@ -312,6 +396,7 @@ export async function runPackageInstallUpdate(
     },
     steps: packageUpdate.steps,
     recovery: packageUpdate.recovery,
+    localOverrides: packageUpdate.localOverrides,
     durationMs: Date.now() - params.startedAt,
   };
 }

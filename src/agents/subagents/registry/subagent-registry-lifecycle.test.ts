@@ -1018,7 +1018,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(entry).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      killReconciliation: { killedAt: 4_001 },
+      killReconciliation: { killedAt: 4_001, taskCancellationAccepted: true },
       execution: {
         status: "terminal",
         endedAt: 4_001,
@@ -1066,6 +1066,7 @@ describe("subagent registry lifecycle hardening", () => {
       },
     });
     expect(entry.killIntent).toBeUndefined();
+    expect(entry.killReconciliation?.taskCancellationAccepted).toBeUndefined();
   });
 
   it("keeps a natural completion that predates the durable kill intent", async () => {

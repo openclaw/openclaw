@@ -307,16 +307,18 @@ describe("configured transcript source provenance", () => {
       const originalWrite = f.store.writeSession.bind(f.store);
       let titleFailed = false;
       let cleanupFails = true;
-      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(async (session) => {
-        if (session.title === "Room title" && !titleFailed) {
-          titleFailed = true;
-          throw new Error("title write unavailable");
-        }
-        if (session.stoppedAt && fault === "session-write" && cleanupFails) {
-          throw new Error("final session write unavailable");
-        }
-        await originalWrite(session);
-      });
+      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
+        async (session, condition) => {
+          if (session.title === "Room title" && !titleFailed) {
+            titleFailed = true;
+            throw new Error("title write unavailable");
+          }
+          if (session.stoppedAt && fault === "session-write" && cleanupFails) {
+            throw new Error("final session write unavailable");
+          }
+          await originalWrite(session, condition);
+        },
+      );
       const originalSummary = f.store.writeSummary.bind(f.store);
       vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
         if (fault === "summary-write" && cleanupFails) {
@@ -440,12 +442,14 @@ describe("configured transcript source provenance", () => {
         return { ok: true, sessionId };
       });
       const writeSession = f.store.writeSession.bind(f.store);
-      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(async (session) => {
-        if (cleanupFails && fault === "session-write" && session.stoppedAt) {
-          throw new Error("final session unavailable");
-        }
-        await writeSession(session);
-      });
+      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
+        async (session, condition) => {
+          if (cleanupFails && fault === "session-write" && session.stoppedAt) {
+            throw new Error("final session unavailable");
+          }
+          await writeSession(session, condition);
+        },
+      );
       const writeSummary = f.store.writeSummary.bind(f.store);
       vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
         if (cleanupFails && fault === "summary-write") {
@@ -668,7 +672,7 @@ describe("configured transcript source provenance", () => {
       expect(session.stoppedAt).toEqual(expect.any(String));
       const notes = await f.store.readSummary(session);
       expect(notes.summary?.transcript).toEqual(["Saved before the duplicate retry"]);
-      const revision = f.store.readSummaryInputRevision(session);
+      const revision = await f.store.readSummaryInputRevision(session);
       vi.mocked(providerRegistry.getTranscriptSourceProvider).mockImplementation((id) =>
         id === delayedId ? delayedProvider : f.provider,
       );
@@ -687,7 +691,7 @@ describe("configured transcript source provenance", () => {
       expect(await f.store.listSessionEntries()).toHaveLength(1);
       expect(await f.store.readSession(entry.sessionId)).toEqual(session);
       expect(await f.store.readSummary(session)).toEqual(notes);
-      expect(f.store.readSummaryInputRevision(session)).toBe(revision);
+      expect(await f.store.readSummaryInputRevision(session)).toBe(revision);
     } finally {
       await service.stop();
     }

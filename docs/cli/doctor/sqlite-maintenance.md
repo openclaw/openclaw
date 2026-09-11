@@ -66,8 +66,10 @@ CLI startup do not import, restore, or rewrite legacy session JSON/JSONL files.
 When startup finds a legacy session store, it refuses readiness and prints a
 `doctor --fix` command for the active profile instead of serving empty history.
 
-To upgrade history from an older file-backed installation, stop the Gateway,
-back up its state, and run `openclaw doctor --fix` before restarting it.
+To upgrade history from an older file-backed installation, stop the Gateway
+(`openclaw gateway stop`), back up its state (`openclaw backup create --verify`),
+and run `openclaw doctor --fix` before restarting it with
+`openclaw gateway start`.
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
 migration sources. Hot transcript JSONL files are imported and archived after
@@ -78,8 +80,7 @@ The public Doctor migration path stages transcript payloads and performs branch
 and provider repairs in a private, temporary SQLite database instead of retaining
 complete histories in memory. It keeps the raw transcript untouched until archiving it through an
 exclusive same-filesystem move, avoiding both an extra full `.pre-doctor` raw
-copy and a rewritten intermediate file. Standalone transcript repair retains
-its original backup behavior.
+copy and a rewritten intermediate file.
 
 For large histories, plan space for the original JSON/JSONL files, the temporary
 SQLite spool, and the destination database and WAL at the same time. Keep free
@@ -120,7 +121,7 @@ Modes:
 Selectors:
 
 - Default: the configured default agent store; SQLite inspection does not require a legacy file.
-- `--session-sqlite-agent <id>`: one configured agent.
+- `--session-sqlite-agent <id>`: one configured agent, or the expected database owner when paired with `--session-sqlite-store` (which otherwise assumes `main`).
 - `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
 - `--session-sqlite-store <path>`: one explicit `.sqlite` database or legacy `sessions.json` path.
 
@@ -241,7 +242,29 @@ them, so interrupted cleanup can be resumed. Restore distinguishes intentional
 disposal, pending cleanup, and unexpected missing files. See
 [Update cleanup](/cli/update#update-cleanup).
 
-### Downgrading After Session SQLite Migration
+### Hard-linked legacy artifacts
+
+Doctor refuses a legacy `sessions.json` or transcript artifact when another hard
+link references its inode. The diagnostic names the artifact path, device, inode,
+and observed link count (`nlink`). Doctor does not scan for other linked paths.
+The refusal protects snapshot copies from changes through a shared inode.
+
+For a legacy source rejected before its identity was recorded for archival, stop
+the Gateway and create a verified backup. Copy the contents to a **new** temporary
+regular file in the same directory, preserving permissions. Verify that the copy
+has identical contents and a link count of one, then rename it over the reported
+source path and rerun the same Doctor command. Do not overwrite the source in
+place or create another hard link: replacing its directory entry with the fresh
+copy preserves the snapshot's contents without needing to find its other paths.
+
+If an earlier migration was interrupted or the reported path is an archived
+recovery artifact, preserve the files and manifests. Run
+`openclaw doctor --session-sqlite recover` with the same profile and legacy-source
+selectors first. Recorded artifacts depend on their original identities;
+replacing them with copies can prevent restoration. If recovery still refuses
+the artifact, retain that evidence for support instead of replacing it.
+
+### Downgrading after session SQLite migration
 
 Follow [Downgrade](/install/updating#downgrade) before starting an older release.
 With writers stopped, `openclaw doctor --session-sqlite restore

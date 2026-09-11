@@ -751,6 +751,123 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
+/* Search and Connect a machine stay visible while the inventory scrolls. */
+wa-popover.new-session-page__where-popover {
+  --max-width: min(360px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__where-popover::part(body) {
+  width: min(360px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__environment-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  overflow: hidden;
+}
+
+.new-session-page__environment-search {
+  margin-bottom: 4px;
+  display: flex;
+  flex: 0 0 32px;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.new-session-page__environment-search svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.new-session-page__environment-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-md);
+  outline: none;
+}
+
+.new-session-page__environment-search input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__environment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.new-session-page__environment-option,
+.new-session-page__connect-machine {
+  min-height: 32px;
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.new-session-page__environment-list > .session-menu__item {
+  flex-shrink: 0;
+}
+
+/* Reserve the selection column even when empty so labels and meters never move. */
+.new-session-page__environment-option > .session-menu__check {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.new-session-page__environment-option[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.new-session-page__environment-option .session-menu__description {
+  display: inline;
+  margin-top: 0;
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.new-session-page__device-icon {
+  display: inline-flex;
+}
+
+.new-session-page__environment-option .session-menu__icon,
+.new-session-page__connect-machine .session-menu__icon,
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__connect-machine .session-menu__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.new-session-page__environment-option > .new-session-page__menu-meta {
+  flex: 0 0 84px;
+}
+
+.new-session-page__environment-empty {
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+}
+
+.new-session-page__environment-picker > .session-menu__separator,
+.new-session-page__environment-picker > .new-session-page__connect-machine {
+  flex-shrink: 0;
+}
+
 .new-session-page__menu-chevron {
   display: inline-flex;
   margin-left: auto;

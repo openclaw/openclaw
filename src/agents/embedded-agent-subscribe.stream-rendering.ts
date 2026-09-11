@@ -359,6 +359,7 @@ export function createStreamRendering({
   const emitBlockChunk = (
     text: string,
     options?: {
+      sourceText?: string;
       assistantMessageIndex?: number;
       final?: boolean;
       completeMarkdownChunk?: boolean;
@@ -460,9 +461,13 @@ export function createStreamRendering({
       markBlockReplyTextHandled();
       return;
     }
-    let splitResult = replyDirectiveAccumulator.consume(chunk, {
-      final: options?.finalReply !== undefined,
-    });
+    // Prepared chunks already removed real directives with full source context;
+    // a chunk boundary can separate a remaining literal from its code opener.
+    let splitResult: ReplyDirectiveParseResult | null = state.blockState.textIsVisible
+      ? { text: chunk, replyToTag: false, isSilent: false }
+      : replyDirectiveAccumulator.consume(chunk, {
+          final: options?.finalReply !== undefined,
+        });
     if (options?.finalReply) {
       let pendingText = splitResult?.text ?? "";
       if (pendingText && !options.finalReply.text.endsWith(pendingText)) {
@@ -520,6 +525,8 @@ export function createStreamRendering({
       },
       {
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        blockSourceText:
+          chunk === text.trimEnd() && cleanedText === chunk ? options?.sourceText : undefined,
         consumePendingToolMedia:
           options?.finalReply !== undefined || Boolean(mediaUrls?.length || audioAsVoice),
       },
@@ -541,26 +548,28 @@ export function createStreamRendering({
     if (!params.onBlockReply) {
       return undefined;
     }
-    let pendingChunk: string | undefined;
+    let pendingChunk: { text: string; sourceText?: string } | undefined;
     if (blockChunker.hasBuffered()) {
       blockChunker.drain({
         force: true,
-        emit: (text) => {
+        emit: (text, metadata) => {
           if (pendingChunk !== undefined) {
-            emitBlockChunk(pendingChunk, {
+            emitBlockChunk(pendingChunk.text, {
+              sourceText: pendingChunk.sourceText,
               assistantMessageIndex: options?.assistantMessageIndex,
               completeMarkdownChunk: true,
             });
           }
-          pendingChunk = text;
+          pendingChunk = { text, sourceText: metadata?.sourceText };
         },
       });
     }
     if (pendingChunk !== undefined || options?.final) {
       // Only the final chunk can select attachments or consume fallback tool
       // media. Intermediate chunks remain text-only until that selection exists.
-      emitBlockChunk(pendingChunk ?? "", {
+      emitBlockChunk(pendingChunk?.text ?? "", {
         ...options,
+        sourceText: pendingChunk?.sourceText,
         completeMarkdownChunk: options?.final === true,
       });
     }

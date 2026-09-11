@@ -31,7 +31,7 @@ export async function resolveSessionDiffBase(params: {
   }
   // Plain clones without origin/HEAD still get a branch-relative diff.
   if (params.branch && params.branch !== "main" && params.branch !== "master") {
-    for (const candidate of ["main", "master"]) {
+    for (const candidate of ["main", "master", "origin/main", "origin/master"]) {
       const verified = await params.gitOut(params.root, [
         "rev-parse",
         "--verify",

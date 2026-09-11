@@ -79,7 +79,10 @@ these hub links to reach the same top-level docs areas from the page body.
     Gateway configuration, security, diagnostics, and operations.
   </Card>
   <Card title="Reference" href="/cli" icon="terminal">
-    CLI reference, schemas, RPC, release notes, and templates.
+    CLI reference, schemas, RPC, and templates.
+  </Card>
+  <Card title="Releases" href="/releases" icon="tag">
+    Release notes for each version, with highlights and source links.
   </Card>
   <Card title="Help" href="/help" icon="life-buoy">
     Troubleshooting, FAQs, testing, diagnostics, and environment checks.
@@ -137,6 +140,15 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Card>
   <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     Pair iOS and Android nodes for camera, screen, and voice-enabled workflows.
+  </Card>
+  <Card title="Skills" icon="graduation-cap" href="/tools/skills">
+    Teach the agent repeatable procedures it loads on demand.
+  </Card>
+  <Card title="Automation" icon="clock" href="/automation">
+    Run work on a schedule with cron jobs, hooks, and webhooks.
+  </Card>
+  <Card title="Build plugins" icon="hammer" href="/plugins/building-plugins">
+    Write your own channel, provider, and tool plugins against the plugin SDK.
   </Card>
 </Columns>
 

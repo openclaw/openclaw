@@ -536,6 +536,41 @@ describe("chat page retained sessions", () => {
     expect(page.data.sessionKey).toBe("agent:main:b");
   });
 
+  it("reuses a deleted middle position without replacing survivors or changing eviction recency", async () => {
+    const { page, paneFor, panes } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
+      "agent:main:c",
+    );
+    const paneA = paneFor("agent:main:a");
+    const paneB = paneFor("agent:main:b");
+    const paneC = paneFor("agent:main:c");
+
+    paneB?.onSessionDeleted?.("p1", "agent:main:b", "agent:main:main");
+    await page.updateComplete;
+    await showSession(page, "agent:main:d");
+
+    expect(paneB?.isConnected).toBe(false);
+    expect(paneFor("agent:main:a")).toBe(paneA);
+    expect(paneFor("agent:main:c")).toBe(paneC);
+    expect(
+      panes()
+        .map((pane) => pane.sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:main:a", "agent:main:c", "agent:main:d"]);
+
+    await showSession(page, "agent:main:a");
+    await showSession(page, "agent:main:e");
+
+    expect(paneFor("agent:main:a")).toBe(paneA);
+    expect(paneC?.isConnected).toBe(false);
+    expect(
+      panes()
+        .map((pane) => pane.sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:main:a", "agent:main:d", "agent:main:e"]);
+  });
+
   it("rolls a retained preview back when authoritative navigation never commits", async () => {
     vi.useFakeTimers();
     try {

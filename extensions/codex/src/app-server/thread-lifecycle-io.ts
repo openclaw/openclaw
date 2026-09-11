@@ -112,10 +112,10 @@ export async function resumeExistingCodexThread(
         ? undefined
         : (params.params.authProfileId ?? resumeBinding.authProfileId);
     const finalConfigPatch = context.prebuiltFinalConfigPatch ??
-      params.buildFinalConfigPatch?.({
+      (await params.buildFinalConfigPatch?.({
         action: "resume",
         binding: resumeBinding,
-      }) ?? {
+      })) ?? {
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
       };
@@ -458,7 +458,7 @@ export async function startFreshCodexThread(
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+  const finalConfigPatch = (await params.buildFinalConfigPatch?.({ action: "start" })) ?? {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };

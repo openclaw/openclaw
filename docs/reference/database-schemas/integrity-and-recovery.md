@@ -32,9 +32,18 @@ Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
+The background verifier retains its child through native exit and IPC disconnect,
+including when sending work fails. Failed native launches settle after closure
+without requiring an exit event. If the operating system refuses a termination
+request, the verifier logs the failure and keeps waiting for native exit; an
+undelivered signal does not mean the child has stopped. The original worker or
+IPC error remains the reported failure even if termination also fails.
+
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Explicit session-maintenance finalization uses this asynchronous admission if its writable handle was evicted during archive or deletion preparation. It keeps its place in the session writer queue and rechecks maintenance and deletion authority before committing. Automatic maintenance retires when its original handle closes instead of reopening it.
 
 The integrity child and both asynchronous and synchronous read-only snapshot workers share a lifetime budget: 30 seconds for startup and shutdown plus one second per 32 MiB of source database file size, rounded up, capped at 30 minutes. A full copy or full scan reads the whole file at least once; the budget allows for a conservative cold-cache read rate of 32 MiB/s. A 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged once per call at debug level with the operation, path, size, and applied budget, keeping ordinary CLI output quiet. If the snapshot worker cannot stat the source, it uses the 30-second base budget and lets the child report the underlying error.
 
@@ -60,9 +69,42 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### Doctor reports orphan task delivery rows
+
+If `foreign_key_check` names `task_delivery_state` referencing `task_runs`,
+stop the Gateway and run `openclaw doctor --fix`. Doctor can recover this known
+relation when the database is structurally intact and has no unrelated
+foreign-key violations or unrecognized delivery-table schema or triggers.
+
+Before removing any orphan rows, Doctor preserves a complete WAL-aware database
+copy and a lossless row export in a private `openclaw-task-delivery-recovery-*`
+directory beside the shared database. Its report names that directory. It contains:
+
+- `database.sqlite`: the pre-repair database, including the orphan rows.
+- `orphan-rows.jsonl`: the original delivery payload, with SQLite integers encoded
+  as decimal strings to avoid precision loss.
+- `manifest.json`: file hashes, row count, and preservation metadata.
+
+Doctor removes only delivery rows whose task no longer exists, within the existing
+repair transaction, and requires clean integrity and foreign-key checks before
+commit. It does not fabricate tasks or replay deliveries. If preservation or a
+later repair step fails, row removal rolls back and any recovery artifacts remain.
+A manifest proves preservation, not that the repair committed; rerun Doctor to
+verify completion.
+
+Keep these files private: they can contain delivery destinations and other user
+data. Retain them until the updated Gateway is verified and any needed payload
+has been recovered. Do not overwrite newer runtime state with this original
+copy. This recovery does not establish which writer created the orphan rows.
+
 ### Why you cannot go back after updating to 2026.7.2
 
 Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
+
+Some older packages omit schema metadata. The updater recognizes the schema-1
+contract for plain 2026 stable releases through `2026.7.1` and checks it before
+activation, including when updating from a local package tarball. An incompatible
+target is refused while the current installation remains in place.
 
 Downgrading the binary never downgrades the data. Use the managed recovery path
 or restore the verified pre-update backup with its matching release. Retain

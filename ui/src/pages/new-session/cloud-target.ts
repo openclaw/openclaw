@@ -28,6 +28,7 @@ export async function requestPlaceCatalog(
 type SessionMenuItemOptions = {
   value: string;
   label: string;
+  description?: string;
   icon?: unknown;
   sub?: string;
   facts?: readonly string[];
@@ -36,14 +37,18 @@ type SessionMenuItemOptions = {
   disabled?: boolean;
   title?: string;
   keepOpen?: boolean;
+  environment?: boolean;
   onSelect: () => void;
 };
 
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
+  const description = params.description;
   return html`
     <button
       type="button"
-      class="session-menu__item"
+      class="session-menu__item ${description ? "session-menu__item--described" : ""} ${
+        params.environment ? "new-session-page__environment-option" : ""
+      }"
       data-value=${params.value}
       data-popover=${params.keepOpen ? nothing : "close"}
       aria-pressed=${String(params.checked)}
@@ -56,7 +61,16 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
           ? html`<span class="session-menu__icon" aria-hidden="true">${params.icon}</span>`
           : nothing
       }
-      <span class="session-menu__text">${params.label}</span>
+      <span class="session-menu__text">
+        ${params.label}
+        ${
+          description
+            ? html`<span class="session-menu__description"
+                >${params.environment ? " · " : nothing}${description}</span
+              >`
+            : nothing
+        }
+      </span>
       ${
         params.facts?.length || params.meter
           ? html`<span class="new-session-page__menu-meta">
@@ -106,17 +120,24 @@ export function renderCloudProfileMenuItems(params: {
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
+  environment?: boolean;
   onSelect: (profileId: string) => void;
 }) {
   return params.profiles.map((profile) => {
     const profileDisabledReason = params.profileDisabledReason?.(profile);
+    const disabledReason = params.disabled ? params.disabledReason : profileDisabledReason;
     return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
-        label: t("newSession.cloudWorker", { profile: profile.id }),
+        label: params.environment
+          ? profile.id
+          : t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
-        facts:
-          profile.trust === "disposable"
+        environment: params.environment,
+        description: params.environment ? disabledReason : undefined,
+        facts: params.environment
+          ? undefined
+          : profile.trust === "disposable"
             ? [t("newSession.environmentDisposable")]
             : profile.trust === "persistent"
               ? [t("newSession.environmentPersistent")]
@@ -124,8 +145,7 @@ export function renderCloudProfileMenuItems(params: {
         checked: params.selectedId === profile.id,
         disabled: params.disabled || Boolean(profileDisabledReason),
         title:
-          (params.disabled ? params.disabledReason : profileDisabledReason) ??
-          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          disabledReason ?? t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,
@@ -179,6 +199,9 @@ export function renderCloudOsMenuItems(params: {
       {
         value: `os:${os.id}`,
         label: os.label,
+        description: os.disabledReason,
+        disabled: Boolean(os.disabledReason),
+        title: os.disabledReason,
         facts: os.default ? [t("newSession.machineDefault")] : undefined,
         checked: params.selectedId === os.id,
         keepOpen: true,

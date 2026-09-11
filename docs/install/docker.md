@@ -1,15 +1,15 @@
 ---
 summary: "Optional Docker-based setup and onboarding for OpenClaw"
 read_when:
-  - You want a containerized gateway instead of local installs
+  - You want a containerized Gateway instead of local installs
   - You are validating the Docker flow
   - You are migrating from ClawDock shell helpers
 title: "Docker"
 ---
 
-Docker is **optional**. Use it for an isolated, throwaway gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
+Docker is **optional**. Use it for an isolated, throwaway Gateway environment or a host without local installs. If you already develop on your own machine, use the normal install flow instead.
 
-The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
+The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
 Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
 
@@ -20,7 +20,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 - Enough disk for images and logs
 - On a VPS/public host, review [Security hardening for network exposure](/gateway/security), especially the Docker `DOCKER-USER` firewall chain
 
-## Containerized gateway
+## Containerized Gateway
 
 <Steps>
   <Step title="Build the image">
@@ -30,7 +30,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh
     ```
 
-    This builds the gateway image locally as `openclaw:local`. To use a pre-built image instead:
+    This builds the Gateway image locally as `openclaw:local`. To use a pre-built image instead:
 
     ```bash
     export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
@@ -44,7 +44,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh
     ```
 
-    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.9.3` and prereleases such as `2026.9.1-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in, useful for the [sandboxed browser](/gateway/sandboxing#sandboxed-browser) tool without a first-run Playwright install.
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.9.3` and prereleases such as `2026.9.1-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in for the [Gateway-controlled browser](/install/docker#using-the-control-ui-browser). The agent sandbox browser uses a separate image.
 
   </Step>
 
@@ -57,7 +57,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh --offline
     ```
 
-    `--offline` verifies `OPENCLAW_IMAGE` already exists locally, disables implicit Compose pulls/builds, then runs the normal flow: `.env` sync, permission fixes, onboarding, gateway config sync, Compose startup.
+    `--offline` verifies `OPENCLAW_IMAGE` already exists locally, disables implicit Compose pulls/builds, then runs the normal flow: `.env` sync, permission fixes, onboarding, Gateway config sync, Compose startup.
 
     If `OPENCLAW_SANDBOX=1`, offline setup also checks the configured default and per-agent sandbox images on the daemon behind `OPENCLAW_DOCKER_SOCKET`, including the browser-contract label on Docker-backed browser images. If a required image is missing or stale, setup exits without changing sandbox config rather than reporting a broken success.
 
@@ -67,11 +67,11 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     The setup script runs onboarding automatically:
 
     - prompts for provider API keys
-    - generates a gateway token and writes it to `.env`
+    - generates a Gateway token and writes it to `.env`
     - creates the legacy auth-profile secret key directory
-    - starts the gateway via Docker Compose
+    - starts the Gateway via Docker Compose
 
-    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the gateway's network namespace and only works once the gateway container exists.
+    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the Gateway's network namespace and only works once the Gateway container exists.
 
   </Step>
 
@@ -104,6 +104,70 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 
   </Step>
 </Steps>
+
+### Using the Control UI browser
+
+The [Control UI Browser panel](/web/control-ui/panels#browser-panel) displays a
+browser controlled by the Gateway. It is separate from the browser on your laptop
+or phone that opens the dashboard. For a local managed browser with a Docker
+Gateway, Chromium must be available **inside the Gateway container**.
+
+For a new installation, use the official browser-equipped image with the normal
+Compose setup; no custom Dockerfile is needed:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest-browser"
+./scripts/docker/setup.sh
+```
+
+For a pinned deployment, choose a release's `-browser` tag instead of the moving
+`latest-browser` tag. For an existing Compose installation, change `OPENCLAW_IMAGE`
+in its `.env` to the browser variant, then pull and recreate the Gateway using
+the same Compose files and overlays as your current deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose up -d openclaw-gateway
+```
+
+Keep your existing volumes, ports, and other settings. Do not rerun setup with an
+empty shell environment to change only the image: setup rewrites `.env` from the
+current shell and defaults.
+
+An existing home volume or bind mount covering `/home/node/.cache/ms-playwright`
+can hide the image's bundled Chromium. If browser discovery still fails after the
+image switch, check those mounts. Preserve the data, then either provision
+Chromium in the mounted home or adjust the mounts to leave the image's browser
+cache visible; recreating the container does not refresh a populated home volume.
+
+For a new installation from a local source build, bake Chromium into the image:
+
+```bash
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+```
+
+This build-time option installs Chromium and Xvfb; setting it on
+an already-built container does not install a browser.
+
+The image supplies Chromium, not a replacement for your browser configuration:
+
+- Keep browser control enabled (`browser.enabled`). Use a local managed profile
+  such as `openclaw` for the container's Chromium, not an extension, attach-only,
+  or remote-CDP profile intended for another browser.
+- OpenClaw auto-detects the image's Playwright-managed Chromium on Linux. An
+  explicit `browser.executablePath` or profile executable path must point to a
+  binary inside the container; a path from your laptop will not work there.
+- A headless container needs headless browser operation. Check explicit
+  `browser.headless`, profile headless settings, and `OPENCLAW_BROWSER_HEADLESS`
+  overrides if startup reports a missing display. See [Browser configuration](/tools/browser-control).
+- Connect with `operator.admin` access to a Gateway advertising `browser.request`.
+  Open **+ → Browser** in the Chat side panel, navigate to a page, and confirm that
+  its snapshot loads and navigation works. Loading the dashboard alone does not
+  verify that Chromium can start.
+
+This is not the separate [sandboxed browser](/gateway/sandboxing#sandboxed-browser)
+container used by sandboxed agent sessions. Selecting a Gateway `-browser` image
+does not build or configure that sandbox image.
 
 ### Headless bootstrap
 
@@ -164,22 +228,22 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new gateway runs startup-safe upgrade migrations and plugin convergence before
+new Gateway runs startup-safe upgrade migrations and plugin convergence before
 readiness. Routine image upgrades should not require a separate
 `openclaw doctor --fix` pass.
 
-If startup cannot complete those repairs safely, the gateway exits instead of
+If startup cannot complete those repairs safely, the Gateway exits instead of
 reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
-the gateway container restarting. Keep the mounted state volume, then run the
+the Gateway container restarting. Keep the mounted state volume, then run the
 same image once with `openclaw doctor --fix` as the container command, using the
-same state/config mounts the gateway uses:
+same state/config mounts the Gateway uses:
 
 ```bash
 docker run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
 podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
 ```
 
-After doctor finishes, restart the gateway container with its default command.
+After doctor finishes, restart the Gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
 same PVC, then restart the Deployment or StatefulSet.
 
@@ -209,7 +273,7 @@ plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
 
 For example, these commands build separate, multi-architecture standalone
-FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
+FakeCo Gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
 already part of the root OpenClaw runtime, so the ClickClack image selects only
 `clickclack`. The explicit empty browser argument keeps the default image free
 of Chromium:
@@ -252,8 +316,8 @@ docker buildx imagetools inspect \
 # Deploy: registry.example.com/fakeco/openclaw-clickclack@sha256:<manifest-digest>
 ```
 
-These images are for standalone OCI-based gateways and generic Docker users.
-Crabhelm-managed gateways do not consume them: that delivery path builds a
+These images are for standalone OCI-based Gateways and generic Docker users.
+Crabhelm-managed Gateways do not consume them: that delivery path builds a
 separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
 the Node, archive, and manifest digests. Build that appliance independently
 from the same landed OpenClaw source.
@@ -350,5 +414,8 @@ docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health -
 
 - [Install Overview](/install) — all installation methods
 - [Podman](/install/podman) — Podman alternative to Docker
+- [Kubernetes](/install/kubernetes) — a minimal Kustomize starting point for running the Gateway on a cluster
+- [Ansible](/install/ansible) — automated server deployment with Tailscale VPN and firewall isolation
+- [Cloudflare Containers](/install/cloudflare) — experimental Worker plus container deployment with Litestream backups to R2
 - [Updating](/install/updating) — keeping OpenClaw up to date
-- [Configuration](/gateway/configuration) — gateway configuration after install
+- [Configuration](/gateway/configuration) — Gateway configuration after install

@@ -55,13 +55,6 @@ Backend plugin APIs and ordinary plugin loading do not require that setting.
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
 
-Plugins that provide an external team-chat surface for a session can register
-the single process-wide provider exported by
-`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
-reports whether a discussion is unavailable, ready to open, or already open;
-`open({ sessionKey })` creates or resolves the discussion and returns its embed
-and external URLs. Registering another provider replaces the current provider.
-
 Each group of registration methods has its own page:
 
 | Group                                                                                       | What it registers                                                     |
@@ -74,6 +67,15 @@ Each group of registration methods has its own page:
 | [Exclusive slots](/plugins/sdk-overview/memory-and-context#exclusive-slots)                 | Context engine and memory capability, one active at a time            |
 | [Events and lifecycle](/plugins/sdk-overview/events-and-hooks#events-and-lifecycle)         | Typed lifecycle hooks and conversation binding callbacks              |
 
+### Session discussion provider
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
+
 ### API object fields
 
 | Field                    | Type                      | Description                                                                               |
@@ -83,6 +85,7 @@ Each group of registration methods has its own page:
 | `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
 | `api.description`        | `string?`                 | Plugin description (optional)                                                             |
 | `api.source`             | `string`                  | Plugin source path                                                                        |
+| `api.runtimeSource`      | `string?`                 | Selected runtime entrypoint path, when the loader has selected a runtime artifact         |
 | `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
 | `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
 | `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
@@ -90,6 +93,14 @@ Each group of registration methods has its own page:
 | `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
 | `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
 | `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
+
+Use `api.runtimeSource` to locate private modules beside the selected runtime
+entrypoint. It records the loader's source, standalone package, or bundled
+artifact choice and always identifies the main runtime entry, even during
+setup registration. `api.source` and `api.rootDir` retain discovery identity;
+they can differ from the selected artifact. `runtimeSource` is absent when no
+runtime artifact has been selected, including metadata-only APIs. This path is
+a location fact, not authorization to invoke a retired plugin.
 
 ## Where each section moved
 

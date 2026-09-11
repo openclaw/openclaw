@@ -13,6 +13,7 @@ import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWithClient,
+  contextWeight,
   createPage,
   deferred,
   focusDocument,
@@ -23,18 +24,53 @@ import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
 
-function contextWeight(name: string): NonNullable<UsageSessionEntry["contextWeight"]> {
-  return {
-    source: "run",
-    generatedAt: 1,
-    systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
-    skills: { promptChars: 10, entries: [{ name, blockChars: 10 }] },
-    tools: { listChars: 0, schemaChars: 0, entries: [] },
-    injectedWorkspaceFiles: [],
-  };
-}
-
 describe("UsagePage detail requests", () => {
+  it.each([
+    { key: "global", agentId: "opus", needsOwnerHint: true },
+    { key: "agent:openclaw:usage", agentId: "openclaw", needsOwnerHint: false },
+  ])(
+    "routes every selected $key detail through its listed agent",
+    async ({ key, agentId, needsOwnerHint }) => {
+      const snapshot = cacheSnapshot("sessions", "fresh");
+      const session = {
+        key,
+        agentId,
+        sessionId: `${agentId}-instance`,
+        hasContextWeight: true,
+        usage: snapshot.result.totals,
+      };
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "sessions.usage") {
+          return {
+            ...snapshot.result,
+            sessions: [
+              { ...session, ...(params?.key ? { contextWeight: contextWeight(agentId) } : {}) },
+            ],
+          };
+        }
+        if (method === "sessions.usage.logs") {
+          return { logs: [{ timestamp: 1, role: "user", content: `${agentId} turn` }] };
+        }
+        return method === "usage.cost" ? snapshot.costSummary : { providers: [], points: [] };
+      });
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+      await vi.waitFor(() => expect(page.textContent).toContain(`${agentId} turn`));
+
+      for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
+        const detail = request.mock.calls.find(([name, params]) => name === method && params?.key);
+        expect.soft(detail?.[1], method).toMatchObject({ key });
+        expect.soft(detail?.[1], method).not.toHaveProperty("sessionId");
+        if (needsOwnerHint) {
+          expect.soft(detail?.[1], method).toHaveProperty("agentId", agentId);
+        } else {
+          expect.soft(detail?.[1], method).not.toHaveProperty("agentId");
+        }
+      }
+    },
+  );
+
   it("releases hydrated export reports after download while the page stays mounted", async () => {
     class ExportReport {
       name = "exported-context";
@@ -371,7 +407,6 @@ describe("UsagePage detail requests", () => {
     delete contextParams.agentScope;
     expect(firstContext[1]).toEqual({
       ...contextParams,
-      agentId: "main",
       key: keys[0],
       limit: 1,
       includeContextWeight: true,

@@ -5,6 +5,15 @@ import {
   buildGatewaySessionSnapshot,
 } from "./session-event-payload.js";
 
+it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
+  const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionEventFields({
+    sessionRow: { ...sessionRow, autoLabel: "Device", displayName: "Device" },
+  });
+  const cleared = buildGatewaySessionEventFields({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
+});
+
 it("projects session actors and explicitly clears absent attribution", () => {
   expect(
     buildGatewaySessionEventFields({

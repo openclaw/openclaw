@@ -42,18 +42,28 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 - `updatedAt`: last store-row mutation timestamp, used for listing/pruning/bookkeeping - not the daily/idle freshness authority.
 - `archivedAt`: optional archive timestamp. Archived sessions stay in the store with their transcript intact and are excluded from normal active listings.
 - `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of unpinned sessions; archiving a session clears its pin.
-- Codex thread interop: both fields follow the Codex thread-management shape - the `archived`/`pinned` booleans on the wire are always derived from the timestamp and stamped server-side, matching Codex `threads.archived_at` semantics and camelCase serialization. OpenClaw timestamps are epoch milliseconds while Codex uses epoch seconds, so bridges convert at the `codex` plugin seam. Codex has no pin API yet (`thread/archive`/`thread/unarchive` only); pinned state stays OpenClaw-side until one exists, at which point the matching shape lets bound sessions round-trip pin state mechanically.
+- Codex thread interop: both fields follow the Codex thread-management shape - the `archived`/`pinned` booleans on the wire are always derived from the timestamp and stamped server-side, matching Codex `threads.archived_at` semantics and camelCase serialization. OpenClaw timestamps are epoch milliseconds while Codex uses epoch seconds, so bridges convert at the `codex` plugin seam. The Codex thread methods cover archiving only (`thread/archive`/`thread/unarchive`) and include no pin method, so pinned state stays OpenClaw-side. The shapes match, so a Codex pin method would let bound sessions round-trip pin state mechanically.
 - Codex supervision lists only non-archived native threads. A Gateway-local `idle` or `notLoaded` activity-unknown thread can be archived through native `thread/archive` only after the operator explicitly confirms that no other Codex process owns it; the plugin performs a fresh process-local status read first, and the thread then disappears from the catalog. That read cannot prove that another App Server process is not using the thread. OpenClaw refuses to archive active and error rows, and paired-node archive is unavailable until the node bridge can own the full streamed thread lifecycle. Unarchiving in a native Codex client makes the thread eligible to appear again.
 - `lastReadAt` / `markedUnreadAt`: read-state timestamps stamped server-side by `sessions.patch { unread }` - `unread: false` records a read (sets `lastReadAt`, clears `markedUnreadAt`); `unread: true` records `markedUnreadAt` and marks the session unread until the next activation or explicit read. Session rows expose the marker alongside a derived `unread` boolean so already-open clients preserve manual reminders while still acknowledging new activity. Automatic read patches from clients that support the advertised unread acknowledgement contract include `expectedMarkedUnreadAt` (`null` means no marker); a newer marker makes that acknowledgement a successful no-op instead of erasing newer intent. Bare `unread: false` requests retain the legacy clear behavior, so protection across several connected clients requires each active client to support the contract. Sessions never marked read stay `unread: false`, so existing installs do not light up on upgrade.
 - `lastActivityAt`: timestamp of the last completed agent run that counts as unread-worthy activity (user, channel, and cron runs). Heartbeat and internal-event turns, plus metadata patches, do not update it; `updatedAt` is not an activity signal.
 - `sessionFile`: legacy marker retained for migration/archive compatibility; active runtime uses SQLite identity
 - `chatType`: `direct | group | room`
-- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata
+- `label`: explicit custom name; always takes precedence, including older records whose label resembles an automatic device name. Clearing it with `sessions.patch { label: null }` restores automatic naming.
+- `autoLabel`: optional automatic device label, separate from the custom name. Android writes it through `sessions.patch`; duplicate values are allowed, and `null` clears it. It is a display fallback below a saved `displayName`, not a unique session label.
+- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata; `displayName` also stores generated conversation titles.
 - Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
 - Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
 - Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
 - `compactionCount`: how many times auto-compaction completed for this session key
 - `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
+
+Existing label-only records are preserved: the Gateway does not infer whether a
+saved `label` was automatic from its text. Clear or replace it explicitly to
+change its precedence. An older Gateway that does not support `autoLabel` rejects
+that patch field; Android does not retry the device name as `label`, which could
+overwrite a custom name. Android still uses its locally known device name as a
+display-only fallback for its own session, below server-provided names. This
+fallback is neither sent to the Gateway nor stored in the session cache.
 
 The Gateway is the authority: it may rewrite or rehydrate entries as sessions
 run. For legacy file-backed installs, migrate with

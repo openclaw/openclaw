@@ -18,6 +18,13 @@ const EnvironmentTrustSchema = Type.String({
   enum: ["persistent", "disposable"],
 });
 
+/** Operational desktop state reported by the current native node connection. */
+export const DesktopAvailabilitySchema = closedObject({
+  state: Type.Union([Type.Literal("locked"), Type.Literal("unlocked"), Type.Literal("unknown")]),
+});
+
+export type DesktopAvailability = Static<typeof DesktopAvailabilitySchema>;
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -85,6 +92,7 @@ export const RequiredNodeCommandSchema = closedObject({
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
@@ -122,8 +130,15 @@ function createEnvironmentSummaryProperties() {
       }),
     ),
     desktop: Type.Optional(Type.Boolean()),
+    desktopAvailability: Type.Optional(DesktopAvailabilitySchema),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
+    preparation: Type.Optional(
+      closedObject({
+        purpose: Type.Union([Type.Literal("reserve"), Type.Literal("build")]),
+        key: NonEmptyString,
+      }),
+    ),
   };
 }
 
@@ -162,6 +177,7 @@ export const WorkerOperatingSystemSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 64 }),
   label: Type.String({ minLength: 1, maxLength: 64 }),
   default: Type.Optional(Type.Boolean()),
+  disabledReason: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 /** Placement execution modes shared by runtime requirements and worker providers. */
@@ -208,6 +224,18 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 
 /** Create result uses the same public summary shape as list and status. */
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
+
+/** Prepares a configured profile's local Git project without dispatching a session. */
+export const EnvironmentsPrepareParamsSchema = closedObject({
+  profileId: NonEmptyString,
+  projectPath: NonEmptyString,
+});
+
+export const EnvironmentsPrepareResultSchema = closedObject({
+  environmentId: NonEmptyString,
+  preparationKey: NonEmptyString,
+  reused: Type.Boolean(),
+});
 
 /** Destroys one durable worker environment by its gateway-owned id. */
 export const EnvironmentsDestroyParamsSchema = closedObject({
@@ -258,6 +286,8 @@ export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;
+export type EnvironmentsPrepareParams = Static<typeof EnvironmentsPrepareParamsSchema>;
+export type EnvironmentsPrepareResult = Static<typeof EnvironmentsPrepareResultSchema>;
 export type EnvironmentsDestroyParams = Static<typeof EnvironmentsDestroyParamsSchema>;
 export type EnvironmentsDestroyResult = Static<typeof EnvironmentsDestroyResultSchema>;
 export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>;

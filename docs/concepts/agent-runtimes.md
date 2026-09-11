@@ -313,3 +313,5 @@ reject the turn. The completed result records the runtime that actually ran.
 - [Agent loop](/concepts/agent-loop)
 - [Models](/concepts/models)
 - [Status](/cli/status)
+- [Code Mode](/tools/code-mode) — an experimental, opt-in agent-runtime feature
+- [Agent runtime architecture](/agent-runtime-architecture) — code layout, module boundaries, and how the built-in runtime is selected

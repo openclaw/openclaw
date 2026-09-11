@@ -465,10 +465,7 @@ export function restoreTaskRegistryOnce() {
     rebuildRelatedSessionKeyIndex();
     taskRegistryRestoreState = { status: "ready" };
     if (restoredTasks.size > 0 || restoredDeliveryStates.size > 0) {
-      emitTaskRegistryObserverEvent(() => ({
-        kind: "restored",
-        tasks: snapshotTaskRecords(tasks),
-      }));
+      emitTaskRegistryObserverEvent(() => ({ kind: "restored" }));
     }
   } catch (error) {
     clearTaskRegistryMemory();

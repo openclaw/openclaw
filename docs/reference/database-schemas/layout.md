@@ -13,7 +13,7 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 ### Plugin state listing index
 
@@ -199,12 +199,30 @@ Reconciliation writes status `failed`, reason `abandoned`, and a retained
 `operator-reconciled-inactive-run`. All unfinished steps become terminal, and
 history is retained. Explicit `update repair` can reconcile inactive identityless
 rows when the current Gateway generation is healthy and no post-core repair is
-pending. It cannot override a live or inconclusive recorded driver. The
+pending. When every recorded driver is positively dead and no
+`driver:identity-unavailable` marker exists, explicit recovery does not require
+the inactivity window. It cannot override a live or inconclusive recorded driver. The
 [2026.9.2 updater](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command.ts#L465)
 does not record adoption: package-manager and registry preflight can
 leave a live updater at its single `requested/in_progress` step. Older writers
-may drop unknown driver JSON fields; identityless rows require explicit recovery.
-`update status` only reports classification and never commits reconciliation.
+may drop unknown driver JSON fields; identityless rows normally require explicit recovery.
+
+An untouched legacy admission expires automatically after more than 24 hours:
+it is still `requested` / `running`, has identical creation and update timestamps,
+no finish timestamp, no recorded driver, and only its initial `requested` step.
+The ledger retains it as `failed` with reason `legacy-driver-expired` and a
+`reconcile:abandoned` step. Startup, `update status`, `status`, and the Control UI's
+update reads reconcile this shape through the same transaction. Status and failure
+reports explain that the update never progressed and recommend `openclaw update`
+to retry. Status retains the latest such advisory even after a newer update finishes.
+This fixed legacy expiry does not establish process death. It is the bounded
+recovery policy for 2026.9.2-era orphan admissions. Younger rows, progressed rows,
+recorded drivers, and retained recovery descriptors keep their existing protections.
+Recording `driver:identity-unavailable` is itself a mutation, so that adoption
+cannot match an untouched admission. All other `update status` history remains
+read-only; the existing 30-minute inactivity window is unchanged.
+Gateway update reads also run the existing automatic dead-driver reconciliation,
+so Control UI admission uses the same recovery decision as its startup watcher.
 
 Explicit new CLI update admission can supersede a legacy row only when it is
 the sole running row, has no current or previous driver identity, and exceeds
@@ -239,6 +257,34 @@ The restart sentinel carries `stats.runId` and remains the continuation owner;
 consuming it does not delete the run row. Chat, CLI, and status reports read that
 row. See [Run history and reports](/cli/update#run-history-and-reports).
 
+### Update installation control
+
+Managed update leases use a separate machine-local `managed-update-handoffs.sqlite`
+database under the secure OpenClaw temporary directory. This owner must remain
+available while an update replaces an installation or changes its runtime state.
+The update history above remains in the profile's shared state database.
+
+First creation exclusively creates a private file with one filesystem link.
+Concurrent initializers use that same file without replacing it. SQLite commits
+the existing schema atomically; ordinary lease inspection reports no lease while
+the first-use schema is empty. Reads of an absent database create no state.
+Existing lease rows, claim transactions, and the rule that one updater owns an
+installation are unchanged.
+
+The normal handoff parent prepares this database before launching its sealed
+helper. The helper receives the captured database identity and operates only on
+that existing database, without resolving installation packages or recreating
+missing or empty state.
+
+File creation applies private permissions before SQLite opens the file, including
+a protected ACL on Windows. Initialization follows the existing directory-durability
+policy and does not require the optional fs-safe native binding. Failure stops
+lease admission before its operation runs. After an interrupted first creation,
+the normal owner can finish initialization through its existing empty-database
+recovery path; committed rows remain governed by SQLite's normal transactions.
+This change requires no schema migration. See the
+[accepted initialization design](https://github.com/openclaw/openclaw/pull/144155).
+
 ### Cloud repository workspaces
 
 Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
@@ -250,3 +296,36 @@ Both tables are additive, lazily ensured on first use, and leave the numeric dat
 Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
 
 Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
+
+## Sandbox runtime reservations
+
+The existing `sandbox_registry_entries` table owns runtime identity and cleanup.
+Backends that opt into reservation persist a generation before provider allocation.
+The entry payload retains the original `workspaceDir` and records `runtimeState`
+as `pending`, `ready`, `removing`, or `removing-pending`;
+no schema version, table, or column is added. Older entries are adopted on first
+use, and backends without reservation keep their existing registry behavior.
+Factories receive the reserved workspace on replay and shared-scope reuse, rather
+than the latest caller's local workspace. Provider execution and repository-scoped
+cleanup therefore use the same original owner.
+
+Reservation and publication use synchronous SQLite transactions. Provider work
+runs outside the transaction under a per-runtime file lock beside the shared
+database. Lock contenders wait up to 15 minutes, covering the backend's warmup
+and inspection budgets. Concurrent creators reuse the same generation. Failed
+provisioning retains its pending ID for replay after restart. Recreate and prune
+record removal intent before waiting for provisioning, then remove the provider runtime before
+deleting the row. Cleanup failures retain that intent for retry; stale handles
+cannot publish readiness or start new operations after removal begins.
+
+`removing-pending` preserves the fact that provisioning never published readiness.
+If ordinary cleanup fails, the Crabbox adapter can replay that same fixed ID from
+its original workspace and then release it. This also covers a failure before
+Crabbox recorded the request: recovery may allocate and immediately release the
+reserved runtime. Unknown outcomes retain the recovery row; an absent local claim
+or an error message is not proof that provider resources are absent.
+
+The reservation is canonical recovery state. Do not delete it to clear a provider
+error. Before downgrading to a version without reservation support, disable the
+backend and reconcile its pending leases using the current version. Older readers
+can open the database but do not implement this lifecycle.

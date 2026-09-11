@@ -70,14 +70,26 @@ function registry(snapshot: ReturnType<typeof metadata>, workspaceDir?: string) 
   });
 }
 
+function createRegistrationProbe() {
+  const marker = path.join(makePluginLoaderTempDir(), "registrations.log");
+  writeFileSync(marker, "");
+  // Observe registration across independent module generations without sharing plugin globals.
+  return {
+    source: `const fs = require("node:fs");
+      fs.appendFileSync(${JSON.stringify(marker)}, "registered\\n");
+      const registration = fs.readFileSync(${JSON.stringify(marker)}, "utf8").split("\\n").length - 1;`,
+    count: () => readFileSync(marker, "utf8").split("\n").length - 1,
+  };
+}
+
 function loadFixture(label: string, dir?: string, hookAliases?: readonly string[]) {
+  const registrations = createRegistrationProbe();
   const plugin = writePlugin({
     id: "same-id",
     dir,
     filename: `${label}.cjs`,
-    body: `let registrations = 0;
-    module.exports = { id: "same-id", register(api) {
-      const registration = ++registrations;
+    body: `module.exports = { id: "same-id", register(api) {
+      ${registrations.source}
       api.registerProvider({ id: "same-provider", label: ${JSON.stringify(label)}, auth: [],
         ${hookAliases ? `hookAliases: ${JSON.stringify(hookAliases)},` : ""}
         normalizeModelId: () => String(registration) });
@@ -91,7 +103,7 @@ function loadFixture(label: string, dir?: string, hookAliases?: readonly string[
       configSchema: EMPTY_PLUGIN_SCHEMA,
     }),
   );
-  return metadata(plugin.dir, plugin.file);
+  return Object.assign(metadata(plugin.dir, plugin.file), { registrations: registrations.count });
 }
 
 afterEach(clearPluginLoaderCache);
@@ -124,13 +136,14 @@ describe("provider runtime physical ownership", () => {
   it.each([false, true])(
     "preserves paired source defaults during config reuse with snapshot=%s",
     (snapshotPresent) => {
+      const registrations = createRegistrationProbe();
       const plugin = writePlugin({
         id: "same-id",
         filename: "index.cjs",
-        body: `let registrations = 0;
-        module.exports = { id: "same-id", register(api) {
+        body: `module.exports = { id: "same-id", register(api) {
           if (api.pluginConfig.credential !== "resolved-fixture-key") throw new Error("unhydrated fixture");
-          api.registerProvider({ id: "same-provider", label: api.pluginConfig.revision + "/" + (++registrations), auth: [] });
+          ${registrations.source}
+          api.registerProvider({ id: "same-provider", label: api.pluginConfig.revision + "/" + registration, auth: [] });
         }};`,
       });
       writeFileSync(
@@ -210,6 +223,7 @@ describe("provider runtime physical ownership", () => {
         };
         expect(resolveLoadedProviderRuntimePlugin(lookup)?.label).toBe("A/1");
         expect(resolveProviderRuntimePlugin(lookup)?.label).toBe("A/1");
+        expect(registrations.count()).toBe(1);
         setRuntimeConfigSnapshot(runtimeConfig, sourceFor("OTHER"));
         expect(resolveLoadedProviderRuntimePlugin(lookup)).toBeUndefined();
         expect(resolveProviderRuntimePlugin(lookup)?.label).toBe("B/2");
@@ -219,6 +233,7 @@ describe("provider runtime physical ownership", () => {
             () => resolveProviderRuntimePlugin(lookup)?.label,
           ),
         ).toBe("A/1");
+        expect(registrations.count()).toBe(2);
         const setupProviders = resolvePluginProvidersCore({
           ...lookup,
           providerRefs: ["same-provider"],
@@ -252,13 +267,14 @@ describe("provider runtime physical ownership", () => {
   )(
     "keeps registration config current with snapshot=$snapshotPresent, change=$change, receiver=$receiver",
     ({ snapshotPresent, change, receiver }) => {
+      const registrations = createRegistrationProbe();
       const registrationMarker = path.join(makePluginLoaderTempDir(), "registered");
       const plugin = writePlugin({
         id: "same-id",
         filename: "index.cjs",
-        body: `let registrations = 0;
-        module.exports = { id: "same-id", register(api) {
-          const captured = api.pluginConfig.revision + "/" + (++registrations);
+        body: `module.exports = { id: "same-id", register(api) {
+          ${registrations.source}
+          const captured = api.pluginConfig.revision + "/" + registration;
           require("node:fs").writeFileSync(${JSON.stringify(registrationMarker)}, captured);
           api.registerProvider({ id: "same-provider", label: captured, auth: [],
             hookAliases: ${receiver === "removed-alias" ? 'api.pluginConfig.revision === "A" ? ["runtime-alias"] : ["new-alias"]' : '["runtime-alias"]'},
@@ -338,6 +354,7 @@ describe("provider runtime physical ownership", () => {
       expect(resolveProviderRuntimePlugin(requested)?.label).toBe(
         receiver === "removed-alias" ? undefined : "B/2",
       );
+      expect(registrations.count()).toBe(2);
     },
   );
 
@@ -385,7 +402,7 @@ describe("provider runtime physical ownership", () => {
     "reserves a %s literal owner before considering another loaded hook alias",
     (state) => {
       const old = loadFixture("old");
-      let selected = loadFixture("selected");
+      let selected: ReturnType<typeof metadata> = loadFixture("selected");
       if (state === "setup-only") {
         selected = createPluginMetadataSnapshotFixture({
           plugins: selected.plugins.map((plugin) => ({
@@ -603,7 +620,7 @@ describe("provider runtime physical ownership", () => {
     const snapshot = loadFixture("old");
     const old = registry(snapshot);
     setActivePluginRegistry(old, "old");
-    const resolve = (selected: typeof snapshot) =>
+    const resolve = (selected: ReturnType<typeof metadata>) =>
       getLoadedRuntimePluginRegistry({
         requiredPluginIds: ["same-id"],
         loadOptions: {
@@ -618,7 +635,7 @@ describe("provider runtime physical ownership", () => {
   it("does not reuse an active registry for another raw discovery selection", () => {
     const snapshot = loadFixture("old");
     const old = registry(snapshot);
-    const options = (selected: typeof snapshot) => ({
+    const options = (selected: ReturnType<typeof metadata>) => ({
       config,
       env: {},
       installRecords: {},
@@ -899,6 +916,7 @@ describe("provider runtime physical ownership", () => {
         } else {
           verify();
         }
+        expect(fixture.registrations()).toBe(scope === "empty active" ? 1 : 2);
       });
     },
   );
@@ -944,6 +962,7 @@ describe("provider runtime physical ownership", () => {
           })?.[0]?.normalizeModelId?.(context),
         ).toBe("2");
       });
+      expect(snapshot.registrations()).toBe(2);
     },
   );
 

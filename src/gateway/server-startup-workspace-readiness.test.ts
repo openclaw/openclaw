@@ -120,7 +120,7 @@ describe("Gateway workspace migration readiness", () => {
 
       const migration = await migrateLegacyWorkspaceState({
         stateDir,
-        detected: detectLegacyWorkspaceState({
+        detected: await detectLegacyWorkspaceState({
           cfg,
           stateDir,
           homedir: os.homedir,
@@ -213,7 +213,7 @@ describe("Gateway workspace migration readiness", () => {
       server = undefined;
       const migration = await migrateLegacyWorkspaceState({
         stateDir: state.stateDir,
-        detected: detectLegacyWorkspaceState({
+        detected: await detectLegacyWorkspaceState({
           cfg: nextConfig,
           stateDir: state.stateDir,
           doctorOnlyStateMigrations: true,

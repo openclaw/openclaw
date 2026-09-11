@@ -75,7 +75,8 @@ export function readyRecoveryHealth(
   return {
     healthy: true,
     staleGatewayPids: [],
-    runtime: { status: running ? "running" : "stopped" },
+    runtime: { status: running ? "running" : "stopped", pid: running ? 4242 : undefined },
+    gatewayBootId: "service-boot",
     portUsage: { port, status: "busy", listeners: [], hints: [] },
   };
 }
@@ -112,7 +113,7 @@ export function registerRecoveryTests(params: {
 }): void {
   it.each([
     { startup: "fast", readyAfterMs: 0, needsRecovery: false },
-    { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
+    { startup: "slow", readyAfterMs: 20_000, needsRecovery: true },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: true },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
   ])(
@@ -198,6 +199,7 @@ export function registerRecoveryTests(params: {
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,
@@ -218,8 +220,8 @@ export function registerRecoveryTests(params: {
       ]);
       expect(mocks.script).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();
-      if (startup === "unready") {
-        expect(healthResults[0]?.elapsedMs).toBeGreaterThanOrEqual(60_000);
+      if (startup === "unready" || startup === "slow") {
+        expect(healthResults[0]?.elapsedMs).toBe(6_500);
       } else if (!needsRecovery) {
         expect(nowMs).toBeGreaterThanOrEqual(readyAfterMs + 5_500);
       }

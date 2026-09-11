@@ -140,7 +140,7 @@ export type ConfigWriteCoordinator = {
   setRaw: (value: string) => void;
   resetDraft: () => void;
   discardDraft: () => Promise<void>;
-  setWritesSuspended: (suspended: boolean) => void;
+  setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   waitForPendingWrites: () => Promise<void>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   retry: () => Promise<boolean>;

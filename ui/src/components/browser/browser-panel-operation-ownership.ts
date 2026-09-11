@@ -16,6 +16,7 @@ import type { BrowserRoute } from "./browser-target.ts";
 
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   readonly client: GatewayBrowserClient | null;
+  readonly sessionKey: string;
   readonly available: boolean;
   readonly remoteAvailable?: boolean;
   readonly resourceBasePath: string;
