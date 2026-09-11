@@ -243,6 +243,14 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+A `suppressed` result is ambiguous when its reason is
+`adapter_returned_no_identity`, or any payload outcome records a send, an
+identityless send, or a failure with `sentBeforeError`. Check the whole batch
+before treating suppression as intentional non-delivery. For a known omission,
+an action can return `{ status: "suppressed", reason: result.reason }` without
+a tool error or a fabricated receipt. Keep free-form hook diagnostics private.
+Suppression does not recover an earlier failed send.
+
 Failure is not permission to send the same payload through another path.
 Once admitted, the queue owns retry or reconciliation until its exact owner
 acknowledges or terminally retires the intent. Pending custody is not a
