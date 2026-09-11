@@ -21,7 +21,11 @@ import {
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  getReplyPayloadTtsSupplement,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
@@ -54,6 +58,7 @@ import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.j
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
@@ -2115,6 +2120,803 @@ describe("dispatchReplyFromConfig", () => {
       },
     ]);
     expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
+  });
+
+  // A final that carries media is never spoken by the core guard, whatever the media is.
+  // The supplement branch therefore has to tell audio (already a voice) from everything
+  // else (a picture, a document, a video), and it decides by the reference alone.
+  const MEDIA_FORMAT_CASES: Array<{ label: string; media: string; speaks: boolean }> = [
+    { label: "PNG picture", media: "https://example.com/chart.png", speaks: true },
+    { label: "JPEG photo", media: "https://example.com/photo.jpg", speaks: true },
+    {
+      label: "JPEG URL with query",
+      media: "https://example.com/photo.jpeg?token=abc",
+      speaks: true,
+    },
+    { label: "WebP picture", media: "https://example.com/sticker.webp", speaks: true },
+    { label: "GIF animation", media: "https://example.com/loop.gif", speaks: true },
+    { label: "PDF document", media: "/tmp/report.pdf", speaks: true },
+    { label: "MP4 video", media: "/tmp/clip.mp4", speaks: true },
+    { label: "extensionless reference", media: "https://example.com/attachment", speaks: true },
+    { label: "Opus voice note", media: "/tmp/note.opus", speaks: false },
+    { label: "Ogg audio", media: "/tmp/note.ogg", speaks: false },
+    { label: "Oga audio", media: "/tmp/note.oga", speaks: false },
+    { label: "MP3 audio", media: "/tmp/song.mp3", speaks: false },
+    { label: "M4A audio", media: "/tmp/song.m4a", speaks: false },
+    { label: "WAV audio", media: "/tmp/take.wav", speaks: false },
+    { label: "FLAC audio", media: "/tmp/take.flac", speaks: false },
+    { label: "AAC audio", media: "/tmp/take.aac", speaks: false },
+    { label: "Opus URL with query", media: "https://example.com/voice.opus?sig=1", speaks: false },
+    { label: "uppercase JPG", media: "/tmp/PHOTO.JPG", speaks: true },
+    { label: "uppercase OPUS", media: "/tmp/NOTE.OPUS", speaks: false },
+    // The shared media table owns these, so the branch inherits its verdicts instead of
+    // keeping a second list that drifts: .caf is an iMessage voice memo, .webm is video.
+    { label: "CAF voice memo", media: "/tmp/memo.caf", speaks: false },
+    { label: "M4B audiobook", media: "/tmp/book.m4b", speaks: false },
+    { label: "AIFC audio", media: "/tmp/take.aifc", speaks: false },
+    { label: "M2A audio", media: "/tmp/take.m2a", speaks: false },
+    { label: "WebM video", media: "/tmp/clip.webm", speaks: true },
+    // A local path may carry the very characters a URL uses for query and fragment.
+    { label: "local path with #", media: "/tmp/track #1.mp3", speaks: false },
+    { label: "local path with ?", media: "/tmp/why? .m4a", speaks: false },
+  ];
+
+  async function deliverFinalWithMedia(
+    payload: ReplyPayload,
+  ): Promise<Array<{ kind: string; payload: ReplyPayload }>> {
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (deliveredPayload, info) => {
+        delivered.push({ kind: info.kind, payload: deliveredPayload });
+      },
+    });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => payload,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    return delivered;
+  }
+
+  it.each(MEDIA_FORMAT_CASES)(
+    "$label: voice supplement follows = $speaks",
+    async ({ media, speaks }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = true;
+      const delivered = await deliverFinalWithMedia({
+        text: "Here is what you asked for.",
+        mediaUrl: media,
+      });
+
+      // The visible answer always survives untouched — that is the whole point of the guard.
+      expect(delivered[0]).toEqual({
+        kind: "final",
+        payload: expect.objectContaining({ text: "Here is what you asked for.", mediaUrl: media }),
+      });
+      expect(delivered).toHaveLength(speaks ? 2 : 1);
+      if (speaks) {
+        expect(delivered[1]).toEqual({
+          kind: "final",
+          payload: expect.objectContaining({
+            text: undefined,
+            mediaUrl: "https://example.com/tts-synth.opus",
+            audioAsVoice: true,
+          }),
+        });
+      }
+    },
+  );
+
+  it("speaks a multi-attachment answer once when any attachment is not audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Two pictures and a recording.",
+      mediaUrls: ["/tmp/a.png", "/tmp/b.jpg", "/tmp/c.opus"],
+    });
+
+    expect(delivered).toHaveLength(2);
+    expect(delivered[1]?.payload).toEqual(
+      expect.objectContaining({ text: undefined, mediaUrl: "https://example.com/tts-synth.opus" }),
+    );
+  });
+
+  it("stays silent for an audio-only multi-attachment answer", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Two recordings.",
+      mediaUrls: ["/tmp/a.opus", "/tmp/b.mp3"],
+    });
+
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("has nothing to speak for a caption-less picture", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({ mediaUrl: "/tmp/chart.png" });
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.payload).toEqual(expect.objectContaining({ mediaUrl: "/tmp/chart.png" }));
+  });
+
+  it("leaves an error payload with media unspoken", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Something went wrong while drawing that.",
+      mediaUrl: "/tmp/chart.png",
+      isError: true,
+    });
+
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("keeps the supplement out of non-final TTS modes", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
+    const delivered = await deliverFinalWithMedia({
+      text: "Here is what you asked for.",
+      mediaUrl: "/tmp/chart.png",
+    });
+
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("speaks each picture answer when a turn ends with several finals", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [
+        { text: "First chart.", mediaUrl: "/tmp/first.png" },
+        { text: "Second chart.", mediaUrl: "/tmp/second.png" },
+      ],
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // Both pictures land first, in source order; their voices follow afterwards.
+    expect(delivered.map(({ payload }) => payload.mediaUrl)).toEqual([
+      "/tmp/first.png",
+      "/tmp/second.png",
+      "https://example.com/tts-synth.opus",
+      "https://example.com/tts-synth.opus",
+    ]);
+    expect(delivered.slice(2).every(({ payload }) => payload.text === undefined)).toBe(true);
+  });
+
+  it("speaks the streamed answer too when the final that ends it carries a picture", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Streamed part of the answer." });
+      return { text: "And the chart itself.", mediaUrl: "/tmp/chart.png" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // The streamed text is held for the caption on this channel, so the picture message
+    // carries the whole answer — and the voice that follows says the whole answer too.
+    const finals = delivered.filter(({ kind }) => kind === "final");
+    expect(finals).toHaveLength(2);
+    expect(finals[0]?.payload.mediaUrl).toBe("/tmp/chart.png");
+    expect(finals[1]?.payload).toEqual(
+      expect.objectContaining({
+        text: undefined,
+        mediaUrl: "https://example.com/tts-synth.opus",
+      }),
+    );
+    expect(
+      getReplyPayloadTtsSupplement(expectDefined(finals[1]?.payload, "voice supplement"))
+        ?.spokenText,
+    ).toContain("Streamed part of the answer.");
+  });
+
+  it("keeps a command reply with media silent, as the core guard intends", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia(
+      setReplyPayloadMetadata(
+        { text: "Here is the context map you asked for.", mediaUrl: "/tmp/context-map.png" },
+        { commandReply: true },
+      ),
+    );
+
+    // Command replies never auto-speak. Re-synthesizing from a bare { text } payload
+    // would lose that metadata and hand the user an unwanted voice note.
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("speaks a command reply with media when speech was requested explicitly", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia(
+      setReplyPayloadMetadata(
+        { text: "Here is the context map you asked for.", mediaUrl: "/tmp/context-map.png" },
+        { commandReply: true, ttsExplicit: true },
+      ),
+    );
+
+    expect(delivered).toHaveLength(2);
+    // The picture must survive: an explicit speech request adds a voice, it does not
+    // replace the attachment with one.
+    expect(delivered[0]?.payload).toEqual(
+      expect.objectContaining({
+        text: "Here is the context map you asked for.",
+        mediaUrl: "/tmp/context-map.png",
+      }),
+    );
+    expect(delivered[1]?.payload.mediaUrl).toBe("https://example.com/tts-synth.opus");
+  });
+
+  it("speaks an answer whose picture arrives as a legacy MEDIA: line", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Here is the chart you asked for.\nMEDIA: /tmp/chart.png",
+    });
+
+    expect(delivered).toHaveLength(2);
+    expect(delivered[0]?.payload.text).toBe(
+      "Here is the chart you asked for.\nMEDIA: /tmp/chart.png",
+    );
+    // The directive is stripped from the spoken copy: keeping it would re-trigger the
+    // very guard this branch exists to compensate for, and nobody wants "MEDIA colon"
+    // read out loud either.
+    expect(
+      getReplyPayloadTtsSupplement(expectDefined(delivered[1]?.payload, "voice supplement"))
+        ?.spokenText,
+    ).toBe("Here is the chart you asked for.");
+  });
+
+  it.each([
+    {
+      label: "directive on its own line",
+      text: "Here is the chart.\nMEDIA: /tmp/chart.png\nIt shows the weekly totals.",
+      spoken: "Here is the chart.\n\nIt shows the weekly totals.",
+    },
+    {
+      label: "directive between paragraphs",
+      text: "Here is the chart.\n\nMEDIA: /tmp/chart.png\n\nIt shows the weekly totals.",
+      spoken: "Here is the chart.\n\nIt shows the weekly totals.",
+    },
+  ])("leaves no hole where a MEDIA: line was stripped ($label)", async ({ text, spoken }) => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({ text });
+
+    // The directive keeps its place in the visible message and only leaves the
+    // spoken copy; what remains reads as one answer, not as text with a gap.
+    expect(delivered).toHaveLength(2);
+    expect(
+      getReplyPayloadTtsSupplement(expectDefined(delivered[1]?.payload, "voice supplement"))
+        ?.spokenText,
+    ).toBe(spoken);
+  });
+
+  it("stays silent when the legacy MEDIA: line points at audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Listen to this.\nMEDIA: /tmp/note.opus",
+    });
+
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("trusts an explicit voice-note flag over an unreadable media reference", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "The recording you asked for.",
+      mediaUrl: "media://5f2c1a",
+      audioAsVoice: true,
+    });
+
+    // A store reference carries no extension, so only the payload's own flag can say
+    // this answer already speaks.
+    expect(delivered).toHaveLength(1);
+  });
+
+  // ── The supplement is fenced by the same writer authority as its answer ────
+  // A settled final can carry `sessionWriterDeliveryAuthority`, and an absent authority
+  // reads as "authorized" at every check. Rebuilding the supplement without it would let
+  // audio derived from a replaced writer reach the channel after the answer was accepted.
+  const writerAuthorityPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(payload, {
+      sessionWriterDeliveryAuthority: {
+        expectedLifecycleRevision: "revision-a",
+        expectedSessionId: "s1",
+        expectedWriterRunId: "run-settled",
+        sessionKey: "agent:main:telegram:direct:123",
+        storePath: "/tmp/mock-sessions.json",
+      },
+    });
+
+  const withCurrentWriter = () => {
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      lifecycleRevision: "revision-a",
+      activeWriterRunId: "run-settled",
+      updatedAt: 0,
+    };
+  };
+
+  async function deliverPictureWithWriterAuthority(options: {
+    replaceWriterDuringSynthesis: boolean;
+  }): Promise<ReplyPayload[]> {
+    setNoAbort();
+    withCurrentWriter();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    if (options.replaceWriterDuringSynthesis) {
+      const synthesize = expectDefined(
+        ttsMocks.maybeApplyTtsToPayload.getMockImplementation(),
+        "tts mock implementation",
+      );
+      ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (params: unknown) => {
+        // Only the supplement's synthesis may move the writer: flipping it while the
+        // visible payload is still on its way would fence the picture instead, and the
+        // test would pass for the wrong reason.
+        const { payload } = params as { payload: ReplyPayload };
+        if (!payload?.mediaUrl && !payload?.mediaUrls?.length) {
+          sessionStoreMocks.currentEntry = {
+            ...sessionStoreMocks.currentEntry,
+            activeWriterRunId: "replacement-run",
+          };
+        }
+        return await synthesize(params);
+      });
+    }
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "run-settled" },
+      replyResolver: async () =>
+        writerAuthorityPayload({
+          text: "Here is the chart you asked for.",
+          mediaUrl: "/tmp/chart.png",
+        }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    return delivered;
+  }
+
+  it("speaks a picture answer whose session writer still holds the turn", async () => {
+    const delivered = await deliverPictureWithWriterAuthority({
+      replaceWriterDuringSynthesis: false,
+    });
+
+    expect(delivered.map((payload) => payload.mediaUrl)).toEqual([
+      "/tmp/chart.png",
+      "https://example.com/tts-synth.opus",
+    ]);
+  });
+
+  it("does not send the voice supplement after its session writer is replaced", async () => {
+    const delivered = await deliverPictureWithWriterAuthority({
+      replaceWriterDuringSynthesis: true,
+    });
+
+    // The picture was accepted while the writer still held the turn; the audio derived
+    // from it must not reach the channel once that writer is gone.
+    expect(delivered.map((payload) => payload.mediaUrl)).toEqual(["/tmp/chart.png"]);
+  });
+
+  it("speaks the text delivery prepared, not the raw reply", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "Here is the chart you asked for. NO_REPLY",
+      mediaUrl: "/tmp/chart.png",
+    });
+
+    // Normalization strips the token from the visible message before delivery. The
+    // recording cannot be normalized afterwards, so the supplement has to synthesize
+    // the prepared text rather than what the model originally produced.
+    expect(delivered).toHaveLength(2);
+    expect(
+      getReplyPayloadTtsSupplement(expectDefined(delivered[1]?.payload, "voice supplement"))
+        ?.spokenText,
+    ).not.toContain("NO_REPLY");
+  });
+
+  it("speaks a picture answer whose text the block already delivered", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "the whole answer" });
+      return { text: "the whole answer", mediaUrl: "/tmp/chart.png" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // The block carried the visible answer and was delivered, so there is a message to
+    // speak to even though the final itself was deduped against it.
+    expect(
+      delivered.some(({ payload }) => payload.mediaUrl === "https://example.com/tts-synth.opus"),
+    ).toBe(true);
+  });
+
+  it("stays silent when the channel vetoed the block the voice would follow", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push(payload);
+        if (info.kind === "block") {
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "channel_transform" as const },
+          };
+        }
+        return undefined;
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "the answer the channel handled itself",
+        mediaUrl: "/tmp/chart.png",
+      });
+      return { text: "the answer the channel handled itself", mediaUrl: "/tmp/chart.png" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // The channel took the answer over and showed nothing of ours; a voice message would
+    // arrive alone, following a message the recipient never saw.
+    expect(
+      delivered.some((payload) => payload.mediaUrl === "https://example.com/tts-synth.opus"),
+    ).toBe(false);
+  });
+
+  it("says nothing when preparation cleared the caption entirely", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered = await deliverFinalWithMedia({
+      text: "NO_REPLY",
+      mediaUrl: "/tmp/chart.png",
+    });
+
+    // Normalization empties the caption while the picture keeps the message alive. An
+    // empty prepared text is a decision — say nothing — not a missing value to be
+    // replaced by the raw token.
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.payload.mediaUrl).toBe("/tmp/chart.png");
+  });
+
+  it("keeps a heartbeat answer silent even when it carries a picture", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: {
+        [REPLY_OPERATION_RUN_STATE]: {
+          heartbeat: {
+            prepareReply: async (replyResult: ReplyPayload | ReplyPayload[] | undefined) => ({
+              reply: Array.isArray(replyResult) ? replyResult[0] : replyResult,
+            }),
+          },
+        },
+      },
+      replyResolver: async () => ({
+        text: "Nothing needs your attention.",
+        mediaUrl: "/tmp/chart.png",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // Heartbeat finals are sent with skipTts on purpose; attaching a picture must not
+    // become a way around that policy.
+    expect(
+      delivered.some((payload) => payload.mediaUrl === "https://example.com/tts-synth.opus"),
+    ).toBe(false);
+  });
+
+  it("stays silent when the visible answer failed to route", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    mocks.routeReply.mockResolvedValue({ ok: false, delivered: false, error: "transport down" });
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Here is the chart you asked for.",
+        mediaUrl: "/tmp/chart.png",
+      }),
+    });
+
+    // The picture never reached the recipient, so its voice must not arrive on its own.
+    const spoken = mocks.routeReply.mock.calls.filter(
+      ([call]) => call.payload?.mediaUrl === "https://example.com/tts-synth.opus",
+    );
+    expect(spoken).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      label: "cancelled in beforeDeliver",
+      dispatcherOptions: {
+        beforeDeliver: (payload: ReplyPayload) => (payload.mediaUrl ? null : payload),
+      },
+    },
+    {
+      label: "suppressed as a channel transform",
+      dispatcherOptions: {
+        deliver: async () => ({
+          visibleReplySent: false,
+          suppression: { reason: "channel_transform" as const },
+        }),
+      },
+    },
+  ])("stays silent when the queued answer ends up $label", async ({ dispatcherOptions }) => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      ...dispatcherOptions,
+      deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+        delivered.push(payload);
+        return await (
+          dispatcherOptions as {
+            deliver?: (p: ReplyPayload, i: { kind: string }) => Promise<unknown>;
+          }
+        ).deliver?.(payload, info);
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Here is the chart you asked for.",
+        mediaUrl: "/tmp/chart.png",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // Admission is not visibility: the answer was accepted into the queue and then
+    // lost before transport, so its voice must not arrive on its own.
+    expect(
+      delivered.some((payload) => payload.mediaUrl === "https://example.com/tts-synth.opus"),
+    ).toBe(false);
+  });
+
+  it("stays silent when the answer was delivered but not visibly", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        return { visibleReplySent: false };
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Here is the chart you asked for.",
+        mediaUrl: "/tmp/chart.png",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    // The transport accepted the payload without showing it. Speaking to a message the
+    // recipient cannot see is the same failure as speaking to one that never went out.
+    expect(
+      delivered.some((payload) => payload.mediaUrl === "https://example.com/tts-synth.opus"),
+    ).toBe(false);
+  });
+
+  it("speaks a picture answer as a separate voice message", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Here is the chart you asked for.",
+        mediaUrl: "https://example.com/chart.png",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: "Here is the chart you asked for.",
+          mediaUrl: "https://example.com/chart.png",
+        }),
+      },
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+        }),
+      },
+    ]);
+    expect(
+      getReplyPayloadTtsSupplement(
+        expectDefined(delivered[1]?.payload, "voice supplement payload"),
+      ),
+    ).toEqual({
+      spokenText: "Here is the chart you asked for.",
+      visibleTextAlreadyDelivered: true,
+    });
+    expect(result.counts.final).toBe(2);
+  });
+
+  it("does not add a voice supplement to a final that already carries audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Listen to this recording.",
+        mediaUrl: "https://example.com/recording.mp3",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: "Listen to this recording.",
+          mediaUrl: "https://example.com/recording.mp3",
+        }),
+      },
+    ]);
+  });
+
+  it("keeps a picture answer silent when synthesis produces no audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({
+        text: "Here is the chart you asked for.",
+        mediaUrl: "https://example.com/chart.png",
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: "Here is the chart you asked for.",
+          mediaUrl: "https://example.com/chart.png",
+        }),
+      },
+    ]);
   });
 
   it("strips split TTS directives from streamed block text before delivery", async () => {

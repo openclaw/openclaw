@@ -236,6 +236,46 @@ describe("TTS real synthesis owner to public output entries", () => {
     expect(converter.requests).toHaveLength(0);
   });
 
+  // Synthesis writes into mediaUrl, so a payload that already owns media is left alone:
+  // the attachment survives and the answer stays silent. This holds for EVERY media kind,
+  // audio included — the core guard does not look at the type. Speaking such an answer
+  // needs a second message, which reply dispatch adds after the visible one.
+  it.each([
+    { label: "PNG picture", mediaUrl: "https://example.com/chart.png" },
+    { label: "JPEG photo", mediaUrl: "https://example.com/photo.jpg" },
+    { label: "PDF document", mediaUrl: "/tmp/report.pdf" },
+    { label: "MP4 video", mediaUrl: "/tmp/clip.mp4" },
+    { label: "Opus voice note", mediaUrl: "/tmp/note.opus" },
+    { label: "several attachments", mediaUrls: ["/tmp/a.png", "/tmp/b.jpg"] },
+    { label: "legacy MEDIA: directive", text: `${SPOKEN}\nMEDIA: /tmp/chart.png` },
+  ])("leaves a $label answer unspoken so its attachment survives", async (media) => {
+    installFixture({ synthesisTarget: "voice-note" });
+    const { label: _label, text, ...mediaFields } = media;
+    const payload = { text: text ?? SPOKEN, ...mediaFields };
+    const applied = await maybeApplyTtsToPayload({
+      payload,
+      cfg,
+      channel: CHANNEL,
+      kind: "final",
+    });
+    expect(applied).toEqual(payload);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("still speaks the same answer once its attachment is gone", async () => {
+    installFixture({ synthesisTarget: "voice-note" });
+    const applied = await maybeApplyTtsToPayload({
+      payload: { text: SPOKEN },
+      cfg,
+      channel: CHANNEL,
+      kind: "final",
+    });
+    // Control for the cases above: the text itself is speakable, so the silence there
+    // comes from the attachment and nothing else.
+    await assertStoredAudio(applied.mediaUrl);
+    expect(requests).toHaveLength(1);
+  });
+
   it("preserves a separate explicit automatic-payload voice request", async () => {
     installFixture({
       synthesisTarget: "audio-file",

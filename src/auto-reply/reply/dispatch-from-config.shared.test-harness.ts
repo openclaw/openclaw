@@ -17,7 +17,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply-dispatcher.js";
 import type {
@@ -224,6 +224,35 @@ const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
 }));
+// Mirrors the core guards that decide a payload cannot be spoken, so mocked dispatch
+// tests see the same silences as production: media (including a legacy MEDIA: line in
+// the text) would be overwritten by the audio, and command replies never auto-speak.
+function payloadCarriesMedia(payload?: ReplyPayload): boolean {
+  if (payload?.mediaUrl || payload?.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
+    return true;
+  }
+  return /(?:^|\n)\s*MEDIA\s*:/i.test(payload?.text ?? "");
+}
+
+function payloadSuppressesAutoTts(payload?: ReplyPayload): boolean {
+  if (!payload) {
+    return false;
+  }
+  // Order matters, and it follows the core: the media guard is unconditional, while
+  // an explicit speech request bypasses only the command-reply/auto-mode guard.
+  // Letting ttsExplicit skip the media check would mean the mock synthesizes over an
+  // attachment that production leaves alone — and the tests could no longer tell a
+  // surviving picture from one replaced by audio.
+  if (payloadCarriesMedia(payload)) {
+    return true;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  if (metadata?.ttsExplicit === true) {
+    return false;
+  }
+  return metadata?.commandReply === true;
+}
+
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -250,6 +279,7 @@ const ttsMocks = vi.hoisted(() => {
       if (
         state.synthesizeFinalAudio &&
         params.kind === "final" &&
+        !payloadSuppressesAutoTts(params.payload) &&
         typeof params.payload?.text === "string" &&
         params.payload.text.trim()
       ) {
@@ -825,6 +855,7 @@ export function resetPluginTtsAndThreadMocks() {
     if (
       ttsMocks.state.synthesizeFinalAudio &&
       params.kind === "final" &&
+      !payloadSuppressesAutoTts(params.payload) &&
       typeof params.payload?.text === "string" &&
       params.payload.text.trim()
     ) {
