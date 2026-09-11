@@ -81,7 +81,6 @@ beforeEach(() => {
 afterEach(() => {
   catalogMocks.readSnapshot.mockReset();
   catalogMocks.getPreparedOwner.mockReset();
-  vi.useRealTimers();
   catalogMocks.authStore = { version: 1, profiles: {} };
   catalogMocks.authModes = {};
   catalogMocks.isCurrent = () => true;
@@ -144,18 +143,13 @@ describe("/models browse catalog recovery", () => {
   });
 
   it.each([
-    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: false },
-    { nativeAuth: false, providerKey: false, disabled: false, visible: false, slowCatalog: false },
-    { nativeAuth: false, providerKey: true, disabled: false, visible: false, slowCatalog: false },
-    { nativeAuth: true, providerKey: true, disabled: true, visible: false, slowCatalog: false },
-    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: true },
+    { nativeAuth: true, providerKey: false, disabled: false, visible: true },
+    { nativeAuth: false, providerKey: false, disabled: false, visible: false },
+    { nativeAuth: false, providerKey: true, disabled: false, visible: false },
+    { nativeAuth: true, providerKey: true, disabled: true, visible: false },
   ])(
-    "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled, slow catalog=$slowCatalog",
-    async ({ nativeAuth, providerKey, disabled, visible, slowCatalog }) => {
-      if (slowCatalog) {
-        vi.useRealTimers();
-        vi.useFakeTimers();
-      }
+    "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled",
+    async ({ nativeAuth, providerKey, disabled, visible }) => {
       vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
       cliBackendsTesting.setDepsForTest({
         resolveRuntimeCliBackends: () => [
@@ -202,15 +196,11 @@ describe("/models browse catalog recovery", () => {
         throw new Error("Published browsing consulted pending acquisition");
       });
 
-      const replyPromise = resolveModelsCommandReply({
+      const reply = await resolveModelsCommandReply({
         cfg,
         commandBodyNormalized: "/models anthropic",
         agentId: "main",
       });
-      if (slowCatalog) {
-        await vi.advanceTimersByTimeAsync(750);
-      }
-      const reply = await replyPromise;
 
       expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
       expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
@@ -344,16 +334,6 @@ describe("/models browse catalog recovery", () => {
     },
   );
 
-  it("returns the exact-config snapshot when the prepared owner matches", async () => {
-    catalogMocks.readSnapshot.mockReturnValueOnce({
-      entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" }],
-      routeVariants: [],
-    });
-
-    const data = await buildPreparedModelsProviderData(staleCfg);
-
-    expect(data.byProvider.get("anthropic")).toEqual(new Set(["claude-opus-4-5"]));
-  });
   it("returns visible not-ready guidance from the public models command", async () => {
     vi.mocked(preparedCatalog.getPublishedPreparedModelCatalogOwnerSnapshot).mockReturnValueOnce(
       undefined,

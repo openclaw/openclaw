@@ -1038,7 +1038,7 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
 }
 
 /** Applies an optional profile-id override to a single returned login profile. */
-export function resolveLoginProfiles(params: {
+function resolveLoginProfiles(params: {
   result: ProviderAuthResult;
   requestedProfileId?: string;
 }): ProviderAuthResult["profiles"] {
