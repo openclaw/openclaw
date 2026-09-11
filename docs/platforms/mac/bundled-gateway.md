@@ -72,6 +72,12 @@ Use **Retry setup** after a failed automatic setup. If that still fails,
 install the CLI manually with the command above, then choose **Check again**
 in onboarding.
 
+Existing asdf-managed Node installations can be reused. The app preserves its
+inherited environment, including `HOME`, when checking the Node and CLI versions.
+For pnpm installations, it searches both `~/Library/pnpm` and
+`~/Library/pnpm/bin` for the CLI. After changing a manual installation, choose
+**Check again** to repeat discovery.
+
 ## Launchd (Gateway as LaunchAgent)
 
 Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`

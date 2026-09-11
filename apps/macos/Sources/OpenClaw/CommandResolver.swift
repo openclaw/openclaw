@@ -128,6 +128,7 @@ enum CommandResolver {
         }
         let externalPaths = [
             home.appendingPathComponent("Library/pnpm").path,
+            home.appendingPathComponent("Library/pnpm/bin").path,
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/usr/bin",

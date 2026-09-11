@@ -275,11 +275,13 @@ enum GatewayEnvironment {
 
     private static func readGatewayVersion(binary: String, searchPaths: [String]) async -> String? {
         let start = Date()
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = searchPaths.joined(separator: ":")
         do {
             let result = try await BoundedProcess.run(
                 path: binary,
                 arguments: ["--version"],
-                environment: ["PATH": searchPaths.joined(separator: ":")],
+                environment: environment,
                 timeout: CommandResolver.versionProbeTimeout)
             guard result.terminationStatus == 0 else { return nil }
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
