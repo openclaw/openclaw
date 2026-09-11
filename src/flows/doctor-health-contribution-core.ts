@@ -7,8 +7,8 @@ import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
-import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
-import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import { copyHealthCheck } from "./health-check-adapter.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
@@ -44,7 +44,7 @@ function withDoctorHealthCheckFacts<T extends object>(
 
 export async function runStructuredHealthRepairs(
   ctx: DoctorHealthFlowContext,
-  resolveCoreChecks: () => Promise<readonly DetectableHealthCheckInput[]>,
+  resolveCoreChecks: () => Promise<readonly DoctorHealthCheck[]>,
 ): Promise<void> {
   if (!ctx.prompter.shouldRepair) {
     return;
@@ -58,7 +58,7 @@ export async function runStructuredHealthRepairs(
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir, env: ctx.env });
   const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks())
     .filter(isHealthCheckEnabledByDefault)
-    .map(defineSplitHealthCheckInput);
+    .map(copyHealthCheck);
   const result = await runDoctorHealthRepairs(
     withDoctorHealthCheckFacts(ctx, {
       mode: "fix" as const,

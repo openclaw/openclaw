@@ -1,8 +1,10 @@
 import fs from "node:fs";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -15,11 +17,23 @@ const mocks = vi.hoisted(() => ({
   service: vi.fn(),
   probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
+  runtimeTmpDir: vi.fn<() => string>(),
   restartedHealthy: true,
   emulateNativeInstall: true,
   servicePlatform: undefined as NodeJS.Platform | undefined,
   taskDefinitelyStopped: vi.fn(() => true),
   startupFallbackRuntime: vi.fn<() => Promise<{ status: string } | null>>(async () => null),
+}));
+
+const runtimeDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => {
+  mocks.runtimeTmpDir.mockReturnValue(runtimeDirs.make("openclaw-doctor-runtime-"));
+});
+
+// The synthetic manager's leases and locks belong to its private fixture root.
+vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: mocks.runtimeTmpDir,
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -145,6 +159,16 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 export { mocks };
+
+export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateDatabase) {
+  openDatabase().db.exec(
+    "INSERT INTO gateway_boot_lifecycle (boot_id, pid, started_at_ms, completed_at_ms, outcome, startup_reason) VALUES ('maintenance', 1, 1, 2, 'startup_failed', 'gateway.maintenance_required')",
+  );
+  return () =>
+    openDatabase()
+      .db.prepare("SELECT outcome FROM gateway_boot_lifecycle WHERE boot_id = 'maintenance'")
+      .get();
+}
 
 export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,

@@ -69,8 +69,9 @@ import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
-import { listFilter } from "./sessions-board-inventory.js";
+import { listBoardSessionKeys } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
+import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -196,7 +197,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.list": async ({ params, respond, client, context }) => {
+  "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {
+    const { params, respond, client, context } = args;
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
@@ -208,6 +210,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       callerScopes: client?.connect?.scopes ?? [],
       cfg,
     }).target;
+    diagnostics?.mark("modelCatalog");
     const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list.model_catalog",
       async () => {
@@ -251,6 +254,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           } = {},
         ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
           const workStartedAt = performance.now();
+          const projectionTiming = diagnostics?.projection;
+          if (projectionTiming) {
+            projectionTiming.projectionPasses++;
+          }
+          diagnostics?.mark("storeLoad");
           let loaded = options.loaded;
           if (!loaded) {
             const loadedStore = measureDiagnosticsTimelineSpanSync(
@@ -274,7 +282,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
-          const visibleEntryFilter = listFilter({ p, loaded, client, cfg, options });
+          diagnostics?.mark("filterSetup");
+          const boardSessionKeys =
+            p.hasBoard === undefined ? undefined : await listBoardSessionKeys(targetsBySessionKey);
+          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
+          const excludedSessionKeys = options.excludedKeys;
+          const visibleEntryFilter =
+            !visibilityFilter && !boardSessionKeys && !excludedSessionKeys?.size
+              ? undefined
+              : (key: string, entry: SessionEntry) =>
+                  !excludedSessionKeys?.has(key) &&
+                  (visibilityFilter?.(key, entry) ?? true) &&
+                  (p.hasBoard === undefined || boardSessionKeys?.has(key) === p.hasBoard);
           const selectionRuns =
             p.activeOnly === true || p.search?.trim()
               ? createVisibleActiveSessionRunProjector(context)
@@ -301,12 +320,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                     expectDefined(targetsBySessionKey.get(key), "active row owner").agentId,
                   ).active
               : visibleEntryFilter;
+          diagnostics?.mark("rows");
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
               listSessionsFromStoreAsync({
                 cfg,
                 workStartedAt,
+                projectionTiming,
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
@@ -324,6 +345,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           result.defaults = { ...result.defaults, modelSelectionTarget };
+          diagnostics?.mark("sharing");
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
@@ -416,6 +438,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               },
             },
           );
+          diagnostics?.mark("decoration");
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
           const projectActiveRun = createVisibleActiveSessionRunProjector(context);
           // These rows are unpublished; decorate them with fresh caller facts after the yields.
@@ -465,6 +488,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           );
           // Reapply current visibility and activity after awaits; selected work may
           // settle or change ownership while its row is projected.
+          diagnostics?.mark("visibilityRepair");
           const currentVisibilityFilter = sharing.entryFilter;
           const visibleSessions =
             currentVisibilityFilter || p.activeOnly === true
@@ -493,6 +517,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               }
             }
             if (!options.rowRepairAttempted) {
+              if (projectionTiming) {
+                projectionTiming.rowRepairCount++;
+              }
               // Excluding only freshly rejected rows refills this page from the already-loaded
               // store, preserving cursor continuity without multiplying catalog/store work.
               return await listVisibleSessions({
@@ -503,6 +530,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               });
             }
             if (options.allowFullReload !== false) {
+              if (projectionTiming) {
+                projectionTiming.fullReloadCount++;
+              }
               // A second visibility drift means the loaded snapshot cannot restore a coherent
               // page. One full reload is the last resort; repeated drift below fails closed.
               return await listVisibleSessions({ allowFullReload: false });
@@ -536,6 +566,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           },
         },
       );
+    diagnostics?.mark("cacheSelectionOrWait");
     await respondWithCachedSessionList({
       client,
       config: cfg,
@@ -544,8 +575,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       request: p,
       respond,
       run,
+      diagnostics,
     });
-  },
+  }),
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
       return;

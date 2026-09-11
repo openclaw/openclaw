@@ -54,6 +54,10 @@ of being treated as a missing service; check the LaunchAgent and retry.
 
 ## Manual recovery
 
+Read the version to install from the app: choose **About OpenClaw** in the
+menu bar, or run `openclaw-mac status --json`, which reports the app version
+and build.
+
 For a manual install, use Node 26 (recommended) or another supported release:
 Node 24.16+ or Node 26.1+. Install `openclaw` globally:
 
@@ -97,6 +101,55 @@ openclaw gateway restart
 Launchd provides auto-start at login, crash restarts, and one predictable log
 location without tying the Gateway lifetime to the app process.
 
+### Unexpected repeated restarts
+
+Run these commands if the Gateway repeatedly restarts after an update:
+
+```bash
+openclaw gateway status
+openclaw doctor
+```
+
+On macOS, both commands report foreign loaded jobs in the `ai.openclaw.*`
+namespace, including jobs submitted without a plist. The report shows each
+label, program, KeepAlive flag, and detected `openclaw gateway restart`,
+`start`, or `stop` invocation. Plain-text status shows the list as a warning when
+at least one job has KeepAlive or a verified lifecycle invocation. Otherwise,
+the list appears informationally under "Other OpenClaw launchd jobs (macOS)".
+Status JSON includes all these jobs under
+`service.foreignLaunchdJobs`. For warnings, recent external forced restarts in
+the lifecycle log provide a possible correlation; the count alone does not
+identify which job caused a restart.
+After three external forced restarts within ten minutes, the managed Gateway
+logs an actionable warning naming likely KeepAlive jobs when available. It
+does not suppress an operator's restart command.
+
+To remove confirmed stray Gateway lifecycle jobs and verify recovery:
+
+```bash
+openclaw doctor --fix
+openclaw gateway status
+openclaw health
+```
+
+Doctor removes a foreign job only when its literal, straight-line script or
+direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
+subcommand. Shell jobs must also have no launchd environment entries that alter
+shell execution. Everything outside this contract is reported and left unchanged.
+This is command-metadata verification; it does not probe binary executability,
+interpreter availability, or quarantine state.
+
+Doctor preserves managed LaunchAgents, unrelated labels,
+and jobs whose purpose cannot be established, and names every removal even
+in noninteractive runs. Service repair remains disabled for an isolated install
+identity, external supervision, or an update in progress.
+
+Never use `launchctl submit` or an ad-hoc KeepAlive job for updates or Gateway
+lifecycle commands. Such a job can repeatedly run `openclaw gateway restart`
+whenever its script exits, as described in
+[#114967](https://github.com/openclaw/openclaw/issues/114967). Use the managed
+update workflow and its suspension fence, then verify status and health.
+
 ### Attach-only development
 
 When another process already owns the local Gateway, run the development app
@@ -114,7 +167,8 @@ Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
-- launchd stderr: suppressed
+- launchd stderr: merged into the same `gateway.log` file, so startup failures
+  that happen before the logger starts are still recorded
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in

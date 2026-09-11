@@ -385,6 +385,7 @@ export const dispatchTelegramMessage = async (
     // ingress watchdog. Never enter the reply pipeline after that owner has
     // already fenced this attempt; the canonical spool row will retry it.
     if (isDispatchSuperseded()) {
+      status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
       return { kind: "completed" };
     }
     if (status.controller && !isRoomEvent) {
@@ -426,6 +427,7 @@ export const dispatchTelegramMessage = async (
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
+    !turn.sendPolicyDenied &&
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
     (terminalFailure ||
@@ -446,6 +448,7 @@ export const dispatchTelegramMessage = async (
 
   if (
     !sentFallback &&
+    !turn.sendPolicyDenied &&
     !turn.dispatchError &&
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&

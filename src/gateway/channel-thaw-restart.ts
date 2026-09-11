@@ -4,7 +4,7 @@ import type { ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
   ChannelManager,
-  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel" | "startChannel"
+  "getRuntimeSnapshot" | "isManuallyStopped" | "isAccountListed" | "stopChannel" | "startChannel"
 >;
 
 export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
@@ -17,8 +17,11 @@ function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[
   return Object.entries(manager.getRuntimeSnapshot().channelAccounts).flatMap(
     ([channelId, accounts]) =>
       Object.entries(accounts ?? {})
-        .filter(([, status]) => status?.running === true)
-        .map(([accountId]) => ({ channelId: channelId as ChannelId, accountId })),
+        .filter(
+          ([accountId, status]) =>
+            status?.running === true && manager.isAccountListed(channelId, accountId),
+        )
+        .map(([accountId]) => ({ channelId, accountId })),
   );
 }
 
@@ -35,7 +38,7 @@ function dedupeTargets(targets: readonly ThawRestartTarget[]): ThawRestartTarget
 }
 
 /**
- * Restarts every running, non-manually-stopped channel account after a host
+ * Restarts running listed, non-manually-stopped channel accounts after a host
  * thaw. Dead sockets from a freeze otherwise wait for the slow health sweep.
  */
 export async function restartRunningChannelAccounts(
@@ -60,7 +63,7 @@ export async function restartRunningChannelAccounts(
     }
     try {
       let current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (!current) {
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
         continue;
       }
       await manager.stopChannel(channelId, accountId, { manual: false });
@@ -68,7 +71,7 @@ export async function restartRunningChannelAccounts(
         return [...failedTargets, target, ...targets.slice(index + 1)];
       }
       current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (!current) {
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
         continue;
       }
       let startOutcomes = await manager.startChannel(channelId, accountId, {
@@ -76,7 +79,11 @@ export async function restartRunningChannelAccounts(
       });
       let startOutcome = startOutcomes.get(accountId);
       let restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (startOutcome?.status === "retry" && restarted?.restartPending === true) {
+      if (
+        startOutcome?.status === "retry" &&
+        restarted?.restartPending === true &&
+        manager.isAccountListed(channelId, accountId)
+      ) {
         // A timed-out stop uses a two-call recovery contract: the first call
         // requests replacement and the second discards the stale task.
         startOutcomes = await manager.startChannel(channelId, accountId, {

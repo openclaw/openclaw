@@ -65,7 +65,7 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 }));
 
 // Harness selection and built-in execution are owned by their focused suites. These tests keep
-// the real visible-reply policy resolver while supplying its default OpenClaw harness leaf.
+// the real visible-reply policy resolver while supplying its default delivery metadata.
 const preparedReplyMockState = vi.hoisted(() => ({
   unexpectedCalls: [] as string[],
 }));
@@ -120,7 +120,7 @@ vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
   resolveSubagentCapabilityStore: vi.fn().mockReturnValue(undefined),
 }));
 
-const selectAgentHarnessMock = vi.hoisted(() =>
+const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
   vi.fn(
     (params: {
       provider: string;
@@ -136,14 +136,14 @@ const selectAgentHarnessMock = vi.hoisted(() =>
         params.agentHarnessId ||
         params.agentHarnessRuntimeOverride
       ) {
-        preparedReplyMockState.unexpectedCalls.push("selectAgentHarness");
+        preparedReplyMockState.unexpectedCalls.push("resolveAgentHarnessDeliveryDefaults");
       }
-      return { id: "openclaw", deliveryDefaults: {} };
+      return {};
     },
   ),
 );
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: selectAgentHarnessMock,
+vi.mock("../../agents/harness/selection-decision.js", () => ({
+  resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
@@ -3144,6 +3144,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthSelection)).toHaveBeenCalledTimes(1);
+    expect(resolveSessionAuthSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "default" }),
+    );
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
@@ -3789,9 +3792,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
-  it.each(["heartbeat", "cron", "exec"] as const)(
-    "keeps %s heartbeat metadata out of the model prompt",
-    async (source) => {
+  it.each([
+    ["heartbeat", undefined, "heartbeat", "[OpenClaw heartbeat poll]"],
+    ["cron", undefined, "cron", "[OpenClaw cron wake]"],
+    ["exec", undefined, "exec", "[OpenClaw exec completion]"],
+    ["heartbeat", "background-task", "background-task", "[OpenClaw session event]"],
+    ["heartbeat", "exec-event", "exec-event", "[OpenClaw exec completion]"],
+  ] as const)(
+    "keeps %s wake metadata private and preserves %s event provenance",
+    async (source, suppliedSourceTool, expectedSourceTool, transcriptPrompt) => {
       const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
       const syntheticConversationInfo =
         'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
@@ -3804,6 +3813,14 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: heartbeatPrompt,
           CommandBody: heartbeatPrompt,
           InternalTurnSource: source,
+          ...(suppliedSourceTool
+            ? {
+                InputProvenance: {
+                  kind: "internal_system" as const,
+                  sourceTool: suppliedSourceTool,
+                },
+              }
+            : {}),
           ChatType: "direct",
           OriginatingChannel: "discord",
           OriginatingTo: "discord:channel-123",
@@ -3827,10 +3844,10 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",
       });
-      expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
-      expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+      expect(call?.transcriptCommandBody).toBe(transcriptPrompt);
+      expect(call?.followupRun.transcriptPrompt).toBe(transcriptPrompt);
       expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        provenance: { kind: "internal_system", sourceTool: expectedSourceTool },
       });
     },
   );
@@ -4268,7 +4285,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("resolves origin-less sessions as internal for synthetic stable facts", async () => {
     vi.mocked(buildDirectChatContext).mockReturnValue("direct-context");
-    selectAgentHarnessMock.mockClear();
+    resolveAgentHarnessDeliveryDefaultsMock.mockClear();
     // An entry with no persisted delivery origin has only ever been driven
     // internally; its wake source must not leak into the
     // stable context as a non-internal surface or the fact diverges from
@@ -4301,7 +4318,7 @@ describe("runPreparedReply media-only handling", () => {
     const run = requireRunReplyAgentCall(0).followupRun.run;
     expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
     expect(
-      selectAgentHarnessMock.mock.calls.map(([params]) => ({
+      resolveAgentHarnessDeliveryDefaultsMock.mock.calls.map(([params]) => ({
         provider: params.provider,
         modelId: params.modelId,
       })),

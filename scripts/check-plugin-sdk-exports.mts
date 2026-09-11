@@ -62,6 +62,20 @@ const requiredSubpathExports: Record<string, string[]> = {
   ],
 };
 
+// This private runtime facade has declarations only in the private-QA profile.
+// Do not require its types from ordinary public-package builds.
+const privateSessionManagerConsumer = isPrivateQaPluginSdkBuild(process.env)
+  ? `import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+
+// Private facade declarations must preserve callable access to persist.
+declare const sessionManager: SessionManager;
+declare const sessionEntry: SessionEntry;
+sessionManager.persist(sessionEntry);
+sessionManager.persist(sessionEntry, {});
+// @ts-expect-error Persist still requires a complete session entry.
+sessionManager.persist({});`
+  : "";
+
 let missing = 0;
 
 {
@@ -73,6 +87,11 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+  EmbeddingProviderBatchRuntime,
+} from "openclaw/plugin-sdk/embedding-provider-runtime-contract";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { identityEntryAuthenticationClassifier, meetsIdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type {
@@ -89,6 +108,7 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
+${privateSessionManagerConsumer}
 
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {
@@ -123,6 +143,23 @@ const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
 });
 const entryAuthentication: IdentifierAuthentication | undefined = classifyEntryAuthentication("provider-user-id");
 void entryAuthentication;
+
+const batchEmbed: EmbeddingProviderBatchRuntime["batchEmbed"] = async (options: EmbeddingBatchOptions) => {
+  const chunks: EmbeddingBatchChunk[] = options.chunks;
+  return chunks.map(() => [1]);
+};
+const batchRuntimes: EmbeddingProviderBatchRuntime[] = [
+  { batchEmbed },
+  { batchEmbed, sourceWideBatchEmbed: true },
+  { batchEmbed, sourceWideBatchEmbed: false },
+];
+const batchRuntimeWithInternalPolicy = {
+  batchEmbed,
+  // @ts-expect-error Cache identity is not part of the public batch contract.
+  cacheKeyData: {},
+} satisfies EmbeddingProviderBatchRuntime;
+void batchRuntimes;
+void batchRuntimeWithInternalPolicy;
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",

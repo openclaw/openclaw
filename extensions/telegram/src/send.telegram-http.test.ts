@@ -184,6 +184,24 @@ describe("Telegram physical send acceptance over HTTP", () => {
     expect(requests.at(-1)?.fields.text).toBe("Manual");
   });
 
+  it.each(["text", "caption"] as const)(
+    "preserves literal code spacing in the %s sent over HTTP",
+    async (kind) => {
+      await sendMessageTelegram("123", "````\n```\n• literal bullet\n3. literal number\n````", {
+        cfg,
+        api: bot.api,
+        ...(kind === "caption" ? { mediaUrl: photoPath, mediaLocalRoots: [mediaDir] } : {}),
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.method).toBe(kind === "caption" ? "sendPhoto" : "sendMessage");
+      expect(requests[0]?.fields.parse_mode).toBe("HTML");
+      expect(requests[0]?.fields[kind]).toBe(
+        "<pre><code>```\n• literal bullet\n3. literal number\n</code></pre>",
+      );
+    },
+  );
+
   it.each(["active", "closed", "aborted"])(
     "checks %s send authority after the real account queue drains",
     async (state) => {

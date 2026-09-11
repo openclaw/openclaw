@@ -6,6 +6,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
@@ -37,9 +38,32 @@ export async function execSystemctl(
   return await execSystemdCommand("systemctl", args, env, timeoutMs);
 }
 
+/** System-manager reads never inherit user-bus routing. */
+export async function execBusctlSystem(args: string[], timeoutMs?: number): Promise<ExecResult> {
+  return await execSystemdCommand("busctl", ["--system", ...args], undefined, timeoutMs);
+}
+
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
   // Unit status can be in stdout while stderr contains a launcher diagnostic.
   return `${result.stderr} ${result.stdout}`.trim();
+}
+
+export function systemdInspectionError(
+  result: ExecResult,
+  fallback: string,
+  scope: SystemdUnitScope = "user",
+): Error {
+  if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
+    return new ServiceInspectionError("service-manager-access-denied");
+  }
+  if (
+    scope === "user" &&
+    result.termination === "exit" &&
+    isSystemdUserBusUnavailableDetail(readSystemctlDetail(result))
+  ) {
+    return new ServiceInspectionError("systemd-user-bus-unavailable");
+  }
+  return new Error(fallback);
 }
 
 export function isSystemctlMissing(result: ExecResult): boolean {
@@ -249,10 +273,27 @@ async function execSystemdUserCommand(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  const run = (scopeArgs: string[]) =>
-    execSystemdCommand(command, [...scopeArgs, ...args], env, timeoutMs);
+  const deadline =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? performance.now() + timeoutMs
+      : undefined;
+  const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+    assertCurrent?.();
+    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+    if (remaining !== undefined && remaining <= 0) {
+      return {
+        code: 1,
+        termination: "timeout",
+        stdout: "",
+        stderr: "systemd user manager command deadline expired",
+      };
+    }
+    // The machine fallback is part of this operation, not a fresh timeout budget.
+    return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
+  };
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
@@ -288,16 +329,18 @@ export async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdUserCommand("systemctl", env, args, timeoutMs);
+  return await execSystemdUserCommand("systemctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function execBusctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdUserCommand("busctl", env, args, timeoutMs);
+  return await execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function disableSystemdUserUnitForRemoval(
@@ -366,12 +409,18 @@ export async function assertSystemdAvailable(
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(res)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw systemdInspectionError(
+      res,
+      "systemctl not available; systemd user services are required on Linux.",
+    );
   }
   if (res.termination === "exit" && detail && !isSystemdUserScopeUnavailable(detail)) {
     return;
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw systemdInspectionError(
+    res,
+    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
@@ -379,4 +428,70 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
   // Cleanup uses false to permit file-only removal. An interrupted status probe
   // must still attempt disable before removing a potentially loaded unit.
   return res.code === 0 || !isSystemctlMissing(res);
+}
+
+/** Authenticate the existing unique manager owner before loading a bound unit.
+ * The caller supplies its deadline- and custody-checked D-Bus query. */
+export async function bindSystemdManagerOwner(
+  query: (args: string[], signatures: string[]) => Promise<unknown[] | null>,
+  managerUid: number,
+  unavailable: () => Error,
+): Promise<{ destination: string; verify: () => Promise<void> }> {
+  const manager = "org.freedesktop.systemd1";
+  const readOwner = async () => {
+    const [value] =
+      (await query(
+        [
+          "call",
+          "org.freedesktop.DBus",
+          "/org/freedesktop/DBus",
+          "org.freedesktop.DBus",
+          "GetNameOwner",
+          "s",
+          manager,
+        ],
+        ["s"],
+      )) ?? [];
+    if (
+      !Array.isArray(value) ||
+      value.length !== 1 ||
+      typeof value[0] !== "string" ||
+      !/^:[0-9]+\.[0-9]+$/.test(value[0])
+    ) {
+      throw unavailable();
+    }
+    return value[0];
+  };
+  const destination = await readOwner();
+  const [uid] =
+    (await query(
+      [
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixUser",
+        "s",
+        destination,
+      ],
+      ["u"],
+    )) ?? [];
+  if (
+    !Number.isInteger(managerUid) ||
+    managerUid < 0 ||
+    managerUid >= 0xffffffff ||
+    !Array.isArray(uid) ||
+    uid.length !== 1 ||
+    uid[0] !== managerUid
+  ) {
+    throw unavailable();
+  }
+  return {
+    destination,
+    async verify() {
+      if (destination !== (await readOwner())) {
+        throw unavailable();
+      }
+    },
+  };
 }

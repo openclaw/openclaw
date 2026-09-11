@@ -88,5 +88,5 @@ When debugging real providers/models (requires real creds):
   assistant transcript stores normalized `usage.cost`.
 
 <Tip>
-When you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+When you only need one failing case, prefer narrowing live tests via the [allowlist env vars](/help/testing/docker).
 </Tip>

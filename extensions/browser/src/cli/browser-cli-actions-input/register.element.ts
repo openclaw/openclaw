@@ -7,17 +7,13 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliCommand,
   parseBrowserNonNegativeIntegerOption,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import {
-  callBrowserAct,
-  logBrowserActionResult,
-  requireRef,
-  resolveBrowserActionContext,
-} from "./shared.js";
+import { runBrowserAction, requireRef, resolveBrowserActionContext } from "./shared.js";
 
 function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
   if (value === "left" || value === "right" || value === "middle") {
@@ -57,24 +53,17 @@ export function registerBrowserElementCommands(
   const runElementAction = async (params: {
     cmd: Command;
     body: BrowserActRequest;
-    successMessage: string | ((result: unknown) => string);
+    successMessage: string | ((result: { url?: string }) => string);
   }): Promise<void> => {
     const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
-    try {
-      const result = await callBrowserAct({
+    await runBrowserCliCommand(async () => {
+      await runBrowserAction({
         parent,
         profile,
         body: params.body,
+        successMessage: params.successMessage,
       });
-      const successMessage =
-        typeof params.successMessage === "function"
-          ? params.successMessage(result)
-          : params.successMessage;
-      logBrowserActionResult(parent, result, successMessage);
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+    });
   };
 
   browser
@@ -107,7 +96,7 @@ export function registerBrowserElementCommands(
           modifiers,
         },
         successMessage: (result) => {
-          const url = (result as { url?: unknown }).url;
+          const url = result.url;
           const suffix = typeof url === "string" && url ? ` on ${url}` : "";
           return `clicked ref ${refValue}${suffix}`;
         },
@@ -143,7 +132,7 @@ export function registerBrowserElementCommands(
           delayMs: Number.isFinite(opts.delayMs) ? opts.delayMs : undefined,
         },
         successMessage: (result) => {
-          const url = (result as { url?: unknown }).url;
+          const url = result.url;
           const suffix = typeof url === "string" && url ? ` on ${url}` : "";
           return `clicked ${x},${y}${suffix}`;
         },

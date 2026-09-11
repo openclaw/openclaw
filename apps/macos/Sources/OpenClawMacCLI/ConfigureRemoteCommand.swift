@@ -3,7 +3,6 @@ import Foundation
 import Darwin
 #endif
 
-private let appDefaultsSuites = ["ai.openclaw.mac", "ai.openclaw.mac.debug"]
 private let appOnboardingVersion = 7
 
 struct ConfigureRemoteOptions {
@@ -104,7 +103,7 @@ struct ConfigureRemoteOutput: Encodable {
     var onboardingSkipped: Bool
 }
 
-func runConfigureRemote(_ args: [String]) {
+func runConfigureRemote(_ args: [String], context: MacCLIContext) {
     do {
         let opts = try ConfigureRemoteOptions.parse(args)
         if opts.help {
@@ -122,6 +121,7 @@ func runConfigureRemote(_ args: [String]) {
             Offline preconfiguration; prefer openclaw-mac primary set when the app is running.
 
             Options:
+              --profile <name>   App profile; overrides OPENCLAW_PROFILE (default: default).
               --ssh-target <t>    SSH target for the remote gateway host.
               --direct-url <url>  Direct remote gateway URL; skips SSH tunneling.
               --local-port <p>    Local tunnel port for the mac app/UI. Default: 18789.
@@ -144,7 +144,7 @@ func runConfigureRemote(_ args: [String]) {
             """)
             return
         }
-        let output = try configureRemote(opts)
+        let output = try configureRemote(opts, configURL: context.configURL, defaultsSuites: context.defaultsSuites)
         printConfigureRemoteOutput(output, json: opts.json)
     } catch {
         if args.contains("--json") {
@@ -159,7 +159,8 @@ func runConfigureRemote(_ args: [String]) {
 @discardableResult
 func configureRemote(
     _ opts: ConfigureRemoteOptions,
-    defaultsSuites: [String] = appDefaultsSuites) throws -> ConfigureRemoteOutput
+    configURL: URL,
+    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     var opts = opts
     for (kind, value) in [("token", opts.token), ("password", opts.password)] where value != nil {
@@ -170,13 +171,18 @@ func configureRemote(
     if let directUrlRaw = opts.directUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
        !directUrlRaw.isEmpty
     {
-        return try configureDirectRemote(opts, directUrlRaw: directUrlRaw, defaultsSuites: defaultsSuites)
+        return try configureDirectRemote(
+            opts,
+            directUrlRaw: directUrlRaw,
+            configURL: configURL,
+            defaultsSuites: defaultsSuites)
     }
-    return try configureSSHRemote(opts, defaultsSuites: defaultsSuites)
+    return try configureSSHRemote(opts, configURL: configURL, defaultsSuites: defaultsSuites)
 }
 
 private func configureSSHRemote(
     _ opts: ConfigureRemoteOptions,
+    configURL: URL,
     defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     let target = opts.sshTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -187,7 +193,6 @@ private func configureSSHRemote(
             userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
     }
 
-    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -234,6 +239,7 @@ private func configureSSHRemote(
 private func configureDirectRemote(
     _ opts: ConfigureRemoteOptions,
     directUrlRaw: String,
+    configURL: URL,
     defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     guard let directURL = normalizeDirectURL(directUrlRaw) else {
@@ -247,7 +253,6 @@ private func configureDirectRemote(
             ])
     }
 
-    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]

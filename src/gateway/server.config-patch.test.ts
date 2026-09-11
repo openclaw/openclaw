@@ -24,6 +24,25 @@ import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore } from "./server-start.js";
 
+const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (
+      options: Parameters<typeof actual.startGatewayConfigReloader>[0],
+    ) =>
+      actual.startGatewayConfigReloader({
+        ...options,
+        onHotReload: async (...args) => {
+          await reloadBarrier.wait;
+          return await options.onHotReload(...args);
+        },
+      }),
+  };
+});
+
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
@@ -414,6 +433,39 @@ describe("gateway config methods", () => {
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
     const afterHash = await getConfigHash();
     expect(afterHash).toBe(current.hash);
+  });
+
+  it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    vi.mocked(Date.now).mockRestore();
+    const operations = [
+      {
+        method: "agents.create",
+        params: { name: "revision-worker", workspace: state.path("revision-workspace") },
+      },
+      { method: "agents.update", params: { agentId: "revision-worker", name: "Ready" } },
+      { method: "agents.delete", params: { agentId: "revision-worker", deleteFiles: false } },
+    ];
+    for (const operation of operations) {
+      const before = await getConfigHash();
+      const gate = createDeferredCore();
+      reloadBarrier.wait = gate.promise;
+      try {
+        const changed = await rpcReq(requireClient(), operation.method, operation.params);
+        expect(changed.ok, changed.error?.message).toBe(true);
+
+        const current = await getCurrentConfigObject();
+        gate.resolve();
+        const patched = await rpcReq(requireClient(), "config.patch", {
+          baseHash: current.hash,
+          raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
+        });
+        expect(patched.ok, patched.error?.message).toBe(true);
+        expect(current.hash).not.toBe(before);
+      } finally {
+        gate.resolve();
+        reloadBarrier.wait = undefined;
+      }
+    }
   });
 
   it("round-trips config.set and returns the live config path", async () => {

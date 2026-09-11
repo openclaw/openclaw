@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
+import { resolveSessionArtifactDirectory } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionPhysicalDiskUsage = {
@@ -76,12 +77,13 @@ async function readSqliteDatabaseFiles(
 export async function readSessionPhysicalDiskUsage(
   storePath: string,
 ): Promise<SessionPhysicalDiskUsage> {
-  const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
-  const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
-  // Owner inspection may create SQLite SHM files. Preserve its original position
-  // after the artifact inventory so a measurement cannot count its own side effects.
-  const databaseFiles = await readSqliteDatabaseFiles(
-    listDurableSqliteTargetPathsForSessionStorePath(storePath),
+  const sessionsDir = resolveSessionArtifactDirectory(storePath);
+  const sessionsDirFiles = await readSessionsDirFiles(sessionsDir);
+  const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
+  const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
+  const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
+  const databaseSharedMemoryPaths = new Set(
+    databasePaths.map((databasePath) => canonicalizePathForComparison(`${databasePath}-shm`)),
   );
   const databaseMainPaths = new Set(
     databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
@@ -91,7 +93,9 @@ export async function readSessionPhysicalDiskUsage(
   );
   const uniqueFiles = new Map<string, SessionsDirFileStat>();
   for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
-    uniqueFiles.set(file.canonicalPath, file);
+    if (!databaseSharedMemoryPaths.has(file.canonicalPath)) {
+      uniqueFiles.set(file.canonicalPath, file);
+    }
   }
   const databaseMainBytes = [...databaseMainPaths].reduce(
     (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),

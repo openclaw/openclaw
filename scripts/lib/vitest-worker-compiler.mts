@@ -4,14 +4,18 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "./runtime-process-core-build-entries.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
   verifyVitestWorkerArtifacts,
-  vitestWorkerDeclarationEntries,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import { vitestWorkerBuildEntries } from "./vitest-worker-build-entries.mts";
+import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -40,6 +44,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "package.json",
     "pnpm-lock.yaml",
     "scripts/lib/vitest-worker-artifacts.mts",
+    "scripts/lib/vitest-worker-declarations.mts",
     "scripts/lib/managed-handoff-build-config.mts",
     "scripts/lib/vitest-worker-run.mts",
     "scripts/lib/vitest-worker-compiler.mts",
@@ -64,7 +69,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
-    entry,
+    entry: sharedRuntimeProcessBuildEntries(entry),
     outDir,
     format: "esm",
     platform: "node",
@@ -106,8 +111,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
           return null;
         },
         generateBundle(_options, bundle) {
-          for (const id of Object.keys(inputs)) {
-            let packageDirectory = path.dirname(id);
+          const packageDirectories = new Set(Object.keys(inputs).map((id) => path.dirname(id)));
+          for (let packageDirectory of packageDirectories) {
             while (packageDirectory.startsWith(root)) {
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {
@@ -141,6 +146,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ],
   };
   await build(config);
+  await build({
+    ...config,
+    entry: standaloneRuntimeProcessBuildEntries,
+    outputOptions: { codeSplitting: false },
+  });
   await build({
     ...createManagedHandoffBuildConfig(),
     config: false,

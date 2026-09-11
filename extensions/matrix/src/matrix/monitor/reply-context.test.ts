@@ -294,40 +294,42 @@ describe("matrix reply context", () => {
     });
   });
 
-  it("uses LRU eviction — recently accessed entries survive over older ones", async () => {
-    let callCount = 0;
-    const getEvent = vi.fn().mockImplementation((_roomId: string, eventId: string) => {
-      callCount++;
-      return Promise.resolve({
-        event_id: eventId,
-        sender: `@user${callCount}:example.org`,
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: { msgtype: "m.text", body: `msg-${eventId}` },
-      });
-    });
+  it("retains recently accessed reply contexts when the cache exceeds 256 entries", async () => {
+    const getEvent = vi.fn(async (_roomId: string, eventId: string) => ({
+      event_id: eventId,
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: Date.now(),
+      content: { msgtype: "m.text", body: `msg-${eventId}` },
+    }));
     const getMemberDisplayName = vi
       .fn()
       .mockImplementation((_r: string, userId: string) => Promise.resolve(userId));
-
-    // Use a small cache by testing the eviction pattern:
-    // The actual MAX_CACHED_REPLY_CONTEXTS is 256. We cannot override it easily,
-    // but we can verify that a cache hit reorders entries (delete + re-insert).
     const resolveReplyContext = createMatrixReplyContextResolver({
       client: { getEvent } as never,
       getMemberDisplayName,
       logVerboseMessage: () => {},
     });
+    const roomId = "!room:example.org";
+    const oldest = await resolveReplyContext({ roomId, eventId: "$event-0" });
+    const nextOldest = await resolveReplyContext({ roomId, eventId: "$event-1" });
+    for (let i = 2; i < 256; i += 1) {
+      await resolveReplyContext({ roomId, eventId: `$event-${i}` });
+    }
+    expect(await resolveReplyContext({ roomId, eventId: "$event-0" })).toBe(oldest);
+    expect(getEvent).toHaveBeenCalledTimes(256);
 
-    // Populate cache with two entries
-    await resolveReplyContext({ roomId: "!r:e", eventId: "$A" });
-    await resolveReplyContext({ roomId: "!r:e", eventId: "$B" });
-    expect(getEvent).toHaveBeenCalledTimes(2);
+    await resolveReplyContext({ roomId, eventId: "$event-256" });
 
-    // Access $A again — should be a cache hit (no new getEvent call)
-    // and should move $A to the end of the Map for LRU.
-    const hitResult = await resolveReplyContext({ roomId: "!r:e", eventId: "$A" });
-    expect(getEvent).toHaveBeenCalledTimes(2); // Still 2 — cache hit
-    expect(hitResult.replyToBody).toBe("msg-$A");
+    // Check the survivor before refetching the victim triggers another eviction.
+    expect(await resolveReplyContext({ roomId, eventId: "$event-0" })).toBe(oldest);
+    expect(getEvent).toHaveBeenCalledTimes(257);
+    expect(await resolveReplyContext({ roomId, eventId: "$event-1" })).not.toBe(nextOldest);
+    expect(getEvent).toHaveBeenCalledTimes(258);
+    for (let i = 0; i <= 256; i += 1) {
+      expect(getEvent.mock.calls.filter(([, eventId]) => eventId === `$event-${i}`)).toHaveLength(
+        i === 1 ? 2 : 1,
+      );
+    }
   });
 });

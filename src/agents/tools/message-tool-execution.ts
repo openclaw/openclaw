@@ -276,7 +276,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
     ? "Send a message to the current source conversation. Supports actions: send."
-    : buildMessageToolDescription(actions);
+    : `${buildMessageToolDescription(actions)}${currentChannelIsInternal ? ' When the user asks whether you can perform an action or install a capability, use action="send" with clawhub={query:"capability"} to check official plugins and skills and present installation cards. Omit channel and target. Installed capabilities show their current status; the card opens the listing inside Control UI.' : ""}`;
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true

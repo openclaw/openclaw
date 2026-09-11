@@ -198,11 +198,14 @@ async function runQaCli(
   const stdout = createQaChildOutputCapture();
   const stdoutTail = createQaChildOutputTail();
   const stderr = createQaChildOutputTail();
-  const distEntryPath = path.join(env.repoRoot, "dist", "index.js");
-  const nodeExecPath = await resolveQaNodeExecPath();
+  const command = env.gateway.cliCommand ?? {
+    executablePath: await resolveQaNodeExecPath(),
+    argsPrefix: [path.join(env.repoRoot, "dist", "index.js")],
+    cwd: env.gateway.tempRoot,
+  };
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(nodeExecPath, [distEntryPath, ...args], {
-      cwd: env.gateway.tempRoot,
+    const child = spawn(command.executablePath, [...command.argsPrefix, ...args], {
+      cwd: command.cwd,
       env: {
         ...env.gateway.runtimeEnv,
         ...opts?.env,

@@ -58,6 +58,7 @@ describe("server-runtime-services", () => {
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
+        isAccountListed: vi.fn(() => true),
         isManuallyStopped: vi.fn(),
       } as never,
     });

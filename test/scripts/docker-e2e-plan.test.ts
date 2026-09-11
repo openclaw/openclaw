@@ -1,6 +1,14 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -16,6 +24,7 @@ import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   mainLanes,
 } from "../../scripts/lib/docker-e2e-scenarios.mts";
+import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -138,6 +147,88 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  function commitTarget(root: string) {
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git(
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    return { sha: git("rev-parse", "HEAD"), git };
+  }
+
+  it("keeps admission inert even when frozen omissions authorize executable legacy planning", () => {
+    const root = tempDirs.make("openclaw-inert-catalog-");
+    const marker = join(root, "executed");
+    const assertions = writeFrozenScenarioContract(root, ["base"]);
+    writeFileSync(
+      assertions,
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed");\n` +
+        readFileSync(assertions, "utf8"),
+    );
+    const { sha } = commitTarget(root);
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "2026.6.11",
+        upgradeSurvivorTargetRoot: root,
+        frozenTarget: { mode: "inert", source: createFrozenTargetSource(root, sha) },
+      }),
+    ).toThrow(/inert scenario catalog/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it.each(["dirty absent owner", "missing blob", "unselected unreadable owner"])(
+    "uses committed selected metadata for %s",
+    (shape) => {
+      const root = tempDirs.make("openclaw-inert-metadata-");
+      const relative = "src/cli/update-cli/update-command-plugin-preflight.ts";
+      mkdirSync(dirname(join(root, relative)), { recursive: true });
+      writeFileSync(join(root, "package.json"), "{}");
+      if (shape !== "dirty absent owner") {
+        writeFileSync(join(root, relative), "throw new Error('never execute');\n");
+      }
+      const { sha, git } = commitTarget(root);
+      if (shape === "dirty absent owner") {
+        writeFileSync(
+          join(root, relative),
+          "local modification must not imply committed support\n",
+        );
+      } else {
+        const oid = git("rev-parse", `${sha}:${relative}`);
+        rmSync(join(root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+      }
+      const selected =
+        shape === "unselected unreadable owner"
+          ? "docker-package-install"
+          : "update-corrupt-plugin";
+      const run = () =>
+        planFor({
+          selectedLaneNames: [selected],
+          upgradeSurvivorTargetRoot: root,
+          frozenTarget: { mode: "inert", source: createFrozenTargetSource(root, sha) },
+        });
+      if (shape === "missing blob") {
+        expect(run).toThrow(/unable to read selected source/);
+      } else if (shape === "dirty absent owner") {
+        expect(run().omittedUnsupportedLanes).toEqual([selected]);
+      } else {
+        expect(run().lanes.map((lane) => lane.name)).toEqual([selected]);
+      }
+    },
+  );
+
   const literalFirstHopPostbuild = String.raw`const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   // v2026.8.2 and the exact d413210 build load these after replacing dist/.
   // Remove only after both source artifacts fall outside the supported upgrade window.
@@ -186,6 +277,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ["literal", "shared-DTaQo6Hi.js"],
     ["mapped", "shared-Y6bNiw2w.js"],
     ["mapped", "shared-DTaQo6Hi.js"],
+    ["mapped", "shared-1Uyqkfns.js"],
     ["unrelated", ""],
     ["absent", ""],
   ])(
@@ -531,7 +623,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       package: true,
       prepublishPluginRegistry: true,
     });
-    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.credentials).toEqual(["anthropic-api-key", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("openai-chat-tools");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-codex-npm-plugin");
@@ -591,6 +683,26 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
     expect(core.lanes.map((lane) => lane.name)).not.toContain("gateway-concurrency");
   });
+
+  it.each(["stable", "full"] as const)(
+    "requires packaged live Anthropic cache proof in the %s release core",
+    (releaseProfile) => {
+      const plan = planFor({ profile: RELEASE_PATH_PROFILE, releaseChunk: "core", releaseProfile });
+      const cacheLane = plan.lanes.find((lane) => lane.name === "live-anthropic-cache");
+
+      expect(cacheLane).toMatchObject({
+        imageKind: "functional",
+        live: true,
+        resources: ["docker", "live", "live:claude"],
+        timeoutMs: 900_000,
+      });
+      expect(plan.needs.functionalImage).toBe(true);
+      expect(plan.needs.liveImage).toBe(false);
+      expect(plan.credentials).toContain("anthropic-api-key");
+      const lane = findLaneByName("live-anthropic-cache");
+      expect(lane?.retryPatterns).toEqual([]);
+    },
+  );
 
   it("plans Open WebUI only when release-path coverage requests it", () => {
     const withoutOpenWebUI = planFor({
@@ -1820,6 +1932,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     const cases = [
       { credentials: ["anthropic", "gemini"], name: "live-models" },
       { credentials: ["anthropic", "gemini"], name: "live-gateway" },
+      { credentials: ["anthropic-api-key"], name: "live-anthropic-cache" },
       { credentials: ["anthropic"], name: "live-cli-backend-claude" },
       { credentials: ["gemini"], name: "live-cli-backend-gemini" },
       { credentials: ["openai"], name: "live-codex-harness" },

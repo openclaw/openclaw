@@ -97,8 +97,11 @@ class CodexAppServerLocalRequestCancellationError extends Error {
     method: string,
     readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
+    cause?: unknown,
   ) {
-    super(`${method} ${reason}`);
+    const detail =
+      cause instanceof Error || typeof cause === "string" ? coerceErrorMessage(cause) : undefined;
+    super(`${method} ${reason}${detail ? `: ${detail}` : ""}`, { cause });
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
 }
@@ -237,6 +240,8 @@ export class CodexAppServerClient {
       }) => Promise<() => void>)
     | undefined;
   private stderrTail = "";
+  private readonly privateTransportSecrets = new Set<string>();
+  private privateStderrPending = "";
   private pendingParse:
     | {
         text: string;
@@ -252,7 +257,8 @@ export class CodexAppServerClient {
     this.lines.on("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.stdout.on("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (text: string) => {
+    child.stderr.on("data", (chunk: string) => {
+      const text = this.redactPrivateStderr(chunk);
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
       const trimmed = text.trim();
       if (trimmed) {
@@ -426,7 +432,12 @@ export class CodexAppServerClient {
     }
     if (options.signal?.aborted) {
       return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(method, "aborted", false),
+        new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        ),
       );
     }
     const guard =
@@ -463,7 +474,12 @@ export class CodexAppServerClient {
             throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
           }
           if (error instanceof Error && error.message === abortMessage) {
-            throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+            throw new CodexAppServerLocalRequestCancellationError(
+              method,
+              "aborted",
+              false,
+              options.signal?.reason,
+            );
           }
           throw error;
         }
@@ -526,7 +542,12 @@ export class CodexAppServerClient {
         : undefined;
     for (let retry = 0; ; retry += 1) {
       if (options.signal?.aborted) {
-        throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+        throw new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        );
       }
       const remainingTimeoutMs = deadline === undefined ? undefined : deadline - Date.now();
       if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
@@ -569,7 +590,12 @@ export class CodexAppServerClient {
     signal: AbortSignal | undefined,
   ): Promise<void> {
     if (signal?.aborted) {
-      throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+      throw new CodexAppServerLocalRequestCancellationError(
+        method,
+        "aborted",
+        false,
+        signal?.reason,
+      );
     }
     const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
     if (remainingMs !== undefined && remainingMs <= 0) {
@@ -584,7 +610,9 @@ export class CodexAppServerClient {
       timer.unref?.();
       const abortListener = () => {
         cleanup();
-        reject(new CodexAppServerLocalRequestCancellationError(method, "aborted", false));
+        reject(
+          new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal?.reason),
+        );
       };
       const cleanup = () => {
         clearTimeout(timer);
@@ -608,7 +636,12 @@ export class CodexAppServerClient {
     }
     if (options.signal?.aborted) {
       return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(method, "aborted", false),
+        new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          options.signal?.reason,
+        ),
       );
     }
     const id = this.nextId++;
@@ -661,7 +694,12 @@ export class CodexAppServerClient {
       if (options.signal) {
         const abortListener = () =>
           rejectPending(
-            new CodexAppServerLocalRequestCancellationError(method, "aborted", mayHaveWritten),
+            new CodexAppServerLocalRequestCancellationError(
+              method,
+              "aborted",
+              mayHaveWritten,
+              options.signal?.reason,
+            ),
           );
         options.signal.addEventListener("abort", abortListener, { once: true });
         cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
@@ -686,7 +724,14 @@ export class CodexAppServerClient {
         cleanup,
       });
       if (options.signal?.aborted) {
-        rejectPending(new CodexAppServerLocalRequestCancellationError(method, "aborted", false));
+        rejectPending(
+          new CodexAppServerLocalRequestCancellationError(
+            method,
+            "aborted",
+            false,
+            options.signal?.reason,
+          ),
+        );
         return;
       }
       try {
@@ -822,7 +867,41 @@ export class CodexAppServerClient {
     });
   }
 
+  /** Protect private loopback route capabilities before native diagnostics can mention them. */
+  protectPrivateTransportSecret(secret: string): void {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || this.privateTransportSecrets.size >= 8) {
+      if (!this.privateTransportSecrets.has(secret)) {
+        throw new Error("Invalid private Codex transport capability");
+      }
+    }
+    this.privateTransportSecrets.add(secret);
+  }
+
+  private redactPrivateText(text: string): string {
+    let redacted = text;
+    for (const secret of this.privateTransportSecrets) {
+      redacted = redacted.replaceAll(secret, "[REDACTED]");
+    }
+    return redacted;
+  }
+
+  private redactPrivateStderr(chunk: string): string {
+    const text = this.redactPrivateText(this.privateStderrPending + chunk);
+    let held = 0;
+    // A capability can span arbitrary pipe chunks. Retain only a possible token prefix.
+    for (const secret of this.privateTransportSecrets) {
+      for (let length = 1; length < secret.length; length++) {
+        if (text.endsWith(secret.slice(0, length))) {
+          held = Math.max(held, length);
+        }
+      }
+    }
+    this.privateStderrPending = held ? text.slice(-held) : "";
+    return held ? text.slice(0, -held) : text;
+  }
+
   private handleLine(line: string): void {
+    // Live RPC values remain exact; the canonical presentation boundary redacts diagnostics.
     const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
     if (this.pendingParse) {
       this.handlePendingParseLine(rawLine);

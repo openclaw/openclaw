@@ -176,15 +176,22 @@ function openWorkspaceItem<T>(
   openSessionCheckoutSidebar(state, request);
   const isCurrent = () =>
     state.sidebarContent === request && isCurrentSessionWorkspace(state, workspace);
+  const fail = (message: string) => {
+    if (!isCurrent()) {
+      return;
+    }
+    workspace.error = message;
+    const unavailable = { kind: "unavailable" as const, message };
+    trackSessionCheckoutSidebar(unavailable);
+    state.sidebarContent = unavailable;
+  };
   void (async () => {
     workspace.error = null;
     try {
       const result = await load();
       const content = result == null ? null : render(result);
       if (!content) {
-        if (isCurrent()) {
-          workspace.error = missingMessage;
-        }
+        fail(missingMessage);
         return;
       }
       if (isCurrent()) {
@@ -192,9 +199,7 @@ function openWorkspaceItem<T>(
         state.sidebarContent = content;
       }
     } catch (error) {
-      if (isCurrent()) {
-        workspace.error = formatUiError(error);
-      }
+      fail(formatUiError(error));
     } finally {
       if (state.sidebarContent === request) {
         state.sidebarContent = null;
@@ -387,6 +392,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.collapsed = false;
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
+  workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
   requestWorkspaceUpdate(state);
@@ -460,6 +466,12 @@ export function createSessionWorkspaceProps(
     activeId: workspace.activeId,
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
+    filter: workspace.filter,
+    browserSearch: workspace.browserSearch,
+    onSetFilter: (filter) => {
+      workspace.filter = filter;
+      requestWorkspaceUpdate(state);
+    },
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
     onRefresh: () => loadSessionWorkspace(state, workspace, true),
@@ -480,6 +492,7 @@ export function createSessionWorkspaceProps(
     },
     onSearch: (search) => {
       workspace.browserSearch = search;
+      requestWorkspaceUpdate(state);
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;

@@ -24,20 +24,21 @@ export type TaskRegistryStore = {
   close?: () => void;
 };
 
+type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
+
 export type TaskRegistryObserverEvent =
   | {
       kind: "restored";
-      tasks: TaskRecord[];
     }
   | {
       kind: "upserted";
-      task: TaskRecord;
-      previous?: TaskRecord;
+      task: TaskRegistryObserverRecord;
+      previous?: TaskRegistryObserverRecord;
     }
   | {
       kind: "deleted";
       taskId: string;
-      previous: TaskRecord;
+      previous: TaskRegistryObserverRecord;
     };
 
 type TaskRegistryObservers = {

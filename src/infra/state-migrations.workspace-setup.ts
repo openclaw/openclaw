@@ -299,13 +299,13 @@ function addLegacyWorkspaceSources(params: {
 }
 
 /** Detect retired workspace files only when an explicit Doctor flow opts in. */
-export function detectLegacyWorkspaceState(params: {
+export async function detectLegacyWorkspaceState(params: {
   cfg: OpenClawConfig;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   doctorOnlyStateMigrations?: boolean;
-}): LegacyWorkspaceStateDetection {
+}): Promise<LegacyWorkspaceStateDetection> {
   if (params.doctorOnlyStateMigrations !== true) {
     return { sources: [], hasLegacy: false };
   }
@@ -327,7 +327,7 @@ export function detectLegacyWorkspaceState(params: {
   };
 
   const workspaceDirs = new Set(
-    listWorkspaceStateDirs({
+    await listWorkspaceStateDirs({
       cfg: params.cfg,
       env,
       homedir,

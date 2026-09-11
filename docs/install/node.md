@@ -19,6 +19,52 @@ node -v
 
 Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
+### Update from the CLI
+
+If you run `openclaw` with an incompatible Node.js, startup first checks for an
+already available compatible runtime: the private OpenClaw runtime, the Node
+recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
+Homebrew defaults. Each candidate must pass the same SQLite capability checks as
+normal startup. The first passing runtime retries the original command without
+prompting, including non-interactive Doctor commands launched by older updaters.
+Arguments, working directory, environment, standard streams, and exit status are
+preserved. Commands with an exact process-identity requirement cannot use this
+recovery.
+
+Runtime discovery uses the environment inherited when the CLI starts, before
+OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
+workspace `.env` values cannot select a Node executable for recovery.
+
+Home-relative service and version-manager paths expand `~` against inherited
+`HOME` or `USERPROFILE`. Service paths use that home even when `OPENCLAW_HOME`
+selects a different private-runtime home. Bare relative paths and service or
+manager metadata inside the current working directory are rejected.
+
+Recovery ignores relative PATH entries and runtimes that resolve inside the
+current working directory, unless an absolute PATH entry explicitly names their
+directory. OpenClaw's own private recovery directory is also allowed, so cached
+runtime reuse and the installation offer work when you launch from your home
+directory. This exception does not extend to other in-home executables or manager
+roots. On Windows, the service reader honors recorded code pages and Unicode
+byte-order marks. If the current Node build cannot decode a service script safely,
+OpenClaw prints the code page and continues searching other sources. Unsupported
+OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
+Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
+case probes the service executable; recovery continues with PATH and the other
+available runtime sources.
+
+If none is available and you are in an interactive terminal, the CLI offers:
+
+```text
+Update NodeJS: Y/N [N]:
+```
+
+Enter **Y** to download a compatible Node.js for OpenClaw and retry the same command. The download is checksum-verified and stored under `~/.openclaw/tools/cli-node` (or the home selected by `OPENCLAW_HOME`). The Node.js installation does not replace system Node.js, change shell settings, reinstall OpenClaw, or repair/restart Gateway services. The retried command keeps its normal behavior.
+
+Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
+
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+
 ## Install Node
 
 <Tabs>

@@ -111,6 +111,7 @@ import {
 type VitestRunPlan = {
   config: string;
   forwardedArgs: string[];
+  timingTargets?: string[];
   includePatterns: string[] | null;
   watchMode: boolean;
 };
@@ -248,6 +249,7 @@ const EXTENSION_PROVIDERS_VITEST_CONFIG = "test/vitest/vitest.extension-provider
 const EXTENSION_QA_VITEST_CONFIG = "test/vitest/vitest.extension-qa.config.ts";
 const EXTENSION_SIGNAL_VITEST_CONFIG = "test/vitest/vitest.extension-signal.config.ts";
 const EXTENSION_SLACK_VITEST_CONFIG = "test/vitest/vitest.extension-slack.config.ts";
+const EXTENSION_TEAM_REPORTS_VITEST_CONFIG = "test/vitest/vitest.extension-team-reports.config.ts";
 const EXTENSION_TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
 const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-call.config.ts";
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
@@ -369,7 +371,7 @@ function resolveSpecSortWeight(
   }
   // Exact selections use their file costs; a whole-config sample would price a
   // single worker proof like all tooling. Globs keep the whole-config fallback.
-  const includes = spec.includePatterns;
+  const includes = spec.timingTargets ?? spec.includePatterns;
   const estimateFileSeconds =
     spec.config === TOOLING_VITEST_CONFIG
       ? estimateVitestToolingFileSeconds
@@ -537,6 +539,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   extensionIrc: EXTENSION_IRC_VITEST_CONFIG,
   extensionLine: EXTENSION_LINE_VITEST_CONFIG,
   extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
+  extensionTeamReports: EXTENSION_TEAM_REPORTS_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
   extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
   extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
@@ -580,7 +583,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ["test/scripts/vitest-runner-task-updates.test.ts"],
   ]),
   ...[
-    "src/system-agent/setup-inference-persist.ts",
+    "src/system-agent/setup-inference-turn.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
@@ -879,11 +882,19 @@ const SOURCE_ROOTS_FOR_IMPORT_GRAPH = [
   "packages",
   "ui/src",
   "ui/config",
+  "ui/public",
   "test",
 ];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
-const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
-  IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+function importGraphPathspecs(roots: string[], suffixes: readonly string[]) {
+  return [
+    ...roots.flatMap((root) => suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`)),
+    ...suffixes.map((suffix) => `:(glob)ui/*${suffix}`),
+  ];
+}
+const IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  SOURCE_ROOTS_FOR_IMPORT_GRAPH,
+  IMPORTABLE_FILE_EXTENSIONS,
 );
 const TOOLING_IMPORT_GRAPH_ROOTS = [...SOURCE_ROOTS_FOR_IMPORT_GRAPH, "scripts"];
 const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
@@ -893,8 +904,9 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
   ".mjs",
   ".cjs",
 ];
-const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
-  TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+const TOOLING_IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  TOOLING_IMPORT_GRAPH_ROOTS,
+  TOOLING_IMPORTABLE_FILE_EXTENSIONS,
 );
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
@@ -1509,6 +1521,7 @@ function listImportGraphFiles(
   directory: string,
   files: string[] = [],
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
+  recursive = true,
 ) {
   let entries;
   try {
@@ -1520,7 +1533,7 @@ function listImportGraphFiles(
   for (const entry of entries) {
     const relative = normalizePathPattern(path.posix.join(directory, entry.name));
     if (entry.isDirectory()) {
-      if (!isSkippedImportGraphDirectory(entry.name)) {
+      if (recursive && !isSkippedImportGraphDirectory(entry.name)) {
         listImportGraphFiles(cwd, relative, files, extensions);
       }
       continue;
@@ -1580,11 +1593,14 @@ function listImportGraphFilesForCwd(cwd: string, options: ImportGraphOptions = {
   }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
-  const files =
-    listTrackedTestPlanFiles(
-      cwd,
-      tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
-    ) ?? roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions));
+  const files = listTrackedTestPlanFiles(
+    cwd,
+    tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  ) ?? [
+    ...roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions)),
+    // Root configs are inputs; UI caches and generated sibling trees are not.
+    ...listImportGraphFiles(cwd, "ui", [], extensions, false),
+  ];
   cachedImportGraphFiles.set(cacheKey, files);
   return files;
 }
@@ -1681,9 +1697,7 @@ function listImportGraphGrepMatches(
   const suffixes = testFilesOnly
     ? extensions.flatMap((ext) => [`.test${ext}`, `.spec${ext}`])
     : extensions;
-  const grepPaths = roots.flatMap((root) =>
-    suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`),
-  );
+  const grepPaths = importGraphPathspecs(roots, suffixes);
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
@@ -1761,6 +1775,33 @@ function findDirectImporters(
     }
   }
   return skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
+}
+
+/** Prove an entry is unshared using the canonical targeted reverse-import scan. */
+export function hasImportGraphConsumers(
+  changedPaths: string[],
+  cwd = process.cwd(),
+  options: ImportGraphOptions = {},
+) {
+  const tracked = listTrackedTestPlanFiles(
+    cwd,
+    options.tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  );
+  // An incomplete archive/filesystem inventory cannot prove that an entry is unshared.
+  if (tracked === null) {
+    return true;
+  }
+  cachedImportGraphFiles.set(`${cwd}\0${options.tooling ? "tooling" : "source"}`, tracked);
+  const files = new Set(tracked);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const terms = changedPaths.flatMap((file) => resolveImportGraphSearchTerms(file, extensions));
+  const matches = listImportGraphGrepMatches(cwd, terms, options);
+  return changedPaths.some((file) => {
+    const consumers = files.has(file) ? findDirectImporters(file, matches, extensions) : null;
+    return consumers === null || consumers.length > 0;
+  });
 }
 
 function resolveAffectedTestsFromTargetedImportScan(
@@ -2196,9 +2237,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["install-trufflehog", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
   [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
+  [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
@@ -2404,17 +2446,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/ci-check-testbox\.yml$/u,
-    [workflowGuards, packageAcceptance, "changed-lanes", "install-trufflehog"],
+    [workflowGuards, packageAcceptance, "changed-lanes"],
   ],
-  [
-    /^\.github\/workflows\/ci-check-arm-testbox\.yml$/u,
-    [workflowGuards, packageAcceptance, "install-trufflehog"],
-  ],
+  [/^\.github\/workflows\/ci-check-arm-testbox\.yml$/u, [workflowGuards, packageAcceptance]],
   [/^\.github\/workflows\/crabbox-hydrate\.yml$/u, [workflowGuards, packageAcceptance]],
-  [
-    /^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u,
-    ["install-trufflehog", packageAcceptance, workflowGuards],
-  ],
+  [/^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u, [packageAcceptance, workflowGuards]],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
     [
@@ -2939,7 +2975,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
     ],
   ],
@@ -3309,8 +3344,12 @@ function resolvePreciseChangedTestTargets(
   options: ChangedTestTargetOptions & { skipImportGraph?: boolean },
 ) {
   const cwd = options.cwd ?? process.cwd();
+  const pluginSdkInclude = resolvePluginSdkLightIncludePattern(changedPath);
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
+    (pluginSdkInclude
+      ? pluginSdkLightTestFiles.filter((file) => path.matchesGlob(file, pluginSdkInclude))
+      : null) ??
     (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
       ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
       : null) ??
@@ -3505,8 +3544,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (
     relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
-    relative === "src/gateway/sessions-history-http.test.ts"
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
   ) {
     return "e2e";
   }
@@ -4108,7 +4146,7 @@ export function buildVitestRunPlans(
   return plans;
 }
 
-export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()) {
+export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()): VitestRunPlan[] {
   const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   if (watchMode) {
     return [
@@ -4180,6 +4218,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
           return chunks.map((targets) => ({
             config,
             forwardedArgs: [...forwardedArgs, ...targets],
+            timingTargets: targets,
             includePatterns: null,
             watchMode: false,
           }));
@@ -4443,6 +4482,7 @@ export function createVitestRunSpecs(
       : null;
     return {
       config: plan.config,
+      timingTargets: plan.timingTargets,
       env: includeFilePath
         ? {
             ...baseEnv,

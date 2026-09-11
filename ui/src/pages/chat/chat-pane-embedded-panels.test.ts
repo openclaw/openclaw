@@ -1,10 +1,16 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, render, type LitElement } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import "./components/chat-detail-panel.ts";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import {
   availableSidebarSlots,
   sidebarPanelDefinitions,
@@ -17,18 +23,33 @@ import {
   createInitializationContext,
   createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
+import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import {
+  releaseChatMediaResourceSubscriber,
+  type AttachmentItem,
+} from "./components/chat-message-media.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   renderSessionWorkspaceRail,
+  retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { renderChatThread } from "./components/chat-thread.ts";
 import "./components/chat-sidebar-region.runtime.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+  threadProps,
+} from "./components/chat-transcript.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import {
   closeSlot,
@@ -66,6 +87,7 @@ async function renderPanelFixture(
       availableSlots: ["detail", "workspace"],
       callbacks: {
         activatePanel: vi.fn(),
+        togglePanelExpanded: vi.fn(),
         closeSlot: closePanelSlot,
         openSlot: vi.fn(),
         reorderPanel: vi.fn(),
@@ -87,7 +109,7 @@ async function renderPanelFixture(
   await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
 }
 
-function createReviewFixture() {
+function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
   const file = createDeferred<SessionWorkspaceGetResult | null>();
   const list = createDeferred<SessionWorkspaceListResult | null>();
   const sessions = createSessionCapabilityFixture({
@@ -101,8 +123,16 @@ function createReviewFixture() {
     { invalidate: vi.fn(), afterCommit: () => () => {} },
     mount,
   );
+  const history = vi.fn().mockResolvedValue({
+    messages: [{ role: "assistant", content: "The selected task transcript." }],
+  });
   state.client = createGatewayBrowserClientFixture({
-    request: (method) => (method === "tasks.list" ? { tasks: [] } : { artifacts: [] }),
+    request: (method, params) =>
+      method === "tasks.history"
+        ? history(params)
+        : method === "tasks.list"
+          ? { tasks: [] }
+          : { artifacts: [] },
   });
   state.connected = true;
   state.connectionEpoch = 1;
@@ -120,6 +150,7 @@ function createReviewFixture() {
     agentId: "main",
     createdAt: 1,
     updatedAt: 2,
+    ...taskFields,
   } satisfies TaskSummary;
   const backgroundTasks = {
     ...createBackgroundTasksProps(state, { presented: false }),
@@ -151,17 +182,22 @@ function createReviewFixture() {
       setObserverVisibility: vi.fn(),
       updateSidebarLayout: state.updateSidebarLayout,
     });
+  onTestFinished(async () => {
+    file.resolve(null);
+    list.resolve(null);
+    await Promise.allSettled([file.promise, list.promise]);
+    resetTaskDetail(state);
+  });
   const renderPanels = async () => {
     const definitions = sidebarPanelDefinitions({
       state,
       renderDetail: (content) =>
         renderChatDetailSlot({
           backgroundTasks,
-          chat: { paneId: "review-intent", sessionKey: state.sessionKey } as ChatProps,
+          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
           content,
           host: state,
           layout: state.sidebarLayout,
-          transcript: {} as ChatTranscriptController,
         }),
       workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
         embedded: true,
@@ -169,10 +205,296 @@ function createReviewFixture() {
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
   };
-  return { file, list, mount, preview, rails, renderPanels, sessions, state, task };
+  return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
 }
 
 describe("chat pane embedded panels", () => {
+  describe("Review task selection lifetime", () => {
+    beforeEach(installTranscriptDomMocks);
+    afterEach(resetTranscriptTestDom);
+    it.each(["pending", "unavailable", "checkout retired", "file closed", "task closed"] as const)(
+      "stops the previous task's transcript reads when Review is %s",
+      async (selection) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(10_000);
+        onTestFinished(() => {
+          vi.useRealTimers();
+        });
+        const { file, history, mount, preview, rails, renderPanels, state, task } =
+          createReviewFixture({ childSessionKey: "agent:main:subagent:review-child" });
+        rails().backgroundTasks.onOpenTaskDetail?.(task);
+        await renderPanels();
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
+
+        if (selection !== "task closed") {
+          openSessionWorkspaceFile(state, { path: preview.file.path });
+          await renderPanels();
+          expect(mount.querySelector('[data-panel-skeleton="review"]')).not.toBeNull();
+        }
+        if (selection === "unavailable") {
+          file.reject(new Error("Preview unavailable"));
+          await expect(file.promise).rejects.toThrow("Preview unavailable");
+        } else if (selection === "checkout retired") {
+          retireSessionWorkspaceCheckout(state);
+        } else if (selection === "file closed" || selection === "task closed") {
+          mount.querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
+        }
+        await renderPanels();
+        if (selection === "unavailable") {
+          expect(mount.querySelector('[role="alert"]')?.textContent).toContain(
+            "Preview unavailable",
+          );
+        } else if (selection === "file closed" || selection === "task closed") {
+          expect(mount.querySelector('[data-panel-slot="detail"]')).toBeNull();
+        } else if (selection === "checkout retired") {
+          expect(mount.querySelector('[data-panel-skeleton="review"]')).toBeNull();
+        }
+        vi.setSystemTime(12_000);
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "task",
+          payload: { action: "upserted", task: { ...task, updatedAt: 3 } },
+        });
+        expect(history).toHaveBeenCalledOnce();
+        expect(mount.querySelector("[data-task-detail-panel]")).toBeNull();
+      },
+    );
+
+    it.each(["Files", "minimized"] as const)(
+      "retains the selected Review transcript while %s is presented",
+      async (presentation) => {
+        const { history, mount, rails, renderPanels, state, task } = createReviewFixture({
+          childSessionKey: "agent:main:subagent:review-child",
+        });
+        rails().backgroundTasks.onOpenTaskDetail?.(task);
+        await renderPanels();
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+
+        if (presentation === "Files") {
+          state.handleOpenSidebar({
+            kind: "attachment",
+            attachmentKind: "image",
+            title: "Attachment in Files",
+            src: "/synthetic/attachment.png",
+          });
+        } else {
+          state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, false));
+        }
+        await renderPanels();
+        expect.soft(history).toHaveBeenCalledOnce();
+        expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(false);
+        if (presentation === "Files") {
+          expect(
+            mount.querySelector<HTMLImageElement>(".sidebar-attachment-preview__image")?.alt,
+          ).toBe("Attachment in Files");
+        }
+        state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
+        await renderPanels();
+        expect(mount.textContent).toContain("The selected task transcript.");
+        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
+      },
+    );
+  });
+
+  it.each(["ready", "unavailable", "error"] as const)(
+    "keeps Files pending during renewed source resolution, then shows %s",
+    async (outcome) => {
+      const attachmentId = crypto.randomUUID();
+      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+      const container = document.body.appendChild(document.createElement("div"));
+      const detail = document.body.appendChild(document.createElement("div"));
+      let sidebarContent: SidebarContent | null = null;
+      const pending = createDeferred<{ url: string } | null>();
+      const secondResolver = vi.fn(() => pending.promise);
+      const firstResolver = vi.fn(async () => ({ url: `${source}?mediaTicket=first` }));
+      const attachment: AttachmentItem = {
+        type: "attachment",
+        attachment: {
+          kind: "video",
+          label: "recording.mp4",
+          mimeType: "video/mp4",
+          sizeBytes: 574_000,
+          url: source,
+          artifactId: `artifact_${attachmentId}`,
+        },
+      };
+      const rerender = () =>
+        render(
+          renderAssistantAttachments(
+            [attachment],
+            {
+              connectionEpoch: 1,
+              onRequestUpdate: rerender,
+              resolveArtifactDownload: firstResolver,
+            },
+            (content) => {
+              sidebarContent = content;
+            },
+            undefined,
+            false,
+          ),
+          container,
+        );
+      onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
+      rerender();
+      const open = await vi.waitFor(() =>
+        expectDefined(
+          container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
+          "Open attachment",
+        ),
+      );
+      open.click();
+      render(
+        html`<openclaw-chat-detail-panel
+          .content=${{
+            ...expectDefined<SidebarContent>(sidebarContent, "Opened attachment"),
+            sourceIdentity: undefined,
+          }}
+          .attachmentRuntime=${{ connectionEpoch: 2, resolveArtifactDownload: secondResolver }}
+        ></openclaw-chat-detail-panel>`,
+        detail,
+      );
+      const panel = expectDefined(
+        detail.querySelector<LitElement>("openclaw-chat-detail-panel"),
+        "Files panel",
+      );
+      await panel.updateComplete;
+
+      expect(panel.textContent).toContain("recording.mp4");
+      expect(panel.textContent).not.toContain("Preview unavailable");
+      expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+      const video = await vi.waitFor(() =>
+        expectDefined(panel.querySelector("video"), "Pending video"),
+      );
+      expect(video.hasAttribute("src")).toBe(false);
+      expect(video.preload).toBe("auto");
+      const presentation = panel.querySelector('[role="status"]');
+      const header = panel.querySelector(".chat-assistant-attachment-card__header");
+      expect(secondResolver).toHaveBeenCalledOnce();
+      if (outcome === "error") {
+        pending.reject(new Error("Connection lost"));
+      } else {
+        pending.resolve(outcome === "ready" ? { url: `${source}?mediaTicket=renewed` } : null);
+      }
+      if (outcome === "ready") {
+        const player = panel.querySelector<LitElement>("openclaw-chat-video-player");
+        await player?.updateComplete;
+        await vi.waitFor(() =>
+          expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
+        );
+        expect(panel.querySelector("video")).toBe(video);
+        expect(panel.querySelector('[role="status"]')).toBe(presentation);
+        expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+        expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+        Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
+        video.dispatchEvent(new Event("loadeddata"));
+        await player?.updateComplete;
+        expect(panel.querySelector('[role="status"]')).toBeNull();
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+        expect(panel.textContent).not.toContain("Preview unavailable");
+      } else {
+        await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+        expect(panel.querySelector("video")).toBeNull();
+      }
+      detail.remove();
+      container.remove();
+    },
+  );
+
+  it.each(["history", "stream"] as const)(
+    "reuses attachment metadata when Open shows %s content in Files",
+    async (surface) => {
+      const { mount, state } = createReviewFixture();
+      const transcript = document.body.appendChild(document.createElement("div"));
+      const fetchMetadata = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ available: true, sizeBytes: 574_000 }),
+      });
+      vi.stubGlobal("fetch", fetchMetadata);
+      const filename = surface === "history" ? "recording.mp4" : "report.pdf";
+      const source = `/tmp/preview-cache-${surface}/${filename}`;
+      const controller = createTestTranscript();
+      const chat = {
+        ...threadProps(
+          `attachment-preview-${surface}`,
+          state.sessionKey,
+          surface === "history"
+            ? [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "attachment",
+                      attachment: {
+                        kind: "video",
+                        label: filename,
+                        mimeType: "video/mp4",
+                        url: source,
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [],
+        ),
+        stream: surface === "stream" ? `MEDIA:${source}` : null,
+        streamStartedAt: surface === "stream" ? 1 : null,
+        onOpenSidebar: state.handleOpenSidebar,
+        sessionKey: state.sessionKey,
+        currentAgentId: resolveChatAgentId(state),
+        ...resolveChatMessageAccess(state).chatProps,
+        connectionEpoch: state.connectionEpoch,
+      } as ChatProps;
+      const renderAttachment = () => {
+        render(
+          renderChatThread({ ...chat, onRequestUpdate: renderAttachment }, controller),
+          transcript,
+        );
+        controller.hostUpdated();
+      };
+      try {
+        renderAttachment();
+        const open = await vi.waitFor(() => {
+          const button = transcript.querySelector<HTMLButtonElement>(
+            ".chat-assistant-attachment-card__expand",
+          );
+          expect(button).not.toBeNull();
+          return button!;
+        });
+        expect(fetchMetadata).toHaveBeenCalledOnce();
+        open.click();
+        const content = state.attachmentSidebarContent;
+        expect(content).not.toBeNull();
+        render(
+          renderChatDetailSlot({
+            backgroundTasks: createBackgroundTasksProps(state, { presented: false }),
+            chat,
+            content: content!,
+            host: state,
+            layout: state.sidebarLayout,
+          }),
+          mount,
+        );
+        await mount.querySelector<LitElement>("openclaw-chat-detail-panel")?.updateComplete;
+        expect(fetchMetadata).toHaveBeenCalledOnce();
+        expect(mount.textContent).toContain(filename);
+        if (surface === "history") {
+          expect(mount.querySelector("openclaw-chat-video-player")).not.toBeNull();
+        }
+      } finally {
+        controller.hostDisconnected();
+        mount.remove();
+        releaseChatMediaResourceSubscriber(renderAttachment);
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps a newer task selection visible when a pending file preview completes", async () => {
     const { file, mount, preview, rails, renderPanels, state, task } = createReviewFixture();
     const taskContent = { kind: "task" as const, taskId: task.id };
@@ -364,6 +686,7 @@ describe("chat pane embedded panels", () => {
       sessionKey: "agent:main:review",
       sidebarContent: null,
       sidebarLayout: { columns: [] },
+      settings: loadSettings(),
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
     const renderPanels = async (layout: SidebarLayout) => {
@@ -417,6 +740,37 @@ describe("chat pane embedded panels", () => {
       scope: "all",
     });
     expect(state.sidebarContent).toBeNull();
+  });
+
+  it("shows why a file could not open instead of falling back to the session diff", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:review",
+      branch: "feature/review",
+      baseRef: "main",
+      additions: 1,
+      deletions: 1,
+      files: [{ path: "example.txt", status: "modified", additions: 1, deletions: 1 }],
+    });
+    const { mount, renderPanels, state } = createReviewFixture();
+    const message = 'Failed to load docs/chat.md: <img src="missing.png">';
+    state.client = createGatewayBrowserClientFixture({
+      request: (method, params) =>
+        method === "tasks.list" ? { tasks: [] } : request(method, params),
+    });
+    state.hello = gatewayHelloForMethods(["sessions.diff"]);
+    state.sessionKey = "agent:main:review";
+    state.sidebarContent = { kind: "unavailable", message };
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
+    await renderPanels();
+
+    const notice = mount.querySelector(".review-unavailable");
+    expect(notice?.getAttribute("role")).toBe("alert");
+    expect(notice?.classList.contains("danger")).toBe(true);
+    expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+    expect(notice?.querySelector("span")?.textContent).toBe(message);
+    expect(notice?.querySelector("img")).toBeNull();
+    expect(mount.querySelector("openclaw-session-diff")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("enumerates a structural loading variant for every side-panel tab", async () => {

@@ -418,7 +418,7 @@ while continuation uses `operator.write`. Paired-node command advertisement and
 Gateway node policy remain additional requirements for node-backed rows.
 </Note>
 
-See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
+See [Nodes: Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
 ## Live model discovery
@@ -496,6 +496,8 @@ Related Anthropic docs:
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 
 </Note>
+
+<a id="safety-refusal-fallback-claude-fable-5" />
 
 ## Safety refusal fallback (Claude Opus 5 and Fable 5)
 
@@ -838,5 +840,11 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
   </Card>
   <Card title="OAuth and auth" href="/gateway/authentication" icon="key">
     Auth details and credential reuse rules.
+  </Card>
+  <Card title="Claude Max API proxy" href="/providers/claude-max-api-proxy" icon="shuffle">
+    Community proxy exposing Claude subscription credentials as an OpenAI-compatible endpoint.
+  </Card>
+  <Card title="Anthropic plugin reference" href="/plugins/reference/anthropic" icon="plug">
+    Anthropic models, Claude CLI, and the native Claude session catalog.
   </Card>
 </CardGroup>

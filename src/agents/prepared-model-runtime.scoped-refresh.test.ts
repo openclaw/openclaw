@@ -27,6 +27,7 @@ import {
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
@@ -58,6 +59,113 @@ describe("prepared model runtime scoped refresh", () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
     await resetPreparedModelRuntimeHarness(state);
   });
+
+  it.each(["warm", "cold"] as const)(
+    "does not carry catalog failure status from a %s source into its replacement",
+    async (inventoryState) => {
+      mocks.configuredAgentIds = ["default"];
+      const config = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://first.invalid/v1",
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const input = {
+        agentId: "default",
+        agentDir: state.agentDir("default"),
+        inheritedAuthDir: state.agentDir("default"),
+        config,
+      };
+      const original = await prepareModelRuntimeSnapshot(input);
+      if (!original.loadFullModelCatalog) {
+        throw new Error("catalog source diagnostic requires a full catalog loader");
+      }
+      if (inventoryState === "warm") {
+        await original.loadFullModelCatalog();
+      }
+      const failure = new Error("previous source failed to refresh");
+      mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
+      await expect(original.loadFullModelCatalog({ refresh: true })).rejects.toBe(failure);
+      expect(original.modelCatalog.refreshFailed).toBe(true);
+
+      const replacementConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://second.invalid/v1",
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      await refreshPreparedModelRuntimeSnapshots(replacementConfig, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const replacement = await prepareModelRuntimeSnapshot({
+        ...input,
+        config: replacementConfig,
+      });
+      expect(replacement).not.toBe(original);
+      expect(replacement.isCurrent()).toBe(true);
+      expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
+    },
+  );
+
+  it.each(["credentials", "plugins"] as const)(
+    "does not carry a cold catalog failure into replacement %s",
+    async (change) => {
+      mocks.configuredAgentIds = ["default"];
+      const originalIndex = mocks.pluginMetadataSnapshot.index;
+      mocks.pluginMetadataSnapshot.index = { ...originalIndex };
+      const input = {
+        agentId: "default",
+        agentDir: state.agentDir("default"),
+        inheritedAuthDir: state.agentDir("default"),
+        config: {},
+      };
+      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+      try {
+        await refreshPreparedModelRuntimeSnapshots(input.config, options);
+        const original = await prepareModelRuntimeSnapshot(input);
+        if (!original.loadFullModelCatalog) {
+          throw new Error("expected the original catalog loader");
+        }
+        const failure = new Error("first catalog attempt failed");
+        mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
+        await expect(original.loadFullModelCatalog()).rejects.toBe(failure);
+        expect(original.modelCatalog.refreshFailed).toBe(true);
+        expect(original.readFullModelCatalog?.()).toBeUndefined();
+
+        if (change === "credentials") {
+          mocks.authStorage.getAll.mockReturnValue({
+            custom: { type: "api_key", key: "replacement-key" },
+          });
+        } else {
+          Object.assign(mocks.pluginMetadataSnapshot.index, {
+            hostContractVersion: "replacement",
+          });
+        }
+        await refreshPreparedModelRuntimeSnapshots(input.config, options);
+        const replacement = await prepareModelRuntimeSnapshot(input);
+        expect(replacement.isCurrent()).toBe(true);
+        expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
+        expect(replacement.readFullModelCatalog?.()).toBeUndefined();
+      } finally {
+        mocks.pluginMetadataSnapshot.index = originalIndex;
+      }
+    },
+  );
 
   it.each([undefined, "provider-a:default"])(
     "retains failed-provider inventory and variants until authoritative recovery (%s)",
@@ -190,6 +298,7 @@ describe("prepared model runtime scoped refresh", () => {
         ],
       };
       setPreparedModelFullCatalogAuth(previous, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: change === "synthetic-credential" ? {} : profiles },
         authModes: { demo: "api_key" },
         credentials:
@@ -198,6 +307,7 @@ describe("prepared model runtime scoped refresh", () => {
             : {},
       });
       setPreparedModelFullCatalogAuth(failed, {
+        providerAuthLabels: new Map(),
         authStore: {
           version: 1,
           profiles:
@@ -294,6 +404,14 @@ describe("prepared model runtime scoped refresh", () => {
     "carries completed discovery across hot reload without rediscovery (scope: %j)",
     async (agentIds) => {
       mocks.configuredAgentIds = ["pro"];
+      const credential = { type: "api_key" as const, key: "discovered-provider-key" };
+      mocks.preparedAuthStore = {
+        version: 1,
+        profiles: {
+          "discovered-provider:default": { ...credential, provider: "discovered-provider" },
+        },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ "discovered-provider": credential });
       const config: OpenClawConfig = {
         agents: { entries: { pro: {} } },
         plugins: { entries: { fixture: { enabled: true } } },
@@ -309,7 +427,8 @@ describe("prepared model runtime scoped refresh", () => {
       });
       const auth = {
         authModes: { "discovered-provider": "api_key" as const },
-        authStore: { version: 1 as const, profiles: {} },
+        providerAuthLabels: new Map(),
+        authStore: mocks.preparedAuthStore,
         credentials: mocks.authStorage.getAll(),
       };
       setPreparedModelFullCatalogAuth(catalog, auth);
@@ -367,7 +486,8 @@ describe("prepared model runtime scoped refresh", () => {
       expect(refreshedCatalog).toMatchObject(refreshed);
       expect(replacement.readFullModelCatalog!()).toBe(refreshedCatalog);
       expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
-      mocks.credentialsRevision += 1;
+      mocks.preparedAuthStore = { version: 1, profiles: {} };
+      mocks.authStorage.getAll.mockReturnValue({});
       mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
       const afterAuth = await loadPreparedGatewayModelCatalogSnapshot({
         agentId: "pro",
@@ -476,6 +596,7 @@ describe("prepared model runtime scoped refresh", () => {
     setPreparedModelFullCatalogAuth(catalog, {
       authStore: { version: 1, profiles: {} },
       authModes: { demo: "api_key" },
+      providerAuthLabels: new Map(),
       credentials: { demo: { type: "api_key", key: "post-startup-key" } },
     });
     const owner = await prepareCatalogOwner(config, [catalog]);
@@ -577,6 +698,12 @@ describe("prepared model runtime scoped refresh", () => {
 
   it("reprojects retained discovery when a runtime override is added and removed", async () => {
     mocks.configuredAgentIds = ["pro"];
+    mocks.preparedAuthStore = {
+      version: 1,
+      profiles: {
+        "custom:default": { type: "api_key", provider: "custom", key: "test-key" },
+      },
+    };
     mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
       provider,
       id: modelId,
@@ -602,7 +729,8 @@ describe("prepared model runtime scoped refresh", () => {
     });
     setPreparedModelFullCatalogAuth(catalog, {
       authModes: { custom: "api_key" },
-      authStore: { version: 1, profiles: {} },
+      providerAuthLabels: new Map(),
+      authStore: mocks.preparedAuthStore,
       credentials: mocks.authStorage.getAll(),
     });
     mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(catalog);
@@ -634,7 +762,8 @@ describe("prepared model runtime scoped refresh", () => {
         };
         setPreparedModelFullCatalogAuth(failed, {
           authModes: { custom: "api_key" },
-          authStore: { version: 1, profiles: {} },
+          providerAuthLabels: new Map(),
+          authStore: mocks.preparedAuthStore,
           credentials: mocks.authStorage.getAll(),
         });
         mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(failed);

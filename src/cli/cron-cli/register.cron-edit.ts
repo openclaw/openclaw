@@ -27,6 +27,7 @@ import {
   getCronChannelOptions,
   handleCronCliError,
   warnIfCronSchedulerDisabled,
+  requireCronJobId,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
@@ -104,8 +105,9 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
-      .action(async (id, opts) => {
+      .action(async (idArg, opts) => {
         try {
+          const id = requireCronJobId(idArg);
           if (opts.clearTools && opts.tools !== undefined) {
             throw new CronCliError("Use --tools or --clear-tools, not both");
           }
@@ -116,7 +118,7 @@ export function registerCronEditCommand(cron: Command) {
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
-            const existing = await (existingJobPromise ??= readCronJobForEdit(opts, String(id)));
+            const existing = await (existingJobPromise ??= readCronJobForEdit(opts, id));
             if (typeof existing.configRevision === "string") {
               expectedConfigRevision = existing.configRevision;
             }

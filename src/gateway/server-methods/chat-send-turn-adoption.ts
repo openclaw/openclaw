@@ -1,5 +1,5 @@
 import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
-import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
+import type { QueuedFollowupReplyDelivery } from "../../auto-reply/reply/queue/types.js";
 import {
   completeQueuedChatTurn,
   RETIRED_FOLLOWUP_RUNID_TTL_MS,
@@ -40,7 +40,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   lifecycle: TurnAdoptionLifecycle;
   isEnqueued: () => boolean;
   onQueueDisposition: (reason: string) => void;
-  onQueuedFollowupReplyBatch: (batch: QueuedFollowupReplyBatch) => Promise<void>;
+  onQueuedFollowupReplyBatch: QueuedFollowupReplyDelivery;
 } {
   let enqueued = false;
   let releaseWorkAdmission: (() => void) | undefined;

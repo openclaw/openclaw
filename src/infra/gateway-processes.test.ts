@@ -63,10 +63,6 @@ const {
   signalVerifiedGatewayPidSync,
 } = await import("./gateway-processes.js");
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 describe("gateway-processes", () => {
   beforeEach(() => {
     spawnSyncMock.mockReset();
@@ -82,7 +78,7 @@ describe("gateway-processes", () => {
   });
 
   it("signals only verified gateway processes", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     readFileSyncMock.mockReturnValue("node\0gateway\0");
     parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
     isGatewayArgvMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
@@ -97,7 +93,7 @@ describe("gateway-processes", () => {
   });
 
   it("swallows ESRCH when a verified gateway process exits before the signal", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     readFileSyncMock.mockReturnValue("node\0gateway\0");
     parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
     isGatewayArgvMock.mockReturnValue(true);
@@ -111,7 +107,7 @@ describe("gateway-processes", () => {
   });
 
   it("re-throws non-ESRCH kill errors", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     readFileSyncMock.mockReturnValue("node\0gateway\0");
     parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
     isGatewayArgvMock.mockReturnValue(true);
@@ -124,7 +120,7 @@ describe("gateway-processes", () => {
   });
 
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
-    setPlatform("linux");
+    mockProcessPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);
     readFileSyncMock.mockReturnValueOnce("openclaw-gateway\0gateway\0");
     readFileSyncMock.mockReturnValueOnce("python\0-m\0http.server\0");
@@ -134,7 +130,7 @@ describe("gateway-processes", () => {
     isGatewayArgvMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     spawnSyncMock
       .mockReturnValueOnce({
         error: null,
@@ -153,7 +149,7 @@ describe("gateway-processes", () => {
   });
 
   it("falls back from powershell to trusted netstat for windows listener pids", () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
     spawnSyncMock
       .mockReturnValueOnce({
         error: new Error("powershell missing"),

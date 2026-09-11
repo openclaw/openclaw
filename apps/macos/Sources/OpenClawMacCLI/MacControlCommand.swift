@@ -2,10 +2,12 @@ import Darwin
 import Foundation
 import OpenClawIPC
 
-func runMacControl(_ args: [String]) {
+func runMacControl(_ context: MacCLIContext) {
+    let args = context.arguments
     do {
-        var options = try MacControlOptions.parse(args, environment: ProcessInfo.processInfo.environment)
-        if options.help { printMacControlUsage()
+        var options = try MacControlOptions.parse(context)
+        if options.help {
+            printMacControlUsage()
             return
         }
         if options.request.operation == "gateway.remove", !options.yes {
@@ -33,19 +35,23 @@ func runMacControl(_ args: [String]) {
             try printMacControlResult(result, operation: options.request.operation, primaryOnly: options.primaryOnly)
         }
     } catch {
-        let controlError = error as? MacControlError
-            ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
-        if args.contains("--json"),
-           let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError)),
-           let text = String(data: data, encoding: .utf8)
-        {
-            fputs(text + "\n", stderr)
-        } else {
-            fputs("openclaw-mac: \(controlError.message)\n", stderr)
-        }
-        exit(controlError.code == "usage" || controlError
-            .code == "invalid_profile" ? 1 : (controlError.code == "unreachable" ? 2 : 3))
+        exitMacCLI(error, json: args.contains("--json"))
     }
+}
+
+func exitMacCLI(_ error: Error, json: Bool) -> Never {
+    let controlError = error as? MacControlError
+        ?? MacControlError(code: "operation_failed", message: "The app control operation failed.")
+    if json,
+       let data = try? JSONEncoder().encode(MacControlResponse<String>(error: controlError)),
+       let text = String(data: data, encoding: .utf8)
+    {
+        fputs(text + "\n", stderr)
+    } else {
+        fputs("openclaw-mac: \(controlError.message)\n", stderr)
+    }
+    exit(controlError.code == "usage" || controlError
+        .code == "invalid_profile" ? 1 : (controlError.code == "unreachable" ? 2 : 3))
 }
 
 func macControlResult(_ response: Data, primaryOnly: Bool) throws -> Data {

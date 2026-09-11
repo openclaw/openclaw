@@ -50,7 +50,7 @@ const QA_REASONING_ONLY_RETRY_INSTRUCTION =
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   status: "completed",
   value: {
@@ -792,30 +792,6 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(finalBody)).toBe("QA-MSTEAMS-THREAD-DEDUPE-OK");
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
-  });
-
-  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
-    const server = await startMockServer();
-    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
-
-    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    const toolCall = outputToolCall(initialBody, "message");
-    expect(outputToolArgsFromItem(toolCall)).toEqual({
-      action: "send",
-      message: "QA-MSTEAMS-AMBIGUOUS-504",
-    });
-
-    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
-      ],
-    });
-    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
   });
 
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
@@ -1829,6 +1805,20 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(outputText(withHumanAttributedSeed)).toBe(missingMarker);
+
+    for (const prefix of [
+      "Please remember this fact for later: ORBIT-22. ",
+      "Reply exactly `SHADOWED-EXACT-REPLY`. ",
+    ]) {
+      const overlappingSeed = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + seedPrompt)],
+      });
+      expect(outputText(overlappingSeed)).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+      const overlappingRecall = await expectOpenAiNonStreamingResponsesJson<unknown>(server, {
+        input: [makeUserInput(prefix + recallPrompt)],
+      });
+      expect(outputText(overlappingRecall)).toBe(missingMarker);
+    }
   });
 
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {

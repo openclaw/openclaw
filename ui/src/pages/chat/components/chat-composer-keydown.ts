@@ -146,7 +146,11 @@ export function createComposerKeyDownHandler({
         // connected + composable gate), or offline Enter would swallow the key
         // and invoke a lifecycle that returns with no visible outcome.
         const queued =
-          showAbortableUi && props.connected && props.canSend && props.onQueueSteer
+          showAbortableUi &&
+          props.connected &&
+          props.canSend &&
+          !props.submitDisabledReason &&
+          props.onQueueSteer
             ? steerableQueuedMessage(props.queue)
             : undefined;
         if (queued) {

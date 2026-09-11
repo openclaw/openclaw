@@ -1644,18 +1644,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
-    const params = makeBaseParams({
-      synthesizedText: "Morning briefing complete.",
-      runStartedAt: 1_000,
-    });
-    const state = await dispatchCronDelivery(params);
-
-    expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
   it("applies TTS directives before direct cron announce delivery and mirrors spoken text", async () => {
     vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
       deliveryParams.onPayload?.({

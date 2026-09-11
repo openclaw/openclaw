@@ -32,6 +32,7 @@ import {
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
+  catalogErrorMessages,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
@@ -162,24 +163,6 @@ function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
     : nothing;
 }
 
-function catalogErrorMessages(catalog: SessionCatalog): string[] {
-  const messages = new Set<string>();
-  const add = (error: SessionCatalog["error"]) => {
-    if (error) {
-      messages.add(formatUiError(`[${error.code}] ${error.message}`));
-    }
-  };
-  add(catalog.error);
-  for (const host of catalog.hosts) {
-    // A disconnected empty host is normal fleet state, not a provider failure.
-    // Cached rows still expose the host-level offline badge when the host is visible.
-    if (host.error?.code !== "NODE_OFFLINE") {
-      add(host.error);
-    }
-  }
-  return [...messages];
-}
-
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -214,7 +197,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
     // Hiding both states would silently mask unavailable session sources.
-    if (rows.length === 0 && !hasMore && !hasError && !canCreateSession) {
+    if (rows.length === 0 && !hasMore && !hasError) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
@@ -222,6 +205,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
+      canCreateSession ? "sidebar-recent-sessions__group--catalog-can-create" : "",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
       params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
       params.sectionDropTarget?.sectionId === sectionId
@@ -295,6 +279,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                 >${catalog.label}</span
               >
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
+              <span class="sidebar-session-catalog-action-reserve" aria-hidden="true"></span>
               ${
                 hasError || (collapsed && rows.length > 0)
                   ? html`<span
@@ -540,20 +525,8 @@ function renderCatalogSessionRow(
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
-  const menuOpen = params.isMenuOpen(catalogKey);
-  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
-  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-  if (adoptedRow) {
-    return params.renderLiveRow(adoptedRow, {
-      catalogIdentityKey: identityKey,
-      catalogMenuOpen: menuOpen,
-      ...(rowRef ? { rowRef } : {}),
-      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-    });
-  }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const color = normalizeSessionColorValue(session.color ?? "");
   const routeId = "chat";
   const target = sessionNavigationTarget({
     face: routeId,
@@ -563,26 +536,35 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
+  const catalogMenu: CatalogSessionMenuRequest = {
+    key: catalogKey,
+    agentId: params.newSessionAgentId,
+    routeId,
+    navigation,
+    canOpenTerminal: session.canOpenTerminal === true,
+    canDelete: session.canArchive && catalog.capabilities.archive,
+    name: session.name ?? session.threadId,
+    meta,
+  };
+  const menuOpen = params.isMenuOpen(catalogKey);
+  const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+  if (adoptedRow) {
+    return params.renderLiveRow(adoptedRow, {
+      catalogIdentityKey: identityKey,
+      catalogMenuOpen: menuOpen,
+      catalogMenu,
+      ...(rowRef ? { rowRef } : {}),
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+    });
+  }
+  const color = normalizeSessionColorValue(session.color ?? "");
   const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(
-      {
-        key: catalogKey,
-        agentId: params.newSessionAgentId,
-        routeId,
-        navigation,
-        canOpenTerminal: session.canOpenTerminal === true,
-        canDelete: session.canArchive && catalog.capabilities.archive,
-        name: session.name ?? session.threadId,
-        meta,
-      },
-      x,
-      y,
-      trigger,
-    );
+    params.onOpenMenu(catalogMenu, x, y, trigger);
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,

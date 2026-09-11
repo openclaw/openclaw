@@ -69,6 +69,14 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+An explicitly empty or whitespace-only `--account` value is rejected. Omit the
+option to use the existing default or bound account, including when a shell
+variable is empty. Nonblank account values keep their existing selection rules.
+
+An explicitly empty or whitespace-only `--channel` value is also rejected. Omit
+the option to select the sole configured channel, or use a channel-prefixed
+target when supported.
+
 Discord message bodies, captions, poll context, and component text retain
 leading indentation. Existing empty-message validation still applies.
 Ordinary message and caption delivery still trims trailing whitespace.

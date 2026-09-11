@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { root as createFsSafeRoot } from "../infra/fs-safe.js";
+import * as eventStore from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -21,6 +23,70 @@ describe("memory host event export recovery", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it.each([false, true])(
+    "waits for journal reads before replacing an export (read fails: %s)",
+    async (readFails) => {
+      const state = await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "memory-host-delayed-export-",
+      });
+      const { workspaceDir } = state;
+      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      const event = {
+        type: "memory.recall.recorded" as const,
+        timestamp: "2026-09-10T12:00:00.000Z",
+        query: "first",
+        resultCount: 0,
+        results: [],
+      };
+      const entered = createDeferred();
+      const release = createDeferred();
+      try {
+        await appendMemoryHostEvent(workspaceDir, event);
+        const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
+          (entry) => entry.kind === "event-log",
+        );
+        if (!artifact) {
+          throw new Error("expected initial event export");
+        }
+        const before = await fs.readFile(artifact.absolutePath, "utf8");
+        await appendMemoryHostEvent(workspaceDir, { ...event, query: "second" });
+        const failure = new Error("journal read failed");
+        const list = eventStore.listStoredMemoryHostEvents;
+        vi.spyOn(eventStore, "listStoredMemoryHostEvents").mockImplementationOnce(
+          async (params) => {
+            entered.resolve();
+            await release.promise;
+            if (readFails) {
+              throw failure;
+            }
+            return await list(params);
+          },
+        );
+        const result = listMemoryHostPublicArtifacts({ cfg }).catch((error: unknown) => error);
+        try {
+          await entered.promise;
+          expect(await fs.readFile(artifact.absolutePath, "utf8")).toBe(before);
+        } finally {
+          release.resolve();
+          await result;
+        }
+        if (readFails) {
+          expect(await result).toBe(failure);
+          expect(await fs.readFile(artifact.absolutePath, "utf8")).toBe(before);
+        } else {
+          expect(await result).toEqual(
+            expect.arrayContaining([expect.objectContaining({ kind: "event-log" })]),
+          );
+          expect(await fs.readFile(artifact.absolutePath, "utf8")).toContain('"query":"second"');
+        }
+      } finally {
+        release.resolve();
+        await state.cleanup();
+      }
+    },
+  );
 
   it("does not finalize an initial export changed through the published inode", async () => {
     const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-publish-race-"));

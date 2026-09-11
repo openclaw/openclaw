@@ -3,7 +3,10 @@
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { isChannelAccountExplicitlyDisabled } from "../channels/account-config-enabled.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
-import { buildChannelAccountSnapshotFromInspection } from "../channels/account-summary.js";
+import {
+  buildChannelAccountSnapshotFromInspection,
+  buildChannelAccountSnapshotFromRuntime,
+} from "../channels/account-summary.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
@@ -294,6 +297,7 @@ export type ChannelManager = {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  isAccountListed: (channelId: ChannelId, accountId: string) => boolean;
   isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
@@ -1508,15 +1512,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     for (const plugin of listLoadedChannelPluginsForRegistry(registry)) {
       const store = getStore(plugin.id);
-      const accountIds = plugin.config.listAccountIds(cfg);
+      const configuredAccountIds = plugin.config.listAccountIds(cfg);
+      const configuredAccountIdSet = new Set(configuredAccountIds);
+      const accountIds = [...new Set([...configuredAccountIds, ...store.lifetimes.keys()])];
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
-        accountIds,
+        accountIds: configuredAccountIds,
       });
       const accounts: Record<string, ChannelAccountSnapshot> = {};
       for (const id of accountIds) {
-        const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const recorded = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const current = configuredAccountIdSet.has(id)
+          ? recorded
+          : buildChannelAccountSnapshotFromRuntime(recorded);
         const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
           registry,
           channelId: plugin.id,
@@ -1525,6 +1534,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
         if (unavailable) {
           accounts[id] = unavailable;
+          continue;
+        }
+        if (!configuredAccountIdSet.has(id)) {
+          // An admitted lifetime owns its state while static account discovery catches up.
+          accounts[id] = current;
           continue;
         }
         const inspected = plugin.config.inspectAccount?.(cfg, id);
@@ -1612,6 +1626,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
+    isAccountListed: (channelId, accountId) =>
+      withRegistry(
+        (registry) =>
+          getLoadedChannelPluginEntryById(channelId, registry)
+            ?.plugin.config.listAccountIds(getRuntimeConfig())
+            .includes(accountId) ?? false,
+      ),
     resolveRuntimeAccountId: (channelId, accountId) => {
       const matches = [...(channelStores.get(channelId)?.runtimes.keys() ?? [])].filter(
         (id) => normalizeAccountId(id) === accountId,

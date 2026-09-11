@@ -156,11 +156,8 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
     insertBeforeSeparator(nextArgs, "--declaration", "false");
   }
 
-  if (!isLocalCheckEnabled(nextEnv)) {
-    return { env: nextEnv, args: nextArgs };
-  }
-
-  if (defaultProjectRun) {
+  const localCheckEnabled = isLocalCheckEnabled(nextEnv);
+  if (localCheckEnabled && defaultProjectRun) {
     insertBeforeSeparator(nextArgs, "--incremental");
     insertBeforeSeparator(
       nextArgs,
@@ -170,12 +167,15 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
   }
 
   const resolvedHostResources = resolveHostResources(hostResources);
-  if (shouldThrottleLocalChecks(nextEnv, resolvedHostResources, "auto")) {
+  if (
+    shouldThrottleLocalChecks(nextEnv, resolvedHostResources, "auto") ||
+    (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(resolvedHostResources))
+  ) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
     applyThrottledGoRuntimeEnv(nextEnv, resolvedHostResources);
   }
-  if (nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
+  if (localCheckEnabled && nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
     insertBeforeSeparator(nextArgs, "--pprofDir", nextEnv.OPENCLAW_TSGO_PPROF_DIR);
   }
 

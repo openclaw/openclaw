@@ -233,9 +233,13 @@ it.each([false, true])(
     const release = createDeferred();
     releases.push(() => release.resolve());
     const blocker = own(
-      runExclusiveSqliteSessionWrite(resolveSqliteScope(original), async () => {
-        await release.promise;
-      }),
+      runExclusiveSqliteSessionWrite(
+        resolveSqliteScope(original),
+        async () => {
+          await release.promise;
+        },
+        "session.transcript.batch",
+      ),
     );
     const scope = ambient ? { agentId: "main", sessionKey: original.sessionKey } : f.scope;
     const operation = own(
@@ -488,9 +492,13 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       mode === "relative reopen"
         ? undefined
         : own(
-            runExclusiveSqliteSessionWrite(resolveSqliteScope(original), async () => {
-              await release.promise;
-            }),
+            runExclusiveSqliteSessionWrite(
+              resolveSqliteScope(original),
+              async () => {
+                await release.promise;
+              },
+              "session.transcript.batch",
+            ),
           );
     const operation = own(
       patchSessionEntryCore(

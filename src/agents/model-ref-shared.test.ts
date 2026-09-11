@@ -56,6 +56,27 @@ describe("normalizeStaticProviderModelId", () => {
     );
   });
 
+  it("keeps the built-in Anthropic alias table aligned with the bundled manifest", async () => {
+    const manifest: {
+      modelIdNormalization: {
+        providers: { anthropic: { aliases: Record<string, string> } };
+      };
+    } = JSON.parse(
+      await fs.readFile(
+        new URL("../../extensions/anthropic/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const aliases = manifest.modelIdNormalization.providers.anthropic.aliases;
+    expect(Object.keys(aliases).length).toBeGreaterThan(0);
+    for (const [alias, target] of Object.entries(aliases)) {
+      expect(
+        normalizeStaticProviderModelId("anthropic", alias, { allowManifestNormalization: false }),
+        alias,
+      ).toBe(target);
+    }
+  });
+
   it("strips native Anthropic provider prefixes from static catalog ids", () => {
     expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
       "claude-haiku-4-5",

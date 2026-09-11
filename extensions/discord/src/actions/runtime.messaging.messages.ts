@@ -5,7 +5,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {

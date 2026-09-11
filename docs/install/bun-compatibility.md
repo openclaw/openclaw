@@ -46,6 +46,8 @@ Set `OPENCLAW_SQLITE_LIBRARY` in the process environment before starting OpenCla
 OPENCLAW_SQLITE_LIBRARY=/path/to/libsqlite3.dylib bun openclaw.mjs gateway
 ```
 
+On macOS, `openclaw gateway install --runtime bun`, `openclaw node install --runtime bun`, and wrapper-based installs persist `OPENCLAW_SQLITE_LIBRARY` and `HOMEBREW_PREFIX` from the installing shell into the managed service definition, so the service selects the same library. To change these values for an already-installed service, reinstall with `openclaw gateway install --runtime bun --force` (or `openclaw node install --runtime bun --force` for a managed node host) from a shell with the desired values; a bare reinstall of an already-loaded service is a no-op. Direct Node-runtime services never persist them.
+
 An invalid override fails with:
 
 ```text
@@ -53,6 +55,8 @@ Cannot use SQLite library <path>: <reason>. Fix or unset OPENCLAW_SQLITE_LIBRARY
 ```
 
 Node and non-macOS Bun ignore this override, with a warning in Gateway startup logs. When a library is selected, Gateway startup logs `SQLite: using <path> (<version>, extension loading enabled)`. `openclaw doctor` reports the selection for the doctor process.
+
+Daemon install, `openclaw gateway start` repair, `openclaw doctor`, and service audits probe candidate Bun executables through the same selection, so they judge and report the library the Gateway will actually open rather than Bun's runtime SQLite. An invalid override fails those probes with the message above instead of advising a Bun upgrade or switching the service to Node.
 
 If you previously used a preload that calls `Database.setCustomSQLite()`, remove it and set `OPENCLAW_SQLITE_LIBRARY` to the same path instead. The hook is one-shot: keeping the preload causes `SQLite already loaded`, even if both selections name the same library. OpenClaw's override also forwards the path to the KNN child.
 
@@ -73,6 +77,8 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                         |
+| Unreleased (main)                  | Daemon install, repair, doctor, and service audits probe Bun executables through the same SQLite library selection as Gateway startup, with a minimal probe environment. #142186                     |
 | Unreleased (main)                  | Automatically selects a WAL-safe, extension-capable macOS SQLite library and propagates it to the memory KNN child. Adds `OPENCLAW_SQLITE_LIBRARY`. #141854                                          |
 | Unreleased (main)                  | Documents Bun 1.4.2 retaining native statements and WAL/shared-memory files after close or disposal, with Node advised when prompt file release matters. #141846                                     |
 | Unreleased (main)                  | Adds batched embedding-scan fallback when the KNN child cannot load extensions, preserving provider/source filters and cancellation between batches. #141104                                         |

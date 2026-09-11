@@ -14,6 +14,7 @@ Keep one operator-selected canonical live checkout as a read-only-to-the-agent d
 - Escalate only irreversible or materially risky security, privacy, auth, destructive migration/data-loss, protocol-version, credential-rotation, dependency patch/override, or product choices.
 - Diagnose ordinary update, runtime, app, CI, test, and release-validation failures; fix them through a focused PR; prove exact head; land with `scripts/pr`.
 - Never edit, stash, reset, clean, or create a branch in the live mirror.
+- Never use `launchctl submit` or create an ad-hoc KeepAlive job to run updates or Gateway lifecycle commands. A submitted job can relaunch `openclaw gateway restart` after every exit and cause a persistent restart storm, even without a plist ([#114967](https://github.com/openclaw/openclaw/issues/114967)).
 
 ## Fast Update And Maintenance
 
@@ -37,6 +38,8 @@ Keep one operator-selected canonical live checkout as a read-only-to-the-agent d
    - After every managed restart, query Gateway logs through RPC, restrict the audit to entries emitted since that restart began, report warning summaries, and fail the pass on any error/fatal entry. If RPC verification or log retrieval fails, still inspect the local structured log for that restart window. Never accept supervisor or RPC health without this restart-window log audit.
 
    Treat supervisor state alone as insufficient. If build or proof fails, leave the new mirror head intact and retry the stale/missing build on the next heartbeat; never run the old `dist` against new source.
+
+   Keep the deterministic helper as the only update/restart owner: acquire its maintenance suspension fence, complete the update and exact-SHA build, restart the managed LaunchAgent through that helper, and verify with status and health. Leave only the managed Gateway LaunchAgent responsible for its lifecycle. `gateway status` and `doctor` report foreign `ai.openclaw.*` jobs; report any such job instead of creating another update job or manually removing a job whose ownership is uncertain. `doctor --fix` can remove confirmed stray lifecycle jobs when separately authorized; it is not a substitute for the suspension fence.
 
    Re-run the canonical freshness check immediately before every `pnpm openclaw` restart or probe so the source runner cannot hide stale output with an implicit auto-build. Every pass, including a no-update/current-build pass, must run deep RPC status and verbose health. If that first probe fails while the build is already exact-current, perform one managed Gateway restart and repeat both probes once. Do not rebuild a current exact-SHA artifact merely to self-heal the managed process; fail and diagnose if the one restart does not recover it.
 

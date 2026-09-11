@@ -271,7 +271,12 @@ describe("sessions.patch sticky model persistence", () => {
       );
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })?.modelOverride).toBeUndefined();
+      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: model.slice("anthropic/".length),
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      });
       await vi.waitFor(() => expect(persistedConfig).toBeDefined());
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         scope === "global" ? model : defaultConfig.agents.defaults.model,

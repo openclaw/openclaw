@@ -9,6 +9,10 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import {
+  LEGACY_UPDATE_RUN_ADVISORY,
+  LEGACY_UPDATE_RUN_EXPIRED_REASON,
+} from "./update-run-legacy-expiry.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 const UPDATE_REPORT_BODY_MAX_BYTES = 16_000;
@@ -118,7 +122,7 @@ function resolveUpdateTarget(
   );
 }
 
-function resolveRollbackOutcome(
+function resolveRecoveryOutcome(
   result: UpdateRunResult,
   context: UpdateFailureReportContext,
 ): string {
@@ -147,6 +151,9 @@ function renderBoundedDiagnostics(
     `Update mode: ${sanitizeReportField(input.result.mode, context)}`,
     `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
   ];
+  if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
+    diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
+  }
   // Reviewed identity facts also bind consent when the run ID stays the same.
   for (const [label, identity] of [
     ["Before", input.result.before],
@@ -202,7 +209,7 @@ export async function prepareUpdateFailureReport(
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);
   const phase = resolveFailedPhase(input.result, context);
-  const rollback = resolveRollbackOutcome(input.result, context);
+  const recovery = resolveRecoveryOutcome(input.result, context);
   const bodyWithoutMarker = [
     "# OpenClaw update failure report",
     "",
@@ -210,9 +217,10 @@ export async function prepareUpdateFailureReport(
     "",
     `- OpenClaw version: ${version}`,
     `- Platform: ${platform}`,
+    `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
-    `- Rollback outcome: ${rollback}`,
+    `- Recovery outcome: ${recovery}`,
     "",
     "## Bounded diagnostics",
     "",

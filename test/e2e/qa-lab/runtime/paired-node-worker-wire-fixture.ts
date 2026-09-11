@@ -144,6 +144,7 @@ export async function connectWireClient(params: {
   identity: DeviceIdentity | null;
   includeApprovals?: boolean;
   onEvent?: (event: WireGatewayEvent) => void;
+  onHelloOk?: () => void;
   timeoutMs?: number;
 }): Promise<GatewayClient> {
   const { GatewayClient } = await import("openclaw/plugin-sdk/gateway-runtime");
@@ -197,7 +198,10 @@ export async function connectWireClient(params: {
       deviceIdentity: params.identity,
       requestTimeoutMs: PROOF_TIMEOUT_MS,
       onEvent: params.onEvent,
-      onHelloOk: () => finish(),
+      onHelloOk: () => {
+        params.onHelloOk?.();
+        finish();
+      },
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
@@ -273,6 +277,7 @@ type WireWorkerHostOptions = {
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
+  workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
@@ -391,7 +396,7 @@ export async function createPairedNodeWorkerHost(
       gatewayUrl:
         frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
           ? (options.workerGatewayUrl ?? options.gateway.wsUrl)
-          : options.gateway.wsUrl,
+          : (options.workspaceGatewayUrl?.(frame) ?? options.gateway.wsUrl),
     })
       .then(async () => await options.afterInvoke?.(frame, host))
       .catch((error: unknown) => {

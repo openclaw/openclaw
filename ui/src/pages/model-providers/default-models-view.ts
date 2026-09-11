@@ -21,6 +21,10 @@ type DefaultModelsViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
+  /** True while additional catalog models are being discovered on picker open. */
+  catalogDiscovering?: boolean;
+  /** Retryable discovery error; set when a picker-triggered discovery fails. */
+  catalogDiscoveryError?: string | null;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
@@ -32,6 +36,9 @@ type DefaultModelsViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
+  /** Invoked when any default-model picker opens; triggers demand-driven discovery. */
+  onOpen: () => void;
+  onCatalogRetry: () => void;
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
@@ -122,6 +129,30 @@ function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
 
+// Progress/retry feedback for the demand-driven catalog discovery that runs when
+// a picker opens. Keeps the first-screen prepared catalog fast while surfacing the
+// slower full discovery as an accessible status without changing saved selections.
+function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult | typeof nothing {
+  if (props.catalogDiscovering) {
+    return html`
+      <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+        ${t("modelProviders.defaults.discoveringMore")}
+      </div>
+    `;
+  }
+  if (props.catalogDiscoveryError) {
+    return html`
+      <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+        <span>${t("modelProviders.defaults.discoverFailed")}</span>
+        <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
+          ${t("modelProviders.defaults.retryDiscover")}
+        </button>
+      </div>
+    `;
+  }
+  return nothing;
+}
+
 export function renderDefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = !props.canMutate || props.models.length === 0;
   const behaviorControlsDisabled = !props.canMutate;
@@ -141,6 +172,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ? html`<div class="callout warning">${t("modelProviders.defaults.noModels")}</div>`
           : nothing
       }
+      ${renderCatalogProgress(props)}
       ${renderSettingsRow({
         title: t("modelProviders.defaults.primary"),
         stackedOnNarrow: true,
@@ -157,6 +189,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving,
           title,
+          onOpen: props.onOpen,
           onChange: props.onPrimaryChange,
         }),
       })}
@@ -182,6 +215,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving,
           title,
+          onOpen: props.onOpen,
           onChange: (value) =>
             props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
         }),
@@ -200,6 +234,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           ],
           disabled: modelControlsDisabled || saving || !props.selection.primary,
           title,
+          onOpen: props.onOpen,
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}

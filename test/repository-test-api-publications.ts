@@ -8,8 +8,6 @@ const publications: Record<string, string | symbol> = {
   "extensions/memory-lancedb/lancedb-runtime.ts": Symbol.for(
     "openclaw.memoryLanceDbRuntimeTestApi",
   ),
-  "packages/ai/src/transports/openai-responses-transport.ts":
-    "openclawOpenAIResponsesTransportTestApi",
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
@@ -27,7 +25,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
   "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
   "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
-  "src/agents/cli-credentials.ts": Symbol.for("openclaw.cliCredentialsTestApi"),
   "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
   "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
     "openclaw.attemptExecutionHelpersTestApi",
@@ -43,8 +40,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
     "openclaw.mediaGenerationDuplicateGuardTestApi",
   ),
-  "src/agents/models-config.plan.ts": Symbol.for("openclaw.modelsConfigPlanTestApi"),
-  "src/agents/models-config.ts": Symbol.for("openclaw.modelsConfigTestApi"),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
   "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
@@ -64,7 +59,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/tools/model-config.helpers.ts": Symbol.for("openclaw.modelConfigHelpersTestApi"),
-  "src/agents/tools/web-fetch.ts": Symbol.for("openclaw.webFetchTestApi"),
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),

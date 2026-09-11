@@ -1,11 +1,11 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
 import { withEnv } from "../test-utils/env.js";
 import { getCompactionProvider } from "./compaction-provider.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -65,16 +65,17 @@ describe("loadOpenClawPlugins", () => {
           body: `module.exports = { id: "tracked-install-cache", register() {} };`,
         });
 
-        writePersistedInstalledPluginIndexInstallRecordsSync(
-          {
+        refreshPersistedInstalledPluginIndex({
+          stateDir,
+          reason: "source-changed",
+          installRecords: {
             "tracked-install-cache": {
               source: "path" as const,
               installPath: "~/plugins/tracked-install-cache",
               sourcePath: "~/plugins/tracked-install-cache",
             },
           },
-          { stateDir },
-        );
+        });
 
         const options = {
           config: {

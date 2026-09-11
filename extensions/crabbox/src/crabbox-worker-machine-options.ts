@@ -19,7 +19,7 @@ type CrabboxCatalog = {
 type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
-  resolveBinary: (explicit?: string) => string;
+  resolveBinary: (explicit?: string) => Promise<string>;
   runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
 };
@@ -100,7 +100,7 @@ export function createCrabboxMachineOptionsResolver(
 
   const resolveCatalog = async (profile: WorkerProfile) => {
     const parsed = parseCrabboxProfile(profile);
-    const binary = dependencies.resolveBinary(parsed.binary);
+    const binary = await dependencies.resolveBinary(parsed.binary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
@@ -114,7 +114,8 @@ export function createCrabboxMachineOptionsResolver(
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    return { parsed, catalog: (await shapes).get(parsed.provider) };
+    const catalog = (await shapes).get(parsed.provider);
+    return { parsed, catalog };
   };
   return {
     async listMachineOptions(profile) {

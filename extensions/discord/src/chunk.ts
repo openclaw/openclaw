@@ -43,7 +43,11 @@ function countLines(text: string) {
   if (!text) {
     return 0;
   }
-  return text.split("\n").length;
+  let count = 1;
+  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
+    count += 1;
+  }
+  return count;
 }
 
 // Keep Discord's existing fence grammar. Tiny caps retain original source when a synthetic
@@ -341,16 +345,17 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
       const atomicTicks =
         (renderInlineCode("`", marker)?.length ?? Infinity) + code.prefix.text.length > maxChars;
       const pattern = atomicTicks ? /`+|\r\n|[\s\S]/gu : /\r\n|[\s\S]/gu;
-      const fits = Array.from(source.slice(start, finish).matchAll(pattern)).every(
-        ({ index, 0: raw }) => {
-          const value = code.value.slice(code.offsets[index], code.offsets[index + raw.length]);
-          return (
-            !value ||
-            (renderInlineCode(value, marker)?.length ?? Infinity) + code.prefix.text.length <=
-              maxChars
-          );
-        },
-      );
+      let fits = true;
+      for (const { index, 0: raw } of source.slice(start, finish).matchAll(pattern)) {
+        const value = code.value.slice(code.offsets[index], code.offsets[index + raw.length]);
+        fits =
+          !value ||
+          (renderInlineCode(value, marker)?.length ?? Infinity) + code.prefix.text.length <=
+            maxChars;
+        if (!fits) {
+          break;
+        }
+      }
       if (fits && (maxLines > 1 || !code.value.includes("\n"))) {
         spans.push({ start, end: finish, code, base: plainStart, marker, atomicTicks });
       }

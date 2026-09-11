@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -422,23 +423,13 @@ function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): u
   const overrides = listAgentEntries(config).find((agent) => agent.id === agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const rememberAcrossConversations = resolveRememberAcrossConversations(config, agentId);
-  const sessionMemory =
-    rememberAcrossConversations ||
-    (overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false);
-  const configuredSources = overrides?.sources ?? defaults?.sources ?? ["memory"];
-  const sources = new Set<"memory" | "sessions">();
-  for (const source of configuredSources) {
-    if (source === "memory" || (source === "sessions" && sessionMemory)) {
-      sources.add(source);
-    }
-  }
-  if (rememberAcrossConversations) {
-    sources.add("sessions");
-  }
-  if (sources.size === 0) {
-    sources.add("memory");
-  }
-  return { enabled, rememberAcrossConversations, sources: [...sources].toSorted() };
+  const { sources } = resolveMemorySearchSourcePolicy({
+    configuredSources: overrides?.sources ?? defaults?.sources,
+    rememberAcrossConversations,
+    configuredSessionMemory:
+      overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false,
+  });
+  return { enabled, rememberAcrossConversations, sources: sources.toSorted() };
 }
 
 function prepareCapabilityComparisonConfig(

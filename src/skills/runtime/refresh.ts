@@ -736,8 +736,6 @@ export function ensureSkillsWatcher(params: {
     evictIdleWorkspaceWatchStates(now);
     return;
   }
-  const watchTargetsChanged = previousTargets.length > 0 && !targetsUnchanged;
-
   const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
   for (const watchTarget of previousTargets) {
     if (!nextTargetKeys.has(watchTarget.path)) {
@@ -749,7 +747,9 @@ export function ensureSkillsWatcher(params: {
   }
   workspaceWatchTargets.set(watcherKey, watchTargets);
 
-  if (watchTargetsChanged) {
+  // Acquisition must invalidate reads cached during an unwatched interval,
+  // before the first consumer runs or the asynchronous initial scan completes.
+  if (!targetsUnchanged) {
     bumpSkillsSnapshotVersion({
       workspaceDir,
       reason: "watch-targets",

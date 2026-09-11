@@ -1,4 +1,8 @@
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import {
+  isExpiredLegacyUpdateRun,
+  LEGACY_UPDATE_RUN_EXPIRED_REASON,
+} from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
@@ -28,8 +32,7 @@ export function recordedUpdateRunDrivers(record: UpdateRunRecord): UpdateRunDriv
 /** Only a fresh, unacknowledged recovery may substitute for a full repair invocation. */
 export function isUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boolean {
   return (
-    record.status === "failed" &&
-    record.reason === "abandoned" &&
+    isAbandonedUpdateRun(record) &&
     record.finishedAtMs !== null &&
     record.finishedAtMs <= Date.now() &&
     Date.now() - record.finishedAtMs <= ABANDONED_UPDATE_RUN_MS &&
@@ -37,19 +40,36 @@ export function isUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boo
   );
 }
 
-/** Read-only classification; an unobservable process is never presumed dead. */
+export function isAbandonedUpdateRun(record: UpdateRunRecord): boolean {
+  return (
+    record.status === "failed" &&
+    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+  );
+}
+
+/** Recorded drivers require positive death evidence; untouched legacy admissions have a fixed expiry. */
 export function inspectUpdateRunAbandonment(
   record: UpdateRunRecord,
   input: { explicit?: boolean } = {},
 ): string | undefined {
-  const lastActivity = updateRunLastActivity(record);
-  if (record.status !== "running" || Date.now() - lastActivity <= ABANDONED_UPDATE_RUN_MS) {
+  if (record.status !== "running") {
     return undefined;
   }
-  if (!input.explicit && record.steps.some((step) => step.step === "driver:identity-unavailable")) {
+  if (isExpiredLegacyUpdateRun(record)) {
+    return LEGACY_UPDATE_RUN_EXPIRED_REASON;
+  }
+  const identityUnavailable = record.steps.some(
+    (step) => step.step === "driver:identity-unavailable",
+  );
+  if (!input.explicit && identityUnavailable) {
     return undefined;
   }
   const drivers = recordedUpdateRunDrivers(record);
+  // Explicit repair need not wait for dead drivers, but an unrecorded adopter may still be working.
+  const requiresInactivity = !input.explicit || !drivers.length || identityUnavailable;
+  if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
+    return undefined;
+  }
   if (drivers.length) {
     return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
       ? "inactive-driver-dead"

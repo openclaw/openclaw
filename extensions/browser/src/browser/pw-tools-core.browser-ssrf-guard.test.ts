@@ -1,6 +1,7 @@
 // Browser tests cover pw tools core ssrf guard plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
 
 const pageState = vi.hoisted(() => ({
   page: null as Record<string, unknown> | null,
@@ -512,12 +513,15 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("does not start a predicate after aborting an earlier wait condition", async () => {
     const ctrl = new AbortController();
+    const dialogError = new BrowserObservedDialogBlockedError({
+      dialogs: { pending: [], recent: [] },
+    });
     sessionMocks.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
     pageState.page = {
       url: vi.fn(() => "https://example.com"),
       waitForTimeout: vi.fn(async () => {
-        ctrl.abort(new Error("aborted during passive wait"));
+        ctrl.abort(dialogError);
       }),
       waitForFunction,
     };
@@ -529,11 +533,12 @@ describe("pw-tools-core browser SSRF guards", () => {
         fn: "() => true",
         signal: ctrl.signal,
       }),
-    ).rejects.toThrow("aborted during passive wait");
+    ).rejects.toBe(dialogError);
     await Promise.resolve();
     expect(waitForFunction).not.toHaveBeenCalled();
     expect(sessionMocks.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
       pageState.page,
+      dialogError.browserState.dialogs.pending,
     );
   });
 

@@ -10,13 +10,11 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   createMatrixPrivateMarkers,
-  isMarkdownEscaped,
   MATRIX_FORMAT_PROFILE,
   projectMatrixMarkdown,
 } from "./format-profile.js";
 import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
 import {
-  findMatrixMarkdownMetadataRanges,
   findMatrixSpoilerDelimiterOffsets,
   hasMatrixSpoilerMetadataCollision,
 } from "./format-spoiler-ranges.js";
@@ -129,6 +127,12 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 md.renderer.rules.html_block = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.html_inline = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.text_special = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.matrix_escaped_mention = () => "@";
+md.core.ruler.before("text_join", "matrix_escaped_mentions", (state) => {
+  // Preserve the parser's escape decision before text_join erases it; otherwise
+  // literal IDs become mentions when their surrounding Markdown is incomplete.
+  preserveEscapedMentionTokens(state.tokens);
+});
 md.renderer.rules.link_open = (tokens, idx, _options, _env, self) =>
   shouldSuppressAutoLink(tokens, idx) ? "" : self.renderToken(tokens, idx, _options);
 md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
@@ -139,60 +143,13 @@ md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
   return self.renderToken(tokens, idx, _options);
 };
 
-function maskEscapedMentions(markdown: string): { markdown: string; marker?: string } {
-  let masked = "";
-  let idx = 0;
-  let codeFenceLength = 0;
-  let marker: string | undefined;
-  const metadataRanges = markdown.includes("\\@") ? findMatrixMarkdownMetadataRanges(markdown) : [];
-
-  while (idx < markdown.length) {
-    if (markdown[idx] === "`" && !isMarkdownEscaped(markdown, idx)) {
-      let runLength = 1;
-      while (markdown[idx + runLength] === "`") {
-        runLength += 1;
-      }
-      if (codeFenceLength === 0) {
-        codeFenceLength = runLength;
-      } else if (runLength === codeFenceLength) {
-        codeFenceLength = 0;
-      }
-      masked += markdown.slice(idx, idx + runLength);
-      idx += runLength;
-      continue;
-    }
-    if (
-      codeFenceLength === 0 &&
-      markdown[idx] === "\\" &&
-      markdown[idx + 1] === "@" &&
-      !metadataRanges.some((range) => idx >= range.start && idx < range.end)
-    ) {
-      marker ??= createMatrixPrivateMarkers(
-        markdown,
-        "Matrix mention formatting exhausted its private marker pool",
-      ).open;
-      masked += marker;
-      idx += 2;
-      continue;
-    }
-    masked += markdown[idx] ?? "";
-    idx += 1;
-  }
-
-  return { markdown: masked, ...(marker ? { marker } : {}) };
-}
-
-function restoreEscapedMentions(text: string, marker?: string, inCode = false): string {
-  return marker ? text.replaceAll(marker, inCode ? "\\@" : "@") : text;
-}
-
-function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[], marker?: string): void {
-  if (!marker) {
-    return;
-  }
+function preserveEscapedMentionTokens(tokens: MarkdownToken[]): void {
   for (const token of tokens) {
-    if ((token.type === "fence" || token.type === "code_block") && token.content) {
-      token.content = restoreEscapedMentions(token.content, marker, true);
+    if (token.type === "text_special" && token.info === "escape" && token.content === "@") {
+      token.type = "matrix_escaped_mention";
+    }
+    if (token.children) {
+      preserveEscapedMentionTokens(token.children);
     }
   }
 }
@@ -414,11 +371,8 @@ function mutateInlineTokensWithMentions(params: {
   userIds: string[];
   seenUserIds: Set<string>;
   selfUserId: string | null;
-  escapedMentionMarker?: string;
 }): { children: MarkdownInlineToken[]; roomMentioned: boolean } {
   const nextChildren: MarkdownInlineToken[] = [];
-  const restoreMention = (text: string) =>
-    restoreEscapedMentions(text, params.escapedMentionMarker);
   let roomMentioned = false;
   let insideLinkDepth = 0;
   for (const child of params.children) {
@@ -433,30 +387,24 @@ function mutateInlineTokensWithMentions(params: {
       continue;
     }
     if (child.type !== "text" || !child.content) {
-      for (const nested of child.children ?? []) {
-        nested.content = restoreMention(nested.content);
-      }
       nextChildren.push(child);
       continue;
     }
 
-    const visibleContent = restoreMention(child.content);
     if (insideLinkDepth > 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
     const matches = collectMentionCandidates(child.content);
     if (matches.length === 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
 
     let cursor = 0;
     for (const match of matches) {
       if (match.start > cursor) {
-        nextChildren.push(
-          createTextToken(child, restoreMention(child.content.slice(cursor, match.start))),
-        );
+        nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
       }
       cursor = match.end;
       if (match.kind === "room") {
@@ -483,7 +431,7 @@ function mutateInlineTokensWithMentions(params: {
       );
     }
     if (cursor < child.content.length) {
-      nextChildren.push(createTextToken(child, restoreMention(child.content.slice(cursor))));
+      nextChildren.push(createTextToken(child, child.content.slice(cursor)));
     }
   }
   return { children: nextChildren, roomMentioned };
@@ -624,9 +572,7 @@ async function resolveMarkdownMentionState(params: {
   client: MatrixClient;
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const { markdown, marker } = maskEscapedMentions(projectMatrixMarkdown(params.markdown));
-  const tokens = parseMatrixMarkdown(markdown, params.tableMode);
-  restoreEscapedMentionsInBlockTokens(tokens, marker);
+  const tokens = parseMatrixMarkdown(projectMatrixMarkdown(params.markdown), params.tableMode);
   const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
@@ -641,7 +587,6 @@ async function resolveMarkdownMentionState(params: {
       userIds,
       seenUserIds,
       selfUserId,
-      escapedMentionMarker: marker,
     });
     token.children = mutated.children;
     roomMentioned ||= mutated.roomMentioned;

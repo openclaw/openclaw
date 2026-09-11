@@ -25,6 +25,7 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   adoptedCatalogSessionKeys,
+  catalogSectionHasContent,
   visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -355,7 +356,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       catalogIds:
         this.sessionsStatusFilter === "archived"
           ? []
-          : this.visibleSessionCatalogs().map((catalog) => catalog.id),
+          : this.visibleSessionCatalogs()
+              .filter(catalogSectionHasContent)
+              .map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,
@@ -525,7 +528,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   switchChipAgent(agentId: string) {
     this.closeAgentMenu();
     this.expandAgent(agentId);
-    this.openAgentConversation(agentId);
+    // Skills uses the shared agent selection in place; opening chat would
+    // discard the discovery page instead of updating its workspace scope.
+    if (this.activeRouteId !== "skills") {
+      this.openAgentConversation(agentId);
+    }
   }
 
   askAgentCapabilities(agentId: string) {
@@ -627,7 +634,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       (session) =>
         (selected === routeAgentId || lineageAgentId === selected) &&
         session.key === navigationState.activeRowKey &&
-        !isSessionHidden(session.key) &&
+        !isSessionHidden(session) &&
         !adopted.has(session.key) &&
         !areUiSessionKeysEquivalent(session.key, mainSessionKey),
     );
@@ -644,7 +651,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
     if (
       lineageRoot &&
-      !isSessionHidden(lineageRoot.key) &&
+      !isSessionHidden(lineageRoot) &&
       (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
         sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter)) &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&

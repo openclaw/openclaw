@@ -13,39 +13,17 @@ import {
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
-let fileLockDrainerForTests: typeof drainFileLockStateForTest | null = null;
-let sessionStoreWriterQueueDrainerForTests: typeof drainSessionStoreWriterQueuesForTest | null =
-  null;
-
-/** Overrides cleanup hooks so tests can drain mocked session state modules. */
-export function setSessionStateCleanupRuntimeForTests(params: {
-  drainFileLockStateForTest?: typeof drainFileLockStateForTest | null;
-  drainSessionStoreWriterQueuesForTest?: typeof drainSessionStoreWriterQueuesForTest | null;
-}): void {
-  if ("drainFileLockStateForTest" in params) {
-    fileLockDrainerForTests = params.drainFileLockStateForTest ?? null;
-  }
-  if ("drainSessionStoreWriterQueuesForTest" in params) {
-    sessionStoreWriterQueueDrainerForTests = params.drainSessionStoreWriterQueuesForTest ?? null;
-  }
-}
-
-export function resetSessionStateCleanupRuntimeForTests(): void {
-  fileLockDrainerForTests = null;
-  sessionStoreWriterQueueDrainerForTests = null;
-}
-
 export async function cleanupSessionStateForTest(
   options: { stateDir?: string } = {},
 ): Promise<void> {
-  await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
+  await drainSessionStoreWriterQueuesForTest();
   if (options.stateDir) {
     // Writers can publish deferred reconciles as the initial drain settles.
     // Finish those owners and their writes before closing fixture databases.
     await waitForSessionTranscriptIndexReconcilesInStateDir(options.stateDir);
-    await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
+    await drainSessionStoreWriterQueuesForTest();
   }
-  await (fileLockDrainerForTests ?? drainFileLockStateForTest)();
+  await drainFileLockStateForTest();
   clearSessionStoreCacheForTest();
   if (!options.stateDir) {
     return;

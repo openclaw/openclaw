@@ -3081,7 +3081,7 @@ EOF
     expect(output).toContain("version=v24.16.0");
   });
 
-  it("mirrors the canonical release-label contract for existing Node runtimes", () => {
+  it("mirrors the canonical support policy for Node release labels", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
@@ -3113,7 +3113,7 @@ EOF
           ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
             `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
             "export FAKE_NODE_VERSION",
-            "node_is_supported",
+            "node_version_is_supported",
             `printf '${index}=%s\\n' "$?"`,
           ]),
           "exit 0",
@@ -3155,6 +3155,105 @@ EOF
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("status=1");
   });
+
+  it.each(
+    [
+      { version: "24.19.0", defect: "none", expected: 0 },
+      { version: "24.19.0", defect: "text", expected: 1 },
+      { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
+      { version: "24.19.0", defect: "blob", expected: 1 },
+      { version: "24.19.0", defect: "json", expected: 1 },
+      { version: "22.23.2", defect: "none", expected: 1 },
+    ].flatMap(({ version, defect, expected }) =>
+      ["install.sh", "install-cli.sh"].map((installer) => ({
+        version,
+        defect,
+        expected,
+        installer,
+      })),
+    ),
+  )(
+    "requires the numeric floor and SQLite round trips in $installer for $version/$defect",
+    ({ version, defect, expected, installer }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-installer-sqlite-"));
+      const nodePath = join(tmp, "node");
+      const npmPath = join(tmp, "npm");
+      const fakeSqlite = `
+      const originalRequire = require;
+      class FakeDatabaseSync {
+        exec() {}
+        close() {}
+        prepare(sql) {
+          return {
+            run: (text, blob, json) => { this.row = { text_value: text, blob_value: blob, json_value: json }; },
+            get: () => {
+              if (sql.includes("sqlite_version()")) return { version: "3.51.3" };
+              const row = { ...this.row };
+              if (process.env.SQLITE_DEFECT === "text") row.text_value = row.text_value.split("\\0")[0];
+              if (process.env.SQLITE_DEFECT === "blob") row.blob_value = Buffer.from("a");
+              if (process.env.SQLITE_DEFECT === "json") row.json_value = "{}";
+              return row;
+            }
+          };
+        }
+      }
+      require = (name) => name === "node:sqlite" ? { DatabaseSync: FakeDatabaseSync } : originalRequire(name);
+    `;
+      writeFileSync(
+        nodePath,
+        '#!/bin/bash\nif [[ "$1" == -v ]]; then printf "v%s\\n" "$FAKE_NODE_VERSION"; exit 0; fi\nexec "$REAL_NODE" -e "$FAKE_SQLITE_JS"$\'\\n\'"$2"\n',
+      );
+      writeFileSync(npmPath, "#!/bin/sh\nexit 0\n");
+      chmodSync(nodePath, 0o755);
+      chmodSync(npmPath, 0o755);
+      try {
+        const result = runInstallShell(
+          `
+          source "scripts/${installer}"
+          PATH="$FIXTURE_ROOT:$PATH"
+          node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
+          npm_bin() { printf '%s/npm' "$FIXTURE_ROOT"; }
+          set +e
+          ${installer === "install.sh" ? "node_is_supported" : "linked_node_is_usable"}
+          printf 'verdict=%s\\n' "$?"
+        `,
+          {
+            FIXTURE_ROOT: tmp,
+            FAKE_NODE_VERSION: version,
+            SQLITE_DEFECT: defect,
+            REAL_NODE: nodeExecutable,
+            FAKE_SQLITE_JS: fakeSqlite,
+            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout, `${installer}: ${result.stderr}`).toContain(`verdict=${expected}`);
+        if (defect === "text") {
+          expect(result.stderr).toContain("node:sqlite truncates TEXT at embedded NUL");
+        }
+        const powershellProbe = readFileSync("scripts/install.ps1", "utf8").match(
+          /\$sqliteProbe = @'\n([\s\S]*?)\n'@/u,
+        )?.[1];
+        expect(powershellProbe).toBeDefined();
+        const probe = spawnSync(nodeExecutable, ["-e", `${fakeSqlite}\n${powershellProbe}`], {
+          encoding: "utf8",
+          env: { ...process.env, SQLITE_DEFECT: defect },
+        });
+        expect(probe.status, probe.stderr).toBe(0);
+        const probeResult: unknown = JSON.parse(probe.stdout);
+        expect(probeResult).toMatchObject({
+          available: true,
+          version: "3.51.3",
+          text: defect !== "text",
+          blob: defect !== "blob",
+          json: defect !== "json",
+        });
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-linux-node-path-"));
@@ -3918,16 +4017,29 @@ EOF
     expect(result?.stdout).toContain(`Run: ${quotedBin} gateway status --deep`);
   });
 
-  it("does not explicitly restart after force-installing a loaded gateway", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
-    const openclawBin = join(tmp, "openclaw");
-    const commandLog = join(tmp, "commands.log");
-    writeFileSync(openclawBin, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
-    chmodSync(openclawBin, 0o755);
+  it.each(["none", "unsupported", "missing"])(
+    "reports a successful runtime replacement (%s) without restarting again",
+    (replaced) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
+      const openclawBin = join(tmp, "openclaw");
+      const commandLog = join(tmp, "commands.log");
+      writeFileSync(
+        openclawBin,
+        [
+          "#!/bin/sh",
+          'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+          'if [ "$*" = "gateway install --force" ]; then',
+          '  printf "%s\\n" "incidental-output-canary"',
+          '  if [ "$REPLACED" = unsupported ]; then printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."; fi',
+          '  if [ "$REPLACED" = missing ]; then printf "%s\\n" "Replacing missing Gateway service Node (/old/node) with /new/node; refreshing the install."; fi',
+          "fi",
+        ].join("\n"),
+      );
+      chmodSync(openclawBin, 0o755);
 
-    try {
-      const result = runInstallShell(
-        `
+      try {
+        const result = runInstallShell(
+          `
           set -euo pipefail
           source "${SCRIPT_PATH}"
           OPENCLAW_BIN=${JSON.stringify(openclawBin)}
@@ -3939,18 +4051,25 @@ EOF
           }
           refresh_gateway_service_if_loaded
         `,
-        { COMMAND_LOG: commandLog },
-      );
+          { COMMAND_LOG: commandLog, REPLACED: replaced },
+        );
 
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
-        "gateway install --force",
-        "gateway status --deep",
-      ]);
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        expect(result.stdout.includes("Gateway service Node runtime replaced")).toBe(
+          replaced !== "none",
+        );
+        expect(result.stdout + result.stderr).not.toContain("incidental-output-canary");
+        expect(result.stdout + result.stderr).not.toContain("/old/node");
+        expect(result.stdout + result.stderr).not.toContain("/new/node");
+        expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+          "gateway install --force",
+          "gateway status --deep",
+        ]);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stderr" },
@@ -3968,6 +4087,7 @@ EOF
         "#!/bin/bash",
         'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
         'if [[ "$*" == "gateway install --force" ]]; then',
+        '  printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."',
         '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
         '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
         "fi",
@@ -4000,6 +4120,7 @@ EOF
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("+ refresh_gateway_service_if_loaded");
       expect(result.stdout + result.stderr).not.toContain(secretCanary);
+      expect(result.stdout + result.stderr).not.toContain("Gateway service Node runtime replaced");
       if (denied) {
         expect(result.stdout).toContain("gateway service definition left unchanged");
         expect(result.stdout).toContain(

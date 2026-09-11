@@ -22,7 +22,7 @@ for results, cancel work, or inspect Gateway resources.
   guide pins the verified stable `2026.8.1` packages and explains how package and
   wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+  [Embedding OpenClaw](/gateway/embedding).
 </Note>
 
 <Note>
@@ -35,9 +35,9 @@ for results, cancel work, or inspect Gateway resources.
 | Surface                                                       | Status          | Use it for                                                                                    |
 | ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [Gateway protocol RPC methods](/gateway/protocol/rpc-methods) | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
 | [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
@@ -45,7 +45,7 @@ for results, cancel work, or inspect Gateway resources.
 
 1. Run or discover a Gateway.
 2. Connect over the [Gateway protocol](/gateway/protocol).
-3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+3. Call documented RPC methods from [Gateway protocol RPC methods](/gateway/protocol/rpc-methods).
 4. Pin the OpenClaw version you test against.
 5. Recheck the RPC reference when upgrading OpenClaw.
 
@@ -288,7 +288,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code
@@ -315,10 +315,10 @@ plugins loaded by OpenClaw.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
-- [Gateway RPC reference](/reference/rpc)
+- [Gateway protocol RPC methods](/gateway/protocol/rpc-methods)
 - [CLI agent command](/cli/agent)
 - [CLI message command](/cli/message)
 - [Agent loop](/concepts/agent-loop)

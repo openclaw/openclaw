@@ -179,7 +179,7 @@ export function createManagedServiceCommandFixture(params: {
             ...(options?.triageHang
               ? [
                   `const { spawn } = require("node:child_process");`,
-                  `const triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+                  `const triageDescendantPid = spawn(process.execPath, ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "triage-descendant-ready"))}, String(process.pid)); setInterval(() => {}, 1000);`)}], { stdio: "ignore" }).pid;`,
                   `${managedServiceStateUpdateScript(statePath, "state.triageDescendantPid = triageDescendantPid")};`,
                   `setInterval(() => {}, 1000);`,
                 ]
@@ -505,7 +505,7 @@ export function registerManagedLaunchdTeardownTests(
       });
 
       expect(commands).toEqual(["print gui/501/ai.openclaw.gateway"]);
-      expect(state).toEqual({});
+      expect(state).toEqual({ nativeRelease: {} });
       expect(sentinel).toMatchObject({
         payload: {
           status: "skipped",

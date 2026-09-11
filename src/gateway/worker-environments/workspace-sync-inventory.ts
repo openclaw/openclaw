@@ -248,6 +248,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   signal: AbortSignal;
   timeoutMs: number;
   maxOutputBytes?: number;
+  baseEnv?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const [command, ...args] = params.argv;
   if (!command) {
@@ -268,7 +269,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     params.signal.throwIfAborted();
     const boundedOutput = params.maxOutputBytes !== undefined;
     const child = spawn(command, args, {
-      env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
+      env: params.baseEnv ?? workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
       stdio: [input?.fd ?? "ignore", boundedOutput ? "pipe" : output.fd, "pipe"],
       ...(process.platform !== "win32" ? { detached: true } : {}),
       windowsHide: true,

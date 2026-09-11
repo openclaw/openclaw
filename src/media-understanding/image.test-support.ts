@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
+import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-runtime.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -168,19 +170,29 @@ export function installImageRuntimeTestHooks({
     getApiKeyForModelMock.mockResolvedValue({ apiKey, source: "test", mode: "oauth" });
     resolveApiKeyForProviderCoreMock.mockResolvedValue({ apiKey, source: "test", mode: "oauth" });
     acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
-      async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
-        snapshot: {
-          agentDir: input.agentDir,
+      async (
+        input: { agentDir: string; config: OpenClawConfig; workspaceDir?: string },
+        options?: PreparedModelRuntimeLeaseOptions,
+      ) => {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({
           config: input.config,
           workspaceDir: input.workspaceDir,
-          metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
-          createStores: () => ({
-            authStorage: preparedAuthStorage,
-            modelRegistry: {},
-          }),
-        },
-        release: releasePreparedModelRuntimeMock,
-      }),
+        });
+        options?.deriveRuntimePluginSelections?.({ config: input.config, metadataSnapshot });
+        return {
+          snapshot: {
+            agentDir: input.agentDir,
+            config: input.config,
+            workspaceDir: input.workspaceDir,
+            metadataSnapshot,
+            createStores: () => ({
+              authStorage: preparedAuthStorage,
+              modelRegistry: {},
+            }),
+          },
+          release: releasePreparedModelRuntimeMock,
+        };
+      },
     );
     fetchMock.mockImplementation(async () =>
       Response.json({

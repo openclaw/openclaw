@@ -38,11 +38,18 @@ export class BrowserPanelNativePresentation {
 
   constructor(private readonly controller: BrowserPanelNativePresentationHost) {}
 
+  private get hostElement(): Element | null {
+    const root = this.controller.host.renderRoot;
+    return root instanceof ShadowRoot ? root.host : root instanceof Element ? root : null;
+  }
+
   connect(): void {
     if (this.connected) {
       return;
     }
     this.connected = true;
+    // Native responder focus can route back to this panel without DOM events.
+    this.hostElement?.setAttribute("data-native-browser-scope", this.scope);
     this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion((occluded) => {
       this.occluded = occluded;
       if (occluded) {
@@ -57,6 +64,7 @@ export class BrowserPanelNativePresentation {
 
   disconnect(): void {
     this.hide();
+    this.hostElement?.removeAttribute("data-native-browser-scope");
     this.connected = false;
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
@@ -147,8 +155,7 @@ export class BrowserPanelNativePresentation {
       return;
     }
     const rect = stage.getBoundingClientRect();
-    const root = this.controller.host.renderRoot;
-    const host = root instanceof ShadowRoot ? root.host : root;
+    const host = this.hostElement;
     let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     // document hit-testing stops at shadow hosts. Descend to distinguish this
     // panel from a dialog or another panel within the same application root.

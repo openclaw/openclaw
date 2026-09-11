@@ -7,6 +7,8 @@ import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -345,31 +347,13 @@ const defaultResolveEnvApiKeyImpl:
   | ((provider: string) => { apiKey: string; source: string } | null)
   | undefined = mocks.resolveEnvApiKey.getMockImplementation();
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+const runtime = createTestRuntime();
 
 function parseFirstJsonLog(runtimeLike: { log: Mock }) {
   return JSON.parse(String(runtimeLike.log.mock.calls[0]?.[0]));
 }
 
 const requireRecord = createRequireRecord("object", "label-not-object");
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value)).toBe(true);
@@ -581,8 +565,8 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
-      const jsonRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      const jsonRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime);
       expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
         expect.objectContaining({
           profileId: "anthropic:default",
@@ -593,9 +577,9 @@ describe("modelsStatusCommand auth overview", () => {
         }),
       ]);
 
-      const textRuntime = createRuntime();
-      await modelsStatusCommand({}, textRuntime as never);
-      const output = (textRuntime.log as Mock).mock.calls
+      const textRuntime = createTestRuntime();
+      await modelsStatusCommand({}, textRuntime);
+      const output = textRuntime.log.mock.calls
         .map((call: unknown[]) => String(call[0]))
         .join("\n");
       expect(output).toContain("Unavailable auth profiles");
@@ -631,8 +615,8 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
-      const jsonRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      const jsonRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime);
       expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
         expect.objectContaining({
           profileId: "openai:default",
@@ -641,8 +625,8 @@ describe("modelsStatusCommand auth overview", () => {
         }),
       ]);
 
-      const textRuntime = createRuntime();
-      await modelsStatusCommand({}, textRuntime as never);
+      const textRuntime = createTestRuntime();
+      await modelsStatusCommand({}, textRuntime);
       expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("cooldown:wham_token_expired");
     } finally {
       delete store.usageStats;
@@ -671,8 +655,8 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
-      const statusRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, statusRuntime as never);
+      const statusRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, statusRuntime);
       const [unusable] = parseFirstJsonLog(statusRuntime).auth.unusableProfiles;
       expect(unusable).toMatchObject({
         profileId,
@@ -705,7 +689,7 @@ describe("modelsStatusCommand auth overview", () => {
       await releaseCatalog.promise;
       return [];
     });
-    const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
+    const commandPromise = modelsStatusCommand({ json: true }, createTestRuntime());
 
     try {
       await catalogStarted.promise;
@@ -752,7 +736,7 @@ describe("modelsStatusCommand auth overview", () => {
     [{ probeMaxTokens: "" }, "--probe-max-tokens"],
     [{ probeMaxTokens: "   " }, "--probe-max-tokens"],
   ])("rejects invalid probe numeric option %j", async (opts, label) => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     mocks.runAuthProbes.mockClear();
     await expect(
       modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
@@ -769,14 +753,14 @@ describe("modelsStatusCommand auth overview", () => {
     ],
   ])("forwards probe numeric options %j", async (opts, expected) => {
     mocks.runAuthProbes.mockClear();
-    await modelsStatusCommand({ json: true, probe: true, ...opts }, createRuntime());
+    await modelsStatusCommand({ json: true, probe: true, ...opts }, createTestRuntime());
     expect(mocks.runAuthProbes).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ options: expect.objectContaining(expected) }),
     );
   });
 
   it("includes masked auth sources in JSON output", async () => {
-    await modelsStatusCommand({ json: true }, runtime as never);
+    await modelsStatusCommand({ json: true }, runtime);
     const payload = parseFirstJsonLog(runtime);
 
     expect(mocks.loadModelsConfigArgs.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -854,8 +838,8 @@ describe("modelsStatusCommand auth overview", () => {
         ],
       },
       async () => {
-        const localRuntime = createRuntime();
-        await modelsStatusCommand({ json: true }, localRuntime as never);
+        const localRuntime = createTestRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime);
 
         expect(parseFirstJsonLog(localRuntime).allowed).toEqual([
           "clawrouter/anthropic/claude-haiku-4-5",
@@ -873,8 +857,8 @@ describe("modelsStatusCommand auth overview", () => {
         catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
       },
       async () => {
-        const localRuntime = createRuntime();
-        await modelsStatusCommand({ json: true }, localRuntime as never);
+        const localRuntime = createTestRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime);
 
         expect(parseFirstJsonLog(localRuntime).allowed).toEqual(["clawrouter/anthropic/*"]);
       },
@@ -899,8 +883,8 @@ describe("modelsStatusCommand auth overview", () => {
           defaults: { ...baseConfig.agents.defaults, utilityModel: "openai/gpt-5.6-luna" },
         },
       });
-      const explicitRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, explicitRuntime as never);
+      const explicitRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, explicitRuntime);
       expect(parseFirstJsonLog(explicitRuntime).utilityModel).toEqual({
         ref: "openai/gpt-5.6-luna",
         source: "config",
@@ -912,8 +896,8 @@ describe("modelsStatusCommand auth overview", () => {
           defaults: { ...baseConfig.agents.defaults, utilityModel: "" },
         },
       });
-      const disabledRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, disabledRuntime as never);
+      const disabledRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, disabledRuntime);
       expect(parseFirstJsonLog(disabledRuntime).utilityModel).toEqual({
         ref: null,
         source: "disabled",
@@ -928,8 +912,8 @@ describe("modelsStatusCommand auth overview", () => {
           defaults: { ...baseConfig.agents.defaults, utilityModel: "mistral/mistral-small" },
         },
       });
-      const missingAuthRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, missingAuthRuntime as never);
+      const missingAuthRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, missingAuthRuntime);
       const missingPayload = parseFirstJsonLog(missingAuthRuntime);
       expect(missingPayload.utilityModel).toEqual({
         ref: "mistral/mistral-small",
@@ -952,8 +936,8 @@ describe("modelsStatusCommand auth overview", () => {
           },
         },
       });
-      const aliasRuntime = createRuntime();
-      await modelsStatusCommand({ json: true }, aliasRuntime as never);
+      const aliasRuntime = createTestRuntime();
+      await modelsStatusCommand({ json: true }, aliasRuntime);
       expect(parseFirstJsonLog(aliasRuntime).utilityModel).toEqual({
         ref: "anthropic/claude-opus-4-6",
         source: "config",
@@ -966,10 +950,10 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     mocks.resolveAgentDir.mockClear();
     await withEnvAsync({ OPENCLAW_AGENT_DIR: "/tmp/openclaw-isolated-agent" }, async () => {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true }, localRuntime);
     });
 
     expectResolveAgentDirCalledFor("main");
@@ -980,7 +964,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("honors deprecated PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     mocks.resolveAgentDir.mockClear();
     await withEnvAsync(
       {
@@ -988,7 +972,7 @@ describe("modelsStatusCommand auth overview", () => {
         PI_CODING_AGENT_DIR: "/tmp/openclaw-legacy-agent",
       },
       async () => {
-        await modelsStatusCommand({ json: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true }, localRuntime);
       },
     );
 
@@ -999,7 +983,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("uses agent overrides and reports sources", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withAgentScopeOverrides(
       {
         primary: "openai/gpt-4",
@@ -1007,7 +991,7 @@ describe("modelsStatusCommand auth overview", () => {
         agentDir: "/tmp/openclaw-agent-custom",
       },
       async () => {
-        await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
+        await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime);
         expectResolveAgentDirCalledFor("jeremiah");
         const payload = parseFirstJsonLog(localRuntime);
         expect(payload.agentId).toBe("jeremiah");
@@ -1045,7 +1029,7 @@ describe("modelsStatusCommand auth overview", () => {
   }
 
   it("resolves a selected agent's bare alias from that agent's model scope", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withConfig(
       {
         agents: {
@@ -1060,7 +1044,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () => {
         await withAgentScopeOverrides({ primary: "jeremiah-choice" }, async () => {
-          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime);
           const payload = parseFirstJsonLog(localRuntime);
           expect(payload.defaultModel).toBe("jeremiah-choice");
           // Resolving the bare alias against global defaults reported
@@ -1076,7 +1060,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("prefers a per-agent alias row over the same alias in defaults", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withConfig(
       {
         agents: {
@@ -1094,7 +1078,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () => {
         await withAgentScopeOverrides({ primary: "shared" }, async () => {
-          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime);
           const payload = parseFirstJsonLog(localRuntime);
           // Per-agent rows are applied after defaults, so the agent's row owns
           // the alias and the displayed target must follow the same precedence.
@@ -1106,7 +1090,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("keeps unscoped status on global defaults when no agent is selected", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withConfig(
       {
         agents: {
@@ -1123,7 +1107,7 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true }, localRuntime);
         const payload = parseFirstJsonLog(localRuntime);
         // No --agent still reports unscoped defaults; another agent's rows must
         // not leak into the global view.
@@ -1157,8 +1141,8 @@ describe("modelsStatusCommand auth overview", () => {
           fallbacks: ["openai/gpt-5.6-sol"],
         },
         async () => {
-          const localRuntime = createRuntime();
-          await modelsStatusCommand({ json: true }, localRuntime as never);
+          const localRuntime = createTestRuntime();
+          await modelsStatusCommand({ json: true }, localRuntime);
 
           expectResolveAgentDirCalledFor("jeremiah");
           expect(mocks.resolveAgentExplicitModelPrimary).not.toHaveBeenCalled();
@@ -1179,8 +1163,8 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("rejects API-key auth for subscription-only Codex Spark", async () => {
-    const localRuntime = createRuntime();
-    const textRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
+    const textRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.3-codex-spark",
@@ -1193,8 +1177,8 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-        await modelsStatusCommand({ check: true }, textRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
+        await modelsStatusCommand({ check: true }, textRuntime);
       },
     );
     const payload = parseFirstJsonLog(localRuntime);
@@ -1213,8 +1197,8 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("reports usable Codex auth as unavailable when its harness plugin is quarantined", async () => {
-    const localRuntime = createRuntime();
-    const textRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
+    const textRuntime = createTestRuntime();
     const payloadFailure = {
       pluginId: "codex",
       installPath: "/private/plugin",
@@ -1253,8 +1237,8 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-        await modelsStatusCommand({ check: true }, textRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
+        await modelsStatusCommand({ check: true }, textRuntime);
       },
     );
 
@@ -1297,7 +1281,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("evaluates mixed primary and fallback OpenAI routes independently", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.6",
@@ -1313,7 +1297,7 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
       },
     );
     const payload = parseFirstJsonLog(localRuntime);
@@ -1343,7 +1327,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("flags a utility model whose route needs api-key auth despite an OAuth-healthy primary", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.5",
@@ -1359,7 +1343,7 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
       },
     );
     const payload = parseFirstJsonLog(localRuntime);
@@ -1376,8 +1360,8 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("reports incompatible model routes separately in JSON and text", async () => {
-    const jsonRuntime = createRuntime();
-    const textRuntime = createRuntime();
+    const jsonRuntime = createTestRuntime();
+    const textRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.6",
@@ -1389,8 +1373,8 @@ describe("modelsStatusCommand auth overview", () => {
         }),
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, jsonRuntime as never);
-        await modelsStatusCommand({ check: true }, textRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, jsonRuntime);
+        await modelsStatusCommand({ check: true }, textRuntime);
       },
     );
     const payload = parseFirstJsonLog(jsonRuntime);
@@ -1413,7 +1397,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("reports missing static transport observation as indeterminate", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.4-nano",
@@ -1428,7 +1412,7 @@ describe("modelsStatusCommand auth overview", () => {
         },
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
       },
     );
 
@@ -1445,7 +1429,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("uses static catalog transport observation for route readiness", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.4-nano",
@@ -1469,7 +1453,7 @@ describe("modelsStatusCommand auth overview", () => {
         ],
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
       },
     );
 
@@ -1483,7 +1467,7 @@ describe("modelsStatusCommand auth overview", () => {
     ["ChatGPT first", false],
     ["Platform first", true],
   ])("selects ChatGPT nano from grouped physical routes with %s", async (_label, reverse) => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const platform = {
       id: "gpt-5.4-nano",
       name: "Platform Nano",
@@ -1516,7 +1500,7 @@ describe("modelsStatusCommand auth overview", () => {
         routeVariants,
       },
       async () => {
-        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ json: true, check: true }, localRuntime);
       },
     );
 
@@ -1529,7 +1513,7 @@ describe("modelsStatusCommand auth overview", () => {
   it.each(["Writer", "rEaDeR"])(
     "keeps model status independent of %s routes",
     async (responsesId) => {
-      const localRuntime = createRuntime();
+      const localRuntime = createTestRuntime();
       const baseUrl = "https://models.example.test/v1";
       const model = (id: string, api?: ModelDefinitionConfig["api"]): ModelDefinitionConfig => ({
         id,
@@ -1561,7 +1545,7 @@ describe("modelsStatusCommand auth overview", () => {
           routeVariants: catalog,
         },
         async () => {
-          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+          await modelsStatusCommand({ json: true, check: true }, localRuntime);
         },
       );
 
@@ -1576,7 +1560,7 @@ describe("modelsStatusCommand auth overview", () => {
   );
 
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.6",
@@ -1590,7 +1574,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () =>
         await withEnvAsync({ OPENAI_API_KEY: "resolved-key" }, async () => {
-          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+          await modelsStatusCommand({ json: true, check: true }, localRuntime);
         }),
     );
     const payload = parseFirstJsonLog(localRuntime);
@@ -1600,7 +1584,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("reports unresolved API-key SecretRef profiles as indeterminate", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     await withOpenAIStatusFixture(
       {
         primary: "openai/gpt-5.6",
@@ -1614,7 +1598,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () =>
         await withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
-          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+          await modelsStatusCommand({ json: true, check: true }, localRuntime);
         }),
     );
     const payload = parseFirstJsonLog(localRuntime);
@@ -1631,7 +1615,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("preserves configured AWS SDK profiles for non-OpenAI providers", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalProfiles = { ...mocks.store.profiles };
     const originalOrder = mocks.store.order ? { ...mocks.store.order } : undefined;
@@ -1661,7 +1645,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
-      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true, check: true }, localRuntime);
       const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual([]);
       expect(payload.auth.modelRouteIssues).toEqual([]);
@@ -1683,7 +1667,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("handles cli backend and exact provider auth summaries", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     mocks.loadConfig.mockReturnValue({
@@ -1699,12 +1683,12 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true }, localRuntime);
       const payload = parseFirstJsonLog(localRuntime);
       expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
 
-      const aliasRuntime = createRuntime();
+      const aliasRuntime = createTestRuntime();
       mocks.loadConfig.mockReturnValue({
         agents: {
           defaults: {
@@ -1724,7 +1708,7 @@ describe("modelsStatusCommand auth overview", () => {
         }
         return null;
       });
-      await modelsStatusCommand({ json: true }, aliasRuntime as never);
+      await modelsStatusCommand({ json: true }, aliasRuntime);
       const aliasPayload = parseFirstJsonLog(aliasRuntime);
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(
@@ -1746,7 +1730,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("treats plugin-owned synthetic auth as usable for models in use", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     const originalSyntheticImpl =
@@ -1779,7 +1763,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       const syntheticProbeStart = mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls.length;
-      await modelsStatusCommand({ json: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true }, localRuntime);
       const payload = parseFirstJsonLog(localRuntime);
       const providers = payload.auth.providers as Array<{
         provider: string;
@@ -1791,7 +1775,7 @@ describe("modelsStatusCommand auth overview", () => {
         .map(([arg]) => (arg as { provider: string }).provider);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       const codexProvider = requireProvider(providers, "codex");
-      expectRecordFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
+      expectObjectFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
         value: "plugin-owned",
         source: "codex-app-server",
       });
@@ -1802,7 +1786,7 @@ describe("modelsStatusCommand auth overview", () => {
         Object.keys(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth")),
       ).toStrictEqual(["value", "source"]);
       expect(JSON.stringify(payload)).not.toContain("codex-runtime-token");
-      expectRecordFields(requireRecord(codexProvider.effective, "codex effective auth"), {
+      expectObjectFields(requireRecord(codexProvider.effective, "codex effective auth"), {
         kind: "synthetic",
         detail: "codex-app-server",
       });
@@ -1835,7 +1819,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("passes the canonical merged provider config to synthetic auth plugins", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalSyntheticRefs =
       mocks.resolveRuntimeSyntheticAuthProviderRefs.getMockImplementation();
@@ -1864,7 +1848,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
 
     try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true }, localRuntime);
 
       expect(mocks.resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1900,7 +1884,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("does not treat declared but unresolved synthetic auth as usable", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalProfiles = { ...mocks.store.profiles };
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
@@ -1924,7 +1908,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
 
     try {
-      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true, check: true }, localRuntime);
       const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual([]);
       expect(payload.auth.modelRouteIssues).toEqual([
@@ -1959,7 +1943,7 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("includes auth-evidence-only providers in the auth overview", async () => {
-    const localRuntime = createRuntime();
+    const localRuntime = createTestRuntime();
     const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
     const originalLookupImpl = mocks.resolveProviderEnvAuthLookupMaps.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
@@ -1989,7 +1973,7 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
+      await modelsStatusCommand({ json: true }, localRuntime);
       const payload = parseFirstJsonLog(localRuntime);
       const workspaceProvider = requireProvider(payload.auth.providers, "workspace-cloud");
       expect(requireRecord(workspaceProvider.effective, "workspace effective auth").kind).toBe(
@@ -2022,16 +2006,16 @@ describe("modelsStatusCommand auth overview", () => {
         fallbacks: undefined,
       },
       async () => {
-        const textRuntime = createRuntime();
-        await modelsStatusCommand({ agent: "main" }, textRuntime as never);
-        const output = (textRuntime.log as Mock).mock.calls
+        const textRuntime = createTestRuntime();
+        await modelsStatusCommand({ agent: "main" }, textRuntime);
+        const output = textRuntime.log.mock.calls
           .map((call: unknown[]) => String(call[0]))
           .join("\n");
         expect(output).toContain("Default (defaults)");
         expect(output).toContain("Fallbacks (0) (defaults)");
 
-        const jsonRuntime = createRuntime();
-        await modelsStatusCommand({ json: true, agent: "main" }, jsonRuntime as never);
+        const jsonRuntime = createTestRuntime();
+        await modelsStatusCommand({ json: true, agent: "main" }, jsonRuntime);
         const payload = parseFirstJsonLog(jsonRuntime);
         expect(payload.modelConfig).toEqual({
           defaultSource: "defaults",
@@ -2042,8 +2026,8 @@ describe("modelsStatusCommand auth overview", () => {
   });
 
   it("throws when agent id is unknown", async () => {
-    const localRuntime = createRuntime();
-    await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime as never)).rejects.toThrow(
+    const localRuntime = createTestRuntime();
+    await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime)).rejects.toThrow(
       'Unknown agent id "unknown".',
     );
   });
@@ -2051,7 +2035,7 @@ describe("modelsStatusCommand auth overview", () => {
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {};
     const localRuntime = {
-      ...createRuntime(),
+      ...createTestRuntime(),
       writeStdout: vi.fn(),
       writeJson: vi.fn(),
     };
@@ -2059,7 +2043,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
-      await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
+      await modelsStatusCommand({ check: true, plain: true }, localRuntime);
       expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
       expect(localRuntime.log).not.toHaveBeenCalled();
       expect(localRuntime.exit).toHaveBeenCalledWith(1);

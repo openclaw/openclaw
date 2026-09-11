@@ -12,6 +12,7 @@ import {
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
   createTestInstalledPluginIndex,
@@ -378,26 +379,63 @@ describe("plugins cli update", () => {
   });
 
   it.each([
-    { id: "missing-plugin", args: [] },
-    { id: "missing-plugin", args: ["--dry-run"] },
-    { id: "constructor", args: [] },
-    { id: "@acme/missing-plugin@beta", args: [] },
-  ])("rejects untracked update target $id $args", async ({ id, args }) => {
-    const config = {} as OpenClawConfig;
-    primeUpdateConfigSnapshot({ config });
-    primePluginUpdate(config, [
-      { pluginId: id, status: "skipped", message: `No install record for "${id}".` },
-    ]);
+    ["missing", "missing-plugin", [], undefined, undefined, "openclaw"],
+    ["preview", "missing-plugin", ["--dry-run"], undefined, undefined, "openclaw"],
+    ["object-name", "constructor", [], undefined, undefined, "openclaw"],
+    ["npm-spec", "@acme/missing-plugin@beta", [], undefined, undefined, "openclaw"],
+    ["profile", "missing-plugin", [], "work", undefined, "openclaw --profile work"],
+    [
+      "profile preview",
+      "missing-plugin",
+      ["--dry-run"],
+      "work",
+      undefined,
+      "openclaw --profile work",
+    ],
+    ["container", "missing-plugin", [], undefined, "demo", "openclaw --container demo"],
+    [
+      "container preview",
+      "missing-plugin",
+      ["--dry-run"],
+      undefined,
+      "demo",
+      "openclaw --container demo",
+    ],
+    ["container before profile", "missing-plugin", [], "work", "demo", "openclaw --container demo"],
+    [
+      "container before profile preview",
+      "missing-plugin",
+      ["--dry-run"],
+      "work",
+      "demo",
+      "openclaw --container demo",
+    ],
+  ] as const)(
+    "rejects untracked update target with %s guidance",
+    async (_name, id, args, profile, container, prefix) => {
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: container },
+        async () => {
+          const config = {} as OpenClawConfig;
+          primeUpdateConfigSnapshot({ config });
+          primePluginUpdate(config, [
+            { pluginId: id, status: "skipped", message: `No install record for "${id}".` },
+          ]);
 
-    await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
-      "__exit__:1",
-    );
+          await expect(runPluginsCommand(["plugins", "update", id, ...args])).rejects.toThrow(
+            "__exit__:1",
+          );
 
-    expect(runtimeErrors.at(-1)).toContain(`No tracked plugin or hook pack found for "${id}".`);
-    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
-    expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
-  });
+          expect(runtimeErrors.at(-1)).toBe(
+            `No tracked plugin or hook pack found for "${id}". Run "${prefix} plugins list" or "${prefix} hooks list" to inspect installed packages.`,
+          );
+          expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+          expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
+          expect(configWriteMock).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("rejects an npm update target shared by multiple tracked plugins", async () => {
     const config = {

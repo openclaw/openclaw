@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 351659,
-  "reason": "PR #141121 (Control UI warm reload) measures 351659 B startup gzip in Linux CI at 491b8bf880a (+1282 B, 0.37% over the 350377 B baseline; current main measures about 350640 B in the same CI). The boot record, roster-cache lifecycle, and transcript prewarm join the boot path after deferring the roster and snapshot readers. Fixed 358400 B cap and existing growth allowance retained.",
-  "updatedAt": "2026-09-08"
+  "startupJsGzipBytes": 353110,
+  "reason": "Codex cyber safety notices plus automatic Daybreak escalation: six composer notice states, their precedence projection, and thirteen strings on the startup path. Measured 353110 B by ui:check-performance:base against f2ce1992, a 579 B increase over the previous baseline where the growth allowance plus build variance permits 576 B. Trimming was attempted and measured: removing roughly 40 characters of notice copy moves the gzip total by 1 byte, and a deslop pass over the diff moved 0 B, so the growth is feature code rather than comments.",
+  "updatedAt": "2026-09-11"
 }

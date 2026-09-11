@@ -58,7 +58,6 @@ jobs:
         with:
           cache-mode: ${{ github.event_name == 'workflow_dispatch' && 'read-write' || 'restore' }}
           install-bun: "false"
-          install-trufflehog: "true"
 
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds

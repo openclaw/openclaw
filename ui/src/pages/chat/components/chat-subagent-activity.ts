@@ -1,6 +1,8 @@
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
+import remend from "remend";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
@@ -114,7 +116,22 @@ function renderSubagentActivityRow(
   task: TaskSummary,
   onOpenTaskDetail?: (task: TaskSummary) => void,
 ): TemplateResult {
-  const snippet = subagentActivitySnippet(task);
+  const rawSnippet = subagentActivitySnippet(task);
+  // Previews can end mid-emphasis. Repair delimiters without adding escapes
+  // intended for a Markdown renderer; the row and tooltip stay plain text.
+  const snippet = rawSnippet
+    ? flattenMarkdownToPlainText(
+        remend(rawSnippet, {
+          katex: false,
+          links: false,
+          images: false,
+          comparisonOperators: false,
+          singleTilde: false,
+          setextHeadings: false,
+          htmlTags: false,
+        }),
+      )
+    : undefined;
   const label = subagentActivityLabel(task);
   const content = html`
     ${renderSubagentActivityIndicator(task)}

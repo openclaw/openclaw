@@ -116,17 +116,38 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
+  bindSourceTurnId(operation, sourceTurnId) {
+    // Durable admission can finish after reset has replaced this operation.
+    if (
+      replyRunState.activeRunsByKey.get(operation.key) !== operation ||
+      operation.result ||
+      operation.abortSignal.aborted
+    ) {
+      return;
+    }
+    replyRunState.sourceTurnByKey.set(operation.key, sourceTurnId);
+  },
+  getSourceTurnId(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
+    if (!normalizedSessionKey) {
+      return undefined;
+    }
+    return replyRunState.sourceTurnByKey.get(normalizedSessionKey);
+  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
     });
-    if (!operation || !("injection" in resolved)) {
+    if (!operation || !("injection" in resolved) || !normalizedSessionKey) {
       return undefined;
     }
+    const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOperation]: operation,
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      ...(sourceTurnId ? { sourceTurnId } : {}),
     };
   },
   resolveCurrentInterruptTarget(sessionKey) {
@@ -530,6 +551,7 @@ const replyRunRegistryTestApi = {
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
+    replyRunState.sourceTurnByKey.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

@@ -5,9 +5,9 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 ## Source Ownership
 
 - Maintainers author `/clawhub/**` pages in [openclaw/clawhub](https://github.com/openclaw/clawhub/tree/main/docs). `scripts/docs-sync-publish.mjs` replaces the entire publish `docs/clawhub/` tree from that source. Do not keep authored copies here.
-- This repo therefore holds no `/clawhub/**` page sources, even though `docs/docs.json` lists them in the navigation. A local docs preview and `pnpm docs:check-links` report those routes as missing until you point `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` at a ClawHub checkout.
+- This repo therefore holds no `/clawhub/**` page sources, even though `docs/docs.json` lists them in the navigation. Both link-audit modes accept those declared routes without a ClawHub checkout; undeclared routes still fail.
 - Keep OpenClaw-specific skill and plugin guidance in the owning OpenClaw docs, such as `docs/cli/skills.md` and `docs/cli/plugins.md`. That guidance covers installation, update, verification, removal, and release trust. Standalone ClawHub CLI and publishing reference belongs upstream.
-- For links into `/clawhub/**`, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Local-only pages cannot prove published ClawHub routes or anchors.
+- For links into `/clawhub/**`, plain `pnpm docs:check-links` does not check fragments. To verify anchors, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Without that source, fragments into declared mirrored routes are reported as unverified.
 
 ## Published Link Rules
 
@@ -18,6 +18,7 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 - Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
 - Docs content must stay generic: no personal device names, hostnames, or local paths. Use placeholders like `user@gateway-host` and `~/path/to/skills`.
+- For tokens, API keys, and credential snippets, follow [Secret Placeholder Conventions](/reference/secret-placeholder-conventions). Keep example values obviously fake so secret scanners stay quiet.
 
 ## Docs Content Rules
 

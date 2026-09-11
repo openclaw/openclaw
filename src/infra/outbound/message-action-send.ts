@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import {
@@ -543,7 +544,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    await commitOutboundSessionRoute();
+    if (projectPluginMessageDeliveryFact(gatewayPluginAction.payload)?.status !== "suppressed") {
+      await commitOutboundSessionRoute();
+    }
     return annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,
@@ -615,7 +618,11 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   // a non-failed, non-suppressed return is their success proof. Failed and
   // suppressed sends leave the durable route untouched.
   const coreDeliveryStatus = send.sendResult?.deliveryStatus;
-  if (coreDeliveryStatus !== "failed" && coreDeliveryStatus !== "suppressed") {
+  if (
+    coreDeliveryStatus !== "failed" &&
+    coreDeliveryStatus !== "suppressed" &&
+    projectPluginMessageDeliveryFact(send.payload)?.status !== "suppressed"
+  ) {
     await commitOutboundSessionRoute();
   }
 

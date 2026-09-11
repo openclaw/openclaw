@@ -1,5 +1,6 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -186,6 +187,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
@@ -206,12 +208,12 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   prepareConfigCandidate?: (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-  }) => {
+  }) => Promise<{
     runtimeConfig: OpenClawConfig;
     compareConfig: OpenClawConfig;
     reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
     reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  };
+  }>;
   /** Reapplies fixed process-lifetime overlays before secrets preparation. */
   applyRuntimeConfigOverrides?: (config: OpenClawConfig) => OpenClawConfig;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
@@ -227,4 +229,6 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   acceptTerminalConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-export type ManagedGatewayConfigReloaderHandle = GatewayConfigReloaderHandle;
+export type ManagedGatewayConfigReloaderHandle = GatewayConfigReloaderHandle & {
+  ready: Promise<void>;
+};

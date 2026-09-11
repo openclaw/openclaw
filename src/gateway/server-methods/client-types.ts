@@ -7,6 +7,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
@@ -35,6 +36,8 @@ export type GatewayClient = {
   invalidated?: boolean;
   /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
   connectionSignal?: AbortSignal;
+  /** Server-attested browser origin captured during the WebSocket handshake. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;

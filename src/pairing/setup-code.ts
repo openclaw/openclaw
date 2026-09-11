@@ -322,6 +322,11 @@ function resolvePairingSetupAuthLabel(
   if (password) {
     return { label: "password" };
   }
+  if (mode === "none" || mode === "trusted-proxy") {
+    return {
+      error: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+    };
+  }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 

@@ -380,23 +380,85 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch. This direct route is
-intentional: downstream extended-stable evidence requires the canonical branch
-identity, while Telegram still authenticates the exact branch SHA:
+Use one remote-only procedure for `.33+` extended-stable validation. Keep these
+four identities separate:
+
+- **Validation SHA:** exact 40-character candidate commit to validate.
+- **Tooling SHA:** exact trusted-main commit whose workflows and helpers run.
+- **Context ref:** canonical `extended-stable/YYYY.M.33` branch containing the
+  candidate.
+- **Workflow transport ref:** immutable
+  `release-ci/<tooling-sha-prefix>-<unique-id>` branch at the Tooling SHA.
+
+GitHub workflow dispatch `--ref` accepts a branch or tag name, not a raw commit
+SHA. Never raw-dispatch this validation or hand-assemble its identity inputs.
+Use the checked helper exclusively:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
-  -f release_profile=stable
+VALIDATION_SHA="<exact-candidate-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+CONTEXT_REF="extended-stable/YYYY.M.33"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref "$CONTEXT_REF" \
+  --workflow-sha "$TOOLING_SHA" \
+  -f release_profile=stable \
+  -f run_release_soak=true \
+  -f fail_fast=false \
+  -f rerun_group=all \
+  -f reuse_evidence=false \
+  -f dispatch_release_evidence=false
 ```
 
-Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
-manifest `workflowRef`, and package versions identify the same commit. Save its
-successful `run_attempt` and require the final tag to resolve there. Reject
-`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
+The helper verifies both SHAs, creates the transport ref with the equivalent of
+the following GitHub refs operation, and dispatches from that branch:
+
+```bash
+gh api --method POST repos/openclaw/openclaw/git/refs \
+  -f ref="refs/heads/release-ci/${TOOLING_SHA:0:12}-<unique-id>" \
+  -f sha="$TOOLING_SHA"
+```
+
+Do not run that operation separately. The helper also supplies
+`ref=$VALIDATION_SHA`, `expected_sha=$VALIDATION_SHA`,
+`target_context_ref=$CONTEXT_REF`, and this exact trusted identity:
+
+```text
+{"fullRef":"refs/heads/main","ref":"main","sha":"<tooling-sha>"}
+```
+
+Outside this extended-stable procedure, a direct canonical-branch dispatch is
+valid only when that branch's own head is both the Validation SHA and the
+trusted workflow implementation to execute. It cannot use a different
+trusted-main Tooling SHA. Current extended-stable validation requires distinct
+trusted-main tooling, so it must use the immutable `release-ci/*` transport
+above. Direct canonical-branch and mutable-`main` dispatches are not valid
+alternatives for this procedure.
+
+Accept only a complete `rerun_group=all` run with a supported exact-target
+manifest. Bind its workflow SHA separately from the candidate SHA; require the
+manifest target, package versions, saved `run_attempt`, and final tag to identify
+the same candidate. Reject narrow runs, untrusted tooling, mismatched targets,
+and earlier-attempt evidence.
+
+Run the npm preflight separately from trusted `main`. Here `tag` is the exact
+candidate SHA; it is an npm-preflight input, not the workflow transport ref:
+
+```bash
+gh workflow run openclaw-npm-release.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f tag="$VALIDATION_SHA" \
+  -f preflight_only=true \
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch="$CONTEXT_REF"
+```
+
+This standalone run is a supplemental validation-only preflight. Do not pass
+its run ID as publication `preflight_run_id`: a `main` workflow head does not
+have the canonical candidate branch/SHA identity required by that publication
+input. Publication continues to use the Full Release Validation run's
+manifest-bound integrated npm artifact and exact run attempt.
 
 Product failures need an approved backport. Frozen-target tooling failures need
 the smallest behavior-preserving repair. Provider, approval, runner, or log

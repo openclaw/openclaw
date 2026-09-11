@@ -96,7 +96,7 @@ describe("Doctor retired plugin install config", () => {
         }
         // Child Doctor writes cannot invalidate the parent process cache.
         clearLoadInstalledPluginIndexInstallRecordsCache();
-        expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual(
+        expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual(
           empty ? { existing: durable } : { existing: durable, imported: legacy },
         );
         const validation = runBuiltRuntime(runtimeRoot, env, ["config", "validate"], 30_000);
@@ -142,7 +142,7 @@ describe("Doctor retired plugin install config", () => {
     expect(repaired.plugins, result.stderr).not.toHaveProperty("installs");
     expect(repaired).not.toHaveProperty("unknownKey");
     clearLoadInstalledPluginIndexInstallRecordsCache();
-    expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({
       imported: legacy,
     });
   }, 90_000);
@@ -205,7 +205,7 @@ describe("Doctor retired plugin install config", () => {
       result.stderr,
     ).not.toHaveProperty("installs");
     clearLoadInstalledPluginIndexInstallRecordsCache();
-    expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).plugins).not.toHaveProperty("installs");
   }, 90_000);
 
@@ -258,7 +258,7 @@ describe("Doctor retired plugin install config", () => {
     expect(repaired.plugins?.entries?.["migration-proof-plugin"], output).toEqual(entry);
     clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(
-      (await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env }))?.[
+      readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })?.[
         "migration-proof-plugin"
       ],
     ).toEqual(legacy);

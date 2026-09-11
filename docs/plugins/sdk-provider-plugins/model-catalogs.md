@@ -340,10 +340,33 @@ agent/workspace paths.
 
 If your auth flow also needs to patch `models.providers.*`, aliases, and
 the agent default model during onboarding, use the preset helpers from
-`openclaw/plugin-sdk/provider-onboard`. The narrowest helpers are
-`createDefaultModelPresetAppliers(...)`,
+`openclaw/plugin-sdk/provider-onboard`. For registered connection-only setup,
+use `createProviderConnectionPresetAppliers(...)` with a lazy `catalogModels`
+supplier. Ordinary setup writes connection facts, aliases, and a missing
+primary without copying the built-in catalog into saved configuration.
+Explicit `models.mode: "replace"` evaluates the supplier and merges generated
+rows behind authored rows. Each setup result owns its generated model data.
+
+Use `createDefaultModelsConnectionPresetAppliers(...)` when replace mode must
+retain the existing required-default rule: add the supplied `defaultModels`
+only when the configured provider lacks the selected `defaultModelId`.
+`applyProviderConnectionConfig(...)` provides the catalog variant for auth
+flows that resolve their endpoint or primary per invocation. These helpers
+preserve authored rows, existing aliases and fallbacks. The auth flow still
+owns any explicit default selection.
+
+The existing public `createDefaultModelPresetAppliers(...)`,
 `createDefaultModelsPresetAppliers(...)`, and
-`createModelCatalogPresetAppliers(...)`.
+`createModelCatalogPresetAppliers(...)` retain their catalog-seeding behavior
+in ordinary mode. The latter two also accept lazy model suppliers. A provider
+with published config helpers can share one preset descriptor between its
+existing helper and its new registered setup helper; migrate the registration
+without silently changing the published helper's contract.
+
+Independently published plugins must require the host release containing these
+helpers in `openclaw.compat.pluginApi`. The core release version-sync tool
+updates that range with the paired release; these imports do not work on an
+older host that lacks the helpers.
 
 When a provider's native endpoint supports streamed usage blocks on the
 normal `openai-completions` transport, prefer the shared catalog helpers in

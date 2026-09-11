@@ -13,8 +13,8 @@ const POST_TOOL_USE_PAYLOAD = {
   tool_response: { output: "ok" },
 };
 
-afterEach(() => {
-  testing.clearNativeHookRelaysForTests();
+afterEach(async () => {
+  await testing.clearNativeHookRelaysForTests();
 });
 
 describe("native hook relay gateway method", () => {

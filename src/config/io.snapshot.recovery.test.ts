@@ -69,6 +69,17 @@ async function prepare(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it.each(["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"])(
+    "%s does not prepare a recovery that would replace externally owned config",
+    async (mode) => {
+      const { root, io } = fixture();
+      io.env[mode] = "1";
+      const before = manifest(root);
+      await expect(prepare(io)).resolves.toBeNull();
+      expect(manifest(root)).toEqual(before);
+    },
+  );
+
   it("keeps an unobserved best-effort config read free of source sidecars", async () => {
     const { root, databasePath, io } = fixture();
     expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);

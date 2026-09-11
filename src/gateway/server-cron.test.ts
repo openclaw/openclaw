@@ -1513,10 +1513,7 @@ describe("buildGatewayCronService", () => {
       // stale snapshot. The revision fence must re-list instead of stopping the
       // freshly started owner as "removed".
       const originalList = state.cron.list.bind(state.cron);
-      let releaseStaleList!: () => void;
-      const staleListGate = new Promise<void>((resolve) => {
-        releaseStaleList = resolve;
-      });
+      const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
       let armed = true;
       state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
         if (!armed) {
@@ -1552,10 +1549,7 @@ describe("buildGatewayCronService", () => {
 
   it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
     const cancel = vi.fn();
-    let resolveWait!: () => void;
-    const wait = new Promise<void>((resolve) => {
-      resolveWait = resolve;
-    });
+    const { promise: wait, resolve: resolveWait } = createDeferred();
     const spawn = vi.fn(async () => ({
       runId: "run-single-drain-stream",
       startedAtMs: Date.now(),
@@ -1592,10 +1586,7 @@ describe("buildGatewayCronService", () => {
 
   it("retries stream teardown after a prior drain failure", async () => {
     vi.useFakeTimers();
-    let resolveWait!: () => void;
-    const wait = new Promise<void>((resolve) => {
-      resolveWait = resolve;
-    });
+    const { promise: wait, resolve: resolveWait } = createDeferred();
     let cancelAttempts = 0;
     const cancel = vi.fn(() => {
       cancelAttempts += 1;
@@ -1640,10 +1631,7 @@ describe("buildGatewayCronService", () => {
 
   it("reports a committed stream update as successful when source teardown fails", async () => {
     vi.useFakeTimers();
-    let resolveWait!: () => void;
-    const wait = new Promise<void>((resolve) => {
-      resolveWait = resolve;
-    });
+    const { promise: wait, resolve: resolveWait } = createDeferred();
     let cancelAttempts = 0;
     const cancel = vi.fn(() => {
       cancelAttempts += 1;
@@ -1689,10 +1677,7 @@ describe("buildGatewayCronService", () => {
 
   it("keeps a failed stream removal in an explicit terminal error state", async () => {
     vi.useFakeTimers();
-    let resolveWait!: () => void;
-    const wait = new Promise<void>((resolve) => {
-      resolveWait = resolve;
-    });
+    const { promise: wait, resolve: resolveWait } = createDeferred();
     let cancelAttempts = 0;
     const cancel = vi.fn(() => {
       cancelAttempts += 1;

@@ -1,3 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { compareProviderAuthChoiceGroups } from "../plugins/provider-auth-choice-order.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
@@ -262,4 +264,15 @@ export function listSetupInferencePrepareOptions(
         a.option.id.localeCompare(b.option.id, "en"),
     )
     .map(({ option }) => option);
+}
+
+export function choiceMatchesCredential(
+  choice: ProviderAuthChoiceMetadata,
+  credential: AuthProfileCredential,
+): boolean {
+  return (
+    normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
+    supportsSetupTextInference(choice.onboardingScopes) &&
+    (credential.type === "oauth" ? Boolean(choice.appGuidedAuth) : choice.appGuidedSecret === true)
+  );
 }

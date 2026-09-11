@@ -85,7 +85,7 @@ async function openRevision(page: Page, instructions: string): Promise<void> {
 }
 
 async function enterWorkshop(page: Page): Promise<void> {
-  await page.locator("#plugins-tab-workshop").click();
+  await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
   await waitForControlUiRoute(page, {
     pathname: "/skills/workshop",
     routeId: "skill-workshop",

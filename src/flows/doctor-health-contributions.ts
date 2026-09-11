@@ -19,6 +19,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import {
+  isUpdateDoctorRun,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
@@ -26,7 +27,7 @@ import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -122,8 +123,12 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
-  const { noteAuthProfileHealth, noteLegacyCodexProviderOverride, noteSharedAuthStoreStatus } =
-    await import("../commands/doctor-auth.js");
+  const {
+    noteAuthProfileHealth,
+    noteCopilotAmbientToken,
+    noteLegacyCodexProviderOverride,
+    noteSharedAuthStoreStatus,
+  } = await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
   await maybeRepairLegacyOAuthSidecarProfiles({
@@ -201,6 +206,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
+  noteCopilotAmbientToken(ctx.cfg, ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
   if (ctx.gatewayDetails.remoteFallbackNote) {
     note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");
@@ -297,6 +303,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });
+      recordDoctorHealthWarnings(
+        ctx,
+        [],
+        migrated.stepReceipts.flatMap((receipt) =>
+          receipt.outcome === "warning" ? receipt.warnings : [],
+        ),
+      );
       if (migrated.changes.length > 0) {
         note(migrated.changes.join("\n"), "Doctor changes");
       }
@@ -479,11 +492,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function resolveDoctorContributionHealthChecks(): Promise<
-  readonly DetectableHealthCheckInput[]
+  readonly DoctorHealthCheck[]
 > {
   const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
   const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: DetectableHealthCheckInput[] = [];
+  const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
       checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
@@ -508,7 +521,23 @@ async function runDoctorHealthContributionList(
 ): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  const deferred = updateDoctorRun
+    ? contributions.filter((contribution) => contribution.updatePolicy === "standalone")
+    : [];
+  if (deferred.length > 0) {
+    const { note } = await loadNoteModule();
+    note(
+      `Omitted during update: ${deferred.map((contribution) => contribution.option.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
+      "Update Doctor scope",
+    );
+  }
   for (const contribution of contributions) {
+    // Skip before opening a plugin snapshot; these diagnostics cannot establish
+    // required migration readiness and have their own standalone invocation.
+    if (updateDoctorRun && contribution.updatePolicy === "standalone") {
+      continue;
+    }
     try {
       const run = async () => {
         try {

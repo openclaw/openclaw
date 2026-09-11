@@ -16,20 +16,6 @@ func makeOutboxStore() throws -> (
     return (databases.store(gatewayID: "gw-test"), databases, directory)
 }
 
-extension OpenClawChatSQLiteTranscriptCache {
-    private func storeTestTranscript(
-        sessionKey: String,
-        agentID: String? = nil,
-        messages: [OpenClawChatMessage]) async
-    {
-        await storeCanonicalTranscript(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            messages: messages,
-            canonicalMessageIdempotencyKeys: Set(messages.compactMap(\.idempotencyKey)))
-    }
-}
-
 func outboxTestCommand(
     id: String,
     text: String,

@@ -18,8 +18,25 @@ export class AsyncWorkScope {
     return this.controller.signal;
   }
 
+  get hasPendingWork(): boolean {
+    return this.pending.size > 0;
+  }
+
   get isClosing(): boolean {
     return this.phase !== "open";
+  }
+
+  /** Enters synchronous work without inspecting or assimilating its return value. */
+  run<T>(run: () => T): T {
+    if (this.phase === "closed") {
+      throw new Error("Async work scope is closed");
+    }
+    const operation = this.registerWork<void>();
+    try {
+      return currentWorkScope.run(this, run);
+    } finally {
+      operation.resolve();
+    }
   }
 
   track<T>(run: () => T | Promise<T>): Promise<T> {
@@ -28,12 +45,7 @@ export class AsyncWorkScope {
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.
-    const operation = createDeferredCore<T>();
-    this.pending.add(operation.promise);
-    void operation.promise.then(
-      () => this.pending.delete(operation.promise),
-      () => this.pending.delete(operation.promise),
-    );
+    const operation = this.registerWork<T>();
     try {
       operation.resolve(currentWorkScope.run(this, run));
     } catch (error) {
@@ -42,12 +54,43 @@ export class AsyncWorkScope {
     return operation.promise;
   }
 
+  private registerWork<T>() {
+    const operation = createDeferredCore<T>();
+    this.pending.add(operation.promise);
+    void operation.promise.then(
+      () => this.pending.delete(operation.promise),
+      () => this.pending.delete(operation.promise),
+    );
+    return operation;
+  }
+
   beginClose(reason?: unknown): void {
     if (this.phase !== "open") {
       return;
     }
     this.phase = "closing";
     this.controller.abort(reason);
+  }
+
+  /** Starts the next phase in the same continuation that observes settled pending work. */
+  runWhenIdle<T>(run: () => T | Promise<T>): Promise<T> {
+    return AsyncWorkScope.runWhenAllIdle(
+      () => [this],
+      () => this.track(run),
+    );
+  }
+
+  /** Reselects owners so work admitted into a later phase is not mistaken for earlier work. */
+  static async runWhenAllIdle<T>(
+    selectScopes: () => readonly AsyncWorkScope[],
+    run: () => T | Promise<T>,
+  ): Promise<T> {
+    let scopes = selectScopes();
+    while (scopes.some((scope) => scope.pending.size > 0)) {
+      await Promise.allSettled(scopes.flatMap((scope) => Array.from(scope.pending)));
+      scopes = selectScopes();
+    }
+    return run();
   }
 
   async drain(): Promise<void> {
@@ -74,4 +117,50 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {
   return currentWorkScope.getStore()?.signal;
+}
+
+/** Preserves cancellation context until cooperating work ends, without delaying its result. */
+export async function runWithTrackedCancellation<T>(
+  signal: AbortSignal,
+  run: (signal: AbortSignal) => T | Promise<T>,
+): Promise<T> {
+  const parentWork = currentWorkScope.getStore();
+  if (!parentWork) {
+    return await run(signal);
+  }
+  const result = createDeferredCore<T>();
+  // The parent owns cleanup before invocation, but the caller only waits for its result.
+  void parentWork
+    .track(async () => {
+      const work = new AsyncWorkScope();
+      const controller = new AbortController();
+      const context = work.run(() => AsyncLocalStorage.snapshot());
+      const abort = () => context(() => controller.abort(signal.reason));
+      const closeWork = () => context(() => work.beginClose(parentWork.signal.reason));
+      signal.addEventListener("abort", abort, { once: true });
+      parentWork.signal.addEventListener("abort", closeWork, { once: true });
+      if (signal.aborted) {
+        abort();
+      }
+      if (parentWork.signal.aborted) {
+        closeWork();
+      }
+      try {
+        result.resolve(await work.track(() => run(controller.signal)));
+      } catch (error) {
+        result.reject(error);
+      } finally {
+        try {
+          await AsyncWorkScope.runWhenAllIdle(
+            () => [work],
+            () => context(() => work.drain()),
+          );
+        } finally {
+          signal.removeEventListener("abort", abort);
+          parentWork.signal.removeEventListener("abort", closeWork);
+        }
+      }
+    })
+    .catch(result.reject);
+  return await result.promise;
 }

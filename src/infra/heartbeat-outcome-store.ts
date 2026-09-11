@@ -97,7 +97,7 @@ function rowToOutcome(row: HeartbeatOutcomeRow): PersistedHeartbeatOutcome | und
 }
 
 /** Replaces the previous silent heartbeat outcome for one base session. */
-export function persistHeartbeatOutcome(params: {
+export async function persistHeartbeatOutcome(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
@@ -108,7 +108,7 @@ export function persistHeartbeatOutcome(params: {
   wakeReason?: string;
   occurredAt: number;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): Promise<void> {
   if (params.response.notify || params.response.outcome === "no_change") {
     return;
   }
@@ -178,15 +178,17 @@ export function persistHeartbeatOutcome(params: {
 }
 
 /** Claims the latest outcome for one user run while allowing that run's retries. */
-export function claimHeartbeatOutcomeForRun(params: {
+export async function claimHeartbeatOutcomeForRun(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
   runId: string;
   env?: NodeJS.ProcessEnv;
-}): PersistedHeartbeatOutcome | undefined {
+  assertCurrent?: () => void;
+}): Promise<PersistedHeartbeatOutcome | undefined> {
   return runOpenClawAgentWriteTransaction(
     ({ db }) => {
+      params.assertCurrent?.();
       const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
       const row = executeSqliteQuerySync(
         db,
@@ -246,14 +248,14 @@ function buildHeartbeatOutcomeContext(
 }
 
 /** Claim bounded next-user context only after the runtime owner has admitted the turn. */
-export function claimHeartbeatContextForUserRun(
+export async function claimHeartbeatContextForUserRun(
   params: Omit<Parameters<typeof claimHeartbeatOutcomeForRun>[0], "sessionKey"> & {
     sessionKey?: string;
     trigger?: EmbeddedRunTrigger;
     detached?: boolean;
     assertCurrent: (() => void) | undefined;
   },
-): string | undefined {
+): Promise<string | undefined> {
   if (params.trigger !== "user" || params.detached || !params.sessionKey) {
     return undefined;
   }
@@ -261,7 +263,7 @@ export function claimHeartbeatContextForUserRun(
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }
   params.assertCurrent();
-  return buildHeartbeatOutcomeContext(
-    claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey }),
-  );
+  const outcome = await claimHeartbeatOutcomeForRun({ ...params, sessionKey: params.sessionKey });
+  params.assertCurrent();
+  return buildHeartbeatOutcomeContext(outcome);
 }

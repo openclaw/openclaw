@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   validatePackageExtensionEntriesForInstall,
   resolvePackageRuntimeExtensionSources,
@@ -27,6 +27,8 @@ import {
 import { runPluginsPackCommand } from "./plugins-feature-artifact.js";
 
 const directories: string[] = [];
+let pristineParent: string | undefined;
+let pristineFixturePromise: Promise<string> | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
@@ -34,9 +36,16 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
-  directories.push(parent);
+afterAll(async () => {
+  await pristineFixturePromise?.catch(() => undefined);
+  if (pristineParent) {
+    await fs.rm(pristineParent, { recursive: true, force: true });
+  }
+});
+
+async function createPristineFixture() {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-seed-"));
+  pristineParent = parent;
   const rootDir = path.join(parent, "draft-review");
   await runPluginsInitCommand("draft-review", { directory: rootDir, type: "feature" });
   await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
@@ -60,6 +69,17 @@ async function fixture() {
       'const __dirname = "local"; const resourceNames = { __filename: "import.meta.url" }; if (__dirname !== "local" || !resourceNames.__filename) throw new Error("Local resource names failed");\n',
   );
   await runPluginsBuildCommand({ root: rootDir });
+  return rootDir;
+}
+
+async function fixture() {
+  const pristineRoot = await (pristineFixturePromise ??= createPristineFixture());
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-"));
+  directories.push(parent);
+  const rootDir = path.join(parent, "draft-review");
+  await fs.cp(pristineRoot, rootDir, { recursive: true, verbatimSymlinks: true });
+  // Preserve the per-path module cache established by the original build before case mutations.
+  await loadToolPlugin({ rootDir, entryPath: path.join(rootDir, "dist/index.js") });
   return { rootDir, parent };
 }
 

@@ -111,9 +111,8 @@ export npm_config_fund=false
 export npm_config_audit=false
 export PATH="$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
 
-echo "Installing OpenClaw package under node-A prefix: $NPM_PREFIX_A"
 openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"
-echo "Installed. Checking openclaw location..."
+echo "Checking openclaw location..."
 
 OPENCLAW_A="$(command -v openclaw)"
 echo "openclaw binary: $OPENCLAW_A"
