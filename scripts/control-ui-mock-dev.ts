@@ -2025,7 +2025,7 @@ async function createChatPickerScenario(
       status: "failed",
       lastRunError: "Model access expired: openai/gpt-5-mini",
     }),
-    // Running rows with participants exercise the collaborative orbit in the lead slot.
+    // Running rows with participants exercise the paired run trace in the lead slot.
     sessionRow("agent:main:release-prep", "Release 2026.9.4 preparation", baseTime - 82_000, {
       createdActor: MOCK_ACTOR_PETER,
       execCwd: "/Users/demo/Work/openclaw",
