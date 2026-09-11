@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
@@ -949,22 +950,29 @@ const config = {
 } as const;
 
 const configuredWorkspaces = new Map(Object.entries(config.workspaces));
-// Browser roots come from authoring metadata; the runtime manifest names only
-// compiled assets. Keep each plugin's remaining files subject to reachability.
-const browserWorkspaces = Object.fromEntries(
+// Declared runtime, setup, worker, and browser roots need no static import edge.
+// Keep each plugin's remaining files subject to reachability.
+const artifactWorkspaces = Object.fromEntries(
   fs
     .globSync(`${BUNDLED_PLUGIN_ROOT_DIR}/*/package.json`)
     .toSorted()
     .flatMap((manifestPath) => {
-      const source = controlUiSource(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
-      if (!source) {
-        return [];
-      }
+      const packageJson = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const browserSource = controlUiSource(packageJson);
+      const sources = [
+        ...(browserSource ? [browserSource] : []),
+        ...collectPluginSourceEntries(packageJson),
+      ];
       const workspace = path.dirname(manifestPath).replaceAll("\\", "/");
       const settings =
         configuredWorkspaces.get(workspace) ?? config.workspaces[`${BUNDLED_PLUGIN_ROOT_DIR}/*`];
-      return [[workspace, { ...settings, entry: [...settings.entry, `${source}!`] }]];
+      return [
+        [
+          workspace,
+          { ...settings, entry: [...settings.entry, ...sources.map((source) => `${source}!`)] },
+        ],
+      ];
     }),
 );
 
-export default { ...config, workspaces: { ...config.workspaces, ...browserWorkspaces } };
+export default { ...config, workspaces: { ...config.workspaces, ...artifactWorkspaces } };
