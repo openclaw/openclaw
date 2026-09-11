@@ -15,6 +15,7 @@ import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const models = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id, name: id },
@@ -187,11 +188,14 @@ suite.define(() => {
           const pickers = settings.locator(".model-providers__defaults openclaw-select-picker");
           const primary = pickers.first();
           const trigger = primary.locator(".picker-select__trigger");
-          const capture = async (name: string) =>
-            fs.writeFile(
-              path.join(suite.artifactDir, name),
-              await takeControlUiViewportScreenshot(page, settings, [primary]),
-            );
+          const capture = async (name: string) => {
+            if (captureEnabled) {
+              await fs.writeFile(
+                path.join(suite.artifactDir, name),
+                await takeControlUiViewportScreenshot(page, settings, [primary]),
+              );
+            }
+          };
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           await expect
@@ -364,7 +368,7 @@ suite.define(() => {
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
-        await page.keyboard.press("Control+K");
+        await page.keyboard.press("ControlOrMeta+K");
         await page.locator(".cmd-palette__input").fill("refresh-fixture");
         const model = page.getByRole("option", {
           name: "refresh-fixture:latest ollama",
@@ -376,7 +380,9 @@ suite.define(() => {
           .locator(".cmd-palette")
           .getByText(warning, { exact: true })
           .waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
+        }
 
         providerMode = "empty";
         expect((await refresh()).providerOutcomes).toContainEqual({
@@ -389,7 +395,9 @@ suite.define(() => {
           .locator(".cmd-palette")
           .getByText(warning, { exact: true })
           .waitFor({ state: "hidden" });
-        await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-empty.png") });
+        if (captureEnabled) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-empty.png") });
+        }
         console.log(
           "catalog-refresh-consumer-proof",
           JSON.stringify({
@@ -483,7 +491,7 @@ suite.define(() => {
           });
           await page.goto(browserUrl);
           await waitForControlUiGatewayReady(page);
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
           await input.fill("palette-");
           const retiring = page.getByRole("option", {
@@ -495,11 +503,15 @@ suite.define(() => {
             exact: true,
           });
           await retiring.waitFor({ state: "visible" });
-          await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
+          }
           await publish("palette-published");
           await expect.poll(() => published.count()).toBe(1);
           expect(await retiring.count()).toBe(0);
-          await page.screenshot({ path: path.join(suite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "published.png") });
+          }
 
           rejectCatalogReplies = true;
           await publish("palette-held");
@@ -508,7 +520,9 @@ suite.define(() => {
             .filter({ hasText: "Model search unavailable" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
-          await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
+          }
           rejectCatalogReplies = false;
           await input.fill("palette-held");
           const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
@@ -516,8 +530,14 @@ suite.define(() => {
           await status.waitFor({ state: "hidden" });
           await input.press("Enter");
           await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-          await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
+          // History changes before the new view commits; capture must not supply that wait.
+          const settings = page.locator("openclaw-model-providers-page");
+          await settings.waitFor({ state: "visible" });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
+          }
           await page.goBack();
+          await settings.waitFor({ state: "hidden" });
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
@@ -526,7 +546,7 @@ suite.define(() => {
             .click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           await input.fill("palette");
           await status.waitFor({ state: "visible" });
           expect(catalogParams.length).toBeGreaterThan(requestsBeforeOpen);
@@ -535,9 +555,11 @@ suite.define(() => {
             agentId: "reviewer",
           });
           expect(await recovered.count()).toBe(0);
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "selected-agent-failure.png"),
-          });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "selected-agent-failure.png"),
+            });
+          }
           rejectCatalogReplies = false;
           await input.fill("palette-held");
           await recovered.waitFor({ state: "visible" });

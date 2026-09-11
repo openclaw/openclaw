@@ -148,6 +148,9 @@ export async function readCodexAppServerUsage(options: {
   authProfileId?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
+  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
+  authRequirement?: CodexAppServerClientOptions["authRequirement"];
+  assertCurrent?: () => void;
 }): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = Date.now() + options.timeoutMs;
   return await withCodexAppServerJsonClient(
@@ -158,6 +161,9 @@ export async function readCodexAppServerUsage(options: {
       ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
       config: options.config,
       startOptions: options.startOptions,
+      preparedAuth: options.preparedAuth,
+      authRequirement: options.authRequirement,
+      assertCurrent: options.assertCurrent,
       isolated: true,
       // A throwaway read-only child: bound shutdown inside the outer usage deadline.
       isolatedShutdown: CODEX_USAGE_ISOLATED_SHUTDOWN,
@@ -281,6 +287,7 @@ export async function withCodexAppServerJsonClient<T>(
             agentDir: params.agentDir,
             config: params.config,
             abandonSignal: timeoutController.signal,
+            assertCurrent: params.assertCurrent,
           });
           let scopeActive = true;
           const assertCurrent = () => {

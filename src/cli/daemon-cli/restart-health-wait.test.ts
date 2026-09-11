@@ -19,6 +19,112 @@ describe("restart health", () => {
 
   it.each([
     {
+      name: "waits for a slow update child",
+      marker: "1",
+      readyAtMs: 90_000,
+      outcome: "healthy",
+      elapsedMs: 90_000,
+    },
+    {
+      name: "keeps the standalone deadline",
+      marker: undefined,
+      readyAtMs: 90_000,
+      outcome: "timeout",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "honors a cleared update marker",
+      marker: "0",
+      readyAtMs: 90_000,
+      outcome: "timeout",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "bounds a live but unready update child",
+      marker: "1",
+      readyAtMs: Infinity,
+      outcome: "timeout",
+      elapsedMs: 300_000,
+    },
+    {
+      name: "honors an explicit shorter budget",
+      marker: "1",
+      readyAtMs: Infinity,
+      timeoutMs: 30_000,
+      outcome: "timeout",
+      elapsedMs: 30_000,
+    },
+    {
+      name: "does not reset the bound when a listener appears",
+      marker: "1",
+      readyAtMs: Infinity,
+      boundAtMs: 150_000,
+      outcome: "timeout",
+      elapsedMs: 300_000,
+      phase: "waiting for Gateway health and identity",
+    },
+    {
+      name: "does not reset the bound after migration",
+      marker: "1",
+      readyAtMs: Infinity,
+      migrationUntilMs: 290_000,
+      outcome: "timeout",
+      elapsedMs: 300_000,
+    },
+    {
+      name: "requires observed startup progress",
+      marker: "1",
+      readyAtMs: Infinity,
+      running: false,
+      outcome: "timeout",
+      elapsedMs: 60_000,
+    },
+  ])(
+    "$name",
+    async ({
+      marker,
+      readyAtMs,
+      timeoutMs,
+      boundAtMs,
+      migrationUntilMs,
+      running,
+      outcome,
+      elapsedMs,
+      phase,
+    }) => {
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? "free" : "busy",
+        listeners: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      if (running === false) {
+        vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+      }
+      const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
+        await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: marker },
+        timeoutMs,
+        expectedVersion: boundAtMs === undefined ? undefined : "2026.9.4",
+        isStartupMigrationActive: () => monotonicClock.nowMs < (migrationUntilMs ?? 0),
+      });
+      expect(snapshot.waitOutcome).toBe(outcome);
+      expect(snapshot.healthy).toBe(outcome === "healthy");
+      expect(snapshot.elapsedMs).toBe(elapsedMs);
+      if (outcome === "timeout") {
+        expect(renderRestartDiagnostics(snapshot)).toContain(
+          `Readiness budget exhausted after ${elapsedMs / 1000}s. Last observed startup phase: ${phase ?? (running === false ? "waiting for managed service" : "waiting for Gateway listener")}.`,
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
       name: "waits for consecutive healthy probes",
       pids: [8000, 8000, 8000],
       reachable: [true, true, true],
@@ -313,6 +419,28 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(6);
     expect(isStartupMigrationActive).toHaveBeenCalledTimes(7);
   });
+
+  it.each([false, true])(
+    "bounds an explicit readiness budget (migration=%s)",
+    async (migration) => {
+      const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
+        await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        timeoutMs: 120_000,
+        isStartupMigrationActive: () => migration,
+      });
+      expect(snapshot).toMatchObject({
+        healthy: false,
+        waitOutcome: "timeout",
+        elapsedMs: 120_000,
+      });
+      expect(renderRestartDiagnostics(snapshot)).toContain(
+        `Readiness budget exhausted after 120s. Last observed startup phase: ${migration ? "startup migration" : "waiting for Gateway listener"}.`,
+      );
+    },
+  );
 
   it("bounds a startup migration that never reaches readiness", async () => {
     inspectPortUsage.mockResolvedValue({

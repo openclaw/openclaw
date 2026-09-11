@@ -36,6 +36,7 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { CatalogIconController } from "../plugins/catalog-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
@@ -90,6 +91,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() clawhubIconUrls: Record<string, string> = {};
 
   get runtimeConfig(): ApplicationContext["runtimeConfig"] {
     return this.context.runtimeConfig;
@@ -111,6 +113,21 @@ class SkillsPage extends OpenClawLightDomElement {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetLoadedSkillState(),
     ensureInitialData: () => this.ensureInitialData(),
+  });
+  private readonly clawhubIcons = new CatalogIconController({
+    getFetchContext: () => ({
+      resourceBasePath: this.context.resourceBasePath,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      auth: {
+        hello: this.context.gateway.snapshot.hello,
+        settings: { token: this.context.gateway.connection.token },
+        password: this.context.gateway.connection.password,
+      },
+    }),
+    isConnected: () => this.gateway.connected,
+    onUrlsChange: (urls) => {
+      this.clawhubIconUrls = urls;
+    },
   });
   private readonly library = new SkillLibraryController(
     this,
@@ -164,12 +181,26 @@ class SkillsPage extends OpenClawLightDomElement {
     }
   }
 
+  override updated() {
+    this.clawhubIcons.sync(
+      [],
+      [
+        ...(this.clawhubSearchResults ?? []).flatMap((result) =>
+          result.icon ? [result.icon] : [],
+        ),
+        ...(this.clawhubDetail?.skill?.icon ? [this.clawhubDetail.skill.icon] : []),
+        ...(this.clawhubDetail?.owner?.image ? [this.clawhubDetail.owner.image] : []),
+      ],
+    );
+  }
+
   override disconnectedCallback() {
     this.subscriptions.clear();
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
     }
+    this.clawhubIcons.reset();
     super.disconnectedCallback();
   }
 
@@ -223,6 +254,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillCardContentKeys = {};
     this.skillCardLoadingKey = null;
     this.skillCardErrors = {};
+    this.clawhubIcons.reset();
   }
 
   private applyRouteData() {
@@ -471,6 +503,7 @@ class SkillsPage extends OpenClawLightDomElement {
             skillCardErrors: this.skillCardErrors,
             clawhubQuery: this.clawhubSearchQuery,
             clawhubResults: this.clawhubSearchResults,
+            clawhubIconUrls: this.clawhubIconUrls,
             clawhubSearchLoading: this.clawhubSearchLoading,
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,

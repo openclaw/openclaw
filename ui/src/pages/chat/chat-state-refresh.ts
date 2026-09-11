@@ -9,7 +9,7 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
@@ -62,6 +62,7 @@ export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.delete(host);
   host.chatModelCatalog = [];
   host.chatModelCatalogError = null;
+  host.chatModelCatalogRefreshFailed = undefined;
   host.chatModelsLoading = false;
   host.chatAccountSelection = null;
 }
@@ -244,7 +245,8 @@ async function loadChatModelCatalog(
         }
         host.chatModelCatalog = result.models;
         host.chatAccountSelection = result.accountSelection ?? null;
-        host.chatModelCatalogError = modelCatalogRefreshError(result);
+        host.chatModelCatalogError = null;
+        host.chatModelCatalogRefreshFailed = result.refreshFailed;
         return true;
       },
       (error: unknown) => {

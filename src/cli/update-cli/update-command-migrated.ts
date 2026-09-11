@@ -234,7 +234,7 @@ export async function continueMigratedUpdateInFreshProcess(
         maxOutputBytes: 1024 * 1024,
       });
     const child = executorFence
-      ? await withUpdateCommandExecutorChild(executorFence, runChild)
+      ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
     if (child.stdout) {
       process.stdout.write(child.stdout);

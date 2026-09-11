@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../config/io.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -79,6 +80,53 @@ function fixture(mode: "merge" | "replace" = "merge") {
 }
 
 describe("prepared catalog source composition", () => {
+  it("retains inherited catalogs and current request settings without custom model rows", async () => {
+    const { facts, staticConfig } = fixture();
+    const configPath = path.join(facts.input.agentDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: { apiKey: "current-config-key", headers: { "X-Current": "current" } },
+            codex: {},
+          },
+        },
+      }),
+    );
+    const snapshot = await createConfigIO({ configPath }).readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.sourceConfig.models?.providers?.openai).not.toHaveProperty("models");
+    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+      config: snapshot.sourceConfig,
+      modelsJsonContents: null,
+      pluginCatalogs: [],
+      pluginMetadataSnapshot: metadata,
+      staticProviderConfigs: { openai: staticConfig, codex: staticConfig },
+    });
+    expect(registry.getError()).toBeUndefined();
+    for (const provider of ["openai", "codex"]) {
+      expect(
+        registry
+          .getAll()
+          .filter((row) => row.provider === provider)
+          .map((row) => row.id),
+      ).toEqual(["curated-only", "shared"]);
+      expect(registry.find(provider, "shared")).toMatchObject({
+        baseUrl: endpoint,
+        maxTokens: 8192,
+        maxTokensSource: "discovered",
+      });
+    }
+    await expect(registry.getApiKeyAndHeaders(registry.find("openai", "shared")!)).resolves.toEqual(
+      {
+        ok: true,
+        apiKey: "current-config-key",
+        headers: { "X-Current": "current" },
+      },
+    );
+  });
+
   it.each(["merge", "replace"] as const)(
     "materializes duplicate current declarations once in %s mode",
     (mode) => {

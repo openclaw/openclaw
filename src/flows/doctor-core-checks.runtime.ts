@@ -1327,7 +1327,21 @@ export async function collectRuntimeToolSchemaFindings(
       }
     }
   } finally {
-    await Promise.all([...bundleRuntimeByContext.values()].map((runtime) => runtime.dispose()));
+    const cleanup = await Promise.allSettled(
+      [...bundleRuntimeByContext.values()].map(async (runtime) => await runtime.dispose()),
+    );
+    for (const outcome of cleanup) {
+      if (outcome.status === "rejected") {
+        findings.push({
+          checkId: "core/doctor/runtime-tool-schemas",
+          severity: "error",
+          message: "Configured MCP tool schema inspection could not confirm child-process cleanup.",
+          path: "mcp.servers",
+          requirement: formatErrorMessage(outcome.reason),
+          fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+        });
+      }
+    }
   }
   return findings;
 }

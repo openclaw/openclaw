@@ -120,7 +120,7 @@ export async function prepareGatewayServerBootstrap(input: {
           measure: (name, run) => startupTrace.measure(name, run),
         }),
       ));
-    assertConfiguredWorkspaceStateReady({
+    await assertConfiguredWorkspaceStateReady({
       cfg: captureConfigOverrideApplier()(read.snapshot.config),
     });
     return read;
@@ -437,7 +437,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
-  const prepareReloadCandidate = (params: {
+  const prepareReloadCandidate = async (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig?: OpenClawConfig;
@@ -477,7 +477,7 @@ export async function prepareGatewayServerBootstrap(input: {
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.
-    assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
+    await assertConfiguredWorkspaceStateReady({ cfg: runtimeConfig, env: runtimeEnv.env });
     return {
       runtimeConfig,
       compareConfig: reapplyCompareOverlays(params.sourceConfig),

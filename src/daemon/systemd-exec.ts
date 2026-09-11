@@ -6,6 +6,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
@@ -45,6 +46,24 @@ export async function execBusctlSystem(args: string[], timeoutMs?: number): Prom
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
   // Unit status can be in stdout while stderr contains a launcher diagnostic.
   return `${result.stderr} ${result.stdout}`.trim();
+}
+
+export function systemdInspectionError(
+  result: ExecResult,
+  fallback: string,
+  scope: SystemdUnitScope = "user",
+): Error {
+  if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
+    return new ServiceInspectionError("service-manager-access-denied");
+  }
+  if (
+    scope === "user" &&
+    result.termination === "exit" &&
+    isSystemdUserBusUnavailableDetail(readSystemctlDetail(result))
+  ) {
+    return new ServiceInspectionError("systemd-user-bus-unavailable");
+  }
+  return new Error(fallback);
 }
 
 export function isSystemctlMissing(result: ExecResult): boolean {
@@ -390,12 +409,18 @@ export async function assertSystemdAvailable(
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(res)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw systemdInspectionError(
+      res,
+      "systemctl not available; systemd user services are required on Linux.",
+    );
   }
   if (res.termination === "exit" && detail && !isSystemdUserScopeUnavailable(detail)) {
     return;
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw systemdInspectionError(
+    res,
+    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {

@@ -220,11 +220,13 @@ async function runPdfPrompt(params: {
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
+    manifestPlugins: preparedRuntime.metadataSnapshot,
     modelOverride: params.modelOverride,
     abortSignal: params.signal,
     run: async (provider, modelId) => {
       // Static snapshots serve configured models through prepared facts; a fresh registry can be empty.
       const resolved = await resolveModelAsync(provider, modelId, runtimeAgentDir, effectiveCfg, {
+        modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         ...preparedStores,
         preparedModelRuntime: preparedRuntime,

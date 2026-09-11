@@ -32,7 +32,7 @@ const runCommand: CrabboxCommandRunner = async ([binary]) => ({
   termination: "exit",
 });
 
-async function fixture(version = "0.54.0") {
+async function fixture(version = "0.55.0") {
   const root = tempDirs.make("crabbox-managed-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const candidate = path.join(root, "operator-crabbox");
@@ -93,7 +93,7 @@ describe("managed Crabbox", () => {
     );
   });
 
-  it.each(["0.55.0", "0.55.1", "1.0.0"])(
+  it.each(["0.56.0", "0.56.1", "1.0.0"])(
     "uses supported operator version %s without network or state mutation",
     async (version) => {
       const test = await fixture(version);
@@ -114,7 +114,7 @@ describe("managed Crabbox", () => {
       binary: test.binary,
       version: CRABBOX_MIN_VERSION,
     });
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
     ).toBe("keep me");
@@ -125,11 +125,11 @@ describe("managed Crabbox", () => {
         );
       }
     }
-    await fs.writeFile(test.binary, "0.56.0");
+    await fs.writeFile(test.binary, "0.57.0");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
-      version: "0.56.0",
+      version: "0.57.0",
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
@@ -155,7 +155,7 @@ describe("managed Crabbox", () => {
     });
     await expect(ensureManagedCrabboxBinary(params)).rejects.toThrow("checksum mismatch");
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
       version: CRABBOX_MIN_VERSION,
@@ -166,7 +166,7 @@ describe("managed Crabbox", () => {
     const test = await fixture();
     const staleRunner: CrabboxCommandRunner = async (argv, options) => ({
       ...(await runCommand(argv, options)),
-      stdout: "crabbox version 0.54.0",
+      stdout: "crabbox version 0.55.0",
     });
     await expect(
       ensureManagedCrabboxBinary({
@@ -174,7 +174,7 @@ describe("managed Crabbox", () => {
         env: test.env,
         runCommand: staleRunner,
       }),
-    ).rejects.toThrow("does not satisfy 0.55.0");
+    ).rejects.toThrow("does not satisfy 0.56.0");
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
   });
 
@@ -263,7 +263,7 @@ describe("managed Crabbox", () => {
     ).toBe("keep me");
   });
 
-  it.each(["missing", "0.54.0", "corrupt"])(
+  it.each(["missing", "0.55.0", "corrupt"])(
     "repairs a %s managed executable while preserving the previous directory",
     async (damage) => {
       const test = await fixture();
@@ -277,7 +277,7 @@ describe("managed Crabbox", () => {
         ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
       ).resolves.toEqual({ binary: test.binary, version: CRABBOX_MIN_VERSION });
       expect(await fs.readFile(test.binary, "utf8")).toBe(CRABBOX_MIN_VERSION);
-      expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+      expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
       const parent = path.dirname(destination);
       const entries = await fs.readdir(parent);
       const backups = entries.filter((name) =>
@@ -463,10 +463,11 @@ describe("managed Crabbox", () => {
 
 describe("Crabbox version admission", () => {
   it.each([
-    ["0.54.9", "outdated"],
-    ["0.55.0-rc.1", "outdated"],
-    ["0.55.0+build.1", "supported"],
-    ["0.56.0-dev", "supported"],
+    ["0.55.0", "outdated"],
+    ["0.55.9", "outdated"],
+    ["0.56.0-rc.1", "outdated"],
+    ["0.56.0+build.1", "supported"],
+    ["0.57.0-dev", "supported"],
     ["0.9007199254740993.0", "indeterminate"],
     ["development", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {

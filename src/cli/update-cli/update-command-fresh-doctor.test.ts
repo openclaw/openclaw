@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfigIO } from "../../config/io.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -67,6 +71,7 @@ const updateOptions = {
 };
 
 const validConfigSnapshot = {
+  exists: true,
   valid: true as const,
   parsed: {},
   config: {},
@@ -147,6 +152,60 @@ describe("post-plugin update readiness", () => {
       ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
       ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
     ]);
+  });
+
+  it.each([false, true])(
+    "preserves an unconfigured install through finalization (Doctor: %s)",
+    async (freshDoctorRequired) => {
+      await withTempHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const io = createConfigIO({ configPath, observe: false });
+        mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
+        const runNormally = mocks.runExec.getMockImplementation()!;
+        mocks.runExec.mockImplementation(async (command, args: string[], options) => {
+          if (args.includes("validate")) {
+            throw new Error("Config file not found");
+          }
+          return await runNormally(command, args, options);
+        });
+
+        const result = await completePostCorePluginUpdate({
+          ...updateOptions,
+          freshDoctorRequired,
+        });
+
+        expect(result.pluginUpdate.status).toBe("ok");
+        expect(result.configSnapshot).toMatchObject({ exists: false, valid: true });
+        expect(mocks.runExec.mock.calls.some(([, args]) => args.includes("--lint"))).toBe(true);
+        await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
+  it("validates a config created during fresh Doctor before allowing restart", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({ configPath, observe: false });
+      mocks.readConfig.mockImplementation(() => io.readConfigFileSnapshot());
+      mocks.runExec.mockImplementation(async (_command, args: string[]) => {
+        if (args.includes("--repair")) {
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
+        }
+        if (args.includes("validate")) {
+          throw new Error("Config invalid");
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const result = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.configSnapshot).toMatchObject({ exists: true, valid: false });
+      expect(result.pluginUpdate).toMatchObject({
+        status: "error",
+        reason: "post-plugin-doctor-invalid-config",
+      });
+    });
   });
 
   it("consumes nonfatal Doctor warnings before reporting successful convergence", async () => {
@@ -243,7 +302,8 @@ describe("post-plugin update readiness", () => {
     });
   });
 
-  it("returns the owner-provided remediation and refuses restart when readiness fails", async () => {
+  it.each([true, false])("preserves readiness failures (config exists: %s)", async (exists) => {
+    mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, exists });
     mocks.runExec.mockImplementation(async (_command, args: string[]) => {
       if (args.includes("--lint")) {
         throw Object.assign(new Error("readiness failed"), {

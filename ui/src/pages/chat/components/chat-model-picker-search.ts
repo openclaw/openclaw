@@ -109,14 +109,16 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
       matches.push({ row, score, index });
     }
   });
+  const selectableRows: HTMLButtonElement[] = [];
   matches
     .toSorted((left, right) => left.score - right.score || left.index - right.index)
     .forEach(({ row }, rank) => {
       row.dataset.chatModelRank = String(rank);
       row.style.setProperty("--chat-model-rank", String(rank));
+      if (!row.disabled) {
+        selectableRows.push(row);
+      }
     });
-  const visibleRows = visibleModelRows(menu);
-  const selectableRows = selectableModelRows(menu);
   updateModelShortcuts(menu, selectableRows);
   const selected = selectableRows.find((row) => row.getAttribute("aria-selected") === "true");
   const highlighted = preserveHighlight
@@ -128,7 +130,7 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
   );
   const empty = menu.querySelector<HTMLElement>("[data-chat-model-search-empty]");
   if (empty) {
-    empty.hidden = !query || visibleRows.length > 0;
+    empty.hidden = !query || matches.length > 0;
   }
 }
 
@@ -162,6 +164,9 @@ export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
 }
 
 export function handleModelSearchKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    return;
+  }
   // SAFETY: Bound only to the model-search input’s keydown event.
   const input = event.currentTarget as HTMLInputElement;
   const menu = pickerMenu(input);
@@ -178,9 +183,6 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
       event.preventDefault();
       highlighted.click();
     }
-    return;
-  }
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
     return;
   }
   event.preventDefault();

@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTempDirSync } from "../../src/test-helpers/temp-dir.js";
 
@@ -54,12 +57,16 @@ describe("write-package-dist-inventory direct entry", () => {
         JSON.parse(
           fs.readFileSync(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), "utf8"),
         ),
-      ).toEqual(["dist/entry.js"]);
+      ).toEqual(["dist/entry.js", PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
       expect(
         fs.readFileSync(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
       ).toBe("pending\n");
       expect(fs.readdirSync(path.join(packageRoot, "dist")).sort()).toEqual(
-        ["entry.js", path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)].sort(),
+        [
+          "entry.js",
+          path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+          path.basename(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH),
+        ].sort(),
       );
     });
   });

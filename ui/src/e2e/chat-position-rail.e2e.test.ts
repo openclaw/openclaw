@@ -111,6 +111,48 @@ suite.define(() => {
           expect(await rail.locator('[role="status"]').count()).toBe(0);
           await captureUiProof(suite, page, "chat-position-rail", "idle.png");
 
+          // Exercise the composite through real Tab navigation, including reentry.
+          const focusedMarkerId = () =>
+            page.evaluate(() => document.activeElement?.getAttribute("data-position-marker-id"));
+          const currentMarkerId = () =>
+            rail.locator('[aria-current="true"]').getAttribute("data-position-marker-id");
+          await expect.poll(() => rail.locator('[aria-current="true"]').count()).toBe(1);
+          await transcript.focus();
+          const entryId = await currentMarkerId();
+          await page.keyboard.press("Tab");
+          await expect.poll(focusedMarkerId).toBe(entryId);
+          await page.keyboard.press("Home");
+          await page.keyboard.press("ArrowDown");
+          await expect.poll(focusedMarkerId).toBe("position-rail-1");
+          await expect.poll(() => preview.count()).toBe(1);
+          await page.keyboard.press("ArrowUp");
+          await expect.poll(focusedMarkerId).toBe("position-rail-0");
+          await expect.poll(() => rail.locator('[tabindex="0"]').count()).toBe(1);
+          await page.keyboard.press("Tab");
+          expect(await focusedMarkerId()).toBeNull();
+          await transcript.focus();
+          const reentryId = await currentMarkerId();
+          await page.keyboard.press("Tab");
+          await expect.poll(focusedMarkerId).toBe(reentryId);
+          await page.keyboard.press("Shift+Tab");
+          expect(await transcript.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Home");
+          await page.keyboard.press("Enter");
+          await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+          await page.keyboard.press("Escape");
+          expect(await transcript.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await expect.poll(() => preview.count()).toBe(0);
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("End");
+          await page.keyboard.press(" ");
+          await expect.poll(currentMarkerId).toBe("position-rail-239");
+          await page.keyboard.press("Escape");
+
           const currentMarkerIndex = () =>
             markers.evaluateAll((items) =>
               items.findIndex((item) => item.getAttribute("aria-current") === "true"),

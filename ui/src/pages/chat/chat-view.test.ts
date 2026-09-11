@@ -41,6 +41,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
@@ -1085,6 +1086,10 @@ describe("chat run error", () => {
       const onQueueRetry = vi.fn();
       const container = renderChatView({
         canSend: false,
+        messages: [
+          { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
+          { role: "assistant", content: "Worker recovery is pending", timestamp: 4 },
+        ],
         queue: [
           {
             id: "ordinary",
@@ -1104,6 +1109,7 @@ describe("chat run error", () => {
           error: "Retained initial turn",
           initialTurn: {
             id: "initial",
+            sendRunId: "initial",
             text: "original prompt",
             createdAt: 1,
             sendAttempts: 1,
@@ -1115,6 +1121,13 @@ describe("chat run error", () => {
       });
       expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
       expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
+      const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
+      expect(transcript.indexOf("original prompt")).toBeLessThan(
+        transcript.indexOf("Gateway restarted"),
+      );
+      expect(transcript.indexOf("Worker recovery is pending")).toBeLessThan(
+        transcript.indexOf("later draft"),
+      );
       const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
       expect(buttons).toHaveLength(1);
       expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
@@ -4712,6 +4725,36 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { args: "example/model", allowed: true },
+    { args: "example/model explain this", allowed: false },
+  ])("checks the complete inline model command before sending $args", ({ args, allowed }) => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({
+      onDraftChange,
+      onSend,
+      onSlashCommand,
+      modelRequiredReason: "Connect a provider to send messages.",
+    });
+    inputDraftAtEnd(container, "retained draft /model");
+    keydownComposer(container, "Enter");
+    inputDraftAtEnd(container, `retained draft /model ${args}`);
+    keydownComposer(container, "Enter");
+    if (allowed) {
+      expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/model ${args}`);
+      expect(draft).toBe("retained draft ");
+    } else {
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(draft).toBe(`retained draft /model ${args}`);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("preserves a typed inline command alias when dispatching its argument", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -6879,20 +6922,68 @@ describe("chat welcome", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("omits the composer footer behind the empty model setup splash", () => {
+  it.each([
+    "/models",
+    "/model",
+    "/model example/model",
+    "/clear",
+    "/export-session",
+    "/new",
+    "/think high",
+  ])("keeps %s usable beside empty model setup", (draft) => {
+    const onModelSetup = vi.fn();
+    const onSend = vi.fn();
     const container = renderChatView({
-      canSend: false,
-      disabledBanner: {
-        kind: "composer-replacement",
-        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
-        actionLabel: "Connect an AI provider",
-        onAction: () => undefined,
-      },
+      draft,
+      modelRequiredReason: "Connect a provider to send messages.",
+      disabledBanner: createChatModelSetupBanner(onModelSetup),
       modelSetupRequired: true,
+      onSend,
     });
 
     expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
+    expect(getComposerTextarea(container).disabled).toBe(false);
+    const send = expectDefined(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+      "model-free command send button",
+    );
+    expect(send.disabled).toBe(false);
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+    container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Hello", "/compact", "/reset", "/model example/model explain this"])(
+    "keeps %s editable but prevents submission without model access",
+    (draft) => {
+      const onSend = vi.fn();
+      const container = renderChatView({
+        draft,
+        modelRequiredReason: "Connect a provider to send messages.",
+        onSend,
+      });
+      const textarea = getComposerTextarea(container);
+      expect(textarea.disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.disabled,
+      ).toBe(true);
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSend).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps model-free commands blocked in a read-only conversation", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      draft: "/models",
+      canSend: false,
+      modelRequiredReason: "Connect a provider to send messages.",
+      onSend,
+    });
+    expect(getComposerTextarea(container).disabled).toBe(true);
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {
@@ -7857,14 +7948,21 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models and filters them with keyboard selection", () => {
+  it("groups models and preserves ranked keyboard selection through catalog replacement", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
+        { id: "gemini-2.5-pro", name: "Anth model", provider: "google" },
+        {
+          id: "unavailable",
+          name: "Anth unavailable",
+          provider: "google",
+          available: false,
+          unavailableReason: "cooldown",
+        },
       ],
     });
     const onModelSelect = vi.fn(async () => true);
@@ -7912,10 +8010,13 @@ describe("chat model controls", () => {
     ).filter((option) => !option.hidden);
     expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
       "anthropic/claude-sonnet-4-6",
+      "google/gemini-2.5-pro",
+      "google/unavailable",
     ]);
-    expect(visibleOptions[0]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[1]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
+    expect(visibleOptions[2]?.disabled).toBe(true);
     expect(
-      visibleOptions[0]
+      visibleOptions[1]
         ?.querySelector("[data-chat-model-shortcut]")
         ?.getAttribute("data-chat-model-shortcut-number"),
     ).toBe("1");
@@ -7925,7 +8026,19 @@ describe("chat model controls", () => {
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");
+    expect(highlighted).toBe(visibleOptions[0]);
     expect(highlighted?.id).not.toBe("");
+    expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
+
+    state.chatModelCatalog = [
+      ...state.chatModelCatalog,
+      { id: "new-match", name: "Anth new", provider: "openai" },
+    ];
+    renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+    await Promise.resolve();
+    expect(container.querySelector("[data-chat-model-search]")).toBe(search);
+    expect(search?.value).toBe("anth");
+    expect(container.querySelector("[data-chat-model-highlighted]")).toBe(highlighted);
     expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));

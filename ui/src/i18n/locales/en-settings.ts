@@ -130,6 +130,11 @@ const enSettings = {
       cancelBuildMessage:
         "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
       buildCancelled: "Build canceled",
+      dismiss: "Dismiss",
+      dismissBuild: "Dismiss failed build",
+      dismissBuildMessage:
+        "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
+      buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
       buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
@@ -276,6 +281,15 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
+    login: {
+      action: "Connect provider",
+      title: "Connect a provider",
+      description: "Save credentials for this agent. Choose the active model separately.",
+      done: "Provider credentials saved.",
+      finishing: "Credentials are being saved. Wait for the result.",
+      sessionExpired:
+        "This sign-in session ended. Close this dialog and refresh Models to check the result.",
+    },
     subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
@@ -340,10 +354,9 @@ const enSettings = {
       placeholder: "Enter provider API key",
       replacePlaceholder: "Secret saved. Enter a new key to replace it.",
       set: "Set API key",
-      replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
-      removed: "API key removed.",
+      removed: "Saved API keys removed.",
       authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
     },
     probe: {
@@ -428,9 +441,6 @@ const enSettings = {
       adminRequired: "Browsing only. Model changes require operator.admin access.",
     },
     notes: {
-      saveKey: "Save API key for {provider} from Control UI",
-      removeKey: "Remove API key for {provider} from Control UI",
-      addProvider: "Add model provider {provider} from Control UI",
       defaultModel: "Update defaults from Control UI",
     },
   },
@@ -572,6 +582,15 @@ const enSettings = {
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
       computerControlProvider: "Computer Control provider",
+      unattendedDesktop: "Unattended desktop hosting",
+      unattendedDesktopHint:
+        "Keep this Mac awake between jobs while it is connected and hosting. Manual lock and logout are still respected; OpenClaw never unlocks the Mac.",
+      desktopAvailability: "Desktop availability",
+      desktopStates: {
+        locked: "Locked",
+        unlocked: "Unlocked",
+        unknown: "Unknown",
+      },
       peekaboo: "Peekaboo",
       cua: "CUA",
       cuaUnavailable: "CUA (driver not bundled)",

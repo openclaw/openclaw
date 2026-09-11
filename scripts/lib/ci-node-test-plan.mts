@@ -824,7 +824,7 @@ function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
   }
   return expandedGroups;
 }
-const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+export const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 // The full matrix is capped at 28 jobs. Admit the consistently slow serial
@@ -2284,7 +2284,7 @@ export function createNodeTestShardBundles(
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
   if (compactMode !== undefined) {
-    return createCompactNodeTestShardBundles(options, compactMode);
+    return createCompactNodeTestShardBundles(createNodeTestShards(options), options, compactMode);
   }
 
   const shards = createNodeTestShards(options);
@@ -2431,12 +2431,63 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ["core-unit-fast-isolated", getUnitFastIsolatedTestFiles],
 ]);
 
+type HostedToolingTailDonation = {
+  parentShardName: string;
+  file: string;
+  freedSeconds: number;
+};
+
+function selectHostedToolingTailDonation(
+  stripes: readonly string[][],
+  weightForFile: (file: string) => number,
+  secondsForWeight: (weight: number) => number,
+  selectedFile?: string,
+  selectedToolingFiles?: ReadonlySet<string>,
+): { file: string; donorIndex: number; freedSeconds: number } | undefined {
+  const tail = stripes.at(-1);
+  if (!tail) {
+    return undefined;
+  }
+  const tailWeight = tail.reduce((sum, file) => sum + weightForFile(file), 0);
+  let best: { file: string; donorIndex: number; freedSeconds: number } | undefined;
+  for (const [donorIndex, donor] of stripes.slice(0, -1).entries()) {
+    const donorWeight = donor.reduce((sum, file) => sum + weightForFile(file), 0);
+    const donorSeconds = secondsForWeight(donorWeight);
+    if (donor.length < 2 || donorSeconds <= COMPACT_EXCLUSIVE_JOB_SECONDS / 2) {
+      continue;
+    }
+    for (const file of donor) {
+      const weight = weightForFile(file);
+      const freedSeconds = donorSeconds - secondsForWeight(donorWeight - weight);
+      if (
+        (selectedFile !== undefined && file !== selectedFile) ||
+        (selectedToolingFiles !== undefined && !selectedToolingFiles.has(file)) ||
+        freedSeconds <= 0 ||
+        secondsForWeight(tailWeight + weight) > COMPACT_EXCLUSIVE_JOB_SECONDS / 2
+      ) {
+        continue;
+      }
+      if (
+        !best ||
+        freedSeconds > best.freedSeconds ||
+        (freedSeconds === best.freedSeconds && file.localeCompare(best.file) < 0)
+      ) {
+        best = { file, donorIndex, freedSeconds };
+      }
+    }
+  }
+  return best;
+}
+
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
   splitHostedToolingTails = false,
   balancedHostedToolingTailParents?: ReadonlySet<string>,
+  hostedToolingTailDonation?: HostedToolingTailDonation,
+  onHostedToolingTailDonation?: (donation: HostedToolingTailDonation) => void,
+  selectedToolingFiles?: ReadonlySet<string>,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -2484,13 +2535,17 @@ function splitOversizedCompactGroup(
 
   // The prerequisite is charged once per emitted job. Include it in placement
   // so a balanced test stripe still leaves room for its runtime build.
+  let tailDonation: HostedToolingTailDonation | undefined;
   const createStripes = (seconds: number) => {
+    tailDonation = undefined;
     const files = runtimePartition?.otherFiles ?? includePatterns;
+    const secondsForWeight = (weight: number) =>
+      packTooling ? Math.ceil((seconds * weight) / totalWeight) : weight;
     const batchWeight = (patterns: readonly string[]) => {
       const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
       const weight = patterns.reduce((sum, file) => sum + weightForFile(file), 0);
       return (
-        (packTooling ? Math.ceil((seconds * weight) / totalWeight) : weight) +
+        secondsForWeight(weight) +
         Math.round(
           (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0) *
             (packTooling ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
@@ -2532,6 +2587,40 @@ function splitOversizedCompactGroup(
           // Half-budget tails can share with another family instead of stranding
           // capacity. Keep full chunks and indivisible files at their original cost.
           stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 2));
+        }
+      }
+      const selectedDonation =
+        hostedToolingTailDonation?.parentShardName === group.shard_name
+          ? hostedToolingTailDonation
+          : undefined;
+      if (
+        (onHostedToolingTailDonation || selectedDonation) &&
+        runtimePartition === undefined &&
+        group.pretestBuildMode === undefined &&
+        !group.requiresDist
+      ) {
+        const donation = selectHostedToolingTailDonation(
+          stripes,
+          weightForFile,
+          secondsForWeight,
+          selectedDonation?.file,
+          selectedToolingFiles,
+        );
+        if (donation) {
+          if (selectedDonation) {
+            stripes[donation.donorIndex] = stripes[donation.donorIndex]!.filter(
+              (file) => file !== donation.file,
+            );
+            stripes[stripes.length - 1] = [...stripes.at(-1)!, donation.file].toSorted(
+              discoveryOrder,
+            );
+          } else {
+            tailDonation = {
+              parentShardName: group.shard_name,
+              file: donation.file,
+              freedSeconds: donation.freedSeconds,
+            };
+          }
         }
       }
     } else {
@@ -2592,6 +2681,9 @@ function splitOversizedCompactGroup(
     profileSeconds,
     runnerBackend === "github" ? (completeHostedSeconds ?? 0) : (completeBlacksmithSeconds ?? 0),
   );
+  if (tailDonation) {
+    onHostedToolingTailDonation?.(tailDonation);
+  }
   return stripes.map((patterns, index) => ({
     group: {
       ...group,
@@ -2613,27 +2705,129 @@ function splitOversizedCompactGroup(
 export function packNodeTestGroups<Group>(
   orderedGroups: readonly Group[],
   canShareJob: (bin: readonly [Group, ...Group[]], group: Group) => boolean,
+  allowGroupExchange = false,
 ): Array<[Group, ...Group[]]> {
   const bins: Array<[Group, ...Group[]]> = [];
+  const admits = ([first, ...rest]: [Group, ...Group[]]) => {
+    const admitted: [Group, ...Group[]] = [first];
+    for (const entry of rest) {
+      if (!canShareJob(admitted, entry)) {
+        return false;
+      }
+      admitted.push(entry);
+    }
+    return true;
+  };
+  // A single exchange can free both time and group slots without adding a job.
+  // Validate complete replacement bins before changing either existing bin.
+  const exchange = (group: Group) => {
+    for (const [leftIndex, left] of bins.entries()) {
+      for (const right of bins.slice(leftIndex + 1)) {
+        for (const [leftSlot, leftGroup] of left.entries()) {
+          for (const [rightSlot, rightGroup] of right.entries()) {
+            const nextLeft: [Group, ...Group[]] = [...left];
+            const nextRight: [Group, ...Group[]] = [...right];
+            nextLeft[leftSlot] = rightGroup;
+            nextRight[rightSlot] = leftGroup;
+            if (!admits(nextLeft) || !admits(nextRight)) {
+              continue;
+            }
+            const target = canShareJob(nextLeft, group)
+              ? nextLeft
+              : canShareJob(nextRight, group)
+                ? nextRight
+                : undefined;
+            if (target) {
+              target.push(group);
+              left.splice(0, left.length, ...nextLeft);
+              right.splice(0, right.length, ...nextRight);
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
   for (const group of orderedGroups) {
     const bin = bins.find((candidate) => canShareJob(candidate, group));
     if (bin) {
       bin.push(group);
-    } else {
+    } else if (!allowGroupExchange || !exchange(group)) {
       bins.push([group]);
     }
   }
   return bins;
 }
 
+/** Select complete tooling files without losing their canonical process and artifact owners. */
+export function createToolingNodeTestShardBundles(
+  targets: readonly string[],
+  options: Pick<NodeTestPlanOptions, "runnerBackend"> = {},
+): CompactNodeTestShard[] | null {
+  const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+  const selected = new Set(targets);
+  const owners = new Set<NodeTestShard>();
+  for (const target of selected) {
+    const plans = buildVitestRunPlans([target]);
+    const matches = shards.filter(
+      (shard) =>
+        shard.configs.length === 1 &&
+        shard.configs[0] === TOOLING_CONFIG &&
+        shard.includePatterns?.includes(target),
+    );
+    if (
+      plans.length !== 1 ||
+      plans[0]?.config !== TOOLING_CONFIG ||
+      plans[0].watchMode ||
+      plans[0].forwardedArgs.length > 0 ||
+      plans[0].includePatterns?.length !== 1 ||
+      plans[0].includePatterns[0] !== target ||
+      matches.length !== 1
+    ) {
+      return null;
+    }
+    owners.add(matches[0]!);
+  }
+  if (owners.size === 0) {
+    return null;
+  }
+  return createCompactNodeTestShardBundles(
+    shards.filter((shard) => owners.has(shard) || shard.requiresDist),
+    options,
+    "pull-request",
+    selected,
+  );
+}
+
 function createCompactNodeTestShardBundles(
+  sourceShards: readonly NodeTestShard[],
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
+  selectedToolingFiles?: ReadonlySet<string>,
   splitHostedToolingTails = false,
   balancedHostedToolingTailParents?: ReadonlySet<string>,
+  hostedToolingTailDonation?: HostedToolingTailDonation,
 ): CompactNodeTestShard[] {
   const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
-  const shards = createNodeTestShards(options).filter(
+  const packsHostedTooling = compactMode === "pull-request" && options.runnerBackend === "github";
+  let bestTailDonation: HostedToolingTailDonation | undefined;
+  const collectTailDonation =
+    packsHostedTooling && splitHostedToolingTails && !hostedToolingTailDonation
+      ? (donation: HostedToolingTailDonation) => {
+          if (
+            !bestTailDonation ||
+            donation.freedSeconds > bestTailDonation.freedSeconds ||
+            (donation.freedSeconds === bestTailDonation.freedSeconds &&
+              `${donation.parentShardName}/${donation.file}`.localeCompare(
+                `${bestTailDonation.parentShardName}/${bestTailDonation.file}`,
+              ) < 0)
+          ) {
+            bestTailDonation = donation;
+          }
+        }
+      : undefined;
+  const shards = sourceShards.filter(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
@@ -2660,7 +2854,7 @@ function createCompactNodeTestShardBundles(
       partition?.runtimeFiles.length && partition.otherFiles.length ? partition : undefined;
     // Resolve whole-config ownership before splitting so ordinary files do not
     // inherit a runtime build. Keep consumers together and split the remaining work.
-    const plannedGroups =
+    let plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
       COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
       runtimePartition !== undefined ||
@@ -2671,8 +2865,33 @@ function createCompactNodeTestShardBundles(
             runtimePartition,
             splitHostedToolingTails,
             balancedHostedToolingTailParents,
+            hostedToolingTailDonation,
+            collectTailDonation,
+            selectedToolingFiles,
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
+    const selectedTooling = selectedToolingFiles && group.configs.includes(TOOLING_CONFIG);
+    if (selectedTooling) {
+      // Keep the parent's admission cost and partition policy, but never report
+      // a precise subset as a sample of the complete canonical stripe.
+      plannedGroups = plannedGroups.flatMap((planned) => {
+        const includePatterns = planned.group.includePatterns?.filter((file) =>
+          selectedToolingFiles.has(file),
+        );
+        return includePatterns?.length
+          ? [{ ...planned, group: { ...planned.group, includePatterns } }]
+          : [];
+      });
+      const generation = createCompactSplitTimingGeneration({
+        configs: group.configs,
+        env: group.env,
+        parentShardName: group.shard_name,
+        stripes: plannedGroups.map((planned) => planned.group.includePatterns!),
+      });
+      plannedGroups.forEach((planned, index) => {
+        planned.group.timing_key = generation.timingKeys[index]!;
+      });
+    }
     for (const planned of plannedGroups) {
       planned.group.runner = resolveCiNodeTestRunner(
         {
@@ -2691,7 +2910,7 @@ function createCompactNodeTestShardBundles(
       // The current complete-file membership always retains its parent-derived
       // floor. A matching child sample may raise it, but an old partition must
       // never erase newly assigned work.
-      if (planned.group.shard_name !== group.shard_name) {
+      if (selectedTooling || planned.group.shard_name !== group.shard_name) {
         synthesizedSplitSeconds.set(compactGroupTimingKey(planned.group), planned.seconds);
       }
     }
@@ -2729,7 +2948,6 @@ function createCompactNodeTestShardBundles(
       .filter((family): family is string => family !== undefined);
     return new Set(families).size === families.length;
   };
-  const packsHostedTooling = compactMode === "pull-request" && options.runnerBackend === "github";
   const usesBlacksmithCapacity = (runner: string) =>
     isBlacksmithProfile ||
     (options.runnerBackend === "hybrid" &&
@@ -2755,7 +2973,10 @@ function createCompactNodeTestShardBundles(
     if (packsHostedTooling) {
       hostedToolingGroups.push(...sortedGroups.filter(isHostedToolingGroup));
     }
-    const bins = packNodeTestGroups(anchorGroups, (candidate, group) => {
+    const canShareCompactJob = (
+      candidate: readonly [NodeTestShardGroup, ...NodeTestShardGroup[]],
+      group: NodeTestShardGroup,
+    ) => {
       const exclusive = isExclusiveCompactGroup(group);
       // Keep ordinary work off serial runtime hosts. Hybrid exclusive/dist bins
       // retain their existing prerequisite sharing and admission policy.
@@ -2795,7 +3016,8 @@ function createCompactNodeTestShardBundles(
         (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
         estimateBinSeconds(combined) <= secondsCap
       );
-    });
+    };
+    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
     bins.sort(
       (a, b) => Number(isExclusiveCompactGroup(a[0])) - Number(isExclusiveCompactGroup(b[0])),
     );
@@ -2914,25 +3136,52 @@ function createCompactNodeTestShardBundles(
     if (packsHostedTooling && !splitHostedToolingTails) {
       // Repartition once at the file owner so timing identities and build costs
       // describe the smaller tails before the same admission checks pack them.
-      return createCompactNodeTestShardBundles(options, compactMode, true);
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        true,
+      );
     }
-    if (packsHostedTooling && balancedHostedToolingTailParents === undefined) {
-      // Only failed half-budget overflow bins select the final construction.
+    if (
+      packsHostedTooling &&
+      balancedHostedToolingTailParents === undefined &&
+      hostedToolingTailDonation === undefined
+    ) {
+      // Only failed half-budget overflow bins select balanced tail families.
       // Use construction order, before the returned jobs are sorted by check name.
       const overflowTailParents = new Set(
         packedBins
           .slice(COMPACT_NODE_TEST_JOB_CAP)
+          .flat()
           .filter(
-            (bin) =>
-              bin.length === 1 &&
-              isHostedToolingGroup(bin[0]) &&
-              (bin[0].includePatterns?.length ?? 0) > 1,
+            (group) => isHostedToolingGroup(group) && (group.includePatterns?.length ?? 0) > 1,
           )
-          .map(([group]) => group.shard_name.replace(/-hosted-\d+$/u, "")),
+          .map((group) => group.shard_name.replace(/-hosted-\d+$/u, "")),
       );
       if (overflowTailParents.size > 0) {
-        return createCompactNodeTestShardBundles(options, compactMode, true, overflowTailParents);
+        return createCompactNodeTestShardBundles(
+          sourceShards,
+          options,
+          compactMode,
+          selectedToolingFiles,
+          true,
+          overflowTailParents,
+        );
       }
+    }
+    if (bestTailDonation) {
+      // One largest safe donation opens donor capacity without changing the family selector.
+      return createCompactNodeTestShardBundles(
+        sourceShards,
+        options,
+        compactMode,
+        selectedToolingFiles,
+        true,
+        balancedHostedToolingTailParents,
+        bestTailDonation,
+      );
     }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,

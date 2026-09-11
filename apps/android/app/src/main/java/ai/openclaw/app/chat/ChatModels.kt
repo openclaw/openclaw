@@ -414,13 +414,7 @@ enum class ChatPermissionMode(
 
 internal val defaultChatThinkingLevelSelection =
   ChatThinkingLevelSelection(
-    options =
-      listOf(
-        ChatThinkingLevelOption(id = "off", label = "Off"),
-        ChatThinkingLevelOption(id = "low", label = "Low"),
-        ChatThinkingLevelOption(id = "medium", label = "Medium"),
-        ChatThinkingLevelOption(id = "high", label = "High"),
-      ),
+    options = emptyList(),
     isGatewayProvided = false,
   )
 

@@ -297,6 +297,7 @@ export async function waitForGatewayHealthyRestart(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  timeoutMs?: number;
   settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
@@ -314,7 +315,8 @@ export async function waitForGatewayHealthyRestart(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const settleProbes = Math.max(1, params.settle?.probes ?? 1);
   const settleDurationMs = (settleProbes - 1) * delayMs;
-  const standardDeadlineMs = attempts * delayMs;
+  const standardDeadlineMs = params.timeoutMs ?? attempts * delayMs;
+  const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
     auth: undefined,
@@ -351,12 +353,19 @@ export async function waitForGatewayHealthyRestart(params: {
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
   let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
+  let updateStartupDeadlineMs: number | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
+    if (updateInProgress && snapshot.runtime.status === "running") {
+      // Old updaters invoke the candidate CLI without forwarding their budget. A live
+      // process earns the startup watchdog; later phases never reset its finite cap.
+      updateStartupDeadlineMs ??= Math.max(standardDeadlineMs, STARTUP_MIGRATION_LEASE_TTL_MS);
+    }
+    const boundedDeadlineMs = params.timeoutMs ?? updateStartupDeadlineMs;
     // A managed settle streak needs a concrete process identity. Scheduled Tasks can
     // report running without exposing a PID, so Windows retains status-only proof.
     const healthy =
@@ -364,6 +373,16 @@ export async function waitForGatewayHealthyRestart(params: {
       (!params.requireRunningService ||
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
+    snapshot.startupPhase = healthy
+      ? "settling healthy Gateway"
+      : snapshot.runtime.status !== "running"
+        ? "waiting for managed service"
+        : snapshot.portUsage.status === "free"
+          ? "waiting for Gateway listener"
+          : "waiting for Gateway health and identity";
+    if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
+      return withWaitContext({ ...snapshot, healthy: false }, "timeout", elapsedMs);
+    }
     if (healthy) {
       if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
@@ -432,11 +451,18 @@ export async function waitForGatewayHealthyRestart(params: {
       }
     }
 
+    if (migrationActive) {
+      snapshot.startupPhase = "startup migration";
+    }
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
-      // Settling gets its own readiness time, but cannot extend an active migration's watchdog.
-      const deadlineMs = migrationActive
-        ? migrationDeadlineMs
-        : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
+      // Explicit update budgets win. Older update children use the startup watchdog;
+      // standalone restarts retain their migration and post-migration windows.
+      const deadlineMs =
+        boundedDeadlineMs !== undefined
+          ? boundedDeadlineMs + settleDurationMs
+          : migrationActive
+            ? migrationDeadlineMs
+            : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
       if (deadlineMs === undefined || elapsedMs >= deadlineMs) {
         return withWaitContext(snapshot, "timeout", elapsedMs);
       }

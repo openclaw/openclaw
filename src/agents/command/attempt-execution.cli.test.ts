@@ -3598,6 +3598,7 @@ describe("CLI attempt execution", () => {
     const handoffToCli = vi.fn();
     const deferredLifecycle: NonNullable<RunAgentAttemptParams["deferredLifecycle"]> = {
       signal: controller.signal,
+      beginRetryWait: () => undefined,
       abort: vi.fn(),
       adopt: vi.fn(),
       handoffToCli,

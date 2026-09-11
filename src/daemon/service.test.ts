@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -331,6 +334,14 @@ describe("readGatewayServiceState", () => {
           }
           return;
         }
+        if (condition === "absent") {
+          const run = await admitUpdateCommandRun({
+            opts: { restart: shouldRestart },
+            root: home,
+          });
+          expect(run.env.HOME).toBe(home);
+          expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+        }
         const result = await maybeStopManagedServiceBeforeMutableUpdate({
           root: home,
           updateInstallKind,
@@ -359,6 +370,7 @@ describe("readGatewayServiceState", () => {
           expect(probePortUsage).not.toHaveBeenCalled();
         }
       } finally {
+        closeOpenClawStateDatabaseForTest();
         snapshot.restore();
         await fs.rm(home, { recursive: true, force: true });
       }
@@ -497,7 +509,10 @@ describe("readGatewayServiceState", () => {
 
     const state = await readGatewayServiceState(service, { timeoutMs: 100 });
 
-    expect(readCommand).toHaveBeenCalledWith(process.env, { timeoutMs: 100 });
+    expect(readCommand).toHaveBeenCalledWith(process.env, {
+      timeoutMs: 100,
+      onInspectionFailure: expect.any(Function),
+    });
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",

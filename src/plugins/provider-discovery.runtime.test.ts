@@ -240,7 +240,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     mocks.loadSource.mockReturnValue(staticProvider);
 
     expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
-      { ...staticProvider, pluginId: "deepseek" },
+      { ...staticProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
     ]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
@@ -465,7 +465,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     mocks.loadSource.mockReturnValue(staticProvider);
 
     expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
-      { ...staticProvider, pluginId: "deepseek" },
+      { ...staticProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
     ]);
 
     expect(mocks.getCachedPluginModuleLoader).toHaveBeenCalledOnce();
@@ -528,8 +528,8 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
     ).toEqual([
-      { ...codexEntryProvider, pluginId: "codex" },
-      { ...deepseekEntryProvider, pluginId: "deepseek" },
+      { ...codexEntryProvider, pluginId: "codex", pluginRoot: "/tmp/codex" },
+      { ...deepseekEntryProvider, pluginId: "deepseek", pluginRoot: "/tmp/deepseek" },
       ...fullProviders,
     ]);
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
@@ -561,7 +561,10 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       resolvePluginDiscoveryProvidersRuntime({
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    ).toEqual([
+      { ...codexEntryProvider, pluginId: "codex", pluginRoot: "/tmp/codex" },
+      ...fullProviders,
+    ]);
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
     expect(params.onlyPluginIds).toEqual(["kilocode"]);

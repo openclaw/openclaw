@@ -181,10 +181,10 @@ describe("terminal panel readiness", () => {
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
-    document.body.append(panel);
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
-
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = { catalog };
+    document.body.append(panel);
 
     await waitForFast(() => {
       expect(requests).toContainEqual({
@@ -213,9 +213,9 @@ describe("terminal panel readiness", () => {
       ).toBeNull(),
     );
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("ready");
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["catalog-terminal-1"]),
-    );
+    expect(
+      sessionStorage.getItem(`openclaw.terminal.sessions.v1:page:${JSON.stringify({ catalog })}`),
+    ).toBe(JSON.stringify(["catalog-terminal-1"]));
   });
 
   it("marks a catalog terminal ready when its first visible output is a replay", async () => {
@@ -249,13 +249,11 @@ describe("terminal panel readiness", () => {
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = {
+      catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" },
+    };
     document.body.append(panel);
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
-      }),
-    );
     await waitForFast(() =>
       expect(
         panel.renderRoot.querySelector(
@@ -304,14 +302,10 @@ describe("terminal panel readiness", () => {
     panel.client = client;
     panel.available = true;
     (panel as unknown as { catalogReadyTimeoutMs: number }).catalogReadyTimeoutMs = 5;
-    document.body.append(panel);
     const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog },
-      }),
-    );
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = { catalog };
+    document.body.append(panel);
 
     await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(

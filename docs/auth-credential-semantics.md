@@ -47,6 +47,28 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 2. For eligible profiles, token material may be resolved from the inline value or `tokenRef`.
 3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
 
+## Setup replacements
+
+Setup replacement credentials are saved under separate profile IDs with an
+internal `setup` descriptor in the existing credential payload. They cannot
+enter normal rotation, resolve through an explicit profile pin, or be copied to
+another agent. Only the owning setup operation can test the selected credential.
+After one successful tool-free turn, setup asks whether to activate it. Declining
+or failing the test keeps the saved credential inactive and preserves the current
+connection. Model Setup offers the same saved sign-in for a fresh test without
+another login. Gateway activation waits for config application; a required restart
+keeps the replacement inactive until setup is retried. Ordinary login remains
+immediate. The descriptor retains the selected model and connection settings for retry after
+restart, without caching a verification result. This adds no database schema or
+migration; older runtimes do not enforce the inactive state. Before downgrading,
+remove saved inactive replacements or restore the state from before setup.
+
+Noninteractive setup saves replacement credentials and prints a
+`openclaw models auth activate <profileId> --agent <id>` command to test and activate
+the saved sign-in. Model Setup offers the same operation. Interactive setup defaults
+to activation after a successful test. Reusing an existing credential
+and first-run noninteractive setup retain their existing behavior.
+
 ## Agent copy portability
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.

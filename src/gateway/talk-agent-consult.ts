@@ -6,6 +6,10 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  getCommandSenderAuthority,
+  withCommandSenderAuthority,
+} from "../auto-reply/command-sender-authority.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -89,10 +93,16 @@ export async function startTalkRealtimeAgentConsult(
       ...request,
       client:
         request.client && authority.replyCaller
-          ? {
-              ...request.client,
-              connect: { ...request.client.connect, caps: authority.replyCaller.GatewayClientCaps },
-            }
+          ? withCommandSenderAuthority(
+              {
+                ...request.client,
+                connect: {
+                  ...request.client.connect,
+                  caps: authority.replyCaller.GatewayClientCaps,
+                },
+              },
+              getCommandSenderAuthority(authority.replyCaller),
+            )
           : request.client,
       req: {
         type: "req",

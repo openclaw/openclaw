@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { matchesAgentLifecycleBinding } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
+import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import {
@@ -17,7 +18,7 @@ import type { RepositoryWorkerProjectSnapshot } from "./repository-project-sourc
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import { requireInheritedWorkerProfileAuthorization } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
+import { prepareWorkerProjectSnapshot, workerLocalProjectKey } from "./workspace-git-base.js";
 
 type WorkerProviderIntentOptions = Pick<
   WorkerProviderLifecycleOptions,
@@ -60,6 +61,10 @@ function projectReplayIdentity(project: unknown): unknown {
   // Display metadata can change without changing the admitted preparation.
   const identity = { ...project };
   delete identity.label;
+  // Local keys bind shared Git storage; a checkout path is only its transport location.
+  if (!Object.hasOwn(identity, "source")) {
+    delete identity.root;
+  }
   return identity;
 }
 
@@ -473,10 +478,31 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       if (existing) {
         const existingProject = readWorkerProjectSnapshot(existing.profileSnapshot.project);
         if (existingProject && projectPath) {
-          const root = await fsp.realpath(projectPath);
-          signal?.throwIfAborted();
-          if ("source" in existingProject || existingProject.root !== root) {
+          if ("source" in existingProject) {
             throw serviceError("invalid_profile", "Idempotency key belongs to another project");
+          }
+          if (!options.projectNamespace) {
+            throw serviceError(
+              "invalid_state",
+              "Worker project preparation namespace is unavailable",
+            );
+          }
+          // Replay identifies the repository; it retains the already-admitted root and commit.
+          const { commonDir } = await resolveGitRepositoryPaths(await fsp.realpath(projectPath), {
+            signal,
+          });
+          signal?.throwIfAborted();
+          if (workerLocalProjectKey(options.projectNamespace, commonDir) !== existingProject.key) {
+            throw serviceError("invalid_profile", "Idempotency key belongs to another project");
+          }
+          if (
+            createOptions.projectCommit !== undefined &&
+            createOptions.projectCommit !== existingProject.baseCommit
+          ) {
+            throw serviceError(
+              "invalid_profile",
+              "Idempotency key belongs to another project preparation",
+            );
           }
         }
         if (admittedIntent) {

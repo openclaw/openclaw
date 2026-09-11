@@ -1103,10 +1103,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: [
-        "test/scripts/install-trufflehog.test.ts",
-        "test/scripts/setup-node-env-bun.test.ts",
-      ],
+      exactTargets: ["test/scripts/setup-node-env-bun.test.ts"],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1318,7 +1315,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/pr-prepare-gates.test.ts",
           "test/scripts/testbox-base.test.ts",
@@ -1330,7 +1326,6 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/testbox-base.test.ts",
         ],
@@ -1338,7 +1333,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         [
-          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ancillary-workflow-concurrency.test.ts",
@@ -2417,7 +2411,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",

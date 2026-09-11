@@ -248,18 +248,6 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (t *singletonFenceRetryTranslator) Close() {}
 
-type splitProtocolMarkerTranslator struct{}
-
-func (splitProtocolMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
-	return text, nil
-}
-
-func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
-	return strings.ReplaceAll(text, "[Notice kind=system]", "[Aviso kind=system]"), nil
-}
-
-func (splitProtocolMarkerTranslator) Close() {}
-
 type fencedLiteralMaskingTranslator struct {
 	rawInputs []string
 }

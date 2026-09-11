@@ -27,6 +27,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import * as authProfileClone from "./auth-profiles/clone.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -44,6 +45,7 @@ import {
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntime,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshotRevision } from "./auth-profiles/store.js";
@@ -144,6 +146,79 @@ describe("auth profile sqlite store", () => {
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "auth-state.json"))).toBe(false);
       expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
+    });
+  });
+
+  it.each([
+    {
+      label: "inactive",
+      replacement: true,
+      expectedProfileId: "openai:default",
+      expectedAccess: "working-access",
+    },
+    {
+      label: "active",
+      replacement: false,
+      expectedProfileId: "openai:setup-replacement",
+      expectedAccess: "newer-access",
+    },
+  ])("keeps OAuth selection correct with a newer $label shared sign-in", async (testCase) => {
+    await withAgentDirEnv("openclaw-auth-setup-drift-", async (mainAgentDir, stateDir) => {
+      const localAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const working: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access: "working-access",
+        refresh: "working-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "same-account",
+        email: "same@example.test",
+      };
+      await persistAuthProfileBatch({
+        agentDir: mainAgentDir,
+        profiles: [
+          {
+            profileId: "openai:setup-replacement",
+            credential: {
+              ...working,
+              access: "newer-access",
+              refresh: "newer-refresh",
+              expires: working.expires + 3_600_000,
+              setup: {
+                replacement: testCase.replacement,
+                modelRef: "openai/test-model",
+                configJson: "{}",
+              },
+            },
+          },
+        ],
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: { "openai:default": working },
+          order: { openai: ["openai:default"] },
+          lastGood: { openai: "openai:default" },
+        },
+        localAgentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const runtimeStore = loadAuthProfileStoreForRuntime(localAgentDir, {
+        readOnly: true,
+        syncExternalCli: false,
+      });
+      expect(resolveAuthProfileOrder({ store: runtimeStore, provider: "openai" })).toEqual([
+        testCase.expectedProfileId,
+      ]);
+      expect(runtimeStore.profiles[testCase.expectedProfileId]).toMatchObject({
+        access: testCase.expectedAccess,
+      });
+      expect(runtimeStore.lastGood?.openai).toBe(testCase.expectedProfileId);
+      expect(loadPersistedAuthProfileStore(localAgentDir)?.profiles["openai:default"]).toEqual(
+        working,
+      );
     });
   });
 

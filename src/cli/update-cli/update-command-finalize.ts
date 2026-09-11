@@ -51,8 +51,9 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
+import { reportPreMutationUpdateFailure } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
@@ -265,6 +266,12 @@ async function updateFinalizeCommandInternal(
     (result) => pluginOutcome(result.pluginUpdate),
   );
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  lifecycle.recordWarnings(
+    (pluginUpdate.warnings ?? [])
+      .filter((warning) => warning.reason === "plugin-target-unavailable")
+      .map((warning) => warning.message),
+    "plugins",
+  );
   configSnapshot = completedPluginUpdate.configSnapshot;
   const completionBudget = lifecycle.budget("completionCache");
   // Leave shutdown time inside the phase deadline so optional cache failures can settle.

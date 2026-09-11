@@ -15,12 +15,12 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   shouldResumePostCoreUpdateInFreshProcess,
 } from "./update-command-post-core.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -203,6 +203,23 @@ export async function convergeUpdatePlugins(params: {
           ],
         };
       }
+      const pluginAdvisories = (postCorePluginUpdate?.warnings ?? []).filter(
+        (warning) => warning.reason === "plugin-target-unavailable",
+      );
+      resultWithPostUpdate = {
+        ...resultWithPostUpdate,
+        steps: [
+          ...resultWithPostUpdate.steps,
+          ...pluginAdvisories.map((warning, index) => ({
+            name: `finalize:plugins:${index}`,
+            command: "openclaw plugins update",
+            cwd: postUpdateRoot,
+            durationMs: 0,
+            exitCode: 0,
+            advisory: { kind: "recoverable-maintenance" as const, message: warning.message },
+          })),
+        ],
+      };
       if (
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&

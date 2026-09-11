@@ -49,20 +49,22 @@ async function listSavedSetupInferenceCandidates(params: {
   deps: DetectSetupInferenceDeps;
   signal: AbortSignal;
 }): Promise<SetupInferenceCandidate[]> {
-  const { currentSavedCandidate, loadProviderAuthMethod } =
-    await import("./setup-inference-credentials.js");
+  const { loadProviderAuthMethod } = await import("./setup-inference-credentials.js");
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const candidates: SetupInferenceCandidate[] = [];
   for (const [profileId, credential] of Object.entries(store.profiles)) {
     params.signal.throwIfAborted();
-    const saved = currentSavedCandidate(agentDir, profileId, credential);
+    const saved = credential.setup;
     if (!saved && params.cfg.auth?.profiles?.[profileId]) {
       continue;
     }
-    const choice =
-      saved?.choice ?? params.choices.find((entry) => choiceMatchesCredential(entry, credential));
-    let modelRef = saved?.candidate.modelRef;
+    const choice = saved?.authChoice
+      ? params.choices.find(
+          (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
+        )
+      : params.choices.find((entry) => choiceMatchesCredential(entry, credential));
+    let modelRef = saved?.modelRef;
     if (!modelRef && choice) {
       const loaded = await loadProviderAuthMethod({ ...params, choice });
       params.signal.throwIfAborted();
@@ -78,7 +80,9 @@ async function listSavedSetupInferenceCandidates(params: {
       modelRef,
       brandId: choice?.providerId ?? credential.provider,
       label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
-      detail: "Verify this saved sign-in to use it. No new sign-in is needed.",
+      detail: credential.setup?.replacement
+        ? "Saved but inactive. Test this sign-in again, then choose whether to activate it."
+        : "Verify this saved sign-in to use it. No new sign-in is needed.",
       recommended: false,
       credentials: true,
       ...(choice?.icon ? { icon: choice.icon } : {}),

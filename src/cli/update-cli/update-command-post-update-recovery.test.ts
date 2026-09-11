@@ -37,6 +37,14 @@ const mocks = vi.hoisted(() => ({
     async () => "ok",
   ),
   stopCandidate: vi.fn(),
+  revalidateService: vi.fn<
+    typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+  >(async ({ root }) => ({
+    kind: "owned",
+    root,
+    fingerprint: "fixture",
+    refreshDefinition: false,
+  })),
   restart:
     vi.fn<
       typeof import("./update-command-service.js").maybeRestartServiceAfterFailedMutableUpdate
@@ -75,6 +83,10 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     command: { programArguments: ["node", "/repo/dist/entry.js", "gateway"] },
   }),
 }));
+vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
@@ -82,12 +94,7 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartService: mocks.restartCandidate,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
-  revalidateManagedGatewayServiceAfterUpdate: async () => ({
-    kind: "owned",
-    root: "/repo",
-    fingerprint: "fixture",
-    refreshDefinition: false,
-  }),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
@@ -806,7 +813,10 @@ describe("failed package update recovery safety", () => {
         return;
       }
       expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
-      expect(mocks.restartCandidate.mock.lastCall?.[0]).toMatchObject({
+      expect(
+        mocks.restartCandidate.mock.lastCall?.[0],
+        JSON.stringify(failure.result),
+      ).toMatchObject({
         result: { root: originalRoot, after: { version: "2026.9.1" } },
       });
       expect(rollback).toHaveBeenCalledOnce();

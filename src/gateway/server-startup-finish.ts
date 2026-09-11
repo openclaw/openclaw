@@ -343,9 +343,6 @@ export async function finishGatewayStartup(params: {
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
           activeWorkInspectors,
-          providerAuthPrewarm: {
-            getConfig: getRuntimeConfig,
-          },
         }),
       ),
     ),
@@ -389,6 +386,7 @@ export async function finishGatewayStartup(params: {
     resolveGatewayContext: resolvePluginGatewayContext,
     minimalTestGateway,
     initialConfig: cfgAtStart,
+    initialPluginInstallRecords: pluginMetadataSnapshot?.index.installRecords,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
     initialSnapshotRawHash: startupLastGoodSnapshot.exists
       ? (startupLastGoodSnapshot.hash ?? null)
@@ -405,7 +403,7 @@ export async function finishGatewayStartup(params: {
       registerConfigWriteListener(listener, {
         ownsRuntimeActivationFor: configSnapshot.path,
         preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
-          const candidate = prepareReloadCandidate({
+          const candidate = await prepareReloadCandidate({
             runtimeConfig: sourceConfig,
             sourceConfig,
           });
@@ -510,7 +508,15 @@ export async function finishGatewayStartup(params: {
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   };
-  kernel.setConfigReloaderHandle(startManagedGatewayConfigReloader(configReloaderParams));
+  if (lifecycle.closePreludeStarted) {
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
+  const configReloader = startManagedGatewayConfigReloader(configReloaderParams);
+  kernel.setConfigReloaderHandle(configReloader);
+  await configReloader.ready;
+  if (lifecycle.closePreludeStarted) {
+    return { startupSettled: postAttachHandles.startupSettled };
+  }
   await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
     log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
   });

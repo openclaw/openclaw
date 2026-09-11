@@ -251,6 +251,11 @@ install there.
 
 pnpm 12 retains the `global/v11` layout; the layout number does not need to match
 the pnpm CLI major version.
+Staged pnpm updates isolate both the global project and its launchers. OpenClaw
+sets the staging bin through CLI configuration for pnpm 10/11 and child-process
+environment configuration for pnpm 12, then verifies both destinations before
+installation. A manager that still reports a live destination stops the update
+before activation.
 
 If OpenClaw shares a pnpm global install group with another package, the
 automatic updater stops before changing the group. Update the original

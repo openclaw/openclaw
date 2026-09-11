@@ -70,16 +70,16 @@ type ModelSetupViewProps = {
 };
 
 function candidateStatus(candidate: Candidate): string {
-  if (candidate.recommended) {
-    return t("modelSetup.candidates.recommended");
-  }
-  if (candidate.credentials === true) {
-    return t("modelSetup.candidates.credentialsReady");
-  }
-  if (candidate.credentials === false) {
-    return t("modelSetup.candidates.signInNeeded");
-  }
-  return t("modelSetup.candidates.detected");
+  const status = candidate.kind.startsWith("saved-auth:")
+    ? "detected"
+    : candidate.recommended
+      ? "recommended"
+      : candidate.credentials === undefined
+        ? "detected"
+        : candidate.credentials
+          ? "credentialsReady"
+          : "signInNeeded";
+  return t(`modelSetup.candidates.${status}`);
 }
 
 function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {

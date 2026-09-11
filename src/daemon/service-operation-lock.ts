@@ -8,6 +8,7 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 type Scope = { active: boolean; pending: Set<Promise<unknown>> };
@@ -21,6 +22,7 @@ export async function withGatewayServiceOperationLock<T>(
   env: GatewayServiceEnv,
   operation: (assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
+  assertGatewayServiceUpdateCurrent();
   const file = resolveGatewayServiceOperationLockPath(env);
   const assertResourceUnborrowed = (targetPath: string) =>
     createManagedHandoffLeaseStore().assertSourceUnborrowed(targetPath);
@@ -28,6 +30,7 @@ export async function withGatewayServiceOperationLock<T>(
   const inherited = scopes.getStore();
   const parent = inherited?.get(file);
   const assertScope = (scope: Scope) => {
+    assertGatewayServiceUpdateCurrent();
     if (!scope.active) {
       throw new Error("Native service operation ownership has closed.");
     }

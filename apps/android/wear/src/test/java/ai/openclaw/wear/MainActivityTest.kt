@@ -292,11 +292,19 @@ class MainActivityTest {
   fun modelSearchResultsRemainSelectableOutsideTheCompactModelWindow() {
     val state =
       WearUiState(
+        phoneNodeId = "phone-a",
         models = listOf(WearModel(ref = "openai/gpt-a", name = "GPT A")),
+        modelCatalogRefreshFailed = true,
         modelSearchResults =
           listOf(WearModel(ref = "anthropic/claude", name = "Claude")),
       )
 
+    val snapshot = checkNotNull(state.toConversationSnapshot())
+    assertTrue(snapshot.modelCatalogRefreshFailed)
+    assertNull(snapshot.failure)
+    assertEquals(listOf("openai/gpt-a"), snapshot.models.map(WearModelSummary::ref))
+    assertEquals(listOf("anthropic/claude"), snapshot.modelSearchResults.map(WearModelSummary::ref))
+    assertFalse(state.resetForPhoneChange().modelCatalogRefreshFailed)
     assertTrue(state.containsModelRef("openai/gpt-a"))
     assertTrue(state.containsModelRef("anthropic/claude"))
     assertFalse(state.containsModelRef("google/gemini"))
@@ -310,6 +318,7 @@ class MainActivityTest {
         proxyCapabilities =
           setOf(
             WearProxyCapability.ModelControls,
+            WearProxyCapability.ModelCatalogSearch,
             WearProxyCapability.SessionSelectionLookup,
           ),
       ).toConversationSnapshot()
@@ -319,13 +328,16 @@ class MainActivityTest {
         proxyCapabilities =
           setOf(
             WearProxyCapability.ModelCatalogSearch,
+            WearProxyCapability.SessionScopedModelCatalog,
             WearProxyCapability.SessionSearchPagination,
           ),
       ).toConversationSnapshot()
 
     assertFalse(legacySnapshot?.modelSearchSupported == true)
+    assertFalse(legacySnapshot?.sessionModelCatalogSupported == true)
     assertFalse(legacySnapshot?.sessionSearchSupported == true)
     assertTrue(currentSnapshot?.modelSearchSupported == true)
+    assertTrue(currentSnapshot?.sessionModelCatalogSupported == true)
     assertTrue(currentSnapshot?.sessionSearchSupported == true)
   }
 

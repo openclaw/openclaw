@@ -105,6 +105,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
+              .routeLoadingSkeleton=${routeData?.routeLoadingSkeleton ?? noChange}
               .presented=${presented}
               .visuallyPresented=${presented}
               .active=${active}

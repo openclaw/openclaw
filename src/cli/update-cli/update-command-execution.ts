@@ -51,7 +51,6 @@ import {
 import {
   captureOwnedManagedUpdateContext,
   revalidateUpdateDatabaseContext,
-  withOwnedManagedUpdateEnv,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import {
@@ -61,6 +60,11 @@ import {
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
+import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
+import {
+  resolveUpdatedInstallCommandEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
@@ -341,6 +345,37 @@ export async function executeMutableUpdate(
           throw error;
         }
       }
+      if (
+        params.shouldRestart &&
+        opts.run &&
+        preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        const executor = opts.run.executorFence;
+        if (!executor) {
+          throw new UpdatePreMutationError(
+            "target-native-unsupported",
+            "Native candidate admission requires its original update executor.",
+          );
+        }
+        const supported = await isUpdatedInstallGatewayExecutorSupported({
+          root,
+          env: resolveUpdatedInstallCommandEnv({
+            processEnv: env,
+            invocationCwd: params.invocationCwd,
+          }),
+          executor,
+          nodeRunner: params.packageUpdateNodeRunner,
+          signal,
+        });
+        assertUpdateCommandRecovery(opts);
+        if (!supported) {
+          candidateFailureReason = "target-native-unsupported";
+          throw new UpdatePreMutationError(
+            candidateFailureReason,
+            "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+          );
+        }
+      }
       const snapshot = rehearsal
         ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
         : (validatedConfigSnapshot ?? (await readCandidateSource(env)));
@@ -353,7 +388,7 @@ export async function executeMutableUpdate(
         rehearsal,
         assertCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
-        timeoutMs: Math.min(updateStepTimeoutMs, 5 * 60_000),
+        timeoutMs: updateStepTimeoutMs,
         onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
       });
       assertUpdateCommandRecovery(opts);
@@ -529,6 +564,7 @@ export async function executeMutableUpdate(
         await params.prepareMutableUpdate(admission?.managedEnv);
       }
       const packageUpdate: PackageInstallUpdateParams = {
+        reapplyLocalOverrides: opts.reapplyLocalOverrides,
         root: params.root,
         installKind: params.installKind,
         tag: params.tag,

@@ -6,6 +6,7 @@ import "./components/chat-detail-panel.ts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import { loadSettings } from "../../app/settings.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -43,7 +44,6 @@ import {
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import "./components/chat-sidebar-region.runtime.ts";
 import {
   installTranscriptDomMocks,
@@ -182,14 +182,11 @@ function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
       setObserverVisibility: vi.fn(),
       updateSidebarLayout: state.updateSidebarLayout,
     });
-  const transcript = createTestTranscript();
-  transcript.hostConnected();
   onTestFinished(async () => {
     file.resolve(null);
     list.resolve(null);
     await Promise.allSettled([file.promise, list.promise]);
     resetTaskDetail(state);
-    transcript.hostDisconnected();
   });
   const renderPanels = async () => {
     const definitions = sidebarPanelDefinitions({
@@ -201,14 +198,12 @@ function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
           content,
           host: state,
           layout: state.sidebarLayout,
-          transcript,
         }),
       workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
         embedded: true,
       }),
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
-    transcript.hostUpdated();
   };
   return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
 }
@@ -482,7 +477,6 @@ describe("chat pane embedded panels", () => {
             content: content!,
             host: state,
             layout: state.sidebarLayout,
-            transcript: {} as ChatTranscriptController,
           }),
           mount,
         );
@@ -692,6 +686,7 @@ describe("chat pane embedded panels", () => {
       sessionKey: "agent:main:review",
       sidebarContent: null,
       sidebarLayout: { columns: [] },
+      settings: loadSettings(),
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
     const renderPanels = async (layout: SidebarLayout) => {

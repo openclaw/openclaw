@@ -181,6 +181,8 @@ function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undef
   return parsed;
 }
 
+const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
+
 function stageTranscriptArchiveContent(
   database: DatabaseSync,
   sessionId: string,
@@ -188,6 +190,16 @@ function stageTranscriptArchiveContent(
 ): number {
   const fd = fs.openSync(stagedPath, "wx", 0o600);
   let rowCount = 0;
+  const bufferedParts: string[] = [];
+  let bufferedBytes = 0;
+  const flush = () => {
+    if (bufferedBytes === 0) {
+      return;
+    }
+    fs.writeFileSync(fd, bufferedParts.join(""));
+    bufferedParts.length = 0;
+    bufferedBytes = 0;
+  };
   try {
     const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database);
     for (const row of iterateSqliteQuerySync(
@@ -201,10 +213,20 @@ function stageTranscriptArchiveContent(
       if (typeof row.event_json !== "string") {
         throw new Error(`Invalid transcript event row for ${sessionId}`);
       }
-      fs.writeFileSync(fd, row.event_json);
-      fs.writeFileSync(fd, "\n");
+      const rowBytes = Buffer.byteLength(row.event_json, "utf8") + 1;
+      if (bufferedBytes + rowBytes > TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES) {
+        flush();
+      }
+      if (rowBytes >= TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES) {
+        fs.writeFileSync(fd, row.event_json);
+        fs.writeFileSync(fd, "\n");
+      } else {
+        bufferedParts.push(row.event_json, "\n");
+        bufferedBytes += rowBytes;
+      }
       rowCount += 1;
     }
+    flush();
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

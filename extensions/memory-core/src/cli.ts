@@ -34,71 +34,6 @@ const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 
-async function runMemoryStatus(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryStatus(opts, hostOptions);
-}
-
-async function runMemoryIndex(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryIndex(opts, hostOptions);
-}
-
-async function runMemorySearch(
-  queryArg: string | undefined,
-  opts: MemorySearchCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemorySearch(queryArg, opts, hostOptions);
-}
-
-async function runMemoryForget(opts: MemoryForgetCommandOptions) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryForget(opts);
-}
-
-async function runMemoryPromote(
-  opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryPromote(opts, hostOptions);
-}
-
-async function runMemoryPromoteExplain(
-  selectorArg: string | undefined,
-  opts: MemoryPromoteExplainOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
-}
-
-async function runMemoryRemHarness(
-  opts: MemoryRemHarnessOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryRemHarness(opts, hostOptions);
-}
-
-async function runMemoryRemBackfill(
-  opts: MemoryRemBackfillOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryRemBackfill(opts, hostOptions);
-}
-
-async function runMemorySessionBackfill(
-  opts: MemorySessionBackfillOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemorySessionBackfill(opts, hostOptions);
-}
-
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
   const error = new Error(message) as Error & { code: string; exitCode: number };
   error.name = "InvalidArgumentError";
@@ -206,7 +141,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      await runMemoryStatus(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryStatus(opts, hostOptions);
     });
 
   memory
@@ -216,7 +152,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
-      await runMemoryIndex(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryIndex(opts, hostOptions);
     });
 
   memory
@@ -243,7 +180,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
-      await runMemorySearch(queryArg, opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemorySearch(queryArg, opts, hostOptions);
     });
 
   memory
@@ -272,7 +210,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--dry-run", "Report everything that would be deleted without writing", false)
     .option("--json", "Print the complete machine-readable deletion report")
     .action(async (opts: MemoryForgetCommandOptions) => {
-      await runMemoryForget(opts);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryForget(opts);
     });
 
   memory
@@ -301,7 +240,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {
-      await runMemoryPromote(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryPromote(opts, hostOptions);
     });
 
   memory
@@ -312,7 +252,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (selectorArg: string | undefined, opts: MemoryPromoteExplainOptions) => {
-      await runMemoryPromoteExplain(selectorArg, opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
     });
 
   memory
@@ -324,7 +265,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemHarnessOptions) => {
-      await runMemoryRemHarness(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryRemHarness(opts, hostOptions);
     });
 
   memory
@@ -345,7 +287,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
-      await runMemoryRemBackfill(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemoryRemBackfill(opts, hostOptions);
     });
 
   memory
@@ -373,7 +316,8 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     )
     .option("--json", "Print JSON")
     .action(async (opts: MemorySessionBackfillOptions) => {
-      await runMemorySessionBackfill(opts, hostOptions);
+      const runtime = await loadMemoryCliRuntime();
+      await runtime.runMemorySessionBackfill(opts, hostOptions);
     });
 
   memory.action(() => {

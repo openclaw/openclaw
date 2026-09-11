@@ -666,6 +666,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         label: installedTabLabel(tab, plugin.state === "needs-setup"),
       })),
       activeTab,
+      requestedTab: props.tab,
       onTabChange: props.onTabChange,
       panel: html`${props.pageNotice ? renderMessage(props.pageNotice) : nothing}
       ${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}

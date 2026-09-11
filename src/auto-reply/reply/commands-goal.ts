@@ -54,14 +54,15 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   if (!argText) {
     return { action: "status", text: "" };
   }
-  const [actionRaw = "", ...rest] = argText.split(/\s+/);
+  const actionEnd = argText.search(/\s/);
+  const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
   const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }
   return {
     action,
-    text: rest.join(" ").trim(),
+    text: actionEnd === -1 ? "" : argText.slice(actionEnd).trim(),
   };
 }
 

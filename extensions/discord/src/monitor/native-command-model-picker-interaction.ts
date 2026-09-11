@@ -38,7 +38,6 @@ import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
-  toDiscordModelPickerMessagePayload,
 } from "./model-picker.view.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import { applyDiscordModelPickerSelection } from "./native-command-model-picker-apply.js";
@@ -351,7 +350,7 @@ async function handleDiscordModelPickerInteraction(params: {
       quickModels,
       ...state,
     });
-    return await updatePicker(toDiscordModelPickerMessagePayload(rendered));
+    return await updatePicker(rendered);
   };
 
   if (parsed.action !== "cancel" && pickerData.isCurrent?.() === false) {
@@ -387,7 +386,7 @@ async function handleDiscordModelPickerInteraction(params: {
       providerPage: parsed.providerPage,
       modelBucket: parsed.modelBucket,
     });
-    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
+    await updatePicker(rendered);
     return;
   }
 
@@ -404,7 +403,7 @@ async function handleDiscordModelPickerInteraction(params: {
       providerBucket: selectingBucket ? resolveSelectedBucket(interaction) : parsed.providerBucket,
       currentModel: currentModelRef,
     });
-    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
+    await updatePicker(rendered);
     return;
   }
 

@@ -40,7 +40,7 @@ export function persistSessionTranscriptArchive(
   }
   ensureSessionTranscriptArchiveSchema(database.db);
   const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_transcript_archives")
@@ -60,6 +60,9 @@ export function persistSessionTranscriptArchive(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
   );
+  if (inserted.numAffectedRows === 1n) {
+    return;
+  }
   const persisted = executeSqliteQueryTakeFirstSync(
     database.db,
     db

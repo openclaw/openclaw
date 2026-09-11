@@ -212,7 +212,7 @@ describe("extended-stable npm release request", () => {
     mainPackageVersion: "2026.7.2",
   };
 
-  it("accepts .33, later patches, and any later protected-main calendar month", () => {
+  it("accepts .33 and later patches only in the trailing completed month", () => {
     expect(validateExtendedStableNpmReleaseRequest(valid)).toEqual({
       extendedStable: true,
       releaseVersion: "2026.6.33",
@@ -237,15 +237,31 @@ describe("extended-stable npm release request", () => {
       extendedStable: true,
       extendedStableBranch: "extended-stable/2026.12.33",
     });
-    expect(() =>
-      validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2026.8.1" }),
-    ).not.toThrow();
-    expect(() =>
-      validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2027.1.1" }),
-    ).not.toThrow();
-    expect(() =>
-      validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2028.12.32" }),
-    ).not.toThrow();
+  });
+
+  it.each([
+    ["main two months ahead", "2026.8.1", "2026.7"],
+    ["main many months ahead", "2027.1.1", "2026.12"],
+    ["main a year-plus ahead", "2028.12.32", "2028.11"],
+  ])("rejects %s", (_label, mainPackageVersion, expectedMonth) => {
+    expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion })).toThrow(
+      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedMonth}.PATCH, not 2026.6.33. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
+    );
+  });
+
+  it("accepts an explicitly bypassed stale monthly line", () => {
+    expect(
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        mainPackageVersion: "2027.1.1",
+        bypassExtendedStableGuard: true,
+      }),
+    ).toEqual({
+      extendedStable: true,
+      releaseVersion: "2026.6.33",
+      extendedStableBranch: "extended-stable/2026.6.33",
+      bypassExtendedStableGuard: true,
+    });
   });
 
   it.each([

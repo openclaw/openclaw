@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,10 @@ import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
+  runSqliteIntegrityOperationSync,
+  sqliteIntegrityCheckSteps,
+  type SqliteIntegrityDiagnostics,
+  type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -191,6 +196,141 @@ describe("assertSqliteIntegrity", () => {
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
         /foreign_key_check failed for test database: children row without rowid references parents \(foreign key 0\)/u,
       );
+    } finally {
+      database.close();
+    }
+  });
+});
+
+describe("integrity gate attribution", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function createTimedDatabase(checkMs: number, foreignKeyViolation = false) {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    database.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE parents (id INTEGER PRIMARY KEY);
+      CREATE TABLE children (parent_id INTEGER REFERENCES parents(id));
+      INSERT INTO parents VALUES (1);
+      INSERT INTO children VALUES (${foreignKeyViolation ? 2 : 1});
+    `);
+    let elapsedMs = 0;
+    const advance = (durationMs: number) => {
+      elapsedMs += durationMs;
+    };
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const prepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "PRAGMA integrity_check;") {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+          try {
+            return all(...parameters);
+          } finally {
+            advance(checkMs);
+          }
+        });
+      }
+      return statement;
+    });
+    return { database, advance };
+  }
+
+  it.each([
+    { label: "fractional check", checkMs: 4.75, foreignKeyViolation: false, gateMs: 9, syncMs: 4 },
+    { label: "measured zero", checkMs: 0.25, foreignKeyViolation: false, gateMs: 4, syncMs: 0 },
+    { label: "failed check", checkMs: 4.75, foreignKeyViolation: true, gateMs: 9, syncMs: 4 },
+  ])(
+    "splits a $label without changing the gate outcome or error",
+    ({ checkMs, foreignKeyViolation, gateMs, syncMs }) => {
+      const { database, advance } = createTimedDatabase(checkMs, foreignKeyViolation);
+      const diagnostics: SqliteIntegrityDiagnostics = {};
+      let suppliedError: unknown;
+      function* operation(): SqliteIntegrityOperation<void> {
+        const gate = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+        const step = gate.next();
+        if (step.done) {
+          throw new Error("Integrity check did not yield");
+        }
+        advance(1.75);
+        try {
+          yield step.value;
+        } catch (error) {
+          suppliedError = error;
+          advance(2.75);
+          gate.throw(error);
+          return;
+        }
+        advance(2.75);
+        gate.next();
+      }
+
+      try {
+        let failure: unknown;
+        try {
+          runSqliteIntegrityOperationSync(operation());
+        } catch (error) {
+          failure = error;
+        }
+        if (foreignKeyViolation) {
+          expect(failure).toMatchObject({
+            name: "SqliteIntegrityError",
+            message: expect.stringContaining("foreign_key_check failed for timed database"),
+          });
+          expect(failure).toBe(suppliedError);
+        } else {
+          expect(failure).toBeUndefined();
+        }
+        expect(diagnostics).toEqual({
+          integrityGateMs: gateMs,
+          integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
+          integrityCheckSyncMs: syncMs,
+          integrityOutsideCheckMs: gateMs - syncMs,
+        });
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it("does not carry measured check time into later unmeasured gates", () => {
+    const { database, advance } = createTimedDatabase(4.75);
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const failure = new Error("external integrity driver failed");
+    try {
+      for (const outcome of ["healthy", "failed"] as const) {
+        runSqliteIntegrityOperationSync(
+          sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
+        );
+        expect(diagnostics).toEqual({
+          integrityGateMs: 4,
+          integrityGateOutcome: "healthy",
+          integrityCheckSyncMs: 4,
+          integrityOutsideCheckMs: 0,
+        });
+
+        const manual = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+        expect(manual.next().done).toBe(false);
+        advance(12.5);
+        if (outcome === "failed") {
+          let thrown: unknown;
+          try {
+            manual.throw(failure);
+          } catch (error) {
+            thrown = error;
+          }
+          expect(thrown).toBe(failure);
+        } else {
+          expect(manual.next().done).toBe(true);
+        }
+        expect(diagnostics).toEqual({
+          integrityGateMs: 12,
+          integrityGateOutcome: outcome,
+        });
+        expect(diagnostics).not.toHaveProperty("integrityCheckSyncMs");
+        expect(diagnostics).not.toHaveProperty("integrityOutsideCheckMs");
+      }
     } finally {
       database.close();
     }

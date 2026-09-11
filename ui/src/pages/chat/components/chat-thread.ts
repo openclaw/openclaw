@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { renderLoadingState } from "../../../components/loading-state.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -60,29 +61,35 @@ function renderTranscriptShell(
       }
     : null;
   const transcriptContents =
-    projection.showLoadingSkeleton || projection.isEmpty
-      ? html`
-          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
-            ${historySentinel}
-            ${
-              projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
-                ? historyHeader.template
-                : nothing
-            }
-            ${
-              projection.showLoadingSkeleton
-                ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
-                : nothing
-            }
-            ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
-            ${
-              projection.isEmpty && projection.searchOpen
-                ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
-                : nothing
-            }
-          </div>
-        `
-      : projection.renderRows(historySentinel, historyHeader);
+    props.routeLoadingSkeleton && projection.showLoadingSkeleton
+      ? renderLoadingState()
+      : projection.showLoadingSkeleton || projection.isEmpty
+        ? html`
+            <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+              ${historySentinel}
+              ${
+                projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+                  ? historyHeader.template
+                  : nothing
+              }
+              ${
+                projection.showLoadingSkeleton
+                  ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+                  : nothing
+              }
+              ${
+                projection.isEmpty && !projection.searchOpen
+                  ? renderWelcomeState({ ...props, onModelSetup: undefined })
+                  : nothing
+              }
+              ${
+                projection.isEmpty && projection.searchOpen
+                  ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
+                  : nothing
+              }
+            </div>
+          `
+        : projection.renderRows(historySentinel, historyHeader);
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"

@@ -16,6 +16,8 @@ import {
 } from "./clawhub-client.js";
 
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+// Full scanner evidence can exceed the metadata reader's 16 MiB cap.
+const SKILL_VERIFICATION_MAX_BYTES = 64 * 1024 * 1024;
 
 export const CLAWHUB_SKILLS_SH_TRUST_STATE = "not-scanned-by-clawhub" as const;
 export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
@@ -367,6 +369,7 @@ export async function fetchClawHubSkillVerification(params: {
   return await fetchClawHubJson<ClawHubSkillVerificationResponse>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
+    maxResponseBytes: SKILL_VERIFICATION_MAX_BYTES,
     token: params.token,
     skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,

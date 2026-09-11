@@ -469,13 +469,23 @@ class WearRealtimeChannelRegistryTest {
           transport = transport,
           connectionReadyTimeoutMillis = 200L,
           pendingConnectionTimeoutMillis = 1_000L,
-          retireCallbackTimeoutMillis = 100L,
+          // Cleanup, not channel publication, crosses the discovery deadline.
+          retireCallbackTimeoutMillis = 300L,
         )
       val first = FakeChannel("watch-a", "channel-a", "attempt-a")
       val replacement = FakeChannel("watch-a", "channel-b", "attempt-b")
-      val releaseReplacement = transport.holdOpen(replacement)
+      val stopStarted = CompletableDeferred<Unit>()
+      val releaseStop = CompletableDeferred<Unit>()
+      val stopFinished = CompletableDeferred<Unit>()
       val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
-        if (owner.attemptId == "attempt-a") awaitCancellation()
+        if (owner.attemptId == "attempt-a") {
+          stopStarted.complete(Unit)
+          try {
+            releaseStop.await()
+          } finally {
+            stopFinished.complete(Unit)
+          }
+        }
       }
 
       try {
@@ -483,19 +493,22 @@ class WearRealtimeChannelRegistryTest {
         transport.awaitOpened(first)
         checkNotNull(registry.claim("watch-a", "attempt-a"))
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
-        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
-        delay(150L)
-        releaseReplacement.complete(Unit)
         transport.awaitOpened(replacement)
+        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        withTimeout(1_000L) { stopStarted.await() }
 
         val replacementOwner =
           withTimeout(1_000L) {
             checkNotNull(replacementClaim.await()).owner
           }
         assertTrue(registry.isCurrent(replacementOwner))
+        assertFalse(stopFinished.isCompleted)
         registry.close(replacementOwner)
       } finally {
-        releaseReplacement.complete(Unit)
+        releaseStop.complete(Unit)
+        if (stopStarted.isCompleted) {
+          withTimeout(1_000L) { stopFinished.await() }
+        }
       }
     }
 

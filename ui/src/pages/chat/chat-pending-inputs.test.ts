@@ -123,6 +123,32 @@ describe("server-owned pending input display", () => {
     );
   });
 
+  it.each([
+    { state: "queued", runId: undefined, notice: "Queued · waiting for the agent" },
+    {
+      state: "interrupted",
+      runId: "run-queued",
+      notice:
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+    },
+    {
+      state: "cancelled",
+      runId: "run-queued",
+      notice:
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+    },
+  ] as const)(
+    "keeps $state custody out of the worker-setup notice without eligible execution",
+    ({ state, runId, notice }) => {
+      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+        notice ? [notice] : [],
+      );
+      expect(items.some((item) => item.kind === "message")).toBe(true);
+    },
+  );
+
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     const runId = "cached-delivery";
@@ -893,14 +919,14 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("places accepted input at its acceptance time instead of after newer history", () => {
+  it("labels unconsumed input as queued between its acceptance time and later output", () => {
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
       paneId: "chronological-pending-pane",
       sessionKey,
       messages: [earlier, later],
-      pendingInputs: page.items,
+      pendingInputs: [{ ...input, state: "queued" }],
       queue: [],
       toolMessages: [],
       streamSegments: [],
@@ -916,7 +942,11 @@ describe("server-owned pending input display", () => {
         role: "user",
         messages: [{ message: { content: "Keep my accepted input" } }],
       },
-      { kind: "notice", timestamp: input.acceptedAt },
+      {
+        kind: "notice",
+        timestamp: input.acceptedAt,
+        text: "Queued · waiting for the agent",
+      },
       { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);
   });

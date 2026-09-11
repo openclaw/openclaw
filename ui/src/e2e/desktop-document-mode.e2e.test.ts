@@ -17,6 +17,7 @@ import {
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop document mode",
@@ -88,11 +89,19 @@ async function startDesktopDocument(
     control: false,
   },
   describedSession?: unknown,
+  inventoryMethod: "environments.list" | "environments.status" = route === "focus/desktop"
+    ? "environments.list"
+    : "environments.status",
 ) {
   await page.setViewportSize({ width: 390, height: 844 });
   const gateway = await installMockGateway(page, {
-    deferredMethods: ["environments.list"],
-    featureMethods: ["desktop.observe", "environments.list", "openclaw.setup.detect"],
+    deferredMethods: [inventoryMethod],
+    featureMethods: [
+      "desktop.observe",
+      "environments.list",
+      "environments.status",
+      "openclaw.setup.detect",
+    ],
     methodResponses: {
       "desktop.observe": desktopObserve,
       ...(describedSession === undefined
@@ -109,24 +118,113 @@ async function startDesktopDocument(
   await page.goto(`${suite.server.baseUrl}${route}`);
   const panel = page.locator("openclaw-desktop-panel");
   await panel.waitFor({ state: "attached" });
-  await gateway.waitForRequest("environments.list");
+  const inventoryRequest = await gateway.waitForRequest(inventoryMethod);
   await installDesktopClientFake(panel);
-  return { gateway, panel };
+  return { gateway, panel, inventoryMethod, inventoryRequest };
 }
 
 async function openDesktopDocument(
   page: import("playwright").Page,
   route: string,
-  environments: unknown[],
+  environments: Array<{ id: string } & Record<string, unknown>>,
   desktopObserve?: unknown,
   describedSession?: unknown,
+  inventoryMethod?: "environments.list" | "environments.status",
 ) {
-  const document = await startDesktopDocument(page, route, desktopObserve, describedSession);
-  await document.gateway.resolveDeferred("environments.list", { environments });
+  const document = await startDesktopDocument(
+    page,
+    route,
+    desktopObserve,
+    describedSession,
+    inventoryMethod,
+  );
+  await document.gateway.setMethodResponse("environments.list", { environments });
+  if (document.inventoryMethod === "environments.status") {
+    const params = document.inventoryRequest.params;
+    if (
+      !params ||
+      typeof params !== "object" ||
+      !("environmentId" in params) ||
+      typeof params.environmentId !== "string"
+    ) {
+      throw new Error("Expected a targeted environment status request");
+    }
+    const environmentId = params.environmentId;
+    const environment = environments.find((entry) => entry.id === environmentId);
+    if (environment) {
+      await document.gateway.setMethodResponse("environments.status", environment);
+      await document.gateway.resolveDeferred("environments.status", environment);
+    } else {
+      await document.gateway.rejectDeferred("environments.status", {
+        code: "INVALID_REQUEST",
+        message: "unknown environmentId",
+      });
+    }
+  } else {
+    await document.gateway.resolveDeferred("environments.list", { environments });
+  }
   return document;
 }
 
 suite.define(() => {
+  it("paints the session desktop without waiting for global inventory", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:targeted-desktop";
+      const environment = {
+        id: "worker-targeted",
+        type: "worker",
+        status: "available",
+        desktop: true,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        deferredMethods: ["environments.list", "environments.status"],
+        featureMethods: ["desktop.observe", "environments.list", "environments.status"],
+        methodResponses: {
+          "sessions.describe": {
+            session: {
+              key: sessionKey,
+              kind: "direct",
+              updatedAt: 1,
+              placement: { state: "active", environmentId: environment.id },
+            },
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=targeted",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(
+        `${suite.server.baseUrl}focus/desktop/session/${encodeURIComponent(sessionKey)}`,
+      );
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.waitFor({ state: "attached" });
+      const rfb = await installScriptedRfbServer(page);
+      const status = await gateway.waitForRequest("environments.status");
+      expect(status.params).toEqual({ environmentId: environment.id });
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      await gateway.resolveDeferred("environments.status", environment);
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await rfb.send([createRfbRawFrame()]);
+      await expect
+        .poll(() =>
+          panel.evaluate((element) => {
+            const canvas = element.shadowRoot?.querySelector<HTMLCanvasElement>("canvas");
+            return [...(canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data ?? [])].join(",");
+          }),
+        )
+        .toBe("24,180,160,255");
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      await page.screenshot({
+        path: path.join(artifactDirectory, "session-first-frame-without-global-inventory.png"),
+      });
+    });
+  });
+
   it.each(["active", "starting", "offline"])(
     "opens the %s chat session desktop and follows an explicit pop-out selection",
     async (initialState) => {
@@ -183,6 +281,12 @@ suite.define(() => {
           ],
         };
         await gateway.setMethodResponse("environments.list", inventory);
+        await gateway.setMethodResponse("environments.status", {
+          cases: inventory.environments.map((environment) => ({
+            match: { environmentId: environment.id },
+            response: environment,
+          })),
+        });
         if (initialState !== "active") {
           await panel
             .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
@@ -310,8 +414,8 @@ suite.define(() => {
 
         const popupScenario = {
           sessionKey,
-          deferredMethods: ["environments.list"],
-          featureMethods: ["desktop.observe", "environments.list"],
+          deferredMethods: ["environments.status"],
+          featureMethods: ["desktop.observe", "environments.list", "environments.status"],
           methodResponses: { "desktop.observe": controlResponse },
         };
         await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
@@ -330,14 +434,14 @@ suite.define(() => {
             () =>
               (
                 window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-              ).openclawControlUiE2eGateway?.findRequests("environments.list").length,
+              ).openclawControlUiE2eGateway?.findRequests("environments.status").length,
           );
           await installDesktopClientFake(focusedPanel);
-          await popup.evaluate((environments) => {
+          await popup.evaluate((environment) => {
             (
               window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-            ).openclawControlUiE2eGateway?.resolveDeferred("environments.list", environments);
-          }, inventory);
+            ).openclawControlUiE2eGateway?.resolveDeferred("environments.status", environment);
+          }, inventory.environments[2]);
           await focusedPanel.locator("[data-test-remote-desktop='true']").waitFor();
           expect(
             await popup.evaluate(() =>
@@ -547,6 +651,7 @@ suite.define(() => {
         [gatewayEnvironment],
         undefined,
         session,
+        "environments.list",
       );
 
       await panel
@@ -566,7 +671,7 @@ suite.define(() => {
   it("renders inventory failure recovery and retries the preselected source", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await startDesktopDocument(page, "focus/desktop/source/gateway");
-      await gateway.rejectDeferred("environments.list", {
+      await gateway.rejectDeferred("environments.status", {
         code: "UNAVAILABLE",
         message: "desktop inventory is temporarily unavailable",
       });
@@ -576,9 +681,7 @@ suite.define(() => {
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-      await gateway.setMethodResponse("environments.list", {
-        environments: [gatewayEnvironment],
-      });
+      await gateway.setMethodResponse("environments.status", gatewayEnvironment);
       await retry.click();
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({ source: { kind: "host" }, control: false });
@@ -601,20 +704,17 @@ suite.define(() => {
         undefined,
         { key: sessionKey, kind: "direct", updatedAt: 1, execNode: "workstation" },
       );
-      await gateway.rejectDeferred("environments.list", {
+      await gateway.rejectDeferred("environments.status", {
         code: "UNAVAILABLE",
         message: "desktop inventory is temporarily unavailable",
       });
 
-      // A session key only names a machine once the inventory loads, so recovery here has no
-      // preselected environment to reconnect to and must retry the inventory instead.
+      // Resolution succeeded; retry still follows this session's current target.
       const retry = panel.getByRole("button", { name: "Retry", exact: true });
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-      await gateway.setMethodResponse("environments.list", {
-        environments: [gatewayEnvironment, nodeEnvironment],
-      });
+      await gateway.setMethodResponse("environments.status", nodeEnvironment);
       await retry.click();
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({

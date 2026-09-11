@@ -412,6 +412,38 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
+  it("refreezes retained collections across module instances", async () => {
+    const sharedMap = new Map([["initial", { nested: { value: "initial" } }]]);
+    const sharedSet = new Set([{ nested: { value: "initial" } }]);
+    const first = restorePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "retained",
+            configSchema: { type: "object", properties: { sharedMap, sharedSet } },
+          },
+        ],
+      }),
+    );
+    const mapValue = { nested: { value: "injected-map" } };
+    const setValue = { nested: { value: "injected-set" } };
+    Map.prototype.set.call(sharedMap, "injected", mapValue);
+    Set.prototype.add.call(sharedSet, setValue);
+
+    vi.resetModules();
+    const reloaded = await import("./plugin-metadata-snapshot.js");
+    expect(reloaded.restorePluginMetadataSnapshot).not.toBe(restorePluginMetadataSnapshot);
+    expect(reloaded.finalizePluginMetadataSnapshot(first)).toBe(first);
+    expect(Object.isFrozen(mapValue.nested)).toBe(true);
+    expect(Object.isFrozen(setValue.nested)).toBe(true);
+    expect(() => sharedMap.clear()).toThrow("Plugin metadata snapshots are immutable");
+    expect(() => sharedMap.set("blocked", mapValue)).toThrow(
+      "Plugin metadata snapshots are immutable",
+    );
+    expect(() => sharedSet.add(setValue)).toThrow("Plugin metadata snapshots are immutable");
+    expect(() => sharedSet.delete(setValue)).toThrow("Plugin metadata snapshots are immutable");
+  });
+
   it("rewalks enumerable accessor graphs when their closure-backed values change", () => {
     const index = makeIndex();
     let accessorValue = { nested: { value: "initial" } };

@@ -9,7 +9,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: () => undefined,
 }));
 
-const baseConfig = {} as OpenClawConfig;
+const baseConfig: OpenClawConfig = {};
 
 describe("resolveFollowupDeliveryPayloads", () => {
   it("drops payloads without visible content", () => {

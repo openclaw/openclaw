@@ -218,7 +218,7 @@ module.exports = {
           const cancellationReason = new Error("BTW parent closed");
           let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
           try {
-            first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             if (mode === "published borrow") {
@@ -280,7 +280,9 @@ module.exports = {
               first.release();
             }
             expect(original.database.isOpen).toBe(true);
-            replacement = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
+              catalogMode: "static",
+            });
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.prepare("SELECT value FROM answer").get()?.value).toBe(42);

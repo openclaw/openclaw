@@ -364,7 +364,7 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 
-export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskRecord[]> {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
@@ -374,7 +374,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (store.listTasksForOwnerKey) {
     try {
       const merged = new Map<string, TaskRecord>();
-      for (const task of store.listTasksForOwnerKey(key)) {
+      for (const task of await store.listTasksForOwnerKey(key)) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]

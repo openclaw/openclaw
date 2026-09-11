@@ -23,6 +23,11 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     cancelled?: "close" | "lifecycle";
   };
 
+export type TerminalRouteTarget =
+  | { sessionId: string }
+  | { catalog: TerminalPanelCatalogReference }
+  | null;
+
 export type TerminalOperation = {
   generation: number;
   client: TerminalGatewayClient;
@@ -64,6 +69,8 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
   readonly fullscreen: boolean;
+  readonly page: boolean;
+  readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
   readonly catalogReadyTimeoutMs: number;
   terminalPanelErrorText: string | null;

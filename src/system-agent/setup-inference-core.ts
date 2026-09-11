@@ -203,6 +203,8 @@ export type ActivateSetupInferenceParams = {
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
+  /** Explicit consent from the CLI command that tests and activates a saved sign-in. */
+  activationConfirmed?: true;
   /** Interactive provider login transport, required for `provider-auth`. */
   prompter?: WizardPrompter;
   /** Cancels provider-owned browser callbacks and device-code polling. */
@@ -221,6 +223,8 @@ export type ActivateSetupInferenceParams = {
       typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
     >,
   ) => void;
+  /** Run credential promotion only after the Gateway applied the verified config. */
+  onCredentialActivation?: (activate: () => Promise<void>) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 

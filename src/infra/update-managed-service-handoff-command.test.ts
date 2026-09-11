@@ -93,6 +93,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
   restartDelayMs?: number;
@@ -113,6 +114,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
@@ -311,6 +313,15 @@ describe("managed service update handoff command", () => {
     ]);
     expect(result.command).toContain("--channel extended-stable");
   });
+
+  it.each([true, false])(
+    "preserves replay consent=%s across the detached handoff",
+    async (reapplyLocalOverrides) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
+      expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+      expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
 
   it("serializes an immutable package target into the detached CLI command", async () => {
     const result = await startHandoffAndReadCommand({

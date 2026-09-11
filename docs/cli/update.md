@@ -94,6 +94,27 @@ An agent updating the Gateway that hosts its own session should use the
 host; verify that the destination is not that same Gateway. Normal execution
 approvals and deployment ownership still apply.
 
+## Native service commands during updates
+
+Native service install, restart, and stop commands launched by the updater through
+the target CLI retain the original update owner while their child processes settle. A command whose owner exits or
+loses its lease cannot start another native mutation or commit its pending config
+changes. A new update remains excluded while a registered child or its process
+group is still alive.
+
+The target runtime must support this ownership handoff. Candidate validation checks
+that support before stopping the Gateway or activating its replacement. A missing
+target CLI or an older target without support is refused; the updater does not
+invoke the old runtime installer as a substitute. Authorized installation-root
+changes bind the destination CLI separately while retaining the original update owner. Update-owned commands also refuse unmanaged
+restart/stop and detached restart or Windows Startup-folder fallbacks that cannot
+retain this ownership. Ordinary user-invoked `openclaw gateway` commands keep their
+existing behavior.
+
+This target-CLI protection does not cover every Doctor or plugin child, the
+in-process service preparation before package mutation, or the separate
+deferred-install activation checks.
+
 ## Options
 
 Updater-managed `openclaw update finalize` runs repair Doctor without an automatic
@@ -112,6 +133,7 @@ phase limits are unchanged.
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
+| `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                           |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                             |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,

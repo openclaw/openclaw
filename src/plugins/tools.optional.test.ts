@@ -17,10 +17,8 @@ import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/as
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import {
-  bindPluginRuntimeArtifactSelection,
-  resolvePluginRuntimeArtifactSelection,
-} from "./plugin-runtime-artifact-selection.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";

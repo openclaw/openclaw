@@ -409,18 +409,113 @@ describe("cua-computer provider", () => {
     );
   });
 
-  it("rejects model-supplied app paths and commands before driver dispatch", async () => {
+  it.each([
+    {
+      label: "Darwin bundle identifier despite an observed path",
+      platform: "darwin",
+      app: {
+        name: "TextEdit",
+        bundle_id: "com.apple.TextEdit",
+        launch_path: "/System/Applications/TextEdit.app",
+      },
+      expected: { bundle_id: "com.apple.TextEdit" },
+    },
+    {
+      label: "Darwin display name without a bundle identifier",
+      platform: "darwin",
+      app: {
+        name: "Example Editor",
+        bundle_id: null,
+        launch_path: "/Applications/Example Editor.app",
+      },
+      expected: { name: "Example Editor" },
+    },
+    {
+      label: "Linux launch command despite a desktop identifier",
+      platform: "linux",
+      app: {
+        name: "Editor",
+        bundle_id: "org.example.Editor",
+        launch_path: "/usr/bin/editor --new-window",
+      },
+      expected: { launch_path: "/usr/bin/editor --new-window" },
+    },
+    {
+      label: "Windows quoted executable and arguments",
+      platform: "win32",
+      app: {
+        name: "Example Editor",
+        bundle_id: "org.example.Editor",
+        launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window',
+      },
+      expected: { launch_path: '"C:\\Program Files\\Example\\Editor.exe" --new-window' },
+    },
+    {
+      label: "Windows packaged application launch path",
+      platform: "win32",
+      app: {
+        name: "Example Editor",
+        bundle_id: "Example.Editor_abcdefghijklm!App",
+        launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App",
+      },
+      expected: { launch_path: "shell:appsFolder\\Example.Editor_abcdefghijklm!App" },
+    },
+  ] as const)("launches an observed app using its $label", async ({ platform, app, expected }) => {
     const { session, callTool } = driver();
-    const computer = await execution(session);
-
-    for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
-      await expect(computer.act(JSON.stringify({ action: "launch_app", app }))).rejects.toThrow(
-        "COMPUTER_STALE_OBSERVATION",
+    callTool.mockImplementation(async (name, args) => {
+      if (name === "list_apps") {
+        return cuaToolResult({ apps: [{ ...app, running: false }] });
+      }
+      if (platform === "darwin" && !args.bundle_id && !args.name) {
+        return cuaToolResult(
+          {},
+          {
+            isError: true,
+            text: "Provide either bundle_id or name to identify the app to launch.",
+          },
+        );
+      }
+      return cuaToolResult({ ...app, pid: 4242, running: true, windows: [] });
+    });
+    const computer = await execution(session, platform);
+    try {
+      const listed = JSON.parse(await computer.act('{"action":"list_apps"}')) as {
+        details: { apps: Array<{ app: string }> };
+      };
+      const launched = JSON.parse(
+        await computer.act(
+          JSON.stringify({ action: "launch_app", app: listed.details.apps[0]!.app }),
+        ),
       );
-    }
 
-    expect(callTool).not.toHaveBeenCalled();
+      expect(launched).toMatchObject({
+        ok: true,
+        details: { app: [{ name: app.name, running: true }] },
+      });
+      expect(callTool).toHaveBeenLastCalledWith("launch_app", expected, undefined);
+    } finally {
+      await computer.close("completion");
+    }
   });
+
+  it.each(["darwin", "linux", "win32"] as const)(
+    "rejects model-supplied app paths and commands before driver dispatch on %s",
+    async (platform) => {
+      const { session, callTool } = driver();
+      const computer = await execution(session, platform);
+      try {
+        for (const app of ["/usr/bin/open", "../outside", "sh -c 'touch /tmp/owned'"]) {
+          await expect(computer.act(JSON.stringify({ action: "launch_app", app }))).rejects.toThrow(
+            "COMPUTER_STALE_OBSERVATION",
+          );
+        }
+
+        expect(callTool).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
 
   it("maps the complete Linux window pointer and keyboard family", async () => {
     const { session, callTool } = driver();

@@ -45,8 +45,12 @@ A signed-in native operator device may still need a one-time approval on the
 Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
 determines whether verified proxy identities can enroll automatically.
 
-When the browser session expires, choose **Reconnect** for that saved Gateway,
-then **Connect** to sign in again. Renewing the same account keeps its native
+When the browser session expires, opening the saved Gateway shows a sign-in
+page and starts sign-in in your browser. A window restored at launch waits for
+you to choose **Sign in again**. You can also choose **Reconnect** for that saved
+Gateway in **Connection… → Gateways**, then **Connect**. The session lifetime is
+the Cloudflare Access application's session duration configured by the Access
+administrator. Renewing the same account keeps its native
 chat cache and queued messages. Signing in with a different account closes the
 previous account's native chat windows and uses that account's own cache and
 queue. Previously queued messages remain with their original account; sign

@@ -340,6 +340,11 @@ export type PluginHookAgentContext = {
   channelContext?: PluginHookChannelContext;
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
   toolAuthority?: PluginHookToolAuthority;
+  /**
+   * Present for before_prompt_build only. Checks this handler's result-acceptance lifetime,
+   * not tool authorization or eventual model consumption. Underlying work is not cancelled.
+   */
+  readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };
 
 export type PluginHookContextWindowSource =

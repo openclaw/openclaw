@@ -119,7 +119,7 @@ export async function prepareWorkshopWorkspaceRelocation(
   if (existing?.status === "prepared") {
     return;
   }
-  const snapshot = readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+  const snapshot = await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
   const attestation = snapshot.attestation;
   const now = Date.now();
   if (

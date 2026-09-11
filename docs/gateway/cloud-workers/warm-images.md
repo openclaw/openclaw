@@ -16,13 +16,17 @@ On Linux, warm images are on by default when a class is known from `settings.cla
 
 Forwarded host environment values reach setup, so whatever setup derives from them could persist in a shared image. Profiles with nonempty `setupEnv` capture only when you explicitly set `settings.warmImage: true`, after checking that setup leaves no credential on disk. Explicit `true` requires a known configured or placement class before any provider command. Explicit `false` always keeps provisioning cold, for example when snapshot storage charges or provider-side retention of repository content are unwanted.
 
-For a Gateway worktree project with a Git commit, capture happens during provisioning, before node enrollment. After profile setup, OpenClaw prepares a pristine checkout of the admitted commit and, when the dispatch caller authorizes setup, runs its committed executable `.openclaw/worktree-setup.sh` at the final workspace and `HOME` paths. It installs the verified node runtime and captures the completed environment when an image is needed. An explicit setup skip uses a separate prepared cache; without setup authority, an executable recipe keeps the existing Git-seed path. The first dispatch includes that work; subsequent sessions can reuse the image without waiting for the first session to stop. Session edits, eligible untracked files, and node enrollment credentials arrive only after capture. Public repository-only sessions use the same preparation flow without cloning on the Gateway: OpenClaw resolves the repository instance, commit, and executable setup recipe through GitHub, then fetches that exact commit on the worker without credentials. Initially verified private repositories keep the existing cold repository checkout after enrollment and do not create prepared repository reserves. Private prepared reuse requires a separate credential-cleanup ownership design.
+For a Gateway worktree project with a Git commit, capture happens during provisioning, before node enrollment. After profile setup, OpenClaw prepares a pristine checkout of the admitted commit and, when the dispatch caller authorizes setup, runs its committed executable `.openclaw/worktree-setup.sh` at the final workspace and `HOME` paths. It installs the verified node runtime and captures the completed environment when an image is needed. An explicit setup skip uses a separate prepared cache; without setup authority, an executable recipe keeps the existing Git-seed path. The first dispatch includes that work; subsequent sessions can reuse the image without waiting for the first session to stop. Session edits, eligible untracked files, and node enrollment credentials arrive only after capture. Repository-only sessions use the same preparation flow: OpenClaw resolves the repository instance, commit, and executable setup recipe through GitHub. Public sources fetch that exact commit on the worker without credentials. Private sources fetch authenticated Git objects into temporary Gateway storage, then transfer a verified Git pack; this preparation step never puts GitHub credentials in provider scripts, worker files, or snapshots. The Gateway creates no managed checkout and runs no project setup for this transfer. Providers without project preparation retain ordinary checkout after enrollment.
+
+Private preparation needs temporary Gateway disk space for the shallow Git objects and outgoing pack. The existing 4 GiB pack limit applies to the transferred artifact; it does not cap bytes downloaded by Git before that pack is produced. Fetch uses a bounded command timeout, and temporary files are removed after the owning work settles, including cancellation.
+
+Local project preparation retains the primary Git repository as its transport source, including a bare primary repository backing a linked checkout. It keeps the admitted session commit pinned, so archiving and removing the linked session checkout does not prevent reserve refill or select the primary checkout's newer `HEAD`. Session-file synchronization still uses the session checkout.
 
 Project images also retain one verified compressed worker archive in the installed runtime package, outside node identity and session state. A matching new node uses those bytes instead of downloading the worker archive again. It still enrolls normally and extracts and validates its own installation. OpenClaw worker turns prewarm the worker runtime on capable nodes; Codex remote execution skips that unused startup. If the Gateway requests a different archive, the node uses the normal authenticated download; a present but corrupt or unsafe prepared archive fails installation visibly. Preparing a replacement archive removes the superseded published archive before capture. The slim node runtime archive does not include the standalone worker payload.
 
 Daytona requires a stopped source for filesystem snapshots. OpenClaw allows Crabbox to stop the scrubbed worker for capture. A successful capture waits for snapshot completion and restores a previously running source before project enrollment continues.
 
-Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system, exact effective machine class, and project identity when present. Project identity comes from the Gateway's namespace and the canonical shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared public-repository identity includes the canonical URL, GitHub repository ID, current agent binding, and selected shared GitHub account/profile or explicitly verified anonymous access. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
+Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system, exact effective machine class, and project identity when present. Project identity comes from the Gateway's namespace and the canonical shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared repository identity includes the canonical URL, GitHub repository ID, current agent binding, selected shared GitHub account/profile or explicitly verified anonymous access, and a separate scope for private contents. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
 
 Before its first provider allocation command, OpenClaw records whether the lease starts cold or from a specific checkpoint, along with its resolved operating system and class. Retries and Gateway restart reuse that exact choice; a lost response cannot switch a cold allocation to a newly available image or select a different checkpoint. The record advances through preparation and enrollment, and a selected checkpoint remains protected from deletion until the provider confirms the lease has stopped. A failed fork reports an error instead of silently changing the recorded allocation. Runtime identity is also frozen for that allocation. Replay rejects a changed or missing identity rather than relabeling an existing worker; stop it before creating a new allocation. An older allocation cannot replace an image published from a different source generation merely because their runtime digests differ.
 
@@ -91,13 +95,13 @@ retirement unless pinned or still held by an allocation.
 
 ### Ready workers
 
-For an eligible local Git project or public repository-only session, a successful session activation can prepare a
+For an eligible local Git project or repository-only session, a successful session activation can prepare a
 dedicated worker for the next session in the background. The default target is
 one unassigned worker per project and profile, with a Gateway-wide cap of four.
 The next matching dispatch consumes a ready worker once, then schedules refill;
 if no eligible worker is ready, dispatch uses ordinary provisioning.
 Paired-device dispatch does not use this pool.
-Public-repository admission, refill, and restart binding recheck current source access and public visibility. A repository that becomes private or inaccessible cannot reuse its earlier prepared capacity. Retention and cleanup use local ownership facts without requiring GitHub access. A changed repository instance or selected account cannot consume capacity prepared for the previous owner.
+Repository admission, refill, and restart binding recheck current source access and visibility. Public and private repositories use separate preparation identities; a visibility change or lost access prevents reuse of earlier prepared capacity. Retention and cleanup use local ownership facts without requiring GitHub access. A changed repository instance or selected account cannot consume capacity prepared for the previous owner.
 A ready-worker hit bypasses provisioning. A foreground miss uses ordinary
 snapshot refresh and may wait for a required capture before enrollment; disabling
 reserves preserves that refresh behavior.
@@ -113,14 +117,18 @@ when `readyWorkers` is zero, but admission still requires room under
 it as surplus on the next pool pass. Its demand starts the normal refill and
 provider idle-timeout window. Track its `preparation: { purpose, key }` in
 `environments.list` or `environments.status`; `environments.destroy` cancels it
-and waits for provider work to settle and cleanup to finish.
+and waits for provider work to settle and cleanup to finish. The same command
+cancels an unused automatic reserve, including one whose expiry has passed.
 
 Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
 `cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
 corresponding reserves and drains unused capacity while preserving active
 sessions and image reuse. Preparing workers and workers awaiting confirmed
 cleanup count against the limits. Ready workers incur running-machine charges
-until the provider confirms deletion.
+until the provider confirms deletion. After confirmed allocation cleanup, a
+failed preparation records its original error and ends that preparation. Any
+later eligible refill starts a new allocation. Uncertain cleanup keeps the
+worker counted until the provider confirms release.
 
 Each reserve expires from the successful activation or explicit build that
 created its demand, using the provider's existing idle timeout. Refill and Gateway restart do not
@@ -214,6 +222,10 @@ as active builds. The **Building** total also includes active image captures,
 counting a build and its capture once when they share a lease ID.
 Failed and orphaned builds remain visible with their reported error and count
 toward **Needs attention**. They do not keep polling active or offer cancellation.
+A failed build offers **Dismiss**, which confirms, calls `environments.destroy`,
+and hides the row; the Gateway keeps the terminal record until retention expires,
+so a reload can list it again. Orphaned builds keep no dismissal because their
+provider artifacts still await cleanup.
 
 **Recover** is available only for uncertain captures. Its required checkbox
 acknowledges that the owning capture and worker have stopped and provider
@@ -230,7 +242,7 @@ checkpoint details (`checkpointId`, `createdAtMs`, and recorded `baseCommit` and
 with no retained previous generation; no state migration is needed for them.
 `profileId` means the configured profile that most recently allocated from the
 image key; it is overwritten on each allocation and does not change image keys
-or reuse policy. `projectRoot` is the Gateway-local checkout root used for rebuilding.
+or reuse policy. `projectRoot` is the canonical Gateway-local repository root used for rebuilding.
 Project labels use the normalized origin repository identity
 `host/owner/repo`, or the project root's basename when origin cannot be resolved.
 

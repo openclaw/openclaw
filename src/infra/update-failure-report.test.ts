@@ -166,7 +166,7 @@ describe("update failure report", () => {
     const saved = await fs.readFile(result.savedReportPath, "utf8");
     expect(saved).toBe(prepared.body);
     expect(Buffer.byteLength(saved, "utf8")).toBeLessThanOrEqual(16_000);
-    expect(saved).toContain("Rollback outcome: verified safe to restart");
+    expect(saved).toContain("Recovery outcome: verified safe to restart");
     expect(saved).toContain("Failed phase:");
     expect(saved).toContain("Update target:");
     expect(saved).toContain("🦞");
@@ -216,7 +216,7 @@ describe("update failure report", () => {
     );
 
     expect(prepared.body).toContain(
-      "Rollback outcome: package rollback verified; service restart not verified (runtime-verification-failed)",
+      "Recovery outcome: package rollback verified; service restart not verified (runtime-verification-failed)",
     );
   });
 

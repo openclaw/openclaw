@@ -276,6 +276,14 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Setup admission Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
       - name: Resolve trusted workflow identity
         id: tooling_identity
         env:

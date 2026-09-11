@@ -20,7 +20,6 @@ const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.h
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: resolveProviderIdForAuthMock,

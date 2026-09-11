@@ -286,6 +286,108 @@ as untrusted.
 - LINE describes inline emoji with metadata and alternative text. Empty `()`
   alternatives reach the agent as `[emoji]`. Meaningful alternatives such as
   `(hello)` and parentheses typed by the sender are preserved.
+- LINE sends several images picked in one action as one webhook event per image,
+  out of order. They are held briefly and answered as a single turn carrying
+  every image, ordered by the index LINE reports; a sender whose client omits
+  that index - LINE 11.15 and earlier for Android - keeps the order the images
+  were delivered in. A set that never completes is delivered with whatever
+  arrived rather than being held indefinitely, a few seconds after its most
+  recent part - or after the chat's queue reaches it, if it is still waiting its
+  turn. Anything else arriving meanwhile - a message, or another set of
+  images - waits behind it, so replies keep the order the chat was sent in; in a
+  group that queue is the whole room, because LINE conversations are ordered per
+  chat rather than per member. A model without native vision reads only the
+  first image unless `tools.media.image.attachments` sets both `mode: "all"` and
+  `maxAttachments`; either key alone leaves the limit at one. A set whose parts do
+  not announce a total is delivered with whatever arrived and says nothing
+  about the rest, because nothing states how many there were.
+
+## Reply quoting
+
+`channels.line.replyToMode` controls native quote replies (an outbound reply
+visibly quotes the message it answers, which is how a group tells who the bot is
+talking to):
+
+| Value             | Behavior                             |
+| ----------------- | ------------------------------------ |
+| `"off"` (default) | Do not quote automatically           |
+| `"first"`         | Quote only the first reply of a turn |
+| `"all"`           | Quote every reply of a turn          |
+
+`"batched"`, which other channels accept, is rejected here: it distinguishes a
+reply to a coalesced turn from a reply to an immediate one, and nothing on the
+LINE path marks a turn as coalesced, so that distinction never arises.
+
+Per-account override: `channels.line.accounts.<id>.replyToMode`. There is no
+per-chat-type override: `replyToModeByChatType`, which Slack, Signal, and
+Mattermost accept, is rejected here, so one account quotes the same way in
+direct chats and groups.
+
+```json5
+{ channels: { line: { replyToMode: "all" } } }
+```
+
+As on Telegram, `"off"` turns off automatic quoting only: an explicit reply tag
+the agent writes is still honoured. Replies quote inline and stay visible in the
+conversation, so nothing is hidden by threading them.
+
+LINE quotes by a token it issues with each inbound message rather than by message
+id, and OpenClaw can only quote a message it kept that token for. Quoting
+therefore has limits the setting cannot lift:
+
+- LINE issues a quote token only for text, image, video, and sticker messages.
+  A reply that answers any other kind is sent unquoted.
+- LINE rejects a quote on a Flex card, on media, and on a location pin, so one
+  reply quotes once, on the first message that can carry it. A reply made only of
+  those is sent unquoted.
+- A reply can only quote a message OpenClaw received. LINE also returns a quote
+  token for each message the bot itself sends, but those are not kept, so a reply
+  that answers one of the bot's own earlier messages is sent unquoted.
+- Only a message OpenClaw handed to the agent as its own turn is remembered. In
+  a group with `requireMention` on, a skipped message still reaches the agent as
+  a line of group history, but that line carries no id the reply can name, so it
+  cannot be quoted.
+- A turn a person started by tapping a button carries no message of its own,
+  so its reply is sent unquoted.
+- Tokens live in the running Gateway, the most recent 500 per account across all
+  of its chats. A reply that answers a message from before the last restart, one
+  a busier chat on the same account has since pushed out, or one sent by a
+  separate process such as `openclaw message send`, is sent unquoted.
+- If LINE rejects a request carrying a quote token with HTTP 400, OpenClaw
+  retries the same reply without the quote. Deleting or unsending the quoted
+  message does not itself invalidate its token; LINE may instead show the quoted
+  content as unavailable. See [LINE quote messages](https://developers.line.biz/en/docs/messaging-api/sending-messages/#send-quote-messages).
+
+## Block streaming
+
+Block streaming sends each completed assistant block as its own LINE message
+instead of waiting for the whole reply. It is off by default, and
+`channels.line.streaming` decides it for LINE alone:
+
+```json5
+{ channels: { line: { streaming: { block: { enabled: true } } } } }
+```
+
+| Setting                          | Effect                                                               |
+| -------------------------------- | -------------------------------------------------------------------- |
+| `streaming.block.enabled: true`  | Send completed blocks as they finish, whatever the agent default is  |
+| `streaming.block.enabled: false` | Keep LINE on whole replies even when the agent default is `on`       |
+| unset (default)                  | Follow `agents.defaults.blockStreamingDefault`                       |
+| `streaming.block.coalesce`       | Merge small blocks before sending (`minChars`, `maxChars`, `idleMs`) |
+| `streaming.chunkMode`            | `length` (default) or `newline` to split on paragraph boundaries     |
+
+Per-account override: `channels.line.accounts.<id>.streaming`. These are the
+block-mode streaming controls shared across channels; see
+[Streaming](/concepts/streaming).
+
+Each block LINE receives is a separate message, and LINE counts messages against
+the channel's monthly quota, so leaving this off keeps a long reply to the fewest
+messages. `coalesce.minChars` is the lever if you want blocks to arrive early but
+not one paragraph at a time — OpenClaw's own default is 800 characters.
+
+LINE cannot edit a message it has already sent, so it has no preview streaming
+mode: there is no `streaming.mode` or `streaming.preview` here, and a reply is
+never revised in place.
 
 ## Structured rich messages
 
@@ -301,6 +403,31 @@ message, counted across every `select` block in the reply rather than per block.
 Each select keeps its prompt and any overflow options together in that text.
 Prompts and overflow option names remain complete. Only native quick-reply button
 labels are shortened to LINE's 20-character limit.
+
+In direct chats, the options an `ask_user` question offers become tappable controls
+on the same Flex card, and a tap answers the question directly. LINE carries the option
+index the Gateway assigned rather than the label, so a reply whose choices the Gateway no longer
+lists falls back to readable text instead of drawing a tap that answers the wrong
+option. The eligible shape is one single-select, non-secret question offering two to
+four distinct options — the same bound Telegram, Discord and Slack use; anything else
+stays readable text that a typed reply still answers. Groups, multi-person chats, and
+unrecognized destinations also use this readable fallback. LINE's group and room
+postbacks do not include the sender identity needed to admit a question answer;
+reply with the option text instead.
+
+The **Other…** free-text control is not drawn. Tapping it resolves nothing by itself, and LINE
+cannot take a control back off a card it already delivered, so the button would add a tap that
+changes nothing the question's own text does not already offer. Discord and Slack leave that
+route in text for the same reason. In eligible direct chats, each declared option keeps
+a native control, and **Other…** stays named in the card's text under `Actions:` whatever the option count.
+
+LINE cannot edit a message it already delivered, so the controls stay on screen after
+the question ends. A tap that arrives then is answered with `That question is no longer
+waiting for an answer.` Initial taps follow the channel's normal admission and
+pairing rules. If pairing is revoked while the question is being read, the answer
+is ignored without an answer notice or a new pairing challenge. The Gateway reports one
+terminal state for answered, cancelled and expired questions alike, so the notice does
+not claim which one it was.
 
 ```json5
 {
@@ -414,8 +541,16 @@ link-local, and private-network targets.
 
 - **Webhook verification fails:** ensure the webhook URL is HTTPS and the
   `channelSecret` matches the LINE console.
-- **No inbound events:** confirm the webhook path matches `channels.line.webhookPath`
-  and that the Gateway is reachable from LINE.
+- **No inbound events:** run `openclaw channels status --probe`. LINE only delivers
+  events while the channel's webhook URL is registered and **Use webhook** is on in
+  the Messaging API tab of the LINE Developers Console, and the probe reports both —
+  a channel whose webhook is off or unregistered is named with the setting to change.
+  OpenClaw does not set either for you: the URL has an API but depends on a public
+  address OpenClaw does not know, and the **Use webhook** switch has no API at all.
+  The webhook state comes from the probe, so
+  `openclaw channels status` without `--probe` does not report it. If the probe
+  reports the webhook as on, confirm the webhook path matches
+  `channels.line.webhookPath` and that the Gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 - **Pushes refused with HTTP 429:** Run

@@ -17,7 +17,6 @@ import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materia
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { listCliRuntimeModelBackendBindings } from "./cli-backends.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./harness/availability.js";
-import { createAgentHarnessCatalogEvaluator } from "./harness/model-catalog-readiness.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessId } from "./harness/support.js";
 import {
@@ -25,6 +24,7 @@ import {
   type ModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
@@ -248,18 +248,12 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       ? (authStore.profiles[selectedProfileId]?.provider ??
         params.cfg.auth?.profiles?.[selectedProfileId]?.provider)
       : undefined);
-  const nativeEvaluator = createAgentHarnessCatalogEvaluator({
-    config: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
+  const nativeEvaluator = prepareModelCatalogView({
+    ...params,
+    snapshot,
     workspaceDir,
-    preferredProfileId: params.preferredProfileId,
-    pinnedProfileId: params.pinnedProfileId,
     profileProvider,
-    pluginRegistry: params.pluginRegistry,
-    isCurrent: params.isCurrent,
-    observationConfig: params.observationConfig,
-  });
+  }).evaluateNative;
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
   const evaluateNative: typeof nativeEvaluator = (entry, host, runtimeId) =>

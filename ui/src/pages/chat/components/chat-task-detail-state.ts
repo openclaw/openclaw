@@ -1,9 +1,12 @@
 import type { TasksHistoryResult } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
+import { setExpansionState, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
 const TASK_TRANSCRIPT_REQUEST_LIMIT = 100;
@@ -28,6 +31,7 @@ type TaskDetailState = {
   refreshTimer: number | null;
   olderCursors: Set<string>;
   taskId: string;
+  fullMessages: Map<string, AssistantMessageExpansionState>;
 };
 
 export type TaskDetailHost = UiSessionDefaultsHost & {
@@ -36,7 +40,6 @@ export type TaskDetailHost = UiSessionDefaultsHost & {
   connected: boolean;
   connectionEpoch?: number;
   requestUpdate?: () => void;
-  sessionsResultAgentId?: string | null;
   taskDetailState?: TaskDetailState;
 };
 
@@ -53,7 +56,61 @@ export function resetTaskDetail(host: TaskDetailHost) {
     return;
   }
   clearRefreshTimer(current);
+  current.fullMessages.clear();
   host.taskDetailState = undefined;
+}
+
+export async function requestTaskFullMessage(
+  host: TaskDetailHost,
+  {
+    loader,
+    ...request
+  }: Parameters<SidebarFullMessageLoader>[0] & { loader: SidebarFullMessageLoader },
+) {
+  const state = host.taskDetailState;
+  if (
+    !state ||
+    !host.connected ||
+    host.client !== state.client ||
+    host.connectionEpoch !== state.connectionEpoch
+  ) {
+    return;
+  }
+  const current = state.fullMessages.get(request.messageId);
+  if (current?.status === "loading" || current?.status === "loaded") {
+    return;
+  }
+  const revision = (current?.revision ?? 0) + 1;
+  const pending = { status: "loading", revision } as const;
+  setExpansionState(state.fullMessages, request.messageId, pending);
+  host.requestUpdate?.();
+  let result: Awaited<ReturnType<SidebarFullMessageLoader>>;
+  try {
+    result = await loader(request);
+  } catch {
+    result = null;
+  }
+  // Reset or reconnection can reuse both the message ID and revision.
+  if (
+    host.taskDetailState !== state ||
+    host.client !== state.client ||
+    host.connectionEpoch !== state.connectionEpoch ||
+    state.fullMessages.get(request.messageId) !== pending
+  ) {
+    return;
+  }
+  const markdown =
+    result?.ok && result.message && typeof result.message === "object"
+      ? extractTextCached(result.message)
+      : null;
+  setExpansionState(
+    state.fullMessages,
+    request.messageId,
+    markdown === null
+      ? { status: "error", revision: revision + 1 }
+      : { status: "loaded", markdown, revision: revision + 1 },
+  );
+  host.requestUpdate?.();
 }
 
 function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
@@ -204,6 +261,7 @@ export function readTaskTranscript(
     refreshTimer: null,
     olderCursors: new Set(),
     taskId: selection.taskId,
+    fullMessages: new Map(),
   };
   host.taskDetailState = next;
   scheduleTranscriptLoad(host, next);

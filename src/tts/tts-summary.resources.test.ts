@@ -256,8 +256,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                 skipCredentials: true,
                 runtimePluginSelections: [{ provider: id, modelId: "summary-model" }],
               },
-              undefined,
-              "static",
+              { catalogMode: "static" },
             );
             acquire = vi
               .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")

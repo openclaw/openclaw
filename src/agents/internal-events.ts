@@ -39,6 +39,8 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  /** True only when the producer substituted placeholder text for an absent result. */
+  noVisibleResult?: boolean;
   modelRouteChange?: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];

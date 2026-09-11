@@ -37,18 +37,20 @@ type SessionMenuItemOptions = {
   disabled?: boolean;
   title?: string;
   keepOpen?: boolean;
+  stacked?: boolean;
   onSelect: () => void;
 };
 
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
+  const description = params.stacked
+    ? [params.description, params.sub, ...(params.facts ?? [])].filter(Boolean).join(" · ")
+    : params.description;
   return html`
     <button
       type="button"
-      class=${
-        params.description
-          ? "session-menu__item session-menu__item--described"
-          : "session-menu__item"
-      }
+      class="session-menu__item ${description ? "session-menu__item--described" : ""} ${
+        params.stacked ? "new-session-page__environment-option" : ""
+      }"
       data-value=${params.value}
       data-popover=${params.keepOpen ? nothing : "close"}
       aria-pressed=${String(params.checked)}
@@ -64,13 +66,13 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       <span class="session-menu__text">
         ${params.label}
         ${
-          params.description
-            ? html`<span class="session-menu__description">${params.description}</span>`
+          description
+            ? html`<span class="session-menu__description">${description}</span>`
             : nothing
         }
       </span>
       ${
-        params.facts?.length || params.meter
+        !params.stacked && (params.facts?.length || params.meter)
           ? html`<span class="new-session-page__menu-meta">
               ${
                 params.facts?.length
@@ -85,7 +87,8 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
             </span>`
           : nothing
       }
-      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
+      ${!params.stacked && params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
+      ${params.stacked ? (params.meter ?? nothing) : nothing}
       <span class="session-menu__check" aria-hidden="true"
         >${params.checked ? icons.check : nothing}</span
       >
@@ -118,6 +121,7 @@ export function renderCloudProfileMenuItems(params: {
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
+  stacked?: boolean;
   onSelect: (profileId: string) => void;
 }) {
   return params.profiles.map((profile) => {
@@ -127,6 +131,7 @@ export function renderCloudProfileMenuItems(params: {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
         icon: params.icon,
+        stacked: params.stacked,
         facts:
           profile.trust === "disposable"
             ? [t("newSession.environmentDisposable")]
