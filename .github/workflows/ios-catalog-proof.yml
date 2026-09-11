@@ -119,14 +119,48 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
+          import path from 'node:path';
+          const plugin = path.join(process.env.RUNNER_TEMP, 'catalog-proof', 'auth-plugin');
+          fs.mkdirSync(plugin, {recursive:true});
+          fs.writeFileSync(path.join(plugin, 'openclaw.plugin.json'), JSON.stringify({
+            id:'catalog-proof', providers:['catalog-proof'],
+            providerAuthChoices:[{provider:'catalog-proof',method:'device',choiceId:'device',
+              choiceLabel:'Catalog fixture sign-in',credentialOnly:true,appGuidedAuth:'device-code'}],
+            configSchema:{type:'object',additionalProperties:false,properties:{}}
+          }));
+          fs.writeFileSync(path.join(plugin, 'index.ts'), `export default {id:'catalog-proof',register(api){
+            api.registerProvider({id:'catalog-proof',label:'Catalog fixture',auth:[{
+              id:'device',label:'Catalog fixture sign-in',kind:'device_code',run:async(ctx)=>{
+                await ctx.openUrl('https://example.invalid/catalog-proof');
+                await ctx.prompter.deviceCode({title:'Catalog fixture code',code:'CATALOG-1234'});
+                if(!await ctx.prompter.confirm({message:'Complete fixture sign-in'}))return {profiles:[]};
+                return {profiles:[{profileId:'catalog-proof:default',credential:{
+                  type:'api_key',provider:'catalog-proof',key:'catalog-proof-synthetic-key'}}]};
+              }}]});}};`);
           const config = {
-            gateway: { mode: 'local', bind: 'loopback', port: 19876, auth: { mode: 'token', token: 'catalog-proof-token' } },
-            agents: { entries: { main: {} }, defaults: { model: { primary: 'openai/o3' }, models: { 'openai/o3': { agentRuntime: { id: 'openclaw' } } } } },
+            auth:{order:{anthropic:['bound']}},
+            plugins:{load:{paths:[plugin]},entries:{'catalog-proof':{enabled:true}}},
+            gateway: { mode: 'local', bind: 'loopback', port: 19876, auth: { mode: 'token', token: 'catalog-proof-token' }, controlUi: {enabled:false} },
+            agents: { entries: { main: {} }, defaults: { model: { primary: 'openai/o3' }, models: { 'openai/o3': { agentRuntime: { id: 'openclaw' } }, 'catalog-proof/*': {}, 'anthropic/claude-fixture': {agentRuntime:{id:'openclaw'}} } } },
             models: { mode: 'replace', providers: { openai: { apiKey: 'catalog-proof-fake-key', baseUrl: 'http://127.0.0.1:9/v1', api: 'openai-completions', models: [{ id: 'o3', name: 'Catalog Proof', reasoning: true, input: ['text', 'image'], contextWindow: 32000, maxTokens: 2048 }] } } },
           };
+          config.models.providers['catalog-proof'] = {baseUrl:'https://example.invalid/v1',api:'openai-completions',
+            models:[{id:'fixture',name:'Catalog fixture',input:['text'],contextWindow:32000,maxTokens:128}]};
+          config.models.providers.anthropic = {baseUrl:'https://example.invalid/anthropic',api:'anthropic-messages',
+            models:[{id:'claude-fixture',name:'Unavailable fixture',reasoning:true,input:['text'],contextWindow:32000,maxTokens:128}]};
           fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
           NODE
-          pnpm openclaw gateway run --allow-unconfigured > "$RUNNER_TEMP/catalog-proof/gateway.log" 2>&1 &
+          mkdir -p "$RUNNER_TEMP/catalog-proof/home"
+          env HOME="$RUNNER_TEMP/catalog-proof/home" node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
+          import path from 'node:path';
+          import {saveAuthProfileStore} from './src/agents/auth-profiles.ts';
+          // Same permanent-rejection shape as model-auth-availability.reasons.test.ts.
+          saveAuthProfileStore({version:1,profiles:{bound:{type:'api_key',provider:'anthropic',key:'rejected-key'}},
+            usageStats:{bound:{disabledUntil:Date.now()+24*60*60_000,disabledReason:'auth_permanent'}}},
+            path.join(process.env.OPENCLAW_STATE_DIR,'agents/main/agent'),
+            {filterExternalAuthProfiles:false,syncExternalCli:false});
+          NODE
+          env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN HOME="$RUNNER_TEMP/catalog-proof/home" pnpm openclaw gateway run --allow-unconfigured > "$RUNNER_TEMP/catalog-proof/gateway.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/catalog-proof/gateway.pid"
           for attempt in $(seq 1 120); do
             if curl --silent --fail http://127.0.0.1:19876/readyz > /dev/null; then break; fi
@@ -157,6 +191,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/catalog-proof/simulator.log"
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/catalog-proof/catalog.xcresult" > "$RUNNER_TEMP/catalog-proof/simulator-summary.json"
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/catalog-proof/simulator-summary.json")); if(s.passedTests!==1||s.skippedTests!==0||s.failedTests!==0)throw Error("The selected simulator test must pass without skips")'
+          pnpm --silent openclaw gateway call models.authStatus --json --params '{"agentId":"main"}' > "$RUNNER_TEMP/catalog-proof/auth-status.json"
       - name: Stop task Gateway
         if: always()
         run: |

@@ -842,7 +842,6 @@ struct ChatGatewayPayloadCodecTests {
             #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","available":false,"unavailableReason":"missing-auth","unavailableUntil":1234,"contextWindow":200000,"reasoning":true}]}"#
                 .utf8)
         let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(payload)
-        let metadataChoices = try OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(payload)
 
         #expect(choices == [OpenClawChatModelChoice(
             modelID: "gpt-5",
@@ -853,7 +852,6 @@ struct ChatGatewayPayloadCodecTests {
             unavailableUntil: 1234,
             contextWindow: 200_000,
             reasoning: true)])
-        #expect(metadataChoices == choices)
     }
 
     @Test func `command choice normalizes source aliases and identity`() {

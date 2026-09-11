@@ -273,7 +273,8 @@ extension OpenClawChatComposer {
     private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
             let unavailable = self.viewModel.modelUnavailableDescription(model)
-            Text(verbatim: [model.displayLabel, unavailable].compactMap(\.self).joined(separator: " — "))
+            Text(verbatim: [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
+                .filter { !$0.isEmpty }.joined(separator: " — "))
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag(model.selectionID)
                 .disabled(unavailable != nil)
@@ -286,7 +287,7 @@ extension OpenClawChatComposer {
             if self.viewModel.showsThinkingPicker {
                 self.thinkingPicker
             }
-            if self.viewModel.selectedModelSupportsFastMode {
+            if self.viewModel.showsFastModeControls {
                 self.fastModeToggle
             }
         } label: {
@@ -303,7 +304,7 @@ extension OpenClawChatComposer {
                         .rotationEffect(.degrees(self.viewModel.composerInlineEffortAngle))
                 }
                 .frame(width: 18, height: 18)
-                if self.viewModel.fastModeSelectionID == "on" {
+                if self.viewModel.fastModeIsEnabled {
                     Image(systemName: "bolt.fill")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(OpenClawChatTheme.accent)

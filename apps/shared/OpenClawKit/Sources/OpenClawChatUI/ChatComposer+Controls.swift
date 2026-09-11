@@ -64,9 +64,11 @@ extension OpenClawChatComposer {
             Text(String(localized: "On"))
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag("on")
+                .disabled(!self.viewModel.selectedModelSupportsFastMode)
             Text(String(localized: "Off"))
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag("off")
+                .disabled(!self.viewModel.selectedModelSupportsFastMode)
         } label: {
             Label(String(localized: "Fast"), systemImage: "bolt.fill")
                 .font(OpenClawChatTypography.captionSemiBold)
@@ -133,6 +135,11 @@ extension OpenClawChatComposer {
             HStack(spacing: 4) {
                 Text(model.displayLabel)
                     .font(OpenClawChatTypography.captionSemiBold)
+                Text(model.capabilityDescription)
+                    .font(OpenClawChatTypography.caption)
+                if let unavailable = self.viewModel.modelUnavailableDescription(model) {
+                    Text(unavailable).font(OpenClawChatTypography.caption)
+                }
                 if self.viewModel.isDefaultModel(model) {
                     Text(String(localized: "Default"))
                         .font(OpenClawChatTypography.caption)
@@ -140,6 +147,7 @@ extension OpenClawChatComposer {
                 }
             }
             .tag(model.selectionID)
+            .disabled(self.viewModel.isModelUnavailable(model))
         }
     }
 

@@ -41,6 +41,14 @@ final class ChatCatalogUITests: XCTestCase {
         let modelPicker = app.buttons["chat-composer-inline-model"]
         XCTAssertTrue(modelPicker.waitForExistence(timeout: 30))
         modelPicker.tap()
+        let unknownRow = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "catalog-proof/fixture")).firstMatch
+        XCTAssertTrue(unknownRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(unknownRow.isEnabled)
+        let authRequiredRow = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "anthropic/claude-fixture")).firstMatch
+        XCTAssertTrue(authRequiredRow.waitForExistence(timeout: 10))
+        XCTAssertFalse(authRequiredRow.isEnabled)
         let modelRow = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", "\(model.provider)/\(model.id)")).firstMatch
         XCTAssertTrue(modelRow.waitForExistence(timeout: 10), app.debugDescription)
@@ -59,6 +67,27 @@ final class ChatCatalogUITests: XCTestCase {
             XCTAssertTrue(app.buttons["\(level.label) (override)"].waitForExistence(timeout: 5), app.debugDescription)
         }
         self.capture(app, named: "published-thinking-choices")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        app.buttons["chat-model-sign-in"].tap()
+        let signIn = app.buttons["Catalog fixture sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 15))
+        signIn.tap()
+        XCTAssertTrue(app.staticTexts["Provider sign-in"].waitForExistence(timeout: 15))
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["CATALOG-1234"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["model-auth-external-url"].exists)
+        XCTAssertFalse(app.staticTexts["Sign-in finished."].exists)
+        self.capture(app, named: "published-device-code")
+        app.buttons["Continue"].tap()
+        let confirm = app.switches["Confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        confirm.tap()
+        app.buttons["Continue"].tap()
+        let account = app.descendants(matching: .any)["model-auth-provider-catalog-proof"]
+        let connected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Connected"), object: account)
+        XCTAssertEqual(XCTWaiter.wait(for: [connected], timeout: 20), .completed)
+        self.capture(app, named: "published-auth-state")
         let evidence = XCTAttachment(data: catalogData, uniformTypeIdentifier: "public.json")
         evidence.name = "gateway-published-model"
         evidence.lifetime = .keepAlways
