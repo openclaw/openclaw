@@ -473,13 +473,16 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
         ? html`<wa-dropdown-item
             class="sidebar-customize-menu__item"
             value="command:gateway-set-primary"
-            >${t("nav.gateway.setPrimary")}</wa-dropdown-item
-          >`
+          >
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.star}</span>
+            <span class="sidebar-customize-menu__text">${t("nav.gateway.setPrimary")}</span>
+          </wa-dropdown-item>`
         : nothing
     }
-    <wa-dropdown-item class="sidebar-customize-menu__item" value="command:gateway-settings"
-      >${t("nav.gateway.openSettings")}</wa-dropdown-item
-    >
+    <wa-dropdown-item class="sidebar-customize-menu__item" value="command:gateway-settings">
+      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.server}</span>
+      <span class="sidebar-customize-menu__text">${t("nav.gateway.openSettings")}</span>
+    </wa-dropdown-item>
     <div class="sidebar-customize-menu__separator" role="separator"></div>
   `;
 }
