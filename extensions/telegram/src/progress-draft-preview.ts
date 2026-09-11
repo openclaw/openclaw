@@ -81,11 +81,17 @@ function progressLineText(
 
 export function renderTelegramProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
-  options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
+  options: {
+    richMessages: boolean;
+    maxLines: number;
+    maxLineChars: number;
+    toolProgress: boolean;
+    commentaryProgressEnabled?: boolean;
+  },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
   const activity =
-    snapshot.statusHeadline || snapshot.plan?.length
+    !options.commentaryProgressEnabled && (snapshot.statusHeadline || snapshot.plan?.length)
       ? snapshot.lines.filter(
           (line) =>
             typeof line !== "string" &&
