@@ -273,7 +273,7 @@ describe("renderWorkboard", () => {
       const saved = { ...card, agentId, updatedAt: card.updatedAt + 1 };
       const request = vi.fn(async () => ({ card: saved }));
       const { state, container, renderView } = createWorkboardView({
-        client: { request } as unknown as GatewayBrowserClient,
+        client: { request, addEventListener: () => () => undefined },
         agentsList: {
           defaultId: "main",
           agents: [
@@ -340,6 +340,76 @@ describe("renderWorkboard", () => {
       expect(state.selectedCardIds.size).toBe(0);
     },
   );
+
+  it("retries only pending bulk edits after the second card fails", async () => {
+    const first = createWorkboardCard({ id: "first", agentId: "writer" });
+    const second = createWorkboardCard({ id: "second", agentId: "writer", position: 2000 });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        card: { ...first, agentId: "main", updatedAt: first.updatedAt + 1 },
+      })
+      .mockRejectedValueOnce(new Error("Second card update rejected"))
+      .mockResolvedValueOnce({
+        card: { ...second, agentId: "main", updatedAt: second.updatedAt + 1 },
+      });
+    const { state, container, renderView } = createWorkboardView({
+      client: { request, addEventListener: () => () => undefined },
+      connected: true,
+      canWrite: true,
+      agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
+    });
+    state.cards = [first, second];
+    state.selectedCardIds = new Set([first.id, second.id]);
+    renderView();
+    expectDefined(buttonByLabel(container, "Edit properties"), "bulk edit").click();
+    renderView();
+    const picker = expectDefined(
+      container.querySelector<HTMLElement & ControlUiSelectPickerProps>(
+        ".workboard-bulk-dialog [data-test-select-picker]",
+      ),
+      "bulk agent picker",
+    );
+    expect(picker.accessibleLabel).toBe("Agent");
+    picker.onSelect("main");
+    renderView();
+    expectDefined(buttonByLabel(container, "Apply changes"), "apply changes").click();
+    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.cards.find((card) => card.id === first.id)?.agentId).toBe("main");
+    expect(state.cards.find((card) => card.id === second.id)?.agentId).toBe("writer");
+    expect(state.selectedCardIds).toEqual(new Set([second.id]));
+    expect(state.bulkDialog?.cardIds).toEqual([second.id]);
+    expect(state.bulkResult).toEqual({ completed: 1, total: 2 });
+    renderView();
+    await waitForFast(() => {
+      const toast = container.querySelector("openclaw-workboard-toast:not([hidden])");
+      expect(toast?.shadowRoot?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Applied to 1 of 2 cards. Second card update rejected",
+      );
+    });
+    expectDefined(buttonByLabel(container, "Apply changes"), "retry pending edit").click();
+    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+    expect(request.mock.calls).toEqual([
+      [
+        "workboard.cards.update",
+        { id: first.id, expectedUpdatedAt: first.updatedAt, patch: { agentId: "main" } },
+      ],
+      [
+        "workboard.cards.update",
+        { id: second.id, expectedUpdatedAt: second.updatedAt, patch: { agentId: "main" } },
+      ],
+      [
+        "workboard.cards.update",
+        { id: second.id, expectedUpdatedAt: second.updatedAt, patch: { agentId: "main" } },
+      ],
+    ]);
+    expect(state.cards.every((card) => card.agentId === "main")).toBe(true);
+    expect(state.selectedCardIds.size).toBe(0);
+    expect(state.bulkDialog).toBeNull();
+    expect(state.bulkResult).toEqual({ completed: 1, total: 1 });
+    expect(state.error).toBeNull();
+  });
 
   it.each(["write revocation", "disconnect", "activation disposal"] as const)(
     "stops a bulk assignment after live host %s while the first write is pending",
