@@ -284,9 +284,11 @@ describe("one-shot diagnostics registration resources", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       const services = await starting;
       const stopping = caller.track(() => services.stop());
-      const rejected = expect(stopping).rejects.toThrow("timed out");
+      const observed = expect(stopping).resolves.toMatchObject({
+        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+      });
       await vi.advanceTimersByTimeAsync(10_000);
-      await rejected;
+      await observed;
       released = caller.drain().then(() => acquired.release());
       await nextEventLoopTurn();
       expect(fixture.connection().database.isOpen).toBe(true);
@@ -397,10 +399,12 @@ describe("one-shot diagnostics registration resources", () => {
     vi.useFakeTimers();
     try {
       const stopping = work.track(() => services.stop());
-      const rejected = expect(stopping).rejects.toThrow("timed out");
+      const observed = expect(stopping).resolves.toMatchObject({
+        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+      });
       await fixture.state.stopStarted.promise;
       await vi.advanceTimersByTimeAsync(10_000);
-      await rejected;
+      await observed;
       expect(() =>
         fixture.connection().context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
       ).toThrow("no longer active");

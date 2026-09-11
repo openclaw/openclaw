@@ -6,6 +6,32 @@ import WebKit
 @testable import OpenClaw
 
 struct DashboardGatewayCatalogTests {
+    @Test(arguments: [AppState.ConnectionMode.local, .remote, .unconfigured], [false, true])
+    func `hosted local Gateway is a separate nonpromotable remote companion`(
+        mode: AppState.ConnectionMode,
+        hosting: Bool) throws
+    {
+        let url = try #require(URL(string: "wss://saved.example"))
+        let entries = DashboardGatewayCatalog.entries(
+            mode: mode,
+            primaryRemoteURL: nil,
+            resolvedRemoteURL: nil,
+            resolvedRemoteHostLabel: "primary.example",
+            profiles: [.init(profile: .init(id: "saved", name: "Saved", url: url), canPromote: true)],
+            primaryHealth: .ok,
+            hostsLocalGateway: hosting,
+            localHealth: .error)
+        if mode == .remote, hosting {
+            #expect(entries.map(\.id) == ["primary", "local", "profile:saved"])
+            #expect(entries[1] == DashboardGatewayEntry(
+                id: "local", name: "This Mac", kind: "local", isPrimary: false, canPromote: false, health: .error))
+            #expect(DashboardGatewayTarget(bridgeID: entries[1].id) == .local)
+            #expect(DashboardGatewayTarget.local.bridgeID == "local")
+        } else {
+            #expect(!entries.contains { $0.id == "local" })
+        }
+    }
+
     @Test func `primary remote label uses the SSH host or resolved direct endpoint`() {
         let cases: [(AppState.RemoteTransport, String?, String?, String?)] = [
             (.ssh, "user@studio.local", "127.0.0.1:18789", "studio.local"),
@@ -1243,6 +1269,7 @@ extension DashboardManagerGatewayTargetTests {
                 if let identity { return identity.connection }
                 switch target {
                 case .primary: return GatewayConnection.shared
+                case .local: return await MacGatewayConnectionFleet.shared.localConnection()
                 case let .profile(id): return await MacGatewayConnectionFleet.shared.connection(profileID: id)
                 }
             },

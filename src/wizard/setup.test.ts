@@ -59,13 +59,7 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
-const prepareAuthChoice = vi.hoisted(() =>
-  vi.fn<PrepareAuthChoice>(async (args) => ({
-    ...(await applyAuthChoice(args)),
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  })),
-);
+const prepareAuthChoice = vi.hoisted(() => vi.fn<PrepareAuthChoice>());
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
@@ -86,18 +80,7 @@ const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
-    nextConfig: args.nextConfig,
-    settings: {
-      port: args.localPort ?? 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: "test-token",
-      tailscaleMode: "off",
-    },
-  })),
-);
+const configureGatewayForSetup = vi.hoisted(() => vi.fn<ConfigureGatewayForSetup>());
 const finalizeSetupWizard = vi.hoisted(() =>
   vi.fn(async (options) => {
     if (!options.nextConfig?.tools?.web?.search?.provider) {
@@ -141,13 +124,7 @@ const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const verifySetupInferenceConfig = vi.hoisted(() =>
-  vi.fn<VerifySetupInferenceConfig>(async () => ({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 250,
-  })),
-);
+const verifySetupInferenceConfig = vi.hoisted(() => vi.fn<VerifySetupInferenceConfig>());
 
 const setupChannels = vi.hoisted(() =>
   vi.fn(

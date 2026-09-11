@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -185,7 +186,7 @@ it.each([
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         activateGlobalSideEffects: false,
       });
-      const source = new PluginRegistryInspectionResources();
+      const source = new PluginRegistryInspectionResources(retireInspectionInstances);
       source.attach(donor.registry);
       const record = createPluginRecord({
         id: pluginId,

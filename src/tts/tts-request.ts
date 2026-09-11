@@ -4,9 +4,8 @@ import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
+import { createLegacyPluginSdkProviderProjection } from "../plugins/legacy-sdk-provider-projection.js";
 import { getLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseTtsDirectives } from "./directives.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
@@ -31,17 +30,12 @@ export async function prepareTtsRequest(params: {
 }): Promise<PreparedTtsRequest> {
   const host = getLegacyPluginSdkResourceHost();
   return await host.track(() => {
-    const retained = new Set<
-      NonNullable<ReturnType<typeof getPluginRegistryInspectionResources>>
-    >();
-    const retain = (registry: PluginRegistry | undefined) => {
-      host.assertOpen();
-      const source = registry && getPluginRegistryInspectionResources(registry);
-      if (source && !retained.has(source)) {
-        // Failed projections can also leave tracked work using this registration.
-        host.adopt(source, source.retain());
-        retained.add(source);
-      }
+    using projection = createLegacyPluginSdkProviderProjection();
+    const retain = (registry: Parameters<typeof projection.select>[0]) => {
+      const project = projection.select(registry);
+      // Failed directive projections can leave tails; the host owns them before metadata runs.
+      projection.adopt();
+      return project;
     };
     const registry = createSpeechProviderRegistry({
       getProvider: (providerId, cfg) =>

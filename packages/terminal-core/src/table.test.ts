@@ -994,12 +994,25 @@ describe("wrapNoteMessage", () => {
     expect(wrapped).toBe(input);
   });
 
-  it("still chunks generic long opaque tokens to avoid pathological line width", () => {
-    const input = "x".repeat(70);
-    const wrapped = wrapNoteMessage(input, { maxWidth: 20, columns: 80 });
-
-    expect(wrapped).toContain("\n");
-    expect(wrapped.replace(/\n/g, "")).toBe(input);
+  const word = "abcdefghijklmnopqrstuvwxyz";
+  it.each<[name: string, input: string, maxWidth: number, expected: string]>([
+    [
+      "opaque token",
+      "x".repeat(70),
+      20,
+      ["x".repeat(20), "x".repeat(20), "x".repeat(20), "x".repeat(10)].join("\n"),
+    ],
+    ["token followed by another word", `${word} tail`, 14, "abcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["token after a short word", `ok ${word} tail`, 14, "ok\nabcdefghijklmn\nopqrstuvwxyz\ntail"],
+    ["bullet token", `- ${word} tail`, 14, "- abcdefghijkl\n  mnopqrstuvwx\n  yz\n  tail"],
+    [
+      "bullet with wide spacing",
+      `-\u3000${word} tail`,
+      14,
+      "-\u3000abcdefghijk\n  lmnopqrstuv\n  wxyz\n  tail",
+    ],
+  ])("chunks a %s with exact note spacing", (_name, input, maxWidth, expected) => {
+    expect(wrapNoteMessage(input, { maxWidth, columns: 80 })).toBe(expected);
   });
 
   it("wraps bullet lines while preserving bullet indentation", () => {
@@ -1087,7 +1100,7 @@ describe("wrapNoteMessage", () => {
   });
 
   it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
-    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // A long CJK run with no separators reaches word-fragment wrapping; each fullwidth char is 2 columns,
     // so splitting by code-point count would emit lines up to 2x the budget.
     const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
     const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");

@@ -285,6 +285,9 @@ suite.define(() => {
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
         .poll(() => runner.locator(".session-menu__description").textContent())
+        .toBe(" · No worker slots are available. Wait for a slot or pick another device.");
+      await expect
+        .poll(() => tooltipTitleText(runner))
         .toBe("No worker slots are available. Wait for a slot or pick another device.");
       // A disabled row keeps a muted meter with no utilization claim.
       await expect

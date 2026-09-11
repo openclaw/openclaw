@@ -2265,7 +2265,6 @@ export const en: TranslationMap & {
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
     startCancelled: "Terminal start was cancelled. Try again.",
-    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -4705,10 +4704,9 @@ export const en: TranslationMap & {
       viewDetails: "View details",
     },
     modelAccounts: {
-      label: "Account for this chat",
+      section: "Account",
       automatic: "Automatic (new-chat default)",
       manage: "Manage saved accounts…",
-      draftHint: "Applies only to this session. Your new-chat default is unchanged.",
     },
     mentions: {
       menu: "Mention a person",
@@ -5471,8 +5469,6 @@ export const en: TranslationMap & {
       selectionScopeSession: "Selecting a model changes only this session.",
       selectionScopeAgent: "Selecting a model updates this agent's default.",
       selectionScopeGlobal: "Selecting a model updates the global default.",
-      resetSessionModel: "Reset session model",
-      useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -5647,6 +5643,7 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
+      waitingForAgent: "Queued · waiting for the agent",
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:

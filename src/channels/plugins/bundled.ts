@@ -240,7 +240,6 @@ function loadGeneratedBundledChannelModule(params: {
     }
     const loader = getCachedPluginModuleLoader({
       modulePath,
-      rootDir: boundaryRoot,
       importerUrl: import.meta.url,
       preferBuiltDist: true,
       cacheScopeKey: "bundled-channel-entry",

@@ -304,20 +304,21 @@ export function createMusicGenerateTool(options?: {
               providers: [],
             })
           : null;
-      const readRequest = () => {
+      const readRequest = async () => {
         const prompt = readToolStringParam(args, "prompt", { required: true });
         return {
           prompt,
-          duplicate: createMusicGenerateDuplicateGuardResult(options?.agentSessionKey, {
+          duplicate: await createMusicGenerateDuplicateGuardResult(options?.agentSessionKey, {
             prompt,
             agentId: options?.requesterAgentId,
           }),
         };
       };
-      const configuredRequest = configuredModel ? readRequest() : undefined;
+      const configuredRequest = configuredModel ? await readRequest() : undefined;
       if (configuredRequest?.duplicate) {
         return configuredRequest.duplicate;
       }
+      signal?.throwIfAborted();
       const acquired = options?.preparedModelRuntime?.acquireMediaCapabilityProviders
         ? await acquireMusicGenerationToolProviders({
             cfg: configuredModel
@@ -345,10 +346,12 @@ export function createMusicGenerateTool(options?: {
         }
         const effectiveCfg =
           applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig) ?? cfg;
-        const { prompt, duplicate } = configuredRequest ?? readRequest();
+        const { prompt, duplicate } = configuredRequest ?? (await readRequest());
         if (duplicate) {
           return { kind: "result" as const, result: duplicate };
         }
+        signal?.throwIfAborted();
+        acquired?.assertOpen();
 
         const lyrics = readToolStringParam(args, "lyrics");
         const instrumental = readBooleanParam(args, "instrumental");
@@ -400,13 +403,15 @@ export function createMusicGenerateTool(options?: {
           filename,
           imageInputs,
         });
-        const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
+        const duplicateGuardResult = await createMusicGenerateDuplicateGuardResult(
           options?.agentSessionKey,
           { prompt, requestKey, agentId: options?.requesterAgentId },
         );
         if (duplicateGuardResult) {
           return { kind: "result" as const, result: duplicateGuardResult };
         }
+        signal?.throwIfAborted();
+        acquired?.assertOpen();
         const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
         const loadedReferenceImages = await loadReferenceImages({
           inputs: imageInputs,

@@ -304,7 +304,7 @@ it("keeps an exact API-owner row unchanged under a real caller's runtime hook", 
         expect(result.summary).toBe("materialized:entry");
         expect(requests).toEqual(["entry"]);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     },
   );
@@ -337,7 +337,7 @@ it("retains the shipped injected callback shape and caller-owned returned model"
         expect(reused).toMatchObject({ content: [{ type: "text", text: "materialized:plain" }] });
         expect(requests).toEqual(["plain", "plain"]);
       } finally {
-        prepared.release();
+        await prepared[Symbol.asyncDispose]();
       }
     },
   );

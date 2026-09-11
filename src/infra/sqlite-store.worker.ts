@@ -9,6 +9,7 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
+import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 
 const port = parentPort;
 if (!port) {
@@ -27,6 +28,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (actors.has(request.actor)) {
         throw new Error("SQLite worker actor is already open");
       }
+      if (request.existingIdentity) {
+        assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
+      }
       if (!sourceLoaderRegistered && request.sourceLoaderUrl) {
         const loader: unknown = await import(request.sourceLoaderUrl);
         if (!isRecord(loader) || typeof loader.register !== "function") {
@@ -36,10 +40,17 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         sourceLoaderRegistered = true;
       }
       const module: unknown = await import(request.moduleUrl);
-      if (!isRecord(module) || typeof module.createSqliteWorkerBackend !== "function") {
-        throw new Error("SQLite worker module must export createSqliteWorkerBackend");
+      const factoryName = request.existingIdentity
+        ? "openExistingSqliteWorkerBackend"
+        : "createSqliteWorkerBackend";
+      if (!isRecord(module) || typeof module[factoryName] !== "function") {
+        throw new Error(`SQLite worker module must export ${factoryName}`);
       }
-      const backend: unknown = await module.createSqliteWorkerBackend(deserialize(request.input), {
+      // Module loading can yield before the factory opens native state.
+      if (request.existingIdentity) {
+        assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
+      }
+      const backend: unknown = await module[factoryName](deserialize(request.input), {
         databasePath: request.databasePath,
       });
       if (

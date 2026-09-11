@@ -585,7 +585,7 @@ export function createRuntimeLlm(
       const trackOwner = captureAsyncWorkTracker();
       // Admit drainage with the parent before acquisition; the caller only waits for its result.
       void trackOwner(async () => {
-        const prepared = await acquireSimpleCompletionModelForAgent({
+        const preparation = await acquireSimpleCompletionModelForAgent({
           cfg,
           agentId,
           modelRef: params.model,
@@ -594,11 +594,13 @@ export function createRuntimeLlm(
           allowBundledStaticCatalogFallback: true,
           allowMissingApiKeyModes: ["aws-sdk"],
           skipAgentDiscovery: true,
+          signal: params.signal,
         });
 
-        if ("error" in prepared) {
-          throw new Error(`Plugin LLM completion failed: ${prepared.error}`);
+        if ("error" in preparation) {
+          throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
+        await using prepared = preparation;
 
         const work = new AsyncWorkScope();
         try {
@@ -675,7 +677,6 @@ export function createRuntimeLlm(
           callerResult.reject(error);
         } finally {
           await work.drain();
-          prepared.release();
         }
       }).catch((error: unknown) => callerResult.reject(error));
       return await callerResult.promise;

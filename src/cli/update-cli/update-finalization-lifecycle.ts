@@ -99,10 +99,10 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  recordWarnings(warnings: readonly string[]): void {
+  recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
     warnings.forEach((detail, index) => {
       this.record(
-        { phase: "doctor", step: `warning:finalize:doctor:${index}` },
+        { phase, step: `warning:finalize:${phase}:${index}` },
         "completed",
         Date.now(),
         detail,

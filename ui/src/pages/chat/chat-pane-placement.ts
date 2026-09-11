@@ -262,7 +262,7 @@ export function resolveChatPanePlacement(params: {
         ? t("sessionsView.offlineDeviceStopUnavailable")
         : action?.blocksActiveRun && params.row?.hasActiveRun === true
           ? t("sessionsView.activeRun")
-          : action?.method !== "sessions.reclaim"
+          : !action
             ? t("sessionsView.actionUnavailable")
             : reclaimAccess.allowed
               ? undefined

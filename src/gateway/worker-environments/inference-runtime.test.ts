@@ -285,7 +285,7 @@ function setup(
     options.observeStage?.("policy", observedRegistry());
     return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
   });
-  const releaseRuntime = vi.fn();
+  const releaseRuntime = vi.fn(async () => {});
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
@@ -298,7 +298,7 @@ function setup(
         pluginMetadataSnapshot: leased.metadataSnapshot,
         pluginRegistry: leased.pluginRegistry,
       },
-      release: releaseRuntime,
+      [Symbol.asyncDispose]: releaseRuntime,
     };
   });
   const dependencies = {
@@ -1055,11 +1055,8 @@ describe("worker inference provider runtime", () => {
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {
     const runtime = setup();
-    const baseRequest = request();
-    const inferenceRequest = {
-      ...baseRequest,
-      options: { ...baseRequest.options, reasoning: "adaptive" as const },
-    };
+    const inferenceRequest = request();
+    Object.assign(inferenceRequest.options, { reasoning: "adaptive" });
 
     expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
       type: "done",

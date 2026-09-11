@@ -4,6 +4,7 @@ import {
   activeSessions,
   finalizeTranscriptCapture,
   isTranscriptSelectionCurrent,
+  isTranscriptSelectionOwned,
   isTranscriptSessionStarting,
   revokeTranscriptStartRetries,
   stopTranscriptProviderCapture,
@@ -12,7 +13,7 @@ import {
 } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { TranscriptsStore } from "./store.js";
+import { TranscriptsStore, TranscriptsSummaryChangedError } from "./store.js";
 
 export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
@@ -50,7 +51,9 @@ export async function stopTranscriptCapture(params: {
     selector,
   });
   // Authorization may await native policy while the provider retires this owner.
-  if (!isTranscriptSelectionCurrent(selection, params.store)) {
+  const current = await isTranscriptSelectionCurrent(selection, params.store);
+  params.ctx.assertCallerActive?.();
+  if (!current || !isTranscriptSelectionOwned(selection)) {
     return skip("inactive");
   }
   if (isTranscriptSessionStarting(sessionId)) {
@@ -88,15 +91,33 @@ export async function stopTranscriptCapture(params: {
       stoppedSession = selectedActive.session;
       finalized = true;
     } else {
+      const assertCurrent = () => {
+        params.ctx.assertCallerActive?.();
+        if (!isTranscriptSelectionOwned(selection) || isTranscriptSessionStarting(sessionId)) {
+          throw new TranscriptsSummaryChangedError();
+        }
+      };
       stoppedSession = { ...session, stoppedAt: session.stoppedAt ?? new Date().toISOString() };
       if (!session.stoppedAt) {
-        await params.store.writeSession(stoppedSession);
+        try {
+          await params.store.writeSession(stoppedSession, {
+            expectedInputRevision: selection.historicalRevision,
+            assertCurrent,
+          });
+        } catch (error) {
+          if (error instanceof TranscriptsSummaryChangedError) {
+            return skip("inactive");
+          }
+          throw error;
+        }
       }
       persisted = await persistTranscriptSummary({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
         store: params.store,
         session: stoppedSession,
+        expectedInputRevision: session.stoppedAt ? selection.historicalRevision : undefined,
+        assertCurrent,
       });
     }
     const { summaryPath, intendedSummaryPath, summary, summaryExportError } =

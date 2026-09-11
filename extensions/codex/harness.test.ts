@@ -181,7 +181,7 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("uses the attempt-scoped Codex config before the live Gateway config", async () => {
-    runCodexAppServerAttempt.mockResolvedValueOnce({ stopReason: "stop" });
+    runCodexAppServerAttempt.mockResolvedValueOnce({ terminal: { kind: "ok" } });
     const attemptHarness = createCodexAppServerAgentHarness({
       bindingStore: testCodexAppServerBindingStore,
       pluginConfig: { appServer: { homeScope: "agent" } },

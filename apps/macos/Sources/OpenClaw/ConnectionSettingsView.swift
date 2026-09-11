@@ -13,6 +13,7 @@ struct ConnectionSettingsView: View {
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
+    @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
@@ -54,6 +55,7 @@ struct ConnectionSettingsView: View {
                     isActive: self.isActive)
             case .remote:
                 self.remoteAccessSection
+                self.localHostingSection
                 self.nearbyGatewaysSection
             }
 
@@ -259,6 +261,35 @@ struct ConnectionSettingsView: View {
     }
 
     // MARK: - Remote
+
+    private var localHostingSection: some View {
+        Section {
+            Toggle("Also run a Gateway on this Mac", isOn: Binding(
+                get: { self.state.hostsLocalGatewayWithRemotePrimary },
+                set: { enabled in
+                    do {
+                        try self.state.setHostsLocalGatewayWithRemotePrimary(enabled)
+                        self.localHostingError = nil
+                    } catch {
+                        self.localHostingError = error.localizedDescription
+                    }
+                }))
+            Text(String(
+                format: String(
+                    localized: "Local port %lld. This Mac’s node capabilities and Talk Mode stay with the primary."),
+                GatewayEnvironment.gatewayPort()))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let notice = self.state.localGatewayHostingNotice {
+                Text(notice).font(.caption)
+            }
+            if let error = self.localHostingError ?? (self.state.hostsLocalGatewayWithRemotePrimary
+                ? self.gatewayManager.lastFailureReason : nil)
+            {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+    }
 
     private var remoteAccessSection: some View {
         Section {

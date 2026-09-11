@@ -2,9 +2,11 @@
  * Tests managed-service update handoff behavior exposed by gateway methods.
  */
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -697,6 +699,20 @@ describe("managed service update handoff", () => {
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
     const { env, systemdRunPath } = await createUserSystemdFixture();
+    const spawnNormally = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementationOnce((command: string, args: string[], options: unknown) => {
+      const params = JSON.parse(readFileSync(args.at(-1)!, "utf8"));
+      const db = new DatabaseSync(params.updateLeaseDatabasePath, { readOnly: true });
+      try {
+        expect(db.prepare("SELECT COUNT(*) AS count FROM managed_update_handoffs").get()).toEqual({
+          count: 0,
+        });
+      } finally {
+        db.close();
+      }
+      expect(params.updateLeaseDatabaseIdentity.databasePath).toBe(params.updateLeaseDatabasePath);
+      return spawnNormally(command, args, options);
+    });
 
     const result = await startManagedServiceUpdateHandoff({
       root: MOCK_INSTALL_ROOT,

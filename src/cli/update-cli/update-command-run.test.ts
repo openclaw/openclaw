@@ -12,6 +12,7 @@ import {
   readSystemdServiceExecStart,
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
@@ -23,7 +24,9 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
+import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
@@ -231,6 +234,58 @@ it("presents committed steps without reopening the ledger for display", () => {
     }
   }
 });
+it.each(["state", "config", "include", "environment"])(
+  "refuses changed %s ownership after target initialization before writing update history",
+  async (changed) => {
+    const root = dirs.make("update-initialization-admission-");
+    const stateDir = path.join(root, "profile");
+    const configPath = path.join(root, "openclaw.json");
+    const includePath = path.join(root, "gateway.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "workspace"));
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+    vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
+    fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local" } }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        $include: "./gateway.json",
+        agents: { defaults: { workspace: "${FIXTURE_WORKSPACE_DIR}" } },
+      }),
+    );
+    const env = { ...process.env };
+    const context = await captureTargetDatabaseSchemaContext(env);
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const initialization = {
+      env,
+      runId: randomUUID(),
+      databasePath: resolvePathViaExistingAncestorSync(databasePath),
+      configPath: resolvePathViaExistingAncestorSync(configPath),
+      target: { configSnapshot: context.configSnapshot },
+    };
+    if (changed === "state") {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "replacement-profile"));
+    } else if (changed === "config") {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "replacement.json"));
+    } else if (changed === "include") {
+      fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local", port: 19222 } }));
+    } else {
+      vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "replacement-workspace"));
+    }
+    const configBefore = fs.readFileSync(configPath);
+    const includeBefore = fs.readFileSync(includePath);
+
+    await expect(
+      admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
+    ).rejects.toThrow(/changed/);
+
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
+    expect(fs.readFileSync(includePath)).toEqual(includeBefore);
+  },
+);
 
 it.each([false, true])(
   "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",

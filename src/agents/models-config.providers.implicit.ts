@@ -25,12 +25,10 @@ import {
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import { prepareProviderExternalAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveManifestSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
+import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  isNonSecretApiKeyMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
-} from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
 import {

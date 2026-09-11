@@ -13,6 +13,7 @@ import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
 } from "./chat-context-window-control.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   type ChatModelCatalogState,
   renderChatModelCatalogState,
@@ -38,9 +39,8 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
 type ChatModelPickerParams = {
-  accountControl?: unknown;
+  accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
-  defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
@@ -50,7 +50,7 @@ type ChatModelPickerParams = {
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
-  /** Recorded user pin, so the footer never offers a reset for an inherited default. */
+  /** Pin recorded on the session row; only then does an unavailable Default row reset. */
   sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
@@ -107,7 +107,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
     if (existing) {
-      existing.push(option);
+      if (option.isDefault) {
+        existing.unshift(option);
+      } else {
+        existing.push(option);
+      }
     } else {
       providerGroups.set(option.provider, [option]);
     }
@@ -139,7 +143,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   };
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
-    if (params.disabled || params.modelSelectionLocked || entry.disabled) {
+    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
+    const resetsPin = entry.isDefault && params.sessionModelPinned;
+    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
       event.preventDefault();
       return;
     }
@@ -188,6 +194,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         handleChatComposerDetailsToggle(event);
         syncChatPickerOverlay(details);
         if (!details.open) {
+          params.accountSection?.onClose();
           resetModelSearch(details);
           return;
         }
@@ -281,7 +288,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                 `
               : html`
                   ${
-                    params.modelOptions.length > 0
+                    hasOptions || params.accountSection
                       ? html`
                           <div class="chat-controls__model-search-wrap">
                             ${icons.search}
@@ -311,7 +318,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                     params.onModelSetup,
                   )}
                   ${
-                    hasOptions
+                    hasOptions || params.accountSection
                       ? html`
                           <div class="chat-controls__model-options">
                             ${repeat(
@@ -367,6 +374,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           entry,
                                           index: optionIndex.get(entry.value) ?? 0,
                                           selectedModelValue: params.selectedModelValue,
+                                          sessionModelPinned: params.sessionModelPinned,
                                           onHighlight: highlightOption,
                                           onSelect: selectModel,
                                           onModelSetup: params.onModelSetup,
@@ -435,6 +443,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 </section>
                               `,
                             )}
+                            ${params.accountSection?.render(orderedOptions.length + targetOptionCount) ?? nothing}
                           </div>
                           <div
                             class="chat-controls__model-search-empty"
@@ -448,51 +457,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                               ? renderContextWindowControl(params.contextWindow, params.sessionKey)
                               : nothing
                           }
-                          ${
-                            params.sessionModelPinned && params.modelOptions.length > 0
-                              ? html`<footer class="chat-controls__model-provenance">
-                                  <button
-                                    class="btn btn--ghost btn--xs chat-controls__model-reset"
-                                    data-chat-model-reset="true"
-                                    type="button"
-                                    title=${t("chat.modelControls.useDefaultModel", {
-                                      model: params.defaultModelLabel,
-                                    })}
-                                    ?disabled=${params.disabled}
-                                    @click=${(event: MouseEvent) => {
-                                      event.stopPropagation();
-                                      if (params.disabled) {
-                                        event.preventDefault();
-                                        return;
-                                      }
-                                      commitModel("");
-                                      const resetButton = event.currentTarget;
-                                      if (!(resetButton instanceof HTMLElement)) {
-                                        return;
-                                      }
-                                      const details =
-                                        resetButton.closest<HTMLDetailsElement>("details");
-                                      if (details) {
-                                        details.open = false;
-                                        if (event.detail === 0) {
-                                          details
-                                            .querySelector<HTMLElement>("summary")
-                                            ?.focus({ preventScroll: true });
-                                        }
-                                      }
-                                    }}
-                                  >
-                                    ${t("chat.modelControls.resetSessionModel")}
-                                  </button>
-                                </footer>`
-                              : nothing
-                          }
                         `
                       : nothing
                   }
                 `
           }
-          ${params.accountControl ?? nothing}
+          ${
+            params.modelSelectionLocked && params.accountSection
+              ? html`<div class="chat-controls__model-options">
+                  ${params.accountSection.render(0)}
+                </div>`
+              : nothing
+          }
         </div>
       </wa-popup>
     </details>

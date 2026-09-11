@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -795,6 +796,12 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
+  beforeEach(() => {
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("update-native-repair-locks-"),
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
   it.each(["recovered", "failed", "not attempted"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {

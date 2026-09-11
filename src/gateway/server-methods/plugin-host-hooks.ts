@@ -15,7 +15,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
@@ -59,7 +59,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
+    const registry = getPluginRegistryForContext();
     const descriptors = (registry?.controlUiDescriptors ?? []).map((entry) => {
       const descriptor: Record<string, unknown> = {
         id: entry.descriptor.id,
@@ -143,7 +143,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
+    const registry = getPluginRegistryForContext();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );

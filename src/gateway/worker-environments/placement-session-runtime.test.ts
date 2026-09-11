@@ -334,7 +334,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       registry.cliBackends.push({
         pluginId: "test-cli-plugin",
         pluginName: "test-cli-plugin",
-        backend: { id: "claude-cli", config: { command: "claude" } },
+        backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
         source: "test",
       });
     }
@@ -370,7 +370,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       registry.cliBackends.push({
         pluginId: "test-cli-plugin",
         pluginName: "test-cli-plugin",
-        backend: { id: "claude-cli", config: { command: "claude" } },
+        backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
         source: "test",
       });
     }

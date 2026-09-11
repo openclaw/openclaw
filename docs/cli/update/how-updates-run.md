@@ -71,12 +71,27 @@ available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, and other side services are suppressed in this canary.
 
+Snapshot preparation budgets time for the SQLite database and journal bytes,
+including copying and verification passes, with a five-minute startup floor.
+It uses the larger of that allowance and the configured per-step timeout.
+The deadline extends while private files continue changing. A stalled snapshot
+reports its size and applied budget. Snapshot time does not consume the separate
+runtime validation budget, which also honors the configured per-step timeout.
+
+Before copying databases, the updater estimates space for the SQLite snapshot
+set, temporary copies, and the candidate Doctor backup. If the system temporary
+filesystem is too small, it uses an OpenClaw-owned directory under the selected
+state directory's `tmp` folder. If neither filesystem has enough space, it
+refuses with the required size and the available space at both locations.
+Capacity estimates cannot reserve space against other processes writing to the
+same filesystem.
+
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
 30-second deadline; if compatibility cannot be verified, rollback is refused.
 
 The canary binds a free loopback port and must report `/startupz` as `started`,
-then `/readyz` as ready within a five-minute total budget. Failure records the
+then `/readyz` as ready within the configured per-step timeout. Failure records the
 phase, elapsed time, and bounded diagnostics; the canary process group and
 temporary state are cleaned up. This proves candidate startup on copied state;
 live channel and provider behavior are checked after activation.
@@ -396,9 +411,8 @@ the sentinel.
 
 On stable updates, a configured OpenClaw-owned official plugin with no install
 record is repaired from the selected core release cohort. This also applies to
-`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
-checks that package target before stopping the Gateway; post-core reconciliation
-installs it before restart. Existing install records retain their source and
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Post-core
+reconciliation installs it before restart. Existing install records retain their source and
 selector policy. Verified official packages use the existing
 [capability-consent exemption](/plugins/manage-plugins#capability-consent).
 
@@ -428,6 +442,27 @@ advisory and reports `postUpdate.plugins.status: "warning"` in JSON. The warning
 includes the observed installed and available versions and an explicit command
 to replace the pin. Keep the pin if intentional. This advisory does not establish
 incompatibility, change the pin, or fail an otherwise successful core update.
+
+An unavailable npm target or unreachable registry does not block the core update
+when a compatible, runnable plugin is already installed. Plugin sync retains that
+installed version and its recorded selector. The summary, warning log, and run
+history name the plugin, requested target, resolution failure, and
+`openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
+with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
+
+Before mutation, an installed plugin whose declared `openclaw.compat.pluginApi`
+range or `openclaw.install.minHostVersion` excludes the target core can block the
+update if the requested replacement is unavailable or also incompatible. The
+`plugin-incompatible` refusal names the installed version and requirement.
+When the installed plugin is known to be incompatible, a registry outage also
+blocks the update because a compatible replacement cannot be resolved. Retry
+when the registry is reachable, pin a compatible plugin version, explicitly
+disable the plugin, or wait for a compatible release. Compatible installed
+plugins still follow the advisory path described above.
+
+Older updaters may still refuse with `plugin-target-unavailable` before candidate
+code runs. Use your installation's [manual update method](/install/updating/update-methods),
+then run `openclaw update repair` from the updated installation.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.

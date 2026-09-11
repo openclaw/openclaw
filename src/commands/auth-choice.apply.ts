@@ -86,7 +86,10 @@ export async function prepareAuthChoice(
     normalizedProviderAuthChoice === params.authChoice
       ? params
       : { ...params, authChoice: normalizedProviderAuthChoice };
-  const result = await prepareAuthChoiceLoadedPluginProvider(normalizedParams);
+  const result = await prepareAuthChoiceLoadedPluginProvider(
+    normalizedParams,
+    (prepared) => prepared,
+  );
   if (result) {
     return result;
   }

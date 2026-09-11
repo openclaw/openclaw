@@ -29,7 +29,6 @@ import {
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
-  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import {
   planExecAuthorization,
@@ -156,11 +155,6 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   allowlistAuthorizationSatisfied: boolean;
-  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
-  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
-  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
-  skillBins: SkillBinTrustEntry[];
-  autoAllowSkills: boolean;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan: ExecAuthorizationPlan | undefined;
@@ -924,11 +918,6 @@ async function evaluateSystemRunPolicyPhase(
     analysisOk,
     allowlistSatisfied,
     allowlistAuthorizationSatisfied,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    skillBins: bins,
-    autoAllowSkills,
     segments,
     segmentSatisfiedBy,
     authorizationPlan: allowlistEvaluation.authorizationPlan,
@@ -1021,20 +1010,12 @@ async function executeSystemRunPhase(
     plannedAllowlistArgv: phase.plannedAllowlistArgv,
     argv: phase.argv,
     security: phase.security,
-    approvals: phase.approvals,
-    safeBins: phase.safeBins,
-    safeBinProfiles: phase.safeBinProfiles,
-    trustedSafeBinDirs: phase.trustedSafeBinDirs,
-    skillBins: phase.skillBins,
-    autoAllowSkills: phase.autoAllowSkills,
     isWindows: phase.isWindows,
     policy: phase.policy,
     shellCommand: phase.shellPayload,
     segments: phase.segments,
     segmentSatisfiedBy: phase.segmentSatisfiedBy,
     authorizationPlan: phase.authorizationPlan,
-    cwd: phase.cwd,
-    env: phase.env,
   });
   if (!execArgv) {
     await sendSystemRunDenied(opts, phase.execution, {

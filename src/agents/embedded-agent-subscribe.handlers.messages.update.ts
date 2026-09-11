@@ -101,7 +101,7 @@ export function handleMessageUpdate(
         delta: "",
         content: commentaryText,
       }));
-      emitAssistantCommentaryStreamData(ctx, msg);
+      emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
     }
     return undefined;
   }

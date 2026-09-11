@@ -6,13 +6,11 @@ import type {
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import {
-  matchesWorkerPlacementTarget,
-  type WorkerPlacementCancellationTarget,
-} from "./placement-reclaim-contract.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
+  type WorkerPlacementCancellationTarget,
 } from "./service-contract.js";
 
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(

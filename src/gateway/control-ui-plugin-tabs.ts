@@ -1,12 +1,12 @@
 import { BOARD_REPORT_WIDGET_KIND } from "../boards/board-report.js";
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
-// Descriptors come from the process-root registry installed by the gateway.
+// Descriptors follow the current Gateway's registry, including request-local snapshots.
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
@@ -128,7 +128,7 @@ export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
 ): ControlUiPluginTab[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const basePath = normalizeControlUiBasePath(
     getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath,
   );
@@ -162,7 +162,7 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   const entries = registry?.controlUiDescriptors ?? [];
   const disabled = new Set(
     registry?.plugins
@@ -199,7 +199,7 @@ export function listControlUiPluginWidgetKinds(
 export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
-  const registry = getActivePluginSessionExtensionRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry || !authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
     return [];
   }

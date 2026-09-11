@@ -172,18 +172,8 @@ describe("executeAgentTurn: conversation failures", () => {
       } as unknown as TemplateContext,
       opts: {},
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
+      ...createAgentTurnExecutionDefaults(),
       resetSessionAfterRoleOrderingConflict,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
     });
 
     expect(resetSessionAfterRoleOrderingConflict).not.toHaveBeenCalled();

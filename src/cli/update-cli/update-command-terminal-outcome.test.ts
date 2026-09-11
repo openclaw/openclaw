@@ -385,7 +385,10 @@ async function scenario(
     });
   try {
     if (deferred) {
-      await withUpdateCommandTerminalResult(run, execute);
+      await withUpdateCommandTerminalResult((registerRun) => {
+        registerRun(run);
+        return execute();
+      });
     } else {
       await execute();
     }

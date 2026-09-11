@@ -149,19 +149,22 @@ struct LowCoverageHelperTests {
             command: "com.docker.backend",
             fullCommand: "com.docker.backend",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "ssh",
             fullCommand: "ssh -L \(port):localhost:\(port) user@host",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
 
         #expect(PortGuardian._testIsExpected(
             command: "podman",
             fullCommand: "podman",
             port: port,
-            mode: .remote) == true)
+            mode: .remote,
+            tunnelPort: port) == true)
     }
 
     @Test func `port guardian local mode still rejects unexpected`() {
