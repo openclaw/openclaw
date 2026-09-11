@@ -5,7 +5,7 @@ import OpenClawProtocol
 import OSLog
 
 struct ExecApprovalQueueItem: Decodable, Identifiable {
-    enum ApprovalKind {
+    enum ApprovalKind: Hashable {
         case exec
         case systemAgent
     }

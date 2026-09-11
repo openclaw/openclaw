@@ -23,7 +23,8 @@ enum ExecApprovalsPromptPresenter {
     @MainActor
     static func prompt(
         _ request: ExecApprovalPromptRequest,
-        timeoutMs: Int? = nil) async -> ExecApprovalDecision?
+        timeoutMs: Int? = nil,
+        isStillEligible: @MainActor () -> Bool = { true }) async -> ExecApprovalDecision?
     {
         if let timeoutMs, timeoutMs <= 0 { return nil }
         let promptID = UUID()
@@ -43,6 +44,10 @@ enum ExecApprovalsPromptPresenter {
         return await withTaskCancellationHandler {
             guard !Task.isCancelled, await self.acquirePrompt(id: promptID) else { return nil }
             guard !Task.isCancelled, self.activePrompt?.cancelled != true else {
+                self.releasePrompt(id: promptID)
+                return nil
+            }
+            guard isStillEligible() else {
                 self.releasePrompt(id: promptID)
                 return nil
             }
