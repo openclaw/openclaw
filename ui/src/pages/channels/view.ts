@@ -27,6 +27,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import {
@@ -34,7 +35,6 @@ import {
   renderChannelRefreshAction,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
