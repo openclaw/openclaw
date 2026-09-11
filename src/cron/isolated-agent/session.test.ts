@@ -185,6 +185,30 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
   });
 
+  it("rolls a tombstoned isolated heartbeat session into a fresh run", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:main:heartbeat",
+      entry: {
+        sessionId: "tombstoned-heartbeat-session-id",
+        updatedAt: NOW_MS - 1000,
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "recovery-cycle",
+          revision: 22,
+          chargedAttempts: 22,
+          tombstone: { reason: "recovery-exhausted" },
+        },
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+      forceNew: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.sessionId).not.toBe("tombstoned-heartbeat-session-id");
+    expect(result.sessionEntry.abortedLastRun).toBeUndefined();
+    expect(result.sessionEntry.mainRestartRecovery).toBeUndefined();
+  });
+
   it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
     expect(() =>
       resolveWithStoredEntry({

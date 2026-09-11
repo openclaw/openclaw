@@ -173,12 +173,15 @@ export function resolveCronSession(params: {
   // Guard the run's target row even when a differing source session seeds the
   // carried preferences. A forced isolated heartbeat may replace its archived
   // synthetic row, but trusted initialization must still finish first.
-  const canRollArchivedHeartbeat =
+  const canRollIsolatedHeartbeat =
     params.forceNew === true &&
-    targetEntry?.archivedAt !== undefined &&
-    targetEntry.initializationPending !== true &&
+    targetEntry?.initializationPending !== true &&
     Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
-  const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
+  const canRollArchivedHeartbeat =
+    canRollIsolatedHeartbeat && targetEntry?.archivedAt !== undefined;
+  const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry, {
+    allowRestartTombstoneReplacement: canRollIsolatedHeartbeat,
+  });
   if (sessionWorkStartError && !canRollArchivedHeartbeat) {
     throw new Error(sessionWorkStartError);
   }
