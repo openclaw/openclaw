@@ -7169,8 +7169,8 @@ describe("chat model controls", () => {
     { selected: undefined, order: ["openai:personal"], expected: "peter@steipete.me" },
     { selected: "anthropic:personal", order: ["openai:personal"], expected: "peter@steipete.me" },
     { selected: undefined, order: undefined, expected: "work@example.com" },
-    { selected: "openai:key", order: ["openai:personal"], expected: "" },
-    { selected: undefined, order: ["openai:key"], expected: "" },
+    { selected: "openai:key", order: ["openai:personal"], expected: "API" },
+    { selected: undefined, order: ["openai:key"], expected: "API" },
   ])(
     "resolves subscription identity for $selected with profile order $order",
     ({ selected, order, expected }) => {
@@ -7198,7 +7198,7 @@ describe("chat model controls", () => {
         container
           .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
           ?.textContent?.trim(),
-      ).toBe(["Subscription", expected].filter(Boolean).join(" · "));
+      ).toBe(expected === "API" ? "API" : ["Subscription", expected].filter(Boolean).join(" · "));
     },
   );
 

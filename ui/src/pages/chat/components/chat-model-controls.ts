@@ -226,9 +226,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ["missing", "expired"].includes(provider.status) &&
       !provider.apiKey &&
       !provider.profiles.some((p) => ["ok", "expiring", "static"].includes(p.status));
+    // The effective profile decides the kind: a provider can hold both a
+    // subscription and an API key, and the selected one is what the heading names.
     const auth: ChatModelProviderAuth | undefined = missing
       ? { kind: "missing", label: t("modelSetup.candidates.signInNeeded") }
-      : subscriptions.length
+      : subscriptions.length && active?.type !== "api_key"
         ? {
             kind: "subscription",
             label: provider.usage?.plan || t("chat.modelControls.subscription"),
