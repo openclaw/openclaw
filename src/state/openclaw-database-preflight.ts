@@ -28,11 +28,8 @@ import { isValidAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { isPersistentOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
-import {
-  assertOpenClawAgentCurrentRuntimeSchema,
-  assertCanonicalAgentPersistenceVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
+import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
+import { preflightOpenClawAgentDatabaseTargets } from "./openclaw-database-preflight-agent-targets.js";
 import type {
   DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
@@ -645,99 +642,18 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       path: candidatePath,
     })),
   ];
-  const inspectedAgentPaths = new Set<string>();
-  const inspectedAgentTargets = new Set<string>();
-  for (const row of inspectionTargets) {
-    const agentPath = row.path;
-    const presence = inspectCandidatePresence(agentPath);
-    if (presence.status === "absent") {
-      continue;
-    }
-    if (presence.status === "indeterminate") {
-      result.indeterminate.push({ kind: "agent", path: agentPath, reason: presence.reason });
-      continue;
-    }
-    let agentDatabase: DatabaseSync | undefined;
-    let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
-    try {
-      // Preserve SQLite's filesystem traversal through symlink/.. locators.
-      const realAgentPath = realpathSync.native(agentPath);
-      const inspectionKey = `${realAgentPath}\0${row.agentId ?? ""}`;
-      if (
-        inspectedAgentTargets.has(inspectionKey) ||
-        (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath))
-      ) {
-        continue;
-      }
-      inspectedAgentPaths.add(realAgentPath);
-      inspectedAgentTargets.add(inspectionKey);
-      // Live agents keep committing during inspection. Online backup preserves
-      // database/WAL contents while allowing SQLite to update SHM read marks.
-      agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
-        signal: options.signal,
-      });
-      options.signal?.throwIfAborted();
-      agentDatabase = openNodeSqliteDatabase(agentSnapshot.location, {
-        readOnly: true,
-      });
-      agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      const agentVersion = readSqliteUserVersion(agentDatabase);
-      if (agentVersion < options.supportedVersions.agent) {
-        (result.pendingMigrations ??= []).push({
-          kind: "agent",
-          path: agentPath,
-          ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-          foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
-        });
-      }
-      if (agentVersion <= options.supportedVersions.agent) {
-        if (options.requireStartupMigrationReadiness) {
-          assertSqliteIntegrity(agentDatabase, agentPath);
-          assertCanonicalAgentPersistenceVersion(agentDatabase, agentPath, agentVersion);
-        }
-        const agentId =
-          row.agentId ??
-          (options.requireStartupMigrationReadiness
-            ? readExistingAgentSchemaMeta(agentDatabase)?.agentId
-            : undefined);
-        if (
-          options.verifyCurrentSchemaShape === true &&
-          agentId != null &&
-          (!options.requireStartupMigrationReadiness || agentVersion > 0)
-        ) {
-          assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
-            agentId,
-            pathname: agentPath,
-          });
-        }
-        continue;
-      }
-      const writerAppVersion = readWriterAppVersion(agentDatabase);
-      result.incompatible.push({
-        kind: "agent",
-        path: agentPath,
-        ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-        foundVersion: agentVersion,
-        supportedVersion: options.supportedVersions.agent,
-        ...(writerAppVersion ? { writerAppVersion } : {}),
-      });
-    } catch (error) {
-      if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
-        throw error;
-      }
-      result.indeterminate.push({
-        kind: "agent",
-        path: agentPath,
-        reason: formatErrorMessage(error),
-      });
-    } finally {
-      try {
-        agentDatabase?.close();
-      } finally {
-        agentSnapshot?.cleanup();
-      }
-    }
+  const agentResults = await preflightOpenClawAgentDatabaseTargets({
+    inspectionTargets,
+    inspectCandidatePresence,
+    requireStartupMigrationReadiness: options.requireStartupMigrationReadiness,
+    signal: options.signal,
+    supportedVersion: options.supportedVersions.agent,
+    verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
+  });
+  result.incompatible.push(...agentResults.incompatible);
+  result.indeterminate.push(...agentResults.indeterminate);
+  if (agentResults.pendingMigrations.length > 0) {
+    (result.pendingMigrations ??= []).push(...agentResults.pendingMigrations);
   }
   return result;
 }
