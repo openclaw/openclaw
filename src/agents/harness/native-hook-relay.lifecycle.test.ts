@@ -319,6 +319,7 @@ it("does not start transport when locator lookup consumes the caller deadline", 
       },
     );
     const startedAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({
       provider: "codex",
       relayId: relay.relayId,
@@ -330,7 +331,7 @@ it("does not start transport when locator lookup consumes the caller deadline", 
     void invocation.catch(() => undefined);
     await entered.promise;
     const connect = vi.spyOn(Agent.prototype, "createConnection");
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 101);
+    clock.mockReturnValue(startedAt + 101);
     try {
       resume.resolve();
       await expect(invocation).rejects.toThrow("timed out");
