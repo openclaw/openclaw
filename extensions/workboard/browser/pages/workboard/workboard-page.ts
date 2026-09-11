@@ -142,6 +142,9 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
+      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
+      const missingScope =
+        scope && !selectableAgents.some((agent) => agent.id === scope) ? scope : null;
       if (observedScope !== scope) {
         observedScope = scope;
         state.agentFilter = "all";
@@ -210,48 +213,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       ];
       render(
         html`
-          <section class="content-header content-header--page">
-            <div>
-              <div class="page-title workboard-page-title">
-                ${
-                  selectedBoard
-                    ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-                    : nothing
-                }
-                <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
-                ${
-                  selectedBoard?.automationJobId
-                    ? html`<a
-                        class="chip workboard-automation-chip"
-                        href=${`${host.basePath}/automations`}
-                        title=${t("workboard.automationAttachedTitle")}
-                        aria-label=${t("workboard.automationAttachedTitle")}
-                        >${icons.calendarClock}<span>${t("workboard.automationAttached")}</span></a
-                      >`
-                    : nothing
-                }
-              </div>
-              ${selectedBoard ? html`<div class="page-subtitle">Workboard</div>` : nothing}
-            </div>
-            ${renderAgentPicker(
-              {
-                options: [
-                  { value: "", label: t("workboard.allAgents"), icon: "users" },
-                  ...agents
-                    .filter((agent) => agent.kind !== "system")
-                    .map((agent) => ({
-                      value: agent.id,
-                      label: agent.name ?? agent.identity?.name ?? agent.id,
-                      agent,
-                    })),
-                ],
-                value: scope ?? "",
-                accessibleLabel: t("workboard.agentFilter"),
-                onSelect: (value) => host.agents.setScope(value || null),
-              },
-              "agent-scope-control",
-            )}
-          </section>
           ${
             metadataError
               ? html`<div class="callout danger" role="alert">${metadataError}</div>`
@@ -263,6 +224,61 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
               : nothing
           }
           ${renderWorkboard({
+            heading: html`
+              <div class="workboard-heading__identity">
+                <div class="page-title workboard-page-title">
+                  ${
+                    selectedBoard
+                      ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+                      : nothing
+                  }
+                  <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
+                  ${
+                    selectedBoard?.automationJobId
+                      ? html`<a
+                          class="chip workboard-automation-chip"
+                          href=${`${host.basePath}/automations`}
+                          title=${t("workboard.automationAttachedTitle")}
+                          aria-label=${t("workboard.automationAttachedTitle")}
+                          >${icons.calendarClock}<span
+                            >${t("workboard.automationAttached")}</span
+                          ></a
+                        >`
+                      : nothing
+                  }
+                </div>
+                ${selectedBoard ? html`<div class="page-subtitle">Workboard</div>` : nothing}
+              </div>
+            `,
+            scopeControl:
+              selectableAgents.length > 1 || missingScope
+                ? renderAgentPicker(
+                    {
+                      options: [
+                        { value: "", label: t("workboard.allAgents"), icon: "users" },
+                        ...selectableAgents.map((agent) => ({
+                          value: agent.id,
+                          label: agent.name ?? agent.identity?.name ?? agent.id,
+                          agent,
+                        })),
+                        ...(missingScope
+                          ? [
+                              {
+                                value: missingScope,
+                                label: missingScope,
+                                agent: { id: missingScope },
+                              },
+                            ]
+                          : []),
+                      ],
+                      value: scope ?? "",
+                      variant: "compact",
+                      accessibleLabel: t("workboard.agentFilter"),
+                      onSelect: (value) => host.agents.setScope(value || null),
+                    },
+                    "workboard-scope",
+                  )
+                : undefined,
             host: workboard,
             client: connected ? client : null,
             connected,

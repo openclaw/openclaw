@@ -7,6 +7,7 @@ import { workboardHost } from "../host.ts";
 type Components = ControlUiHost["components"];
 type DialogProps = Parameters<Components["mountDialog"]>[1];
 type PickerProps = Parameters<Components["mountAgentPicker"]>[1];
+type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
 type DashboardProps = Parameters<Components["mountDashboard"]>[1];
 function createHostComponent<Props extends object>(
   mount: (container: HTMLElement, props: Props) => ControlUiComponentHandle<Props>,
@@ -75,6 +76,9 @@ const mountDialog = createHostComponent(
 const mountAgentPicker = createHostComponent((container, props: PickerProps) =>
   workboardHost().components.mountAgentPicker(container, props),
 );
+const mountSelectPicker = createHostComponent((container, props: SelectPickerProps) =>
+  workboardHost().components.mountSelectPicker(container, props),
+);
 const mountDashboard = createHostComponent((container, props: DashboardProps) =>
   workboardHost().components.mountDashboard(container, props),
 );
@@ -85,6 +89,10 @@ export function renderDialog(props: Omit<DialogProps, "content">, content: unkno
 
 export function renderAgentPicker(props: PickerProps, className = "") {
   return html`<div class=${className} ${mountAgentPicker(props)}></div>`;
+}
+
+export function renderSelectPicker(props: SelectPickerProps, className = "") {
+  return html`<div class=${className} ${mountSelectPicker(props)}></div>`;
 }
 
 export function renderDashboard(props: DashboardProps) {

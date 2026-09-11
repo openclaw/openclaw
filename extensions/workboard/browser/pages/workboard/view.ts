@@ -1,18 +1,18 @@
 import { html, nothing } from "lit";
-import { renderAgentPicker } from "../../components/host-components.ts";
+import { ref } from "lit/directives/ref.js";
+import { renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import "../../styles/workboard.css";
 import {
   dispatchWorkboard,
-  filterWorkboardCardsForPreset,
+  filterWorkboardCards,
+  workboardCardMatchesHealthKey,
   getWorkboardState,
-  summarizeWorkboardHealth,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
-  type WorkboardHealthKey,
-  type WorkboardHealthSummary,
   type WorkboardStatus,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
@@ -31,113 +31,53 @@ import { getVisibleDetailCard, renderCardDetailsPanel } from "./view-card-detail
 import { openCreateModal, renderCardModal, workboardCardModalId } from "./view-card-modal.ts";
 import { renderColumn } from "./view-card.ts";
 import {
+  multiFilterLabel,
+  renderActiveFilters,
+  renderStatusTabs,
+  renderFilterSelect,
+  renderFilterChoices,
+  renderMultiFilter,
+  type ActiveFilter,
+} from "./view-filter-controls.ts";
+import {
   canMutate,
   formatPriorityLabel,
+  workboardErrorMessage,
+  renderPriorityIcon,
   formatRefreshTime,
   matchesFilter,
-  renderWorkboardError,
   type WorkboardProps,
 } from "./view-helpers.ts";
-import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
+import { workboardPopoverRef } from "./view-popover.ts";
+import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
+import type { WorkboardSelectOption } from "./workboard-select.ts";
 
-function renderDispatchSummary(state: WorkboardUiState) {
+function dispatchSummaryMessage(state: WorkboardUiState) {
   const summary = state.lastDispatchSummary;
   if (!summary) {
-    return nothing;
+    return "";
   }
   const total = Object.values(summary).reduce((sum, count) => sum + count, 0);
-  const key = total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary";
-  return html`
-    <div class="callout">
-      ${t(key, {
-        started: String(summary.started),
-        failures: String(summary.failures),
-        promoted: String(summary.promoted),
-        blocked: String(summary.blocked),
-        reclaimed: String(summary.reclaimed),
-        orchestrated: String(summary.orchestrated),
-      })}
-    </div>
-  `;
+  return t(total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary", {
+    started: String(summary.started),
+    failures: String(summary.failures),
+    promoted: String(summary.promoted),
+    blocked: String(summary.blocked),
+    reclaimed: String(summary.reclaimed),
+    orchestrated: String(summary.orchestrated),
+  });
 }
 
-function renderHealthStrip(
-  state: WorkboardUiState,
-  summary: WorkboardHealthSummary,
-  requestUpdate?: () => void,
-) {
-  const items: Array<[WorkboardHealthKey, string, number]> = [
-    ["running", t("workboard.healthRunning"), summary.running],
-    ["blocked", t("workboard.healthBlocked"), summary.blocked],
-    ["stale", t("workboard.healthStale"), summary.stale],
-    ["readyUnassigned", t("workboard.healthReadyUnassigned"), summary.readyUnassigned],
-    ["missingProof", t("workboard.healthMissingProof"), summary.missingProof],
-    ["failedAttempts", t("workboard.healthFailedAttempts"), summary.failedAttempts],
-  ];
-  return html`
-    <div class="workboard-health" aria-label=${t("workboard.healthLabel")}>
-      ${items.map(
-        ([key, label, count]) => html`
-          <button
-            class="workboard-health__item workboard-health__item--${key} ${
-              state.activeHealthHighlight === key ? "workboard-health__item--active" : ""
-            } ${count === 0 ? "workboard-health__item--empty" : ""}"
-            type="button"
-            aria-pressed=${state.activeHealthHighlight === key}
-            aria-label=${`${count} ${label}`}
-            @click=${() => {
-              state.activeHealthHighlight = state.activeHealthHighlight === key ? null : key;
-              requestUpdate?.();
-            }}
-          >
-            <strong>${count}</strong>${label}
-          </button>
-        `,
-      )}
-    </div>
-  `;
-}
-
-function renderRefreshStatus(state: WorkboardUiState) {
+function refreshStatusLabel(state: WorkboardUiState) {
   if (state.lastRefreshAt) {
-    return html`<span
-      class="workboard-refresh-status ${
-        state.lastRefreshError ? "workboard-refresh-status--error" : ""
-      }"
-      title=${state.lastRefreshError ? t("workboard.refreshError") : ""}
-    >
-      ${t("workboard.lastRefreshed", { time: formatRefreshTime(state.lastRefreshAt) })}
-    </span>`;
+    return state.lastRefreshError
+      ? t("workboard.refreshError")
+      : t("workboard.lastRefreshed", { time: formatRefreshTime(state.lastRefreshAt) });
   }
-  return state.lastRefreshError
-    ? html`<span class="workboard-refresh-status workboard-refresh-status--error">
-        ${t("workboard.refreshError")}
-      </span>`
-    : nothing;
+  return state.lastRefreshError ? t("workboard.refreshError") : "";
 }
 
-const viewPresetOptions: Array<{ value: WorkboardUiState["viewPreset"]; labelKey: string }> = [
-  { value: "all", labelKey: "workboard.viewAll" },
-  { value: "default_agent", labelKey: "workboard.viewDefaultAgent" },
-  { value: "ready", labelKey: "workboard.viewReady" },
-  { value: "running", labelKey: "workboard.viewRunning" },
-  { value: "blocked", labelKey: "workboard.viewBlocked" },
-  { value: "review", labelKey: "workboard.viewReview" },
-  { value: "stale", labelKey: "workboard.viewStale" },
-  { value: "missing_proof", labelKey: "workboard.viewMissingProof" },
-  { value: "recently_done", labelKey: "workboard.viewRecentlyDone" },
-];
-
-const layoutOptions = [
-  ["compact", "workboard.layoutCompact", icons.layoutCompact],
-  ["comfortable", "workboard.layoutComfortable", icons.layoutComfortable],
-] as const;
-
-const emptyColumnModeOptions = [
-  ["show", "workboard.showEmptyColumns"],
-  ["collapse", "workboard.collapseEmptyColumns"],
-  ["hide", "workboard.hideEmptyColumns"],
-] as const;
+const workboardFilterPopoverId = "workboard-filter-popover";
 
 export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void }) {
   const state = getWorkboardState(props.host);
@@ -148,32 +88,28 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   // A valid route can outlive a deleted board. Keep that id as the active
   // filter so the page becomes empty instead of silently showing every card.
   const activeBoardFilter = state.boardFilter;
-  const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
-    cards
-      .filter((card) => state.showArchived || !card.metadata?.archivedAt)
-      .filter((card) => matchesBoardFilter(card, activeBoardFilter))
-      .filter((card) => matchesAgentScope(card, defaultAgentId, props.scopeAgentId))
-      .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
-      .filter((card) =>
-        matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
-      );
-  const cardsForPreset = (preset: WorkboardUiState["viewPreset"]) =>
-    applyNonViewFilters(
-      filterWorkboardCardsForPreset({
-        cards: state.cards,
-        preset,
-        tasksByCardId: state.tasksByCardId,
-        sessions: props.sessions,
-        defaultAgentId,
-      }),
-    );
-  const filtered = cardsForPreset(state.viewPreset);
-  const health = summarizeWorkboardHealth({
-    cards: filtered,
-    tasksByCardId: state.tasksByCardId,
-    sessions: props.sessions,
-  });
-  const visibleError = state.error ?? state.lifecycleTaskRefreshError;
+  const scopedCards = state.cards
+    .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+    .filter((card) => matchesBoardFilter(card, activeBoardFilter))
+    .filter((card) => matchesAgentScope(card, defaultAgentId, props.scopeAgentId))
+    .filter(
+      (card) =>
+        props.showAgentFilter === false ||
+        matchesAgentFilter(card, props.agentsList, state.agentFilter),
+    )
+    .filter((card) => matchesFilter(card, { query: state.query, priority: "all" }));
+  const now = Date.now();
+  const cardsForFilters = (ignore?: "status" | "priority" | "attention") =>
+    filterWorkboardCards({
+      cards: scopedCards,
+      filters: state,
+      tasksByCardId: state.tasksByCardId,
+      sessions: props.sessions,
+      now,
+      ignore,
+    });
+  const filtered = cardsForFilters();
+  const visibleError = workboardErrorMessage(state, props.pageError);
   const writable = canMutate(props);
   const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
   for (const status of state.statuses) {
@@ -182,196 +118,157 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
   for (const card of filtered) {
     byStatus.get(card.status)?.push(card);
   }
-  const visibleStatuses =
-    state.emptyColumnMode === "hide" || state.viewPreset !== "all"
-      ? state.statuses.filter((status) => (byStatus.get(status)?.length ?? 0) > 0)
-      : state.statuses;
-  const activeFiltering =
-    state.viewPreset !== "all" ||
-    state.query.trim() !== "" ||
-    state.priorityFilter !== "all" ||
-    state.agentFilter !== "all" ||
-    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER ||
-    (!state.showArchived && state.cards.some((card) => card.metadata?.archivedAt));
-  const viewOptions: Array<WorkboardSelectOption<WorkboardUiState["viewPreset"]>> =
-    viewPresetOptions.map((option) => {
-      const count = cardsForPreset(option.value).length;
-      return {
-        value: option.value,
-        label: t(option.labelKey),
-        description:
-          option.value === "all"
-            ? undefined
-            : t("workboard.viewPresetCount", { count: String(count) }),
-        disabled: option.value !== "all" && count === 0,
-      };
-    });
-  const priorityOptions: Array<WorkboardSelectOption<WorkboardUiState["priorityFilter"]>> = [
-    { value: "all", label: t("workboard.allPriorities") },
-    ...WORKBOARD_PRIORITIES.map((priority) => ({
-      value: priority,
-      label: formatPriorityLabel(priority),
-    })),
-  ];
-  const emptyColumnOptions: Array<WorkboardSelectOption<WorkboardUiState["emptyColumnMode"]>> =
-    emptyColumnModeOptions.map(([value, labelKey]) => ({ value, label: t(labelKey) }));
-  const agentSelectOptions = agentOptions.map((option) => ({
+  const visibleStatuses = state.statuses.filter(
+    (status) =>
+      (!state.statusFilter.size || state.statusFilter.has(status)) &&
+      (state.emptyColumnMode !== "hide" || (byStatus.get(status)?.length ?? 0) > 0),
+  );
+  // Counts ignore their own group, so selecting one option does not erase alternatives.
+  const priorityCards = cardsForFilters("priority");
+  const priorityOptions = WORKBOARD_PRIORITIES.map((priority) => ({
+    value: priority,
+    label: formatPriorityLabel(priority),
+    icon: renderPriorityIcon(priority),
+    count: priorityCards.filter((card) => card.priority === priority).length,
+  }));
+  const attentionCards = cardsForFilters("attention");
+  const attentionOptions = (["stale", "missingProof"] as const).map((key) => ({
+    value: key,
+    label: t(key === "stale" ? "workboard.filterStale" : "workboard.filterMissingProof"),
+    title: t(key === "stale" ? "workboard.filterStaleHint" : "workboard.filterMissingProofHint"),
+    count: attentionCards.filter((card) =>
+      workboardCardMatchesHealthKey(card, key, props.sessions, state.tasksByCardId.get(card.id)),
+    ).length,
+  }));
+  const clearFilters = () => {
+    state.query = "";
+    state.searchOpen = false;
+    state.statusFilter.clear();
+    state.priorityFilter.clear();
+    state.attentionFilter.clear();
+    state.donePeriod = "all";
+    state.showArchived = false;
+    props.onRequestUpdate?.();
+  };
+  const agentFilterOptions: WorkboardSelectOption[] = agentOptions.map((option) => ({
     value: option.id,
     label: option.label,
     description: option.description,
-    agent:
-      option.id === "all" || option.id === "default"
-        ? undefined
-        : (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id }),
-    icon:
-      option.id === "all"
-        ? ("users" as const)
-        : option.id === "default"
-          ? ("bot" as const)
-          : undefined,
+    icon: option.id === "all" ? "users" : option.id === "default" ? "bot" : undefined,
   }));
+  const activeFilters: ActiveFilter[] = [];
+  if (state.query.trim()) {
+    activeFilters.push({
+      id: "query",
+      label: t("workboard.filterChipSearch", { query: state.query.trim() }),
+      clear: () => {
+        state.query = "";
+      },
+    });
+  }
+  if (state.priorityFilter.size) {
+    activeFilters.push({
+      id: "priority",
+      label: multiFilterLabel(
+        t("workboard.fieldPriority"),
+        state.priorityFilter,
+        priorityOptions,
+        true,
+      ),
+      clear: () => state.priorityFilter.clear(),
+    });
+  }
+  if (state.attentionFilter.size) {
+    activeFilters.push({
+      id: "attention",
+      label: multiFilterLabel(
+        t("workboard.filterAttention"),
+        state.attentionFilter,
+        attentionOptions,
+      ),
+      clear: () => state.attentionFilter.clear(),
+    });
+  }
+  if (state.donePeriod !== "all") {
+    activeFilters.push({
+      id: "done-period",
+      label: t("workboard.filterChipValue", {
+        field: t("workboard.filterDonePeriod"),
+        value: t("workboard.filterLastWeek"),
+      }),
+      clear: () => {
+        state.donePeriod = "all";
+      },
+    });
+  }
+  if (state.showArchived) {
+    activeFilters.push({
+      id: "archived",
+      label: t("workboard.filterChipArchived"),
+      clear: () => {
+        state.showArchived = false;
+      },
+    });
+  }
+  const activeFilterCount = activeFilters.length;
+  const hasActiveFilters = activeFilterCount > 0 || state.statusFilter.size > 0;
+  const activeFiltering =
+    hasActiveFilters ||
+    Boolean(props.scopeAgentId) ||
+    (props.showAgentFilter !== false && state.agentFilter !== "all") ||
+    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER;
+  const agentControl =
+    props.scopeControl ??
+    (props.showAgentFilter !== false &&
+    listSelectableAgents(props.agentsList?.agents ?? []).length > 1
+      ? renderSelectPicker({
+          value: state.agentFilter,
+          options: agentFilterOptions,
+          accessibleLabel: t("workboard.fieldAgent"),
+          onSelect: (value) => {
+            if (!agentFilterOptions.some((option) => option.value === value)) {
+              return;
+            }
+            state.agentFilter = value;
+            props.onRequestUpdate?.();
+          },
+        })
+      : nothing);
+  const refreshStatus = state.loading ? t("common.refreshing") : refreshStatusLabel(state);
   // The active dialog owns the error alert while the board is inert.
-  const dialogOpen = state.draftOpen || Boolean(getVisibleDetailCard(state));
+  const dialogOpen = props.overlayOpen || state.draftOpen || Boolean(getVisibleDetailCard(state));
   return html`
     <section class="workboard">
       <div class="workboard-main" ?inert=${dialogOpen} aria-hidden=${dialogOpen ? "true" : nothing}>
-        <div class="workboard-toolbar">
-          <div class="workboard-toolbar__filters">
-            <input
-              class="input"
-              type="search"
-              title=${t("workboard.searchPlaceholder")}
-              placeholder=${t("workboard.searchPlaceholder")}
-              .value=${state.query}
-              @input=${(event: InputEvent) => {
-                state.query = (event.currentTarget as HTMLInputElement).value;
-                props.onRequestUpdate?.();
-              }}
-            />
-            ${renderWorkboardSelect({
-              value: state.viewPreset,
-              options: viewOptions,
-              label: t("workboard.viewPreset"),
-              onChange: (value) => {
-                state.viewPreset = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              className: "workboard-select--toolbar",
-              showLabel: false,
-            })}
-            ${renderWorkboardSelect({
-              value: state.priorityFilter,
-              options: priorityOptions,
-              label: t("workboard.allPriorities"),
-              onChange: (value) => {
-                state.priorityFilter = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              className: "workboard-select--toolbar",
-              showLabel: false,
-            })}
-            ${
-              boardOptions.length >= 3
-                ? renderWorkboardSelect({
-                    value: activeBoardFilter,
-                    options: boardOptions,
-                    label: t("workboard.boardFilter"),
-                    onChange: (value) => {
-                      state.boardFilter = value;
-                      props.onBoardFilterChange?.(value);
-                    },
-                    requestUpdate: props.onRequestUpdate,
-                    className: "workboard-select--toolbar workboard-select--toolbar-board",
-                    showLabel: false,
-                  })
-                : nothing
-            }
-            ${
-              props.showAgentFilter !== false
-                ? renderAgentPicker(
-                    {
-                      options: agentSelectOptions,
-                      value: state.agentFilter,
-                      accessibleLabel: t("workboard.agentFilter"),
-                      onSelect: (value: string) => {
-                        const option = agentOptions.find((candidate) => candidate.id === value);
-                        if (option) {
-                          state.agentFilter = option.id;
-                          props.onRequestUpdate?.();
-                        }
-                      },
-                    },
-                    "workboard-agent-select workboard-agent-select--toolbar",
-                  )
-                : nothing
-            }
-            <button
-              class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"
-              type="button"
-              aria-pressed=${state.showArchived}
-              @click=${() => {
-                state.showArchived = !state.showArchived;
-                props.onRequestUpdate?.();
-              }}
-            >
-              ${state.showArchived ? icons.eye : icons.eyeOff}
-              ${
-                state.showArchived
-                  ? t("workboard.hideArchivedShort")
-                  : t("workboard.showArchivedShort")
-              }
-            </button>
-            <div class="workboard-layout-controls">
-              <div class="workboard-layout-toggle" role="group" aria-label=${t("workboard.layout")}>
-                ${layoutOptions.map(
-                  ([layout, labelKey, icon]) => html`
-                    <span title=${t(labelKey)}>
-                      <button
-                        class="btn btn--icon ${state.layout === layout ? "active" : ""}"
-                        type="button"
-                        aria-label=${t(labelKey)}
-                        aria-pressed=${state.layout === layout}
-                        @click=${() => {
-                          state.layout = layout;
-                          props.onRequestUpdate?.();
-                        }}
-                      >
-                        ${icon}
-                      </button>
-                    </span>
-                  `,
-                )}
-              </div>
-              ${renderRefreshStatus(state)}
-            </div>
-            ${renderWorkboardSelect({
-              value: state.emptyColumnMode,
-              options: emptyColumnOptions,
-              label: t("workboard.emptyColumns"),
-              onChange: (value) => {
-                state.emptyColumnMode = value;
-                state.expandedEmptyStatuses.clear();
-              },
-              requestUpdate: props.onRequestUpdate,
-              className: "workboard-select--toolbar workboard-select--empty-columns",
-              showLabel: false,
-            })}
-          </div>
-          <div class="workboard-toolbar__actions">
-            <button
-              class="btn"
-              type="button"
-              ?disabled=${state.loading || state.dispatching || workboardHasActiveWrites(state)}
-              @click=${props.onRefresh}
-            >
-              ${state.loading ? t("common.refreshing") : t("common.refresh")}
-            </button>
+        <header class="workboard-heading">
+          ${props.heading}
+          <div class="workboard-heading__actions settings-section__actions">
+            <span title=${refreshStatus || t("common.refresh")}>
+              <button
+                class="btn btn--icon btn--ghost workboard-refresh ${
+                  state.lastRefreshError ? "workboard-refresh--error" : ""
+                }"
+                type="button"
+                aria-label=${state.loading ? t("common.refreshing") : t("common.refresh")}
+                aria-busy=${state.loading}
+                ?disabled=${state.loading || state.dispatching || workboardHasActiveWrites(state)}
+                @click=${props.onRefresh}
+              >
+                ${icons.refresh}
+              </button>
+            </span>
             ${
               writable
                 ? html`
                     <button
-                      class="btn"
+                      class="btn workboard-dispatch"
                       type="button"
+                      aria-label=${t("workboard.dispatch")}
+                      title=${t(
+                        activeBoardFilter === WORKBOARD_ALL_BOARDS_FILTER
+                          ? "workboard.dispatchHelpAll"
+                          : "workboard.dispatchHelp",
+                      )}
                       ?disabled=${state.dispatching || workboardHasActiveWrites(state)}
                       @click=${() =>
                         dispatchWorkboard({
@@ -380,7 +277,9 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                           requestUpdate: props.onRequestUpdate,
                         })}
                     >
-                      ${icons.zap} ${t("workboard.dispatch")}
+                      ${icons.play}<span class="workboard-action-label"
+                        >${t("workboard.dispatch")}</span
+                      >
                     </button>
                   `
                 : nothing
@@ -389,8 +288,9 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
               writable
                 ? html`
                     <button
-                      class="btn primary"
+                      class="btn primary workboard-create"
                       type="button"
+                      aria-label=${t("workboard.newCard")}
                       aria-haspopup="dialog"
                       aria-expanded=${state.draftOpen ? "true" : "false"}
                       aria-controls=${workboardCardModalId}
@@ -400,36 +300,321 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                         props.onRequestUpdate?.();
                       }}
                     >
-                      ${icons.plus} ${t("workboard.newCard")}
+                      ${icons.plus}<span class="workboard-action-label"
+                        >${t("workboard.newCard")}</span
+                      >
                     </button>
                   `
                 : nothing
             }
           </div>
+        </header>
+        <div class="workboard-toolbar">
+          <div class="workboard-toolbar__filters">
+            <div class="workboard-toolbar__navigation">
+              ${renderStatusTabs(state, props.onRequestUpdate)}
+            </div>
+          </div>
+          <div class="workboard-toolbar__tools">
+            <div class="workboard-search-control">
+              ${
+                state.searchOpen || state.query
+                  ? html`<div class="workboard-search">
+                      <span aria-hidden="true">${icons.search}</span>
+                      <input
+                        class="settings-input"
+                        id="workboard-search-input"
+                        type="search"
+                        aria-label=${t("workboard.searchPlaceholder")}
+                        placeholder=${t("workboard.searchPlaceholder")}
+                        .value=${state.query}
+                        @input=${(event: InputEvent) => {
+                          if (!(event.currentTarget instanceof HTMLInputElement)) {
+                            return;
+                          }
+                          state.query = event.currentTarget.value;
+                          props.onRequestUpdate?.();
+                        }}
+                        @keydown=${(event: KeyboardEvent) => {
+                          if (event.key !== "Escape") {
+                            return;
+                          }
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (!(event.currentTarget instanceof HTMLElement)) {
+                            return;
+                          }
+                          const control = event.currentTarget.closest(".workboard-search-control");
+                          state.query = "";
+                          state.searchOpen = false;
+                          props.onRequestUpdate?.();
+                          queueMicrotask(() =>
+                            control?.querySelector<HTMLButtonElement>("button")?.focus(),
+                          );
+                        }}
+                      />
+                      <button
+                        class="btn btn--icon workboard-search__clear"
+                        type="button"
+                        aria-label=${t("workboard.closeSearch")}
+                        @click=${(event: MouseEvent) => {
+                          if (!(event.currentTarget instanceof HTMLElement)) {
+                            return;
+                          }
+                          const control = event.currentTarget.closest(".workboard-search-control");
+                          state.query = "";
+                          state.searchOpen = false;
+                          props.onRequestUpdate?.();
+                          if (event.detail === 0) {
+                            queueMicrotask(() =>
+                              control?.querySelector<HTMLButtonElement>("button")?.focus(),
+                            );
+                          }
+                        }}
+                      >
+                        ${icons.x}
+                      </button>
+                    </div>`
+                  : html`<button
+                      class="btn btn--icon workboard-search-trigger"
+                      type="button"
+                      aria-label=${t("workboard.searchPlaceholder")}
+                      title=${t("workboard.searchPlaceholder")}
+                      aria-expanded="false"
+                      aria-controls="workboard-search-input"
+                      @click=${(event: Event) => {
+                        if (!(event.currentTarget instanceof HTMLElement)) {
+                          return;
+                        }
+                        const control = event.currentTarget.closest(".workboard-search-control");
+                        state.searchOpen = true;
+                        props.onRequestUpdate?.();
+                        queueMicrotask(() =>
+                          control?.querySelector<HTMLInputElement>("input")?.focus(),
+                        );
+                      }}
+                    >
+                      ${icons.search}
+                    </button>`
+              }
+            </div>
+            ${
+              agentControl === nothing
+                ? nothing
+                : html`<div class="workboard-agent-filter">${agentControl}</div>`
+            }
+            <button
+              popovertarget=${workboardFilterPopoverId}
+              class="btn workboard-filter-trigger ${activeFilterCount > 0 ? "active" : ""}"
+              type="button"
+              aria-label=${
+                activeFilterCount > 0
+                  ? t("workboard.filtersActive", { count: String(activeFilterCount) })
+                  : t("workboard.filters")
+              }
+              aria-haspopup="dialog"
+              aria-expanded="false"
+            >
+              ${icons.listFilter}<span>${t("workboard.filters")}</span>
+              ${
+                activeFilterCount > 0
+                  ? html`<span class="workboard-filter-trigger__count">${activeFilterCount}</span>`
+                  : nothing
+              }
+            </button>
+            <div
+              class="workboard-filter-popover"
+              ${ref(workboardPopoverRef("end"))}
+              id=${workboardFilterPopoverId}
+              popover="auto"
+              role="dialog"
+              aria-label=${t("workboard.filters")}
+            >
+              <div class="workboard-filter-popover__panel">
+                <div class="workboard-filter-heading">
+                  <strong>${t("workboard.filters")}</strong>
+                  ${
+                    hasActiveFilters
+                      ? html`<button
+                          class="workboard-filter-clear"
+                          type="button"
+                          @click=${clearFilters}
+                        >
+                          ${t("workboard.clearFilters")}
+                        </button>`
+                      : nothing
+                  }
+                  <button
+                    type="button"
+                    class="btn btn--icon"
+                    aria-label=${t("common.close")}
+                    @click=${(event: Event) => {
+                      if (!(event.currentTarget instanceof HTMLElement)) {
+                        return;
+                      }
+                      event.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
+                    }}
+                  >
+                    ${icons.x}
+                  </button>
+                </div>
+                <div class="workboard-filter-display">
+                  ${renderFilterChoices({
+                    label: t("workboard.filterDensity"),
+                    value: state.layout,
+                    options: [
+                      {
+                        value: "comfortable",
+                        label: t("workboard.densityComfortable"),
+                        icon: "layoutComfortable",
+                      },
+                      {
+                        value: "compact",
+                        label: t("workboard.densityCompact"),
+                        icon: "layoutCompact",
+                      },
+                    ],
+                    onChange: (value) => {
+                      state.layout = value;
+                      props.onRequestUpdate?.();
+                    },
+                  })}
+                  ${renderFilterChoices({
+                    label: t("workboard.emptyColumns"),
+                    value: state.emptyColumnMode,
+                    options: [
+                      {
+                        value: "show",
+                        label: t("workboard.emptyColumnsShow"),
+                        icon: "eye",
+                        title: t("workboard.showEmptyColumns"),
+                      },
+                      {
+                        value: "collapse",
+                        label: t("workboard.emptyColumnsCollapse"),
+                        icon: "chevronLeft",
+                        title: t("workboard.collapseEmptyColumns"),
+                      },
+                      {
+                        value: "hide",
+                        label: t("workboard.emptyColumnsHide"),
+                        icon: "eyeOff",
+                        title: t("workboard.hideEmptyColumns"),
+                      },
+                    ],
+                    onChange: (value) => {
+                      state.emptyColumnMode = value;
+                      state.expandedEmptyStatuses.clear();
+                      props.onRequestUpdate?.();
+                    },
+                  })}
+                </div>
+                ${renderMultiFilter({
+                  label: t("workboard.fieldPriority"),
+                  values: state.priorityFilter,
+                  options: priorityOptions,
+                  onChange: () => props.onRequestUpdate?.(),
+                })}
+                ${renderMultiFilter({
+                  label: t("workboard.filterAttention"),
+                  values: state.attentionFilter,
+                  options: attentionOptions,
+                  wide: true,
+                  onChange: () => props.onRequestUpdate?.(),
+                })}
+                <div class="workboard-filter-fields">
+                  ${renderFilterSelect({
+                    value: state.donePeriod,
+                    options: [
+                      { value: "all", label: t("workboard.filterAllTime") },
+                      { value: "week", label: t("workboard.filterLastWeek") },
+                    ],
+                    label: t("workboard.filterDonePeriod"),
+                    onChange: (value) => {
+                      state.donePeriod = value;
+                      props.onRequestUpdate?.();
+                    },
+                  })}
+                  ${
+                    boardOptions.length >= 3
+                      ? renderFilterSelect({
+                          value: activeBoardFilter,
+                          options: boardOptions,
+                          label: t("workboard.boardFilter"),
+                          onChange: (value) => {
+                            state.boardFilter = value;
+                            props.onBoardFilterChange?.(value);
+                            props.onRequestUpdate?.();
+                          },
+                        })
+                      : nothing
+                  }
+                  <label class="workboard-filter-row workboard-filter-archived">
+                    <span>${t("workboard.showArchived")}</span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      .checked=${state.showArchived}
+                      @change=${(event: Event) => {
+                        if (!(event.currentTarget instanceof HTMLInputElement)) {
+                          return;
+                        }
+                        state.showArchived = event.currentTarget.checked;
+                        props.onRequestUpdate?.();
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+          ${
+            activeFilters.length
+              ? renderActiveFilters(activeFilters, props.onRequestUpdate)
+              : nothing
+          }
         </div>
-        ${renderHealthStrip(state, health, props.onRequestUpdate)}
-        ${dialogOpen ? nothing : renderWorkboardError(visibleError)} ${renderDispatchSummary(state)}
         ${
           (filtered.length === 0 && activeFiltering) || visibleStatuses.length === 0
             ? html`
                 <div class="workboard-empty-state" role="status">
                   <strong>${t("workboard.emptyFilteredTitle")}</strong>
                   <span>${t("workboard.emptyFilteredHint")}</span>
+                  ${
+                    hasActiveFilters
+                      ? html`<button class="btn" type="button" @click=${clearFilters}>
+                          ${t("workboard.clearFilters")}
+                        </button>`
+                      : nothing
+                  }
                 </div>
               `
             : html`
-                <div
-                  class="workboard-board workboard-board--page workboard-board--${state.layout} ${
-                    visibleStatuses.length === 1 ? "workboard-board--single-column" : ""
-                  }"
-                >
-                  ${visibleStatuses.map((status) =>
-                    renderColumn(props, status, byStatus.get(status) ?? []),
-                  )}
+                <div class="workboard-board-viewport">
+                  <div
+                    ${ref(boardScrollEdgesRef())}
+                    class="workboard-board workboard-board--page workboard-board--${state.layout} ${
+                      visibleStatuses.length === 1 ? "workboard-board--single-column" : ""
+                    }"
+                  >
+                    ${visibleStatuses.map((status) =>
+                      renderColumn(props, status, byStatus.get(status) ?? [], { surface: "page" }),
+                    )}
+                  </div>
                 </div>
               `
         }
       </div>
+      ${
+        visibleError && !dialogOpen
+          ? html`<div class="callout danger" role="alert">${visibleError}</div>`
+          : nothing
+      }
+      ${
+        !dialogOpen && dispatchSummaryMessage(state)
+          ? html`<div class="callout">${dispatchSummaryMessage(state)}</div>`
+          : nothing
+      }
       ${renderCardModal(props)} ${renderCardDetailsPanel(props)}
     </section>
   `;

@@ -112,19 +112,41 @@ async function chooseWorkboardSelectFieldOption(
   await waitForWorkboardSelectValue(control, value);
 }
 
-async function expectWorkboardSelectTextFits(control: Locator): Promise<void> {
-  const geometry = await control.evaluate((select) => {
-    const bounds = select.getBoundingClientRect();
-    const parent = select.parentElement!.getBoundingClientRect();
-    return {
-      width: bounds.width,
-      available: parent.width,
-      overflow: select.scrollWidth - select.clientWidth,
-    };
+async function openWorkboardFilters(page: Page): Promise<void> {
+  const trigger = page.locator(".workboard-filter-trigger");
+  const panel = page.locator(".workboard-filter-popover__panel");
+  if (!(await panel.isVisible())) {
+    await trigger.click();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  }
+  await panel.waitFor({ state: "visible" });
+}
+
+async function chooseWorkboardDisplayOption(page: Page, option: string) {
+  await openWorkboardFilters(page);
+  await page
+    .getByRole("group", { name: "Empty columns", exact: true })
+    .getByRole("button", { name: option, exact: true })
+    .click();
+}
+
+async function chooseWorkboardBoard(page: Page, boardId: string) {
+  await openWorkboardFilters(page);
+  const picker = page.locator("openclaw-select-picker").filter({
+    has: page.getByRole("button", { name: /^Filter by board:/u }),
   });
-  expect(geometry.width).toBeGreaterThan(0);
-  expect(geometry.width).toBeLessThanOrEqual(geometry.available + 1);
-  expect(geometry.overflow).toBeLessThanOrEqual(1);
+  await picker.getByRole("button", { name: /^Filter by board:/u }).click();
+  await picker.locator(`[role="option"][data-value="${boardId}"]`).click();
+}
+
+async function closeWorkboardFilters(page: Page) {
+  const popover = page.locator(".workboard-filter-popover");
+  if (await page.locator(".workboard-filter-popover__panel").isVisible()) {
+    await popover.evaluate((element) => {
+      (element as HTMLElement).hidePopover();
+    });
+    await expect.poll(() => page.locator(".workboard-filter-popover__panel").isHidden()).toBe(true);
+  }
 }
 
 async function setWorkboardDraftField(
@@ -373,31 +395,29 @@ suite.define(() => {
       });
       const response = await writable.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
-      await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
+      await writable.page
+        .locator(".workboard-heading__actions")
+        .getByRole("button", { name: /New card/u })
+        .waitFor({ state: "visible" });
+      await writableGateway.waitForRequest("workboard.cards.list");
+      await expect.poll(() => writable.page.locator(".workboard-refresh").isEnabled()).toBe(true);
+      expect(await writable.page.locator(".workboard-card").count()).toBe(0);
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
-      const prioritySelect = writable.page.getByRole("combobox", { name: "All priorities" });
-      const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
-        const styles = getComputedStyle(select);
-        return {
-          minHeight: styles.minHeight,
-          paddingRight: styles.paddingRight,
-        };
-      });
-      expect(directRoutePickerStyles).toEqual({
-        minHeight: "36px",
-        paddingRight: "36px",
-      });
-      await prioritySelect.selectOption("urgent");
-      await waitForWorkboardSelectValue(prioritySelect, "urgent");
-      await prioritySelect.selectOption("high");
-      await waitForWorkboardSelectValue(prioritySelect, "high");
-      await prioritySelect.selectOption("all");
-      await waitForWorkboardSelectValue(prioritySelect, "all");
+      await openWorkboardFilters(writable.page);
+      const highPriority = writable.page
+        .getByRole("group", { name: "Priority", exact: true })
+        .getByRole("checkbox", { name: /High/u });
+      await highPriority.focus();
+      await writable.page.keyboard.press("Space");
+      await expect.poll(() => highPriority.isChecked()).toBe(true);
+      await highPriority.uncheck();
+      await expect.poll(() => highPriority.isChecked()).toBe(false);
+      await closeWorkboardFilters(writable.page);
 
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
-        .locator(".workboard-toolbar__actions")
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /New card/u })
         .click();
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
@@ -636,8 +656,12 @@ suite.define(() => {
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
       await writableGateway.resolveDeferred("workboard.cards.list");
       await expect
-        .poll(() => writable.page.locator(".workboard-select--toolbar-board").textContent())
-        .toContain("Live metadata");
+        .poll(() =>
+          writable.page
+            .getByRole("option", { name: /Live metadata/u, includeHidden: true })
+            .count(),
+        )
+        .toBe(1);
       expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
       expect(await reviewedCardSurface.textContent()).toContain(reviewedCard.notes);
       expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
@@ -661,7 +685,7 @@ suite.define(() => {
       await writableGateway.deferNext("workboard.cards.list");
       const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
       await writable.page
-        .locator(".workboard-toolbar__actions")
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /^Refresh$/u })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
@@ -815,13 +839,14 @@ suite.define(() => {
 
       const collapsedColumns = recorded.page.locator(".workboard-column--collapsed");
       await expect.poll(() => collapsedColumns.count()).toBe(0);
-      const emptyColumns = recorded.page.locator(".workboard-select--empty-columns");
-      await expectWorkboardSelectTextFits(emptyColumns);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Hide empty", emptyColumns);
+      await openWorkboardFilters(recorded.page);
+      const emptyColumns = recorded.page.getByRole("group", { name: "Empty columns", exact: true });
+      await emptyColumns.getByRole("button", { name: "Hide empty", exact: true }).click();
       await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(2);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Show all", emptyColumns);
+      await chooseWorkboardDisplayOption(recorded.page, "Show all");
       await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(9);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Collapse empty", emptyColumns);
+      await chooseWorkboardDisplayOption(recorded.page, "Collapse empty");
+      await closeWorkboardFilters(recorded.page);
       await expect.poll(() => collapsedColumns.count()).toBe(7);
       const collapsedWidth = await recorded.page
         .locator(".workboard-column--ready")
@@ -884,8 +909,10 @@ suite.define(() => {
       expect(expandedWidth).toBeGreaterThanOrEqual(262);
       await recorded.page.getByRole("button", { name: "Collapse Ready column" }).click();
 
-      const viewPreset = recorded.page.locator(".workboard-select--toolbar").first();
-      await chooseWorkboardSelectFieldOption(viewPreset, "Review", viewPreset);
+      await recorded.page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "Review", exact: true })
+        .click();
       const singleColumnBoard = recorded.page.locator(
         ".workboard-board--page.workboard-board--single-column",
       );
@@ -900,7 +927,10 @@ suite.define(() => {
         singleColumnGeometry.boardWidth * 0.45,
       );
       expect(singleColumnGeometry.columnWidth).toBeLessThanOrEqual(680);
-      await chooseWorkboardSelectFieldOption(viewPreset, "All cards", viewPreset);
+      await recorded.page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
 
       const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
       await recorded.page
@@ -910,7 +940,9 @@ suite.define(() => {
       expect(requestParams(moveRequest)).toMatchObject({ id: reviewCard.id, status: "ready" });
 
       await recorded.page.setViewportSize({ height: 760, width: 700 });
-      await expectWorkboardSelectTextFits(emptyColumns);
+      await openWorkboardFilters(recorded.page);
+      await expect.poll(() => emptyColumns.getByRole("button").count()).toBe(3);
+      await closeWorkboardFilters(recorded.page);
       const backlogRail = recorded.page.locator(".workboard-column--backlog");
       const mobileLayout = await backlogRail.evaluate((column) => ({
         railWritingMode: getComputedStyle(
@@ -1010,19 +1042,20 @@ suite.define(() => {
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
 
       const historyBeforeFilter = await recorded.page.evaluate(() => history.length);
-      const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
-      await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
+      await chooseWorkboardBoard(recorded.page, "__all__");
       await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
       expect(new URL(recorded.page.url()).search).toBe("?agent=main");
 
-      await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
+      await chooseWorkboardBoard(recorded.page, "ops");
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
       expect(new URL(recorded.page.url()).search).toBe("?agent=main");
       expect(await recorded.page.evaluate(() => history.length)).toBe(historyBeforeFilter);
       expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
+      expect(
+        await recorded.page.getByRole("option", { name: /Old work/u, includeHidden: true }).count(),
+      ).toBeGreaterThan(0);
       await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-board-filter");

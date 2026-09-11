@@ -1,7 +1,8 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
 import {
@@ -21,6 +22,10 @@ import type { WorkboardSessionResolution } from "../../lib/workboard/session-res
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 
 export type WorkboardProps = {
+  heading?: TemplateResult;
+  scopeControl?: TemplateResult;
+  pageError?: string | null;
+  overlayOpen?: boolean;
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -311,4 +316,24 @@ export function formatDependencyBlockerTitle(
       })
       .join(", "),
   });
+}
+
+const priorityIcons = {
+  low: icons.priorityLow,
+  normal: icons.priorityNormal,
+  high: icons.priorityHigh,
+  urgent: icons.priorityUrgent,
+} satisfies Record<WorkboardPriority, TemplateResult>;
+
+export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
+
+export function workboardErrorMessage(
+  state: {
+    error: string | null;
+    lifecycleTaskRefreshError: string | null;
+    lastRefreshError: string | null;
+  },
+  pageError?: string | null,
+) {
+  return state.error ?? pageError ?? state.lifecycleTaskRefreshError ?? state.lastRefreshError;
 }
