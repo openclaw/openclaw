@@ -15,6 +15,8 @@ import {
 } from "../agents/workspace-legacy-state.js";
 import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import { listLegacySkillWorkshopWorkspaceDirs } from "../commands/doctor-skill-workshop-sources.js";
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
@@ -340,6 +342,17 @@ export async function detectLegacyWorkspaceState(params: {
   if (sharedWorkspace) {
     workspaceDirs.add(resolveUserPath(sharedWorkspace, env, homedir));
   }
+  const configuredPaths = new Set(
+    [...workspaceDirs].map((directory) => resolveWorkspaceStateIdentity(directory).workspacePath),
+  );
+  const historicalWorkspaceDirs = [];
+  for (const workspaceDir of await listLegacySkillWorkshopWorkspaceDirs(params.cfg, env)) {
+    const canonicalPath = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
+    if (!configuredPaths.has(canonicalPath)) {
+      historicalWorkspaceDirs.push(workspaceDir);
+    }
+    workspaceDirs.add(workspaceDir);
+  }
   for (const workspaceDir of workspaceDirs) {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
@@ -353,17 +366,11 @@ export async function detectLegacyWorkspaceState(params: {
       left.workspaceKey.localeCompare(right.workspaceKey) ||
       left.sourcePath.localeCompare(right.sourcePath),
   );
-  return { sources, hasLegacy: sources.length > 0 };
-}
-
-function formatLegacyWorkspaceReadWarning(
-  source: LegacyWorkspaceStateSource,
-  error: unknown,
-): string {
-  return formatDoctorStateRepairFailure(
-    `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`,
-    "Stop the Gateway. Restore this source or its .doctor-importing claim from a verified backup, or rename the unreadable source or claim with a .rejected-<timestamp> suffix to retain its bytes if its setup/attestation history can be discarded. Then rerun openclaw doctor --fix against the same state/config.",
-  );
+  return {
+    sources,
+    hasLegacy: sources.length > 0 || historicalWorkspaceDirs.length > 0,
+    ...(historicalWorkspaceDirs.length > 0 ? { historicalWorkspaceDirs } : {}),
+  };
 }
 
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
@@ -490,11 +497,24 @@ async function cleanupReceiptSource(params: {
 async function migrateOneSource(params: {
   source: LegacyWorkspaceStateSource;
   env: NodeJS.ProcessEnv;
+  historical?: boolean;
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
   let sourceRoot: Root;
+  const unreadable = (error: unknown): MigrationMessages => ({
+    changes: [],
+    warnings: [
+      params.historical
+        ? `Preserved historical Workshop workspace setup at ${params.source.sourcePath} for manual review: ${formatErrorMessage(error)}.`
+        : formatDoctorStateRepairFailure(
+            `Failed reading legacy workspace state at ${params.source.sourcePath}: ${formatErrorMessage(error)}`,
+            "Stop the Gateway. Restore this source or its .doctor-importing claim from a verified backup, or rename the unreadable source or claim with a .rejected-<timestamp> suffix to retain its bytes if its setup/attestation history can be discarded. Then rerun openclaw doctor --fix against the same state/config.",
+          ),
+    ],
+    ...(params.historical ? { warningDisposition: "recoverable" as const } : {}),
+  });
   try {
     assertConfiguredWorkspaceIdentity(params.source);
     sourceRoot = await root(params.source.rootDir, {
@@ -503,10 +523,7 @@ async function migrateOneSource(params: {
     });
     sourceClaim = createLegacySourceClaim(sourceRoot, params.source);
   } catch (error) {
-    return {
-      changes: [],
-      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
-    };
+    return unreadable(error);
   }
   const receipt = readReceipt(params.source, params.env);
   let hasSource: boolean;
@@ -515,10 +532,7 @@ async function migrateOneSource(params: {
     hasSource = await sourceClaim.exists();
     hasClaim = await sourceClaim.exists(true);
   } catch (error) {
-    return {
-      changes: [],
-      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
-    };
+    return unreadable(error);
   }
   // One artifact after verified removal is a new generation, including a source
   // already renamed before a crash. Collisions keep the stricter receipt check.
@@ -534,6 +548,9 @@ async function migrateOneSource(params: {
     });
   }
   if (hasSource && hasClaim) {
+    if (params.historical) {
+      return unreadable(new Error("source and interrupted claim both exist"));
+    }
     return {
       changes: [],
       warnings: [
@@ -614,13 +631,14 @@ async function migrateOneSource(params: {
         ],
       };
     }
+    if (!operation) {
+      return unreadable(error);
+    }
     const restoreError = claimAttempted ? await sourceClaim.restore() : null;
     return {
       changes: [],
       warnings: [
-        operation
-          ? `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`
-          : formatLegacyWorkspaceReadWarning(params.source, error),
+        `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
       ],
     };
   }
@@ -652,7 +670,7 @@ export async function migrateLegacyWorkspaceState(params: {
   env?: NodeJS.ProcessEnv;
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<MigrationMessages> {
+}): Promise<MigrationMessages & { unavailableWorkshopWorkspaces?: ReadonlyMap<string, string> }> {
   const detected = params.detected;
   if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
@@ -667,18 +685,51 @@ export async function migrateLegacyWorkspaceState(params: {
       const changes: string[] = [];
       const warnings: string[] = [];
       const notices: string[] = [];
+      const historical = new Map(
+        (detected.historicalWorkspaceDirs ?? []).map((directory) => [
+          resolveWorkspaceStateIdentity(directory).workspacePath,
+          directory,
+        ]),
+      );
+      const unavailableWorkshopWorkspaces = new Map<string, string>();
+      let blockingWarnings = 0;
       for (const source of detected.sources) {
         const result = await migrateOneSource({
           source,
           env,
+          historical: source.workspaceDir !== undefined && historical.has(source.workspaceDir),
           ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
           ...(params.removeSource ? { removeSource: params.removeSource } : {}),
         });
         changes.push(...result.changes);
         warnings.push(...result.warnings);
         notices.push(...(result.notices ?? []));
+        if (result.warningDisposition === "recoverable" && source.workspaceDir) {
+          unavailableWorkshopWorkspaces.set(source.workspaceDir, result.warnings.join("\n"));
+        } else {
+          blockingWarnings += result.warnings.length;
+        }
       }
-      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+      for (const [workspacePath, workspaceDir] of historical) {
+        if (unavailableWorkshopWorkspaces.has(workspacePath)) {
+          continue;
+        }
+        const snapshot = await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+        if (!snapshot.setupExists && !snapshot.attestation) {
+          const warning = `Historical Workshop workspace ${workspaceDir} has no usable setup state. Preserved its files; obsolete proposals will be retired and unfinished recovery retained for manual review.`;
+          unavailableWorkshopWorkspaces.set(workspacePath, warning);
+          warnings.push(warning);
+        }
+      }
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+        ...(warnings.length > 0 && blockingWarnings === 0
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
+        ...(unavailableWorkshopWorkspaces.size > 0 ? { unavailableWorkshopWorkspaces } : {}),
+      };
     },
   });
 }

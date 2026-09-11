@@ -1,5 +1,5 @@
 // Covers SQLite WAL maintenance configuration.
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -550,12 +550,10 @@ describe("sqlite WAL maintenance", () => {
     const session = {};
     const timerContexts: Array<[object | undefined, object | undefined]> = [];
     const periodic = createDeferredCore<[object | undefined, object | undefined]>();
-    const hook = createHook({
-      init(_asyncId, type) {
-        if (type === "Timeout") {
-          timerContexts.push([requestScope.getStore(), sessionScope.getStore()]);
-        }
-      },
+    const setIntervalNative = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) => {
+      timerContexts.push([requestScope.getStore(), sessionScope.getStore()]);
+      return setIntervalNative(callback, delay, ...args);
     });
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -568,12 +566,7 @@ describe("sqlite WAL maintenance", () => {
     try {
       await requestScope.run(request, () =>
         sessionScope.run(session, async () => {
-          hook.enable();
-          try {
-            maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 5 });
-          } finally {
-            hook.disable();
-          }
+          maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 5 });
           expect(requestScope.getStore()).toBe(request);
           expect(sessionScope.getStore()).toBe(session);
           // The native resource must be detached at allocation, not only when its callback runs.
@@ -596,7 +589,6 @@ describe("sqlite WAL maintenance", () => {
         }),
       );
     } finally {
-      hook.disable();
       maintenance?.close();
       requestScope.disable();
       sessionScope.disable();

@@ -172,8 +172,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
-  const firstArg = readFirstInstallPlanArg();
-  expect("token" in firstArg).toBe(false);
+  expect("token" in readFirstInstallPlanArg()).toBe(false);
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -510,8 +509,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = readFirstConfigWriteParams();
-    expect(writeParams.sourceConfig?.gateway?.auth?.token).toBe("minted-token");
+    expect(readFirstConfigWriteParams().sourceConfig?.gateway?.auth?.token).toBe("minted-token");
     expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);

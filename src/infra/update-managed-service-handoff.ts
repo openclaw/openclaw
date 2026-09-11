@@ -944,10 +944,14 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     const retained = parked?.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
       parked?.InvocationID === parkedServiceInvocation;
     const cleared = parked?.ExecMainStartTimestampMonotonic === "0" && !parked?.InvocationID;
-    // An owned candidate boot can advance inactive-unit metadata. Only a verified
-    // full-generation rollback permits recovering that later stopped invocation.
+    // A Gateway that exits non-zero during the stop (KillMode=mixed) settles the unit
+    // into ActiveState=failed with the parked identity retained; that is still the
+    // exact parked generation and recovery stays safe. An owned candidate boot can
+    // advance inactive-unit metadata. Only a verified full-generation rollback
+    // permits recovering that later stopped invocation.
     if (!parked || parked.Id !== recovery.unit || parked.LoadState !== "loaded" ||
-      parked.ActiveState !== "inactive" || parked.MainPID !== "0" || !(previousGeneration || retained || cleared) ||
+      (parked.ActiveState !== "inactive" && parked.ActiveState !== "failed") ||
+      parked.MainPID !== "0" || !(previousGeneration || retained || cleared) ||
       !ownsRecovery()) {
       appendLog("recovery refused: parked systemd service identity changed or stop is incomplete");
       record(false);
@@ -1084,7 +1088,12 @@ async function finishGatewayServicePark() {
         Date.now() >= params.parentExitDeadlineAt) {
         throw new Error("systemd service remained active or changed execution generation");
       }
-      if (current.ActiveState === "inactive" && current.MainPID === "0") {
+      if ((current.ActiveState === "inactive" || current.ActiveState === "failed") &&
+        current.MainPID === "0") {
+        // KillMode=mixed units settle into ActiveState=failed instead of inactive
+        // when the Gateway main process exits non-zero during the stop. The parked
+        // generation/invocation stays retained in that state, so it is still the
+        // exact parked unit and activation may proceed.
         const retainedIdentity =
           current.ExecMainStartTimestampMonotonic === parkedServiceGeneration &&
           current.InvocationID === parkedServiceInvocation;
