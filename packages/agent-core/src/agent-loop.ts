@@ -759,7 +759,7 @@ async function executeToolCallGroups(
       }
       for (const finalized of ordered) {
         if (finalized) {
-          messages.push(await emitToolResultMessage(finalized, batch.emit));
+          messages.push(await emitToolResultMessage(finalized, batch));
           finalizedCalls.push(finalized);
         }
       }
@@ -791,7 +791,7 @@ async function executeToolCallGroups(
       continue;
     }
     const finalized = await completeUnstartedToolCall(batch, toolCall, { reason: skippedReason });
-    messages.push(await emitToolResultMessage(finalized, batch.emit));
+    messages.push(await emitToolResultMessage(finalized, batch));
     finalizedCalls.push(finalized);
   }
 
@@ -1486,7 +1486,7 @@ async function completeToolLoopInterventionBatch(
       validation?.kind === "prepared" ? validation.args : toolCall.arguments,
     );
     await emitToolExecutionEnd(finalized, batch.emit);
-    messages.push(await emitToolResultMessage(finalized, batch.emit));
+    messages.push(await emitToolResultMessage(finalized, batch));
     finalizedCalls.push(finalized);
   }
   return {
@@ -1582,7 +1582,7 @@ async function emitToolExecutionEnd(
 
 async function emitToolResultMessage(
   finalized: FinalizedToolCallOutcome,
-  emit: AgentEventSink,
+  { assistantMessage, emit }: Pick<ToolBatchContext, "assistantMessage" | "emit">,
 ): Promise<ToolResultMessage> {
   const message = copyInternalToolResultState(
     finalized.result,
@@ -1599,9 +1599,14 @@ async function emitToolResultMessage(
       finalized.resultContentSource,
     ),
   );
-  await emit({ type: "message_start", message });
-  await emit({ type: "message_end", message });
-  return message;
+  return runWithAgentToolExecutionContext(
+    { assistantMessage, toolCall: finalized.toolCall },
+    async () => {
+      await emit({ type: "message_start", message });
+      await emit({ type: "message_end", message });
+      return message;
+    },
+  );
 }
 
 type TurnTaintMetadata = {

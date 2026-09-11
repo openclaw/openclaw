@@ -9,6 +9,12 @@ import {
   createNestedToolActivity,
   projectNestedToolActivityForHooks,
 } from "../../sessions/nested-tool-activity.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import {
   createSkillExperienceReviewScheduler,
@@ -106,39 +112,76 @@ async function flushMicrotasks(): Promise<void> {
 afterEach(() => vi.useRealTimers());
 
 describe("skill experience review scheduler", () => {
-  it("runs detached review work outside the foreground prepared generation", async () => {
-    const generation: PreparedModelRuntimePluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: {} as never,
-    };
-    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
-    let finishReview: (() => void) | undefined;
-    const reviewFinished = new Promise<void>((resolve) => {
-      finishReview = resolve;
-    });
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => {
+  it.each([false, true])(
+    "runs outside drained foreground owners with initial activity=%s",
+    async (initiallyActive) => {
+      const generation: PreparedModelRuntimePluginGeneration = {
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+        pluginMetadataSnapshot: {} as never,
+      };
+      const foreground = new AsyncWorkScope();
+      const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+      const observedSignals: Array<AbortSignal | undefined> = [];
+      const observedForegroundClosed: boolean[] = [];
+      const timerDelays: number[] = [];
+      const reviewFinished = createDeferredCore();
+      let foregroundClosed = false;
+      let activityChecks = 0;
+      const observe = () => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        return false;
-      },
-      runReview: async (candidate) => {
-        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
-        observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-        finishReview?.();
-      },
-      setTimer: (callback) => setTimeout(callback, 0),
-    });
+        observedSignals.push(getAsyncWorkSignal());
+        observedForegroundClosed.push(foregroundClosed);
+      };
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive: () => {
+          observe();
+          return activityChecks++ === 0 && initiallyActive;
+        },
+        runReview: async (candidate) => {
+          try {
+            await captureAsyncWorkTracker()(async () => {
+              observe();
+              await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
+              observe();
+            });
+            reviewFinished.resolve();
+          } catch (error) {
+            reviewFinished.reject(error);
+          }
+        },
+        setTimer: (callback, delayMs) => {
+          timerDelays.push(delayMs);
+          return setTimeout(callback, 0);
+        },
+      });
 
-    withPreparedModelRuntimePluginGenerationScope(generation, () => {
-      scheduler.schedule(completedRun());
-    });
-    await reviewFinished;
+      try {
+        await foreground.track(() =>
+          withPreparedModelRuntimePluginGenerationScope(generation, () => {
+            scheduler.schedule(completedRun());
+          }),
+        );
+        await foreground.drain();
+        const lateForegroundWork = vi.fn();
+        await expect(foreground.track(lateForegroundWork)).rejects.toThrow(
+          "Async work scope is closed",
+        );
+        expect(lateForegroundWork).not.toHaveBeenCalled();
+        foregroundClosed = true;
+        await reviewFinished.promise;
 
-    expect(observedGenerations).toEqual([undefined, undefined, undefined]);
-    scheduler.clear();
-  });
+        const observations = initiallyActive ? 4 : 3;
+        expect(observedGenerations).toEqual(Array(observations).fill(undefined));
+        expect(observedSignals).toEqual(Array(observations).fill(undefined));
+        expect(observedForegroundClosed).toEqual(Array(observations).fill(true));
+        expect(timerDelays).toEqual(initiallyActive ? [30_000, 30_000] : [30_000]);
+      } finally {
+        scheduler.clear();
+        await foreground.drain();
+      }
+    },
+  );
 
   it("runs one deep turn after the idle window", async () => {
     vi.useFakeTimers();

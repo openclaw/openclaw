@@ -144,6 +144,9 @@ describe("incognito agent database", () => {
     expect(openedGeneration).toBeGreaterThan(beforeGeneration);
     expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(openedGeneration);
     expect(reopened).toBe(first);
+    expect(first.ownerEnv).toEqual({ OPENCLAW_STATE_DIR: stateDir });
+    expect(Object.isFrozen(first.ownerEnv)).toBe(true);
+    expect(reopened.ownerEnv).toBe(first.ownerEnv);
     expect(fs.readdirSync(stateDir)).toEqual([]);
     expect(listOpenIncognitoAgentDatabases()).toEqual([{ agentId: "main", storePath: sentinel }]);
     expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);

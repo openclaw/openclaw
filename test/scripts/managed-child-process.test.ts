@@ -468,6 +468,25 @@ setInterval(() => {}, 1_000);
     });
   });
 
+  it.each([true, false])(
+    "passes through explicit windowsHide=%s without changing argv",
+    (windowsHide) => {
+      const options = {
+        args: ["/d", "/s", "/c", '"npm.cmd pack "C:\\package root""'],
+        bin: "C:\\Windows\\System32\\cmd.exe",
+        platform: "win32" as const,
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+      const original = createManagedCommandSpawnSpec(options);
+      expect(original.options).not.toHaveProperty("windowsHide");
+      expect(createManagedCommandSpawnSpec({ ...options, windowsHide })).toEqual({
+        ...original,
+        options: { ...original.options, windowsHide },
+      });
+    },
+  );
+
   it("rejects unsafe Windows shell argv instead of passing them to Node shell mode", () => {
     expect(() =>
       createManagedCommandSpawnSpec({

@@ -15,6 +15,7 @@ import {
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readTranscriptMirrorFactsInTransaction } from "./session-accessor.sqlite-transcript-mirror.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
@@ -75,7 +76,12 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       message: params.message,
     });
   const existingAppendResult = (found: { message: unknown; messageId: string }) => {
-    const anchor = readAnchor(found);
+    const anchor =
+      readAnchor(found) ??
+      readTranscriptMirrorFactsInTransaction(database, resolved, {
+        entryIds: [found.messageId],
+        idempotencyKeys: [],
+      }).anchorsByEntryId.get(found.messageId);
     if (pending) {
       if (
         found.messageId !== pending.inputId ||

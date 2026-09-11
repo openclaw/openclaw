@@ -140,6 +140,16 @@ capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.
 
+Harnesses that return provider-observed tool results may use the optional
+`commitProviderTranscriptPrefix(...)` capability to atomically persist the
+validated transcript prefix before returning the result to their native SDK.
+The host binds the operation to the current admitted run and transcript writer;
+plugins must not reconstruct that authority or add a capability-free fallback.
+Older hosts do not expose this method. A package that requires it must declare
+the first OpenClaw release containing the capability in
+`openclaw.compat.pluginApi`; do not publish that package until the release
+version is assigned.
+
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
 `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
 `AgentHarnessSideQuestionParamsV2`; those contracts require

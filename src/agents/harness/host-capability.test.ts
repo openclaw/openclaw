@@ -7,7 +7,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
-  resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
@@ -20,10 +19,7 @@ import {
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { runAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
@@ -41,6 +37,13 @@ import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js
 import { callGatewayTool } from "../tools/gateway.js";
 import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  admittedAttempt,
+  cleanupHostCapabilityTestAdmissions,
+  policyRevocations,
+  type HostAttempt,
+  type HostRevocationContext,
+} from "./host-capability.test-helpers.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
@@ -53,69 +56,6 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-
-type HostRevocationContext = {
-  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-  attempt: HostAttempt;
-  admission: PreparedAgentRunAdmission;
-};
-
-const policyRevocations = [
-  {
-    name: "lexical host closure",
-    revoke: async ({ host }: HostRevocationContext) => {
-      host.close();
-    },
-  },
-  {
-    name: "exact authority release",
-    revoke: async ({ attempt }: HostRevocationContext) => {
-      expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
-    },
-  },
-  {
-    name: "replacement owner",
-    revoke: async ({ attempt }: HostRevocationContext) => {
-      await admittedAttempt(attempt.runId);
-    },
-  },
-];
-
-const admissions: PreparedAgentRunAdmission[] = [];
-
-async function admittedAttempt(
-  runId = "run-1",
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      cwd: "/attempt/worktree",
-      workspaceDir: "/workspace",
-      currentChannelId: "chat-1",
-      messageChannel: "telegram",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
-
 function testTool(execute = vi.fn(async () => ({ content: [], details: {} }))): {
   tool: AnyAgentTool;
   execute: typeof execute;
@@ -149,10 +89,7 @@ function bindTool(
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
-  resetAgentRunRegistryForTest();
+  cleanupHostCapabilityTestAdmissions();
 });
 
 describe("agent harness host capability", () => {

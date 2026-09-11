@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
 import { Agent } from "./agent.js";
-import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
+import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "./types.js";
 
@@ -53,9 +53,98 @@ function call(id: string, async = true): ToolCall {
 }
 function recordMessage(event: AgentEvent, messages: AgentMessage[]) {
   if (event.type === "message_end") {
+    if (event.message.role === "toolResult") {
+      const id = event.message.toolCallId;
+      const owner = messages.find(
+        (message) =>
+          message.role === "assistant" &&
+          message.content.some((block) => block.type === "toolCall" && block.id === id),
+      );
+      const origin = getAgentToolExecutionContext();
+      expect(owner).toBeDefined();
+      expect(origin?.assistantMessage).toBe(owner);
+      expect(origin?.toolCall.id).toBe(id);
+    }
     messages.push(event.message);
   }
 }
+
+it.each(["intervention", "abort"] as const)(
+  "retains the exact assistant origin for %s results in direct Agent subscriptions",
+  async (mode) => {
+    const first = call("first", false);
+    const second = call("second", false);
+    const source = assistant([first, second], "toolUse");
+    const execute = vi.fn(async () => {
+      agent.abort(new Error("cancel remaining calls"));
+      return { content: [], details: {} };
+    });
+    const agent = new Agent({
+      initialState: { model, tools: [tool("first", execute), tool("second", execute)] },
+      toolExecution: "sequential",
+      streamFn: () => {
+        const response = createAssistantMessageEventStream();
+        response.push({ type: "done", reason: "toolUse", message: source });
+        response.end();
+        return response;
+      },
+    });
+    if (mode === "intervention") {
+      setInternalBeforeToolBatch(agent, async () => ({
+        intervention: {
+          kind: "critical-tool-loop",
+          toolCallId: first.id,
+          toolName: first.name,
+          actionKey: "repeat",
+          detector: "repeat",
+          count: 10,
+          reason: "Repeated action",
+        },
+      }));
+    }
+    agent.afterToolOutcome = async () => ({ terminate: true });
+    const messages: AgentMessage[] = [];
+    const origins: Array<ReturnType<typeof getAgentToolExecutionContext>> = [];
+    const unsubscribe = agent.subscribe(async (event) => {
+      if (
+        (event.type === "message_start" || event.type === "message_end") &&
+        event.message.role === "toolResult"
+      ) {
+        await setImmediate();
+        origins.push(getAgentToolExecutionContext());
+      }
+      recordMessage(event, messages);
+    });
+    try {
+      await agent.prompt("run two calls");
+      expect(execute).toHaveBeenCalledTimes(mode === "intervention" ? 0 : 1);
+      const owner = messages.find((message) => message.role === "assistant");
+      expect(owner).toBeDefined();
+      expect(origins).toHaveLength(4);
+      expect(origins.map((origin) => origin?.assistantMessage)).toEqual([
+        owner,
+        owner,
+        owner,
+        owner,
+      ]);
+      expect(origins.map((origin) => origin?.toolCall)).toEqual([first, first, second, second]);
+      const results = messages.filter((message) => message.role === "toolResult");
+      expect(results).toHaveLength(2);
+      expect(results[1]).toMatchObject({ toolCallId: "second", isError: true });
+      if (mode === "intervention") {
+        expect(results).toMatchObject([
+          { toolCallId: "first", isError: true, details: { deniedReason: "tool-loop" } },
+          { toolCallId: "second", isError: true, details: { deniedReason: "tool-loop" } },
+        ]);
+      }
+      expect(getAgentToolExecutionContext()).toBeUndefined();
+    } finally {
+      agent.abort();
+      await agent.waitForIdle();
+      unsubscribe();
+    }
+  },
+);
 
 it.each(["replace", "remove"] as const)(
   "honors a message finalization hook that %ss an async call",

@@ -4,7 +4,7 @@
  * These helpers keep fixture construction terse while still returning the
  * runtime message shapes expected by agent test harnesses.
  */
-import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import type { AgentMessage } from "../runtime/index.js";
 import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
 
@@ -40,6 +40,18 @@ export function makeAgentAssistantMessage(
     model: "test-model",
     usage: ZERO_USAGE_FIXTURE,
     stopReason: "stop",
+    timestamp: 0,
+    ...overrides,
+  };
+}
+
+/** Builds a tool-result fixture with a stable timestamp. */
+export function makeAgentToolResultMessage(
+  overrides: Omit<ToolResultMessage, "role" | "timestamp"> &
+    Partial<Pick<ToolResultMessage, "timestamp">>,
+): ToolResultMessage {
+  return {
+    role: "toolResult",
     timestamp: 0,
     ...overrides,
   };

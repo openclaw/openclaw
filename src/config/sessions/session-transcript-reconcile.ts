@@ -1,13 +1,13 @@
 // Transcript projection reconciliation owner. Gateway startup awaits it;
 // request paths may only schedule it and return a bounded retryable response.
 import { randomInt, randomUUID } from "node:crypto";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { computeBackoffSchedule } from "../../../packages/retry/src/index.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -63,6 +63,7 @@ const PROJECTION_READY_POLL_MS = 10;
 const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
 
 type RunningReconcile = {
+  stateDir: string;
   pending: boolean;
   preferredSessionId?: string;
   promise?: Promise<SessionTranscriptReconcileResult>;
@@ -79,15 +80,22 @@ type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
   preferredSessionId?: string;
 };
 
-type PreparedReconcileParams = SessionTranscriptReconcileParams & { env: NodeJS.ProcessEnv };
+type PreparedReconcileParams = SessionTranscriptReconcileParams & {
+  env: NodeJS.ProcessEnv;
+  path: string;
+};
 type ReconcileDatabaseOptions = OpenClawAgentDatabaseOptions & {
   env: NodeJS.ProcessEnv;
   path: string;
 };
 
 function prepareReconcileParams(params: SessionTranscriptReconcileParams): PreparedReconcileParams {
-  // Deferred work retains the state owner selected before scheduling or admission.
-  return { ...params, env: { ...(params.env ?? process.env) } };
+  const env = { ...(params.env ?? process.env) };
+  const databasePath = resolveOpenClawAgentSqlitePath({ ...params, env });
+  const database = getOpenClawAgentDatabaseIfOpen({ ...params, env, path: databasePath });
+  // A cached connection retains its physical open's owner, even for a later reader.
+  // Pin the caller's path first so adopting that owner cannot relocate the work.
+  return { ...params, path: databasePath, env: database?.ownerEnv ?? env };
 }
 
 type ActivePreparedProjection = {
@@ -550,6 +558,7 @@ export function startSessionTranscriptIndexReconcile(
     return;
   }
   const state: RunningReconcile = {
+    stateDir: resolveStateDir(params.env),
     pending: false,
     ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
   };
@@ -626,10 +635,12 @@ export async function waitForSessionTranscriptIndexReconcile(
 export async function waitForSessionTranscriptIndexReconcilesInStateDir(
   stateDir: string,
 ): Promise<void> {
+  const ownerStateDir = path.resolve(stateDir);
   while (true) {
-    const owners = [...runningReconciles]
-      .filter(([databasePath]) => isPathInside(stateDir, databasePath))
-      .flatMap(([, owner]) => (owner.promise ? [owner.promise] : []));
+    // Custom agent files need not live below the state directory that owns their leases.
+    const owners = [...runningReconciles.values()]
+      .filter((owner) => owner.stateDir === ownerStateDir)
+      .flatMap((owner) => (owner.promise ? [owner.promise] : []));
     if (owners.length === 0) {
       return;
     }

@@ -4,10 +4,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { toClientToolDefinitions, toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
@@ -16,6 +20,7 @@ import {
   type InternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -36,6 +41,228 @@ registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("AgentSession runtime and transcript projections", () => {
+  it.each([
+    { policy: "allow", drift: "mirror", bounded: false },
+    { policy: "allow", drift: "mirror", bounded: true },
+    { policy: "allow", drift: "user", bounded: false },
+    { policy: "allow", drift: "off-branch-user", bounded: false },
+    { policy: "allow", drift: "unrelated-branch", bounded: false },
+    { policy: "assistant", drift: "none", bounded: false },
+    { policy: "all", drift: "none", bounded: false },
+    { policy: "result", drift: "none", bounded: false },
+    { policy: "assistant", drift: "user", bounded: false },
+    { policy: "assistant", drift: "hook-user", bounded: false },
+  ] as const)(
+    "keeps real tool results bound to their assistant: $policy/$drift, bounded=$bounded",
+    async ({ policy, drift, bounded }) => {
+      const dir = tempDirs.make("openclaw-result-owner-");
+      const scope = {
+        agentId: "main",
+        sessionId: "result-owner",
+        sessionKey: "agent:main:result-owner",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const writer = SessionManager.open(scope, dir);
+      writer.appendMessage({ role: "user", content: "earlier turn", timestamp: 1 });
+      const sessionManager = bounded
+        ? SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 16_384 })
+        : writer;
+      installSessionToolResultGuard(sessionManager, {
+        allowSyntheticToolResults: false,
+        beforeMessageWriteHook: ({ message }) => {
+          if (
+            policy === "all" ||
+            (policy === "assistant" && message.role === "assistant") ||
+            (policy === "result" && message.role === "toolResult")
+          ) {
+            return { block: true };
+          }
+          return undefined;
+        },
+      });
+      const resourceLoader =
+        drift === "hook-user"
+          ? createResourceLoader(
+              new Map([
+                [
+                  "message_end",
+                  [
+                    async (event: unknown) => {
+                      const { message } = event as MessageEndEvent;
+                      if (
+                        message.role === "assistant" &&
+                        message.content.some((block) => block.type === "toolCall")
+                      ) {
+                        sessionManager.appendMessage({
+                          role: "user",
+                          content: "arrived during assistant hook",
+                          timestamp: 2,
+                        });
+                      }
+                    },
+                  ],
+                ],
+              ]),
+            )
+          : undefined;
+      const started = createDeferred();
+      const release = createDeferred();
+      const calls: string[] = [];
+      const lookup: ToolDefinition = {
+        name: "lookup",
+        label: "Lookup",
+        description: "Look up a record.",
+        parameters: Type.Object({}),
+        async execute(id) {
+          calls.push(id);
+          if (calls.length === 2) {
+            started.resolve();
+          }
+          await release.promise;
+          return { content: [{ type: "text", text: `result:${id}` }], details: {} };
+        },
+      };
+      const ids = ["first", "second"];
+      streamMocks.streamSimple
+        .mockImplementationOnce((model: Model) =>
+          createAssistantResultStream(
+            createAssistant(
+              model,
+              ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: {} })),
+              "toolUse",
+            ),
+          ),
+        )
+        .mockImplementation((model: Model) =>
+          createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
+        );
+      const { session } = await createTestSession({
+        sessionManager,
+        customTools: [lookup],
+        resourceLoader,
+      });
+      const initialRows = loadTranscriptEventsSync(scope);
+      const prompt = session.prompt("Look up both records.");
+      const completion = prompt.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTestTimeout(started.promise, 2_000, "tools did not start");
+        const preparedParent = sessionManager.getAppendParentId();
+        let mirrorId: string | undefined;
+        if (drift === "mirror") {
+          const mirror = await appendAssistantMessageToSessionTranscript({
+            ...scope,
+            expectedSessionId: scope.sessionId,
+            text: "delivered",
+            idempotencyKey: "result-owner-delivery",
+          });
+          expect(mirror.ok).toBe(true);
+          if (!mirror.ok) {
+            throw new Error(mirror.reason);
+          }
+          mirrorId = mirror.messageId;
+          expect(sessionManager.getAppendParentId()).toBe(preparedParent);
+        } else if (drift === "user") {
+          sessionManager.appendMessage({ role: "user", content: "new turn", timestamp: 3 });
+        } else if (drift === "off-branch-user" || drift === "unrelated-branch") {
+          const user = expectDefined(
+            sessionManager
+              .getBranch()
+              .findLast((entry) => entry.type === "message" && entry.message.role === "user"),
+            "prepared user",
+          );
+          const other = SessionManager.open(scope);
+          other.branch(user.id);
+          other.appendMessage(
+            drift === "off-branch-user"
+              ? { role: "user", content: "other branch user", timestamp: 3 }
+              : createAssistant(testModel, [{ type: "text", text: "other branch" }]),
+          );
+          if (drift === "off-branch-user") {
+            other.appendLeafControl({
+              targetId: preparedParent,
+              appendParentId: preparedParent,
+            });
+            expect(SessionManager.open(scope).getAppendParentId()).toBe(preparedParent);
+          }
+        }
+        const beforeResults = loadTranscriptEventsSync(scope);
+        release.resolve();
+        const failure = await withTestTimeout(completion, 2_000, "tool results did not settle");
+        const reopened = SessionManager.open(scope);
+        const results = reopened
+          .getEntries()
+          .filter((entry) => entry.type === "message" && entry.message.role === "toolResult");
+        const rejected = drift !== "none" && drift !== "mirror";
+        expect(calls).toEqual(ids);
+        expect(loadTranscriptEventsSync(scope).slice(0, beforeResults.length)).toEqual(
+          beforeResults,
+        );
+        if (rejected) {
+          let failureMessage = session.state.errorMessage;
+          if (failure !== undefined) {
+            assert(failure instanceof Error);
+            failureMessage = failure.message;
+          }
+          expect(failureMessage).toContain("SQLite transcript changed while preparing rewrite");
+          expect(results).toEqual([]);
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+        } else {
+          expect(failure).toBeUndefined();
+          expect(session.state.errorMessage).toBeUndefined();
+          expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
+          expect(streamMocks.streamSimple.mock.calls[1]?.[1]).toMatchObject({
+            messages: expect.arrayContaining(
+              ids.map((id) =>
+                expect.objectContaining({
+                  role: "toolResult",
+                  toolCallId: id,
+                  content: [{ type: "text", text: `result:${id}` }],
+                  isError: false,
+                }),
+              ),
+            ),
+          });
+          if (policy === "all" || policy === "result") {
+            expect(results).toEqual([]);
+          } else {
+            expect(results).toMatchObject(
+              ids.map((id) => ({
+                message: { toolCallId: id, content: [{ type: "text", text: `result:${id}` }] },
+              })),
+            );
+            expect(results[0]?.parentId).toBe(mirrorId ?? preparedParent);
+            expect(results[1]?.parentId).toBe(results[0]?.id);
+          }
+          if (policy === "all") {
+            expect(loadTranscriptEventsSync(scope)).toEqual(initialRows);
+          } else if (policy === "assistant") {
+            expect(
+              reopened
+                .getEntries()
+                .filter((entry) => entry.type === "message" && entry.message.role === "assistant"),
+            ).toEqual([]);
+          }
+        }
+      } finally {
+        release.resolve();
+        session.agent.abort();
+        try {
+          await withTestTimeout(
+            Promise.allSettled([prompt, session.agent.waitForIdle()]),
+            2_000,
+            "result-owner cleanup did not settle",
+          );
+        } finally {
+          session.dispose();
+        }
+      }
+    },
+  );
+
   it.each([
     { owner: "adapter", abortBeforeLaunch: false },
     { owner: "source", abortBeforeLaunch: false },

@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   readActiveTranscriptEntryAnchor,
   readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { readAuthoritativeTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-mirror.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
@@ -74,6 +76,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
+    const explicitPreparedTurn = options?.preparedTurnParentId !== undefined;
+    if (explicitPreparedTurn && !activeBranchAppend) {
+      throw this.createTranscriptMutationConflictError();
+    }
     const persistenceOptions = copyCodeModeSourceAppendOptions(options, {
       ...options,
       ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
@@ -81,17 +87,22 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     const preparedTurnAppend =
       activeBranchAppend &&
       canonicalEntry.type === "message" &&
-      (canonicalEntry.message.role === "assistant" || canonicalEntry.message.role === "toolResult");
+      (explicitPreparedTurn ||
+        canonicalEntry.message.role === "assistant" ||
+        canonicalEntry.message.role === "toolResult");
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
     const admittedUserId = this.persistenceTarget
       ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
       : undefined;
+    // Explicit preparation follows the admitted user; no later user can belong
+    // to that invocation, even if this manager has already consumed the new turn.
+    const validationUserId = explicitPreparedTurn ? undefined : admittedUserId;
     if (preparedTurnAppend && this.persistenceTarget) {
       const validatedMutationAt = validatePreparedAssistantAppendSync(
         this.persistenceTarget,
         canonicalEntry.parentId,
-        admittedUserId,
+        validationUserId,
       );
       if (validatedMutationAt === undefined) {
         throw this.createTranscriptMutationConflictError();
@@ -133,7 +144,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
                 ? validatePreparedAssistantAppendSync(
                     this.persistenceTarget,
                     canonicalEntry.parentId,
-                    admittedUserId,
+                    validationUserId,
                   )
                 : undefined;
               if (validatedMutationAt === undefined) {
@@ -151,10 +162,34 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       persistenceResult = this.persist(canonicalEntry, retryOptions);
     }
     if (persistenceResult?.adoptedMessageId) {
+      const toolResult =
+        canonicalEntry.type === "message" && canonicalEntry.message.role === "toolResult"
+          ? canonicalEntry.message
+          : undefined;
+      if (toolResult && !activeBranchAppend) {
+        throw new Error("Session transcript keyed tool result cannot change the selected branch");
+      }
       this.reloadPersistedTranscript();
-      // Context-excluded users have no payload in byId. The exact SQLite replay
-      // anchors their identity; physical ancestry still closes older turns.
-      if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+      if (toolResult) {
+        this.ensureCompletePersistedHistory();
+        if (
+          !this.isCurrentToolResult(persistenceResult.adoptedMessageId, toolResult) ||
+          !this.persistenceTarget ||
+          !isDeepStrictEqual(
+            persistenceResult.anchor,
+            readAuthoritativeTranscriptEntryAnchor({
+              ...this.persistenceTarget,
+              entryId: persistenceResult.adoptedMessageId,
+            }),
+          )
+        ) {
+          throw new Error(
+            `Session transcript keyed tool result is outside the current group: ${persistenceResult.adoptedMessageId}`,
+          );
+        }
+      } else if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+        // Context-excluded users have no payload in byId. The exact SQLite replay
+        // anchors their identity; physical ancestry still closes older turns.
         throw new Error(
           `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
         );
@@ -226,6 +261,36 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return error;
   }
 
+  private isCurrentToolResult(
+    entryId: string,
+    message: Extract<SessionMessageEntry["message"], { role: "toolResult" }>,
+  ): boolean {
+    if (this.appendParentId === null) {
+      return false;
+    }
+    let foundResult = false;
+    // Sibling parallel results may follow the canonical row, but a later
+    // assistant/user closes its group. Never move the append cursor backwards.
+    for (const parent of this.getBranch(this.appendParentId).toReversed()) {
+      if (parent.type === "message" && parent.message.role === "toolResult") {
+        foundResult ||= parent.id === entryId;
+      } else if (parent.type === "message" && parent.message.role === "assistant") {
+        return (
+          foundResult &&
+          parent.message.content.some(
+            (block) =>
+              block.type === "toolCall" &&
+              block.id === message.toolCallId &&
+              block.name === message.toolName,
+          )
+        );
+      } else if (!isSessionContextMetadataEntry(parent)) {
+        break;
+      }
+    }
+    return false;
+  }
+
   resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
     let parentId = this.appendParentId;
     let remainingAncestors = this.byId.size;
@@ -263,6 +328,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     anchor?: TranscriptEntryAnchor;
     appended: boolean;
   } {
+    if (
+      options?.preparedTurnParentId !== undefined &&
+      (!this.persistenceTarget || message.role === "user")
+    ) {
+      throw new Error("Prepared turn appends require a persisted non-user message");
+    }
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
@@ -298,7 +369,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(),
-      parentId: this.appendParentId,
+      parentId:
+        options?.preparedTurnParentId !== undefined
+          ? options.preparedTurnParentId
+          : this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
     };

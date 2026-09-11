@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -31,7 +28,7 @@ import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 const agentId = "main";
 const sessionKey = "agent:main:message-cut";
 const sourceExpectedState = {
@@ -39,10 +36,12 @@ const sourceExpectedState = {
   sessionId: "message-cut-source",
 };
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
 });
 
 function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {

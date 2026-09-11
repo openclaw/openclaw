@@ -20,6 +20,10 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
+import {
+  bindCodeModeTranscriptAuthority,
+  CodeModeTranscriptAuthority,
+} from "../../code-mode-transcript-authority.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
@@ -231,6 +235,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       signal: params.runAbortController.signal,
     })
   )?.prepared;
+  params.runAbortController.signal.throwIfAborted();
+  const transcriptTarget = attempt.sessionTarget;
+  if (
+    codeModeControlsEnabledForRun &&
+    transcriptTarget?.sessionId &&
+    transcriptTarget.sessionKey &&
+    transcriptTarget.storePath &&
+    transcriptTarget.expectedWriterRunId
+  ) {
+    const authority = new CodeModeTranscriptAuthority({
+      ...transcriptTarget,
+      sessionId: transcriptTarget.sessionId,
+    });
+    bindCodeModeTranscriptAuthority(attempt, authority);
+    bindCodeModeTranscriptAuthority(toolSearchCatalogRef!, authority);
+    runCleanups.push(async () => authority.close());
+  }
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
     agentId: params.setup.sessionAgentId,

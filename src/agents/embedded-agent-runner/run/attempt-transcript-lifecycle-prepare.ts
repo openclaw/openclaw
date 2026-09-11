@@ -25,7 +25,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionTarget"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
-    arm: () => void;
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
   };
 }): Promise<{
@@ -84,7 +83,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       transcriptLifecycle.withTranscriptWrite(operation),
     );
 
-  externalAbortController.arm();
   try {
     await externalAbortController.throwIfFiredAfterPrepCleanup();
   } catch (error) {

@@ -1,7 +1,13 @@
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import {
+  loadTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import {
   makeAgentAssistantMessage,
@@ -18,6 +24,86 @@ const result = makeTextToolResult("call_order", "read", "success", false, 1) sat
 >;
 
 describe("tool-result persistence ordering", () => {
+  it.each(["custom", "toolResult"] as const)(
+    "keeps the prepared parent through %s transformation",
+    async (role) => {
+      await withOpenClawTestState({ label: "guard-prepared-parent" }, async (state) => {
+        const scope = {
+          agentId: "main",
+          sessionId: "guard-prepared",
+          sessionKey: "agent:main:guard-prepared",
+          storePath: path.join(state.agentDir(), "sessions.json"),
+        };
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const manager = SessionManager.open(scope);
+        const guard = installSessionToolResultGuard(manager, {
+          transformMessageForPersistence(message) {
+            if (message.role === "custom") {
+              return { ...message, content: "redacted activity" };
+            }
+            return message.role === "toolResult"
+              ? { ...message, content: [{ type: "text", text: "redacted result" }] }
+              : message;
+          },
+        });
+        manager.appendMessage(makeAgentUserMessage({ content: "first" }));
+        const parentId = manager.appendMessage(call);
+        manager.appendMessage(makeAgentUserMessage({ content: "next" }));
+        const before = loadTranscriptEventsSync(scope);
+        expect(() =>
+          manager.appendMessage(
+            role === "toolResult"
+              ? result
+              : {
+                  role: "custom",
+                  customType: "prepared-test",
+                  content: "",
+                  display: true,
+                  excludeFromContext: true,
+                  timestamp: 2,
+                },
+            { preparedTurnParentId: parentId },
+          ),
+        ).toThrow("SQLite transcript changed while preparing rewrite");
+        expect(loadTranscriptEventsSync(scope)).toEqual(before);
+        expect(guard.getPendingIds()).toEqual([]);
+      });
+    },
+  );
+
+  it("validates the transformed prepared role before keyed user adoption", async () => {
+    await withOpenClawTestState({ label: "guard-prepared-role" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "guard-prepared-role",
+        sessionKey: "agent:main:guard-prepared-role",
+        storePath: path.join(state.agentDir(), "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const manager = SessionManager.open(scope);
+      const user = { ...makeAgentUserMessage({ content: "current" }), idempotencyKey: "current" };
+      const parentId = manager.appendMessage(user);
+      installSessionToolResultGuard(manager, {
+        beforeMessageWriteHook: () => ({ message: user }),
+      });
+      const before = loadTranscriptEventsSync(scope);
+      expect(() =>
+        manager.appendMessage(
+          {
+            role: "custom",
+            customType: "prepared-test",
+            content: "",
+            display: true,
+            excludeFromContext: true,
+            timestamp: 2,
+          },
+          { preparedTurnParentId: parentId },
+        ),
+      ).toThrow("Prepared turn appends require a persisted non-user message");
+      expect(loadTranscriptEventsSync(scope)).toEqual(before);
+    });
+  });
+
   it.each(["result", "throw"])(
     "tracks a committed assistant call before its callback performs %s",
     (action) => {

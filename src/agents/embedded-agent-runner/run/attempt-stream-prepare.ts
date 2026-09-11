@@ -435,7 +435,10 @@ export function prepareEmbeddedAttemptStream(input: {
               if (isRecord(terminal.result)) {
                 copyInternalToolResultState(terminal.result, message);
               }
-              manager.appendMessage(message);
+              manager.appendMessage(
+                message,
+                manager.getSessionTarget() ? { preparedTurnParentId: afterEntryId } : undefined,
+              );
               const recorded = readNestedToolActivity(
                 redactTranscriptMessage(message, attempt.config),
               );

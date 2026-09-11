@@ -13,6 +13,7 @@ import { gte as semverGte, valid as validSemver } from "semver";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
+import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 import {
@@ -594,6 +595,7 @@ function scanTarball(archivePath: string): {
 }
 
 const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
+let retainArchive = false;
 const archiveSnapshot = path.join(archiveRoot, "candidate.tgz");
 const extractDir = path.join(archiveRoot, "extract");
 let normalized: string[];
@@ -834,12 +836,12 @@ if (hasShrinkwrap && declaresShrinkwrap) {
 }
 
 try {
-  const npmInventory = collectNpmPackInventory(extractedPackageRoot, {
+  const npmInventory = await collectNpmPackInventory(extractedPackageRoot, {
     timeoutMs: NPM_PACK_INVENTORY_TIMEOUT_MS,
   });
   if (phaseTimingsEnabled) {
     console.error(
-      `check-openclaw-package-tarball: npm pack inventory (npm ${npmInventory.npmVersion}) completed in ${npmInventory.durationMs}ms`,
+      `check-openclaw-package-tarball: npm pack inventory completed in ${npmInventory.durationMs}ms`,
     );
   }
   const { extra, missing } = compareNpmPackInventory(
@@ -859,7 +861,14 @@ try {
     errors.push(`package tarball contains npm-excluded entries: ${describePaths(extra)}`);
   }
 } catch (error) {
+  // Preserve the owner fact before reducing diagnostics to strings.
+  retainArchive = hasUnjoinedWork(error);
   errors.push(`npm pack inventory failed: ${coerceErrorMessage(error)}`);
+  if (retainArchive) {
+    errors.push(
+      `npm child cleanup unverified; retained package archive and inputs at ${archiveRoot}`,
+    );
+  }
 }
 const usesPackageLifecycleMarker = entrySet.has(PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH);
 if (entrySet.has(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH) && !usesPackageLifecycleMarker) {
@@ -955,12 +964,16 @@ errors.push(
 );
 
 if (errors.length > 0) {
-  fs.rmSync(archiveRoot, { recursive: true, force: true });
+  if (!retainArchive) {
+    fs.rmSync(archiveRoot, { recursive: true, force: true });
+  }
   fail(`OpenClaw package tarball integrity failed:\n${errors.join("\n")}`);
 }
 
 for (const warning of warnings) {
   console.warn(`OpenClaw package tarball integrity warning: ${warning}`);
 }
-fs.rmSync(archiveRoot, { recursive: true, force: true });
+if (!retainArchive) {
+  fs.rmSync(archiveRoot, { recursive: true, force: true });
+}
 console.log("OpenClaw package tarball integrity passed.");

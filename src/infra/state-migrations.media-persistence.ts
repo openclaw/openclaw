@@ -30,6 +30,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  prepareOpenClawAgentDatabaseOwnerEnvironment,
   withAgentDatabaseMaintenanceLease,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -311,10 +312,12 @@ function createMigrationDatabaseHandle(
   database: DatabaseSync,
   agentId: string,
   pathname: string,
+  ownerEnv: OpenClawAgentDatabase["ownerEnv"],
 ): OpenClawAgentDatabase {
   return {
     agentId,
     db: database,
+    ownerEnv,
     path: pathname,
     walMaintenance: { checkpoint: () => false, close: () => false },
   };
@@ -330,8 +333,10 @@ async function migrateAgentDatabase(params: {
   agentId: string;
   canonicalArchivePaths: Set<string>;
   beforeTransaction?: () => void;
+  env: NodeJS.ProcessEnv;
   pathname: string;
 }) {
+  const ownerEnv = prepareOpenClawAgentDatabaseOwnerEnvironment(params.env);
   const database = openNodeSqliteDatabase(params.pathname);
   const migrateArchives = () =>
     migrateCanonicalTranscriptArchives({
@@ -414,7 +419,12 @@ async function migrateAgentDatabase(params: {
 
     const sourceVersion = readMediaSourceVersion(database);
     params.beforeTransaction?.();
-    const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
+    const owner = createMigrationDatabaseHandle(
+      database,
+      params.agentId,
+      params.pathname,
+      ownerEnv,
+    );
     const rewritten = runSqliteImmediateTransactionSync(
       database,
       () => {
@@ -613,6 +623,7 @@ export async function migrateLegacyMediaPersistence(
           const result = await migrateAgentDatabase({
             agentId: entry.agentId,
             canonicalArchivePaths,
+            env,
             beforeTransaction: params.hooks?.beforeDatabaseTransaction
               ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
               : undefined,

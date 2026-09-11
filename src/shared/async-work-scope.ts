@@ -119,6 +119,11 @@ export function getAsyncWorkSignal(): AbortSignal | undefined {
   return currentWorkScope.getStore()?.signal;
 }
 
+/** Independent work must not inherit the scheduling caller's cleanup lifetime. */
+export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  return currentWorkScope.exit(run);
+}
+
 /** Preserves cancellation context until cooperating work ends, without delaying its result. */
 export async function runWithTrackedCancellation<T>(
   signal: AbortSignal,

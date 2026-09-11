@@ -90,7 +90,6 @@ describe("Gateway automatic Workshop learning", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const providerErrors: unknown[] = [];
-      const providerRequests: ProviderRequest[] = [];
       const reviewRequests: ProviderRequest[] = [];
       const laterForegroundRequests: ProviderRequest[] = [];
       const reviewStarted = createDeferred();
@@ -142,7 +141,6 @@ describe("Gateway automatic Workshop learning", () => {
                 return;
               }
               const payload = JSON.parse(await readText(request)) as ProviderRequest;
-              providerRequests.push(payload);
               // Runtime context can append a user-role item after the actual request.
               if (
                 payload.input?.some(
@@ -280,7 +278,29 @@ describe("Gateway automatic Workshop learning", () => {
               reviewStarted.promise,
               45_000,
               "The idle Workshop review did not reach the provider.",
-            );
+            ).catch((cause: unknown) => {
+              const summarizeError = (error: unknown) =>
+                String(error).replaceAll(state.root, "<test-state>").slice(0, 300);
+              let outcomes: unknown;
+              try {
+                outcomes = Object.values(readSkillReviewOutcomes().experienceReviews)
+                  .slice(0, 3)
+                  .map(({ outcome, error }) => ({
+                    outcome,
+                    error: error ? summarizeError(error) : undefined,
+                  }));
+              } catch (error) {
+                outcomes = { readError: summarizeError(error) };
+              }
+              throw new Error(
+                `The idle Workshop review did not reach the provider. ${JSON.stringify({
+                  foregroundRequests,
+                  reviewRequests: reviewRequests.length,
+                  outcomes,
+                })}`,
+                { cause },
+              );
+            });
             let continuedTranscript: typeof originalTranscript;
             try {
               const laterAccepted = await gateway.client.request<{ runId: string; status: string }>(
@@ -297,23 +317,6 @@ describe("Gateway automatic Workshop learning", () => {
                 "agent.wait",
                 { runId: laterAccepted.runId, timeoutMs: 30_000 },
                 { timeoutMs: 35_000 },
-              );
-              console.log(
-                "WORKSHOP_GATEWAY_OVERLAP_OBSERVATION",
-                JSON.stringify({
-                  accepted,
-                  completed,
-                  laterAccepted,
-                  laterCompleted,
-                  source,
-                  sourceEntry: loadSessionEntry(scope),
-                  originalTranscript,
-                  currentTranscript: loadTranscriptEventsSync(source),
-                  providerRequests,
-                  laterForegroundRequests,
-                  reviewRequests,
-                  providerErrors,
-                }),
               );
               expect(laterCompleted.status).toBe("ok");
               expect(laterForegroundRequests).toHaveLength(1);
@@ -340,25 +343,6 @@ describe("Gateway automatic Workshop learning", () => {
             const support = await fs.readFile(supportFile, "utf8");
             const outside = await fs.readFile(outsideFile, "utf8");
             const finalTranscript = loadTranscriptEventsSync(source);
-            console.log(
-              "WORKSHOP_GATEWAY_LEARNING_EVIDENCE",
-              JSON.stringify({
-                foregroundRequests,
-                providerRequests,
-                laterForegroundRequests,
-                reviewRequests,
-                outcomes: readSkillReviewOutcomes().experienceReviews,
-                originalSkill,
-                originalSupport,
-                skill,
-                support,
-                outsideContent,
-                outside,
-                originalTranscript,
-                continuedTranscript,
-                finalTranscript,
-              }),
-            );
             expect(providerErrors).toEqual([]);
             expect(reviewRequests).toHaveLength(reviewActions.length + 1);
             const outsideResult = reviewRequests[1]?.input?.findLast(

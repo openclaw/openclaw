@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -92,7 +92,6 @@ async function withInitialWriter(
         lifecycleGeneration: getAgentRunLifecycleGeneration(),
       });
       const externalAbortController = {
-        arm: vi.fn(),
         throwIfFiredAfterPrepCleanup: async () => controller.signal.throwIfAborted(),
       };
       const afterAttempt = await promptState.withSessionWriterContext(async () => {
@@ -126,7 +125,6 @@ async function withInitialWriter(
       });
       await prepared?.transcriptLifecycle.dispose();
       await afterAttempt?.();
-      expect(externalAbortController.arm).toHaveBeenCalledOnce();
     } finally {
       try {
         await prepared?.transcriptLifecycle.dispose();
@@ -140,6 +138,53 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it.each(["closed", "replaced", "writer", "session", "lifecycle"] as const)(
+    "rejects prepared activity after its %s changes",
+    async (loss) => {
+      await withInitialWriter(
+        async ({ admission, manager, replaceAdmission, runParams, target }) => {
+          const parentId = manager.appendMessage(userMessage);
+          if (loss === "closed") {
+            admission.close();
+          } else if (loss === "replaced") {
+            await replaceAdmission();
+          } else {
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              replaceSessionEntrySync(target, {
+                sessionId: loss === "session" ? "replacement-session" : target.sessionId,
+                activeWriterRunId: loss === "writer" ? "replacement-writer" : runParams.runId,
+                lifecycleRevision:
+                  loss === "lifecycle" ? "replacement-revision" : "existing-revision",
+                updatedAt: 2,
+              }),
+            );
+          }
+          const before = loadTranscriptEventsSync(target);
+          const append = () =>
+            manager.appendMessage(
+              {
+                role: "custom",
+                customType: "prepared-activity",
+                content: "",
+                display: true,
+                excludeFromContext: true,
+                timestamp: 2,
+              },
+              { preparedTurnParentId: parentId },
+            );
+          if (loss === "closed" || loss === "replaced") {
+            expect(append).toThrow("admitted run authority is no longer active");
+          } else {
+            expect(append).toThrow();
+          }
+          expect(loadTranscriptEventsSync(target)).toEqual(before);
+          expect(manager.getAppendParentId()).toBe(parentId);
+        },
+        { existing: true },
+      );
+    },
+  );
+
   it.each([false, true])(
     "settles one terminal error after attempt teardown (existing=%s)",
     async (existing) => {

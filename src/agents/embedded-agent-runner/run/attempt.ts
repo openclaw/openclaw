@@ -133,6 +133,8 @@ export async function runEmbeddedAttempt(
     assertCurrent: externalAbortController.throwIfFired,
   });
   try {
+    // The outer attempt owns cancellation across every awaited preparation stage.
+    externalAbortController.arm();
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
         includeCodeModeSkills: true,

@@ -106,7 +106,9 @@ type AttemptSpawnWorkspaceHoisted = {
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
   ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
+  bindCodeModeTranscriptAuthorityMock: UnknownMock;
   createOpenClawCodingToolsMock: UnknownMock;
+  loadPairedComputerUseAvailabilityForSurfaceMock: AsyncUnknownMock;
   subscribeEmbeddedAgentSessionMock: Mock<SubscribeEmbeddedAgentSessionFn>;
   installToolResultContextGuardMock: UnknownMock;
   installContextEngineLoopHookMock: UnknownMock;
@@ -229,7 +231,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
+  const bindCodeModeTranscriptAuthorityMock = vi.fn();
   const createOpenClawCodingToolsMock = vi.fn(() => []);
+  const loadPairedComputerUseAvailabilityForSurfaceMock = vi.fn(async () => undefined);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -319,7 +323,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciDispatcherStreamTimeoutsMock,
     ensureGlobalUndiciStreamTimeoutsMock,
+    bindCodeModeTranscriptAuthorityMock,
     createOpenClawCodingToolsMock,
+    loadPairedComputerUseAvailabilityForSurfaceMock,
     subscribeEmbeddedAgentSessionMock,
     installToolResultContextGuardMock,
     installContextEngineLoopHookMock,
@@ -734,6 +740,32 @@ vi.mock("../../agent-tools.js", () => ({
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
+vi.mock("../../code-mode-transcript-authority.js", async () => {
+  const actual = await vi.importActual<typeof import("../../code-mode-transcript-authority.js")>(
+    "../../code-mode-transcript-authority.js",
+  );
+  return {
+    ...actual,
+    bindCodeModeTranscriptAuthority: (...args: unknown[]) => {
+      hoisted.bindCodeModeTranscriptAuthorityMock(...args);
+      return actual.bindCodeModeTranscriptAuthority(
+        ...(args as Parameters<typeof actual.bindCodeModeTranscriptAuthority>),
+      );
+    },
+  };
+});
+
+vi.mock("../../computer-use-node-capabilities.js", async () => {
+  const actual = await vi.importActual<typeof import("../../computer-use-node-capabilities.js")>(
+    "../../computer-use-node-capabilities.js",
+  );
+  return {
+    ...actual,
+    loadPairedComputerUseAvailabilityForSurface: (...args: unknown[]) =>
+      hoisted.loadPairedComputerUseAvailabilityForSurfaceMock(...args),
+  };
+});
+
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
   acquireSessionMcpRuntime: async () => undefined,
@@ -1076,6 +1108,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
+  hoisted.bindCodeModeTranscriptAuthorityMock.mockReset();
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {
@@ -1104,6 +1137,7 @@ export function resetEmbeddedAttemptHarness(
       },
     ];
   });
+  hoisted.loadPairedComputerUseAvailabilityForSurfaceMock.mockReset().mockResolvedValue(undefined);
   hoisted.subscribeEmbeddedAgentSessionMock
     .mockReset()
     .mockImplementation(() => createSubscriptionMock());

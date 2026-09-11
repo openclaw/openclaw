@@ -260,6 +260,7 @@ export function scheduleTranscriptProjectionReconcile(
   deferOpenClawAgentPostCommitPublication(database, () =>
     startSessionTranscriptIndexReconcile({
       agentId: database.agentId,
+      env: database.ownerEnv,
       path: database.path,
       preferredSessionId: sessionId,
     }),

@@ -28,6 +28,10 @@ export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 export type OpenClawAgentDatabase = {
   agentId: string;
   db: DatabaseSync;
+  readonly ownerEnv: Readonly<{
+    OPENCLAW_STATE_DIR: string;
+    OPENCLAW_SUPERVISOR_MODE?: string;
+  }>;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };

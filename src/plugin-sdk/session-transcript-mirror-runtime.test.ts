@@ -40,6 +40,8 @@ describe("private session transcript mirror runtime", () => {
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
+        activeAppendParentId: null,
+        anchorsByEntryId: new Map(),
         anchorsByIdempotencyKey: new Map(),
         existingIdempotencyKeys: new Set(),
         messagesByIdempotencyKey: new Map(),

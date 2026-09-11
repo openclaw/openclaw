@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
 import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";
-import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
+import { SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL } from "./fs-bridge-mutation-helper.js";
+import {
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
+  SANDBOX_PINNED_MUTATION_PYTHON,
+} from "./fs-bridge-mutation-python.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -14,6 +18,7 @@ import {
 } from "./remote-fs-bridge.js";
 import {
   createLocalRemoteShellScriptRunner,
+  spawnLocalRemoteShellAsync,
   type LocalRemoteShellSpawn,
   type LocalRemoteShellSpawnResult,
 } from "./remote-fs-bridge.test-helpers.js";
@@ -344,6 +349,77 @@ describe("remote sandbox fs bridge", () => {
 // These fixtures execute remote GNU stat/readlink and the Python launcher
 // locally. Portable Python behavior stays in fs-bridge-mutation-helper.test.ts.
 describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shell)", () => {
+  it("joins concurrent writes that race to create the same absent parent", async () => {
+    await withTempDir("openclaw-remote-fs-parent-race-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "host-workspace");
+      const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
+      const rendezvousDir = path.join(stateDir, "rendezvous");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(remoteWorkspaceDir);
+      await fs.mkdir(rendezvousDir);
+      // Both real Python children must observe the missing parent before either
+      // may create it. The deadline also releases a child if its peer fails.
+      const source = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+        "            except FileNotFoundError:",
+        [
+          "            except FileNotFoundError:",
+          "                if segment == 'shared':",
+          "                    import time",
+          `                    rendezvous = ${JSON.stringify(rendezvousDir)}`,
+          "                    ready_fd = os.open(os.path.join(rendezvous, sys.argv[4]), WRITE_FLAGS, 0o600)",
+          "                    os.close(ready_fd)",
+          "                    deadline = time.monotonic() + 5",
+          "                    while len(os.listdir(rendezvous)) != 2:",
+          "                        if time.monotonic() >= deadline:",
+          "                            raise RuntimeError('parent creation rendezvous timed out')",
+          "                        time.sleep(0.005)",
+        ].join("\n"),
+      );
+      const shellLiteral = `'${source.replaceAll("'", "'\\''")}'`;
+      const { runtime } = createLocalRemoteRuntime({
+        remoteWorkspaceDir,
+        remoteAgentWorkspaceDir: remoteWorkspaceDir,
+        spawn: (file, args, stdin) =>
+          spawnLocalRemoteShellAsync(
+            file,
+            args.map((arg) =>
+              arg.replace(SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL, () => shellLiteral),
+            ),
+            stdin,
+          ),
+      });
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        runtime,
+      });
+      // Await every child close before assertions or withTempDir can remove inputs.
+      const results = await Promise.allSettled(
+        ["one", "two"].map((name) =>
+          bridge.writeFile({ filePath: `shared/${name}.txt`, data: name, mkdir: true }),
+        ),
+      );
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "Concurrent remote writes failed",
+        );
+      }
+      await expect(
+        fs.readdir(rendezvousDir).then((entries) => entries.toSorted()),
+      ).resolves.toEqual(["one.txt", "two.txt"]);
+      await expect(
+        fs.readdir(path.join(remoteWorkspaceDir, "shared")).then((entries) => entries.toSorted()),
+      ).resolves.toEqual(["one.txt", "two.txt"]);
+      for (const name of ["one", "two"]) {
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "shared", `${name}.txt`), "utf8"),
+        ).resolves.toBe(name);
+      }
+      await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+    });
+  });
+
   it("orders sandbox tools through one remote alias identity", async () => {
     await withTempDir("openclaw-remote-fs-queue-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "host-workspace");

@@ -86,6 +86,11 @@ export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../sh
 export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
+  AgentHarnessHostCapabilities,
+  AgentHarnessProviderTranscriptCommitParams,
+  AgentHarnessProviderTranscriptCommitResult,
+} from "../agents/harness/host-capability-types.js";
+export type {
   AgentHarness,
   AgentHarnessV2,
   AgentHarnessAuthBindingFingerprintParams,

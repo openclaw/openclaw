@@ -1,4 +1,32 @@
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { AnyAgentTool } from "../tools/common.js";
+
+export type AgentHarnessProviderTranscriptCommitParams = Readonly<{
+  assertCurrent: () => void;
+  baseAnchor?: TranscriptEntryAnchor;
+  entries: readonly Readonly<{
+    eventId: string;
+    identity: string;
+    message: AgentMessage;
+    sourceFingerprint?: string;
+  }>[];
+  validatePreparedPrefix?: (messages: readonly AgentMessage[]) => boolean;
+}>;
+
+export type AgentHarnessProviderTranscriptCommitResult =
+  | Readonly<{
+      kind: "committed" | "replayed";
+      results: readonly Readonly<{
+        anchor: TranscriptEntryAnchor;
+        identity: string;
+        message: AgentMessage;
+      }>[];
+    }>
+  | Readonly<{
+      kind: "conflict" | "rejected" | "suppressed";
+      reason?: string;
+    }>;
 
 type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -55,6 +83,13 @@ export type AgentHarnessHostCapabilities = Readonly<{
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
+  /**
+   * Atomically commits a provider-observed transcript prefix when the host
+   * supplied transcript authority for this exact admitted run.
+   */
+  commitProviderTranscriptPrefix?: (
+    params: AgentHarnessProviderTranscriptCommitParams,
+  ) => Promise<AgentHarnessProviderTranscriptCommitResult>;
   /** Creates and binds core tools without exposing admitted-run correlation to the plugin. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,

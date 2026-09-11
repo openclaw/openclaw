@@ -5,11 +5,91 @@ import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
+  runOutsideAsyncWorkScope,
   trackAsyncWork,
 } from "./async-work-scope.js";
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work scope", () => {
+  it("exits only work ownership and restores it after synchronous returns and throws", async () => {
+    const foreground = new AsyncWorkScope();
+    const authorization = new AsyncLocalStorage<string>();
+    const value = {};
+    const failure = new Error("independent failure");
+    let continuation: Promise<void> | undefined;
+    try {
+      authorization.run("caller", () =>
+        foreground.run(() => {
+          expect(
+            runOutsideAsyncWorkScope(() => {
+              expect(getAsyncWorkSignal()).toBeUndefined();
+              expect(authorization.getStore()).toBe("caller");
+              continuation = Promise.resolve().then(() => {
+                expect(getAsyncWorkSignal()).toBeUndefined();
+                expect(authorization.getStore()).toBe("caller");
+              });
+              return value;
+            }),
+          ).toBe(value);
+          expect(getAsyncWorkSignal()).toBe(foreground.signal);
+          expect(() =>
+            runOutsideAsyncWorkScope(() => {
+              expect(getAsyncWorkSignal()).toBeUndefined();
+              throw failure;
+            }),
+          ).toThrow(failure);
+          expect(getAsyncWorkSignal()).toBe(foreground.signal);
+          expect(authorization.getStore()).toBe("caller");
+        }),
+      );
+    } finally {
+      try {
+        await Promise.all([continuation, foreground.drain()]);
+      } finally {
+        authorization.disable();
+      }
+    }
+  });
+
+  it("joins independent descendants without retaining the foreground cleanup owner", async () => {
+    const foreground = new AsyncWorkScope();
+    const review = new AsyncWorkScope();
+    const finishDescendant = createDeferredCore();
+    const cleanupStarted = createDeferredCore();
+    let independent: Promise<void> | undefined;
+    let descendant: Promise<void> | undefined;
+    let reviewClosed = false;
+    try {
+      await foreground.track(() => {
+        independent = runOutsideAsyncWorkScope(() =>
+          trackAsyncWork(async () => {
+            await review.track(() => {
+              descendant = trackAsyncWork(() => finishDescendant.promise);
+            });
+            cleanupStarted.resolve();
+            await review.drain();
+            reviewClosed = true;
+          }),
+        );
+      });
+      await cleanupStarted.promise;
+      expect(foreground.hasPendingWork).toBe(false);
+      await foreground.drain();
+      expect(foreground.signal.aborted).toBe(true);
+      expect(review.hasPendingWork).toBe(true);
+      expect(reviewClosed).toBe(false);
+      finishDescendant.resolve();
+      await independent;
+      expect(reviewClosed).toBe(true);
+      expect(review.hasPendingWork).toBe(false);
+    } finally {
+      finishDescendant.resolve();
+      await descendant;
+      await independent;
+      await Promise.all([foreground.drain(), review.drain()]);
+    }
+  });
+
   it("excludes newly admitted disposal work while another owner enters its next phase", async () => {
     const first = new AsyncWorkScope();
     const second = new AsyncWorkScope();

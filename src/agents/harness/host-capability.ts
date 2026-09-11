@@ -29,6 +29,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { resolveCodeModeTranscriptAuthority } from "../code-mode-transcript-authority.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -63,6 +64,7 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
+import { createHostTranscriptCommit } from "./host-transcript-commit.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
@@ -72,7 +74,6 @@ type AgentHarnessHostApprovalResult = NonNullable<
 >;
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
-
 function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefined): string {
   if (typeof value !== "string") {
     throw new Error("native operation cwd must be a string");
@@ -197,6 +198,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
+  const transcriptAuthority = resolveCodeModeTranscriptAuthority(attempt);
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
@@ -454,6 +456,13 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
+  const commitProviderTranscriptPrefix = createHostTranscriptCommit({
+    abortSignal: attemptSignal,
+    assertActive,
+    attempt,
+    config,
+    transcriptAuthority,
+  });
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -501,6 +510,7 @@ export function createAgentHarnessHostCapabilities(params: {
       });
     },
     bindToolSurface,
+    ...(commitProviderTranscriptPrefix ? { commitProviderTranscriptPrefix } : {}),
     createToolSurface: (options, bindingOptions) => {
       assertActive();
       // Only host-created core tools can seed TTS provenance. Plugin-bound tools
@@ -685,6 +695,7 @@ export function createAgentHarnessHostCapabilities(params: {
       if (!active) {
         return;
       }
+      transcriptAuthority?.close();
       active = false;
       capabilityAbortController.abort();
     },

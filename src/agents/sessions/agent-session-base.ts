@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,17 +11,17 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import {
-  takeCodeModeResponseSource,
-  prepareCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
-import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
+import {
+  prepareAgentSessionMessageAppend,
+  replaceAgentMessageInPlace,
+  type AssistantAppendReceipt,
+} from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import type { CompactionRequestBudget } from "./compaction/request-budget.js";
 import {
@@ -55,7 +54,6 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
-import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 
 const log = createSubsystemLogger("agents/session");
@@ -352,6 +350,7 @@ export abstract class AgentSessionBase {
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
   private lastAssistantEntryId: string | undefined;
+  private assistantAppendReceipts = new WeakMap<AssistantMessage, AssistantAppendReceipt>();
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
@@ -376,7 +375,17 @@ export abstract class AgentSessionBase {
   private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
+      this.assistantAppendReceipts = new WeakMap();
     }
+
+    const appendMessage =
+      event.type === "message_end"
+        ? prepareAgentSessionMessageAppend(
+            this.sessionManager,
+            event.message,
+            this.assistantAppendReceipts,
+          )
+        : undefined;
 
     // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
@@ -384,8 +393,6 @@ export abstract class AgentSessionBase {
       retireQueuedUserMessage(event.message);
     }
 
-    const sourceSlots =
-      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
     const messageChanged = await this.emitExtensionEvent(event);
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
@@ -402,7 +409,7 @@ export abstract class AgentSessionBase {
     }
 
     // Handle session persistence
-    if (event.type === "message_end") {
+    if (event.type === "message_end" && appendMessage) {
       // Check if this is a custom message from extensions
       if (event.message.role === "custom") {
         // Persist as CustomMessageEntry
@@ -421,22 +428,10 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        let entryId: string;
-        try {
-          // Normalize live delivery facts before persistence makes its redacted copy.
-          // Stored arguments must never replace the values used for tool execution.
-          applyAssistantDeliveryDirectives(event.message);
-          const appendOptions = {
-            invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-          };
-          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
-          entryId = this.sessionManager.appendMessage(event.message, appendOptions);
-        } catch (error) {
-          if (event.message.role === "user") {
-            reportSteeringMessagePersistenceFailure(event.message, error);
-          }
-          throw error;
-        }
+        const entryId = appendMessage(
+          event.message,
+          messageChanged || toolResultChangedByExtension,
+        );
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
@@ -627,6 +622,7 @@ export abstract class AgentSessionBase {
       "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
     );
     this.disconnectFromAgent();
+    this.assistantAppendReceipts = new WeakMap();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
       cleanupSessionResources(this.sessionId);

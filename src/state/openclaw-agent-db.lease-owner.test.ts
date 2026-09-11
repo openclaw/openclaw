@@ -207,6 +207,12 @@ describe("agent database lease acquisition owner", () => {
       agentId: "main",
       ...(ambient ? {} : { env: owner.env }),
     });
+    const originalOwnerEnv = database.ownerEnv;
+    expect(originalOwnerEnv).toEqual({
+      OPENCLAW_STATE_DIR: owner.stateDir,
+      ...(external ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+    });
+    expect(Object.isFrozen(originalOwnerEnv)).toBe(true);
     expect(owner.leases()).toHaveLength(1);
     try {
       if (external) {
@@ -216,6 +222,13 @@ describe("agent database lease acquisition owner", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", owner.nextStateDir);
       }
       expect(fs.readdirSync(owner.nextStateDir)).toEqual([]);
+      const cached = openOpenClawAgentDatabase({
+        agentId: "main",
+        env: owner.env,
+        path: database.path,
+      });
+      expect(cached).toBe(database);
+      expect(cached.ownerEnv).toBe(originalOwnerEnv);
       if (worker) {
         expect(settleOpenClawAgentDatabaseWorkerClose(database.path)).toEqual({
           errors: [],

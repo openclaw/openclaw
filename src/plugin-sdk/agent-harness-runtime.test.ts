@@ -14,6 +14,9 @@ import {
   queueAgentHarnessMessage,
   setActiveEmbeddedRun,
   type AgentHarness,
+  type AgentHarnessHostCapabilities,
+  type AgentHarnessProviderTranscriptCommitParams,
+  type AgentHarnessProviderTranscriptCommitResult,
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptParamsV2,
@@ -25,6 +28,11 @@ import {
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
+import type {
+  AgentHarnessHostCapabilities as FocusedAgentHarnessHostCapabilities,
+  AgentHarnessProviderTranscriptCommitParams as FocusedProviderTranscriptCommitParams,
+  AgentHarnessProviderTranscriptCommitResult as FocusedProviderTranscriptCommitResult,
+} from "./agent-harness.js";
 import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
@@ -154,6 +162,30 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("keeps the provider transcript commit typed and optional for stable v2026.9.2 hosts", () => {
+    const stableHostCapabilities = {
+      kind: "agent-harness-host-capability",
+      version: 1,
+      assertActive: () => {},
+      bindToolSurface: (tools) => tools,
+      runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+      requestApproval: async () => undefined,
+      waitForApproval: async () => undefined,
+    } satisfies AgentHarnessHostCapabilities;
+
+    expect(stableHostCapabilities).not.toHaveProperty("commitProviderTranscriptPrefix");
+    expectTypeOf<AgentHarnessProviderTranscriptCommitParams["entries"][number]>().toHaveProperty(
+      "message",
+    );
+    expectTypeOf<AgentHarnessProviderTranscriptCommitResult>().toMatchTypeOf<
+      | { kind: "committed" | "replayed"; results: readonly unknown[] }
+      | { kind: "conflict" | "rejected" | "suppressed"; reason?: string }
+    >();
+    expectTypeOf<FocusedAgentHarnessHostCapabilities>().toEqualTypeOf<AgentHarnessHostCapabilities>();
+    expectTypeOf<FocusedProviderTranscriptCommitParams>().toEqualTypeOf<AgentHarnessProviderTranscriptCommitParams>();
+    expectTypeOf<FocusedProviderTranscriptCommitResult>().toEqualTypeOf<AgentHarnessProviderTranscriptCommitResult>();
+  });
+
   it("exposes structured input through one frozen named runtime surface", () => {
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
     expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([

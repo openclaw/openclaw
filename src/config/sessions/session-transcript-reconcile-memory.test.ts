@@ -7,6 +7,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -19,8 +20,12 @@ import {
   readSessionTranscriptMessageEventPage,
 } from "./session-accessor.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
+} from "./session-accessor.sqlite-scope.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
+import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   appendTranscriptEvent,
   replaceTranscriptEvents,
@@ -158,6 +163,38 @@ describe("incognito transcript reconciliation", () => {
     }
     expect(bytes.length).toBeGreaterThan(1);
     expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(event);
+    expectNoDiskState();
+  });
+
+  it("keeps a reused memory handle's append worker with its original state owner", async () => {
+    const env = { ...explicit.env };
+    const { scope, options } = target(env);
+    const originalScope = { ...scope, env: explicit.env };
+    await replaceTranscriptEvents(originalScope, [message("seed")]);
+    const database = openOpenClawAgentDatabase(options);
+    const ownerEnv = database.ownerEnv;
+    env.OPENCLAW_STATE_DIR = ambient.stateDir;
+    const cached = openOpenClawAgentDatabase(options);
+    expect(cached).toBe(database);
+    expect(cached.ownerEnv).toBe(ownerEnv);
+
+    runOpenClawAgentWriteTransaction((writer) => {
+      appendTranscriptEventInTransaction(writer, resolveSqliteTranscriptScope(originalScope), {
+        type: "leaf",
+        id: "selected-leaf",
+        parentId: "seed",
+        targetId: "seed",
+      });
+    }, options);
+    await waitForSessionTranscriptIndexReconcile(options);
+
+    expect(
+      readSessionTranscriptMessageEventPage(originalScope, {
+        maxMessages: 10,
+        offset: 0,
+      }).events.map(({ event }) => event),
+    ).toEqual([expect.objectContaining({ id: "seed" })]);
+    expect(getOpenClawAgentDatabaseIfOpen(target(ambient.env).options)).toBeUndefined();
     expectNoDiskState();
   });
 

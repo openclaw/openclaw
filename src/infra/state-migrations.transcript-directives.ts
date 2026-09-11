@@ -15,6 +15,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   type OpenClawAgentDatabase,
+  prepareOpenClawAgentDatabaseOwnerEnvironment,
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -63,10 +64,12 @@ function createMigrationDatabaseHandle(
   database: DatabaseSync,
   agentId: string,
   pathname: string,
+  ownerEnv: OpenClawAgentDatabase["ownerEnv"],
 ): OpenClawAgentDatabase {
   return {
     agentId,
     db: database,
+    ownerEnv,
     path: pathname,
     walMaintenance: { checkpoint: () => false, close: () => false },
   };
@@ -325,9 +328,10 @@ async function migrateTranscriptSessions(params: {
 }
 
 async function migrateAgentDatabase(
-  params: { agentId: string; pathname: string },
+  params: { agentId: string; env: NodeJS.ProcessEnv; pathname: string },
   maintenance: OpenClawStateLeaseContext,
 ): Promise<DatabaseMigrationResult> {
+  const ownerEnv = prepareOpenClawAgentDatabaseOwnerEnvironment(params.env);
   await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
   maintenance.assertOwned();
   const database = openNodeSqliteDatabase(params.pathname);
@@ -338,7 +342,12 @@ async function migrateAgentDatabase(
     if (cursor.phase === "complete") {
       return { archivedTranscripts: 0, transcriptSessions: 0 };
     }
-    const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
+    const owner = createMigrationDatabaseHandle(
+      database,
+      params.agentId,
+      params.pathname,
+      ownerEnv,
+    );
     const transcriptSessions =
       cursor.phase === "transcripts"
         ? await migrateTranscriptSessions({
@@ -457,7 +466,7 @@ export async function migrateHistoricalTranscriptDirectives(
         for (const target of targets) {
           try {
             const result = await migrateAgentDatabase(
-              { agentId: target.agentId, pathname: target.path },
+              { agentId: target.agentId, env, pathname: target.path },
               maintenance,
             );
             if (result.transcriptSessions > 0 || result.archivedTranscripts > 0) {

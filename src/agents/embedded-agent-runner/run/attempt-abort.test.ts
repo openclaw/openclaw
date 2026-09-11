@@ -39,6 +39,36 @@ beforeEach(() => {
 });
 
 describe("createEmbeddedAttemptExternalAbortController", () => {
+  it("arms and disposes once before a later external cancellation", () => {
+    const source = new AbortController();
+    const runAbortController = new AbortController();
+    const state = createAbortState();
+    const cleanupAfterEarlyAbort = vi.fn(async () => {});
+    const addEventListener = vi.spyOn(source.signal, "addEventListener");
+    const removeEventListener = vi.spyOn(source.signal, "removeEventListener");
+    const controller = createEmbeddedAttemptExternalAbortController({
+      abortSignal: source.signal,
+      cleanupAfterEarlyAbort,
+      runAbortController,
+      runId: "run-disposed-before-cancel",
+      state,
+    });
+
+    controller.arm();
+    controller.arm();
+    expect(addEventListener).toHaveBeenCalledOnce();
+
+    controller.dispose();
+    controller.dispose();
+    expect(removeEventListener).toHaveBeenCalledOnce();
+
+    source.abort(new Error("cancelled after disposal"));
+
+    expect(state.terminal).toEqual({ kind: "ok" });
+    expect(runAbortController.signal.aborted).toBe(false);
+    expect(cleanupAfterEarlyAbort).not.toHaveBeenCalled();
+  });
+
   it("preserves external cancellation through active session settlement", async () => {
     const source = new AbortController();
     const runAbortController = new AbortController();

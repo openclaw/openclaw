@@ -1,5 +1,5 @@
 // Local subprocess-backed remote bridge fixtures shared by focused sandbox tests.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
@@ -15,7 +15,7 @@ export type LocalRemoteShellSpawn = (
   file: string,
   args: string[],
   stdin?: string | Buffer,
-) => LocalRemoteShellSpawnResult;
+) => LocalRemoteShellSpawnResult | Promise<LocalRemoteShellSpawnResult>;
 
 const PINNED_MUTATION_MARKER = 'python3 -c "$python_script" "$@"';
 
@@ -27,6 +27,38 @@ function spawnLocalRemoteShell(file: string, args: string[], stdin?: string | Bu
   });
 }
 
+export function spawnLocalRemoteShellAsync(
+  file: string,
+  args: string[],
+  stdin?: string | Buffer,
+): Promise<LocalRemoteShellSpawnResult> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let error: Error | undefined;
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (caught) => {
+      error = caught;
+    });
+    child.stdin.on("error", (caught) => {
+      error ??= caught;
+    });
+    // Even a failed child owns its inputs until close joins its stdio.
+    child.once("close", (status, signal) => {
+      resolve({
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
+        status,
+        signal,
+        error,
+      });
+    });
+    child.stdin.end(stdin);
+  });
+}
+
 export function createLocalRemoteShellScriptRunner(params?: {
   spawn?: LocalRemoteShellSpawn;
   onCommand?: (command: Parameters<RemoteShellSandboxHandle["runRemoteShellScript"]>[0]) => void;
@@ -35,10 +67,10 @@ export function createLocalRemoteShellScriptRunner(params?: {
   return async (command) => {
     params?.onCommand?.(command);
     const runsPinnedMutation = command.script.includes(PINNED_MUTATION_MARKER);
-    const spawn = params?.spawn ?? spawnLocalRemoteShell;
+    const spawnShell = params?.spawn ?? spawnLocalRemoteShell;
     // Execute the remote command unchanged, with helper source separate from
     // stdin so mutation payload bytes reach the Python process intact.
-    const result = spawn(
+    const result = await spawnShell(
       "/bin/sh",
       ["-c", command.script, params?.shellArg0 ?? "openclaw-sandbox-fs", ...(command.args ?? [])],
       command.stdin,

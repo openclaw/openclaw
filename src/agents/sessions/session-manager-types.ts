@@ -117,6 +117,15 @@ export type AppendPersistenceOptions = {
   config?: OpenClawConfig;
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;
+  /**
+   * Append a prepared non-user message from this captured active-branch parent.
+   * Requires persistence; null captures the root. The active tail must descend
+   * from this parent with no newer user message, including on another branch.
+   * Deliberate and side-branch appends are rejected. Existing writer/lifecycle
+   * checks still apply; a successful append may follow a newer non-user tail.
+   * Omit for normal append behavior. This option is not stored in the transcript.
+   */
+  preparedTurnParentId?: string | null;
 };
 
 export interface SessionTreeNode {

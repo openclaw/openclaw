@@ -167,8 +167,8 @@ describe("session transcript reconcile worker lifecycle", () => {
     const root = tempDirs.make("openclaw-reconcile-scope-");
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const first = { agentId: "main", env };
-    const later = { agentId: "later", env };
+    const first = { agentId: "main", env, path: path.join(root, "custom-first.sqlite") };
+    const later = { agentId: "later", env, path: path.join(root, "custom-later.sqlite") };
     const unrelated = {
       agentId: "main",
       env: { ...env, OPENCLAW_STATE_DIR: `${stateDir}-unrelated` },
@@ -195,7 +195,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       settled = true;
     });
     // This owner did not exist in the waiter's initial snapshot, and no owner
-    // has opened its database yet: scope must come from the registered keys.
+    // has opened its custom database yet: scope must come from the recorded owner.
     const releaseLater = startDeferred(later);
     try {
       releaseFirst.resolve();
