@@ -11,6 +11,7 @@ export function installDomComponents(host: ControlUiHost): void {
       props = next;
       element.setAttribute("aria-label", next.label);
       element.setAttribute("aria-description", next.description ?? "");
+      element.dataset.testDialogLightDismiss = String(next.lightDismiss ?? true);
       element.className = next.className ?? "";
       if (element.firstChild !== next.content) {
         element.replaceChildren(next.content);

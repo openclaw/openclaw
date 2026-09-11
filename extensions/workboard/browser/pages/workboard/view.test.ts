@@ -1150,6 +1150,32 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-draft")).toBeNull();
   });
 
+  it("disables light dismiss so backdrop clicks keep unsaved drafts", () => {
+    const { host, state } = createLoadedWorkboardState();
+    state.draftOpen = true;
+    state.draftTitle = "Unsaved task";
+    const container = document.createElement("div");
+    const props = createWorkboardRenderProps(host, {
+      onRequestUpdate: () => renderInto(container, props),
+    });
+    renderInto(container, props);
+    const dialog = container.querySelector<HTMLElement>("[data-test-dialog]")!;
+    // The host dialog must not translate backdrop clicks into cancellation.
+    expect(dialog.dataset.testDialogLightDismiss).toBe("false");
+    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title")!;
+    title.value = "Still editing";
+    title.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    // No cancel event reaches the draft owner from a backdrop interaction.
+    expect(state.draftOpen).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")!.value).toBe(
+      "Still editing",
+    );
+    // Explicit dismissal still closes the dialog and resets the draft.
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    expect(state.draftOpen).toBe(false);
+    expect(container.querySelector(".workboard-draft")).toBeNull();
+  });
+
   it("keeps cards compact and puts model-specific execution actions in details", () => {
     const { state, container, renderView } = createWorkboardView();
     state.cards = [
