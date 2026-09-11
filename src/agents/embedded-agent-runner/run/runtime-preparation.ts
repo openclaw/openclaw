@@ -127,7 +127,20 @@ export async function prepareEmbeddedRunRuntime(input: {
         })
       : undefined;
     const resolvedModel = preparedThinkingCompat
-      ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
+      ? (() => {
+          const nextCompat = { ...candidate.compat };
+          if (preparedThinkingCompat.thinkingFormat) {
+            nextCompat.thinkingFormat = preparedThinkingCompat.thinkingFormat;
+          }
+          if (Array.isArray(preparedThinkingCompat.supportedReasoningEfforts)) {
+            nextCompat.supportedReasoningEfforts = [
+              ...preparedThinkingCompat.supportedReasoningEfforts,
+            ];
+          } else if (preparedThinkingCompat.supportedReasoningEfforts === null) {
+            delete nextCompat.supportedReasoningEfforts;
+          }
+          return { ...candidate, compat: nextCompat };
+        })()
       : candidate;
     const resolved =
       resolvedModel === candidate && resolvedCandidate

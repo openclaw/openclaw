@@ -525,6 +525,8 @@ export interface OpenAICompletionsCompat {
   supportsReasoningEffort?: boolean;
   /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
   reasoningEffortMap?: Record<string, string>;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */

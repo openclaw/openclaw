@@ -223,6 +223,33 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBe("none");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
   });
+
+  it("matches mixed-case declared efforts case-insensitively and preserves provider-native casing", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "MAX"],
+      },
+    };
+
+    expect(supportsOpenAIReasoningEffort(model, "max")).toBe(true);
+    expect(supportsOpenAIReasoningEffort(model, "MAX")).toBe(true);
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "max" })).toBe("MAX");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "MAX" })).toBe("MAX");
+  });
+
+  it("preserves provider-native casing when walking down to closest supported tier", () => {
+    const model = {
+      provider: "example",
+      id: "custom-reasoning",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "XHIGH"],
+      },
+    };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "max" })).toBe("XHIGH");
+  });
 });
 
 describe("OpenAI temperature support", () => {
