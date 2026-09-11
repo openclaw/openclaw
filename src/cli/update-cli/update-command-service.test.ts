@@ -368,6 +368,34 @@ describe("maybeRestartService", () => {
     },
   );
 
+  it("leaves a current gateway running without the --no-restart tip", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        opts: {},
+        refreshServiceEnv: false,
+        gatewayPort: 18789,
+        timeoutMs: 1_000,
+        packageAlreadyCurrent: true,
+      }),
+    ).resolves.toBe("ok");
+
+    const logs = logSpy.mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("already at target version; left running"))).toBe(
+      true,
+    );
+    expect(logs.some((line) => line.includes("restart skipped (--no-restart)"))).toBe(false);
+    logSpy.mockRestore();
+  });
+
   it("rejects channel failures even when a Git target has no build identity", async () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },

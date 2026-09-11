@@ -139,9 +139,11 @@ export function printUpdateDryRun(params: {
   actions.push("Run plugin update sync after core update");
   actions.push("Refresh shell completion cache (if needed)");
   actions.push(
-    params.shouldRestart
+    params.shouldRestart && !params.packageAlreadyCurrent
       ? "Restart gateway service and run doctor checks"
-      : "Skip restart (because --no-restart is set)",
+      : params.shouldRestart
+        ? "Leave managed gateway running (already at target version)"
+        : "Skip restart (because --no-restart is set)",
   );
 
   const notes: string[] = [...(params.preflightNotes ?? [])];
@@ -179,7 +181,7 @@ export function printUpdateDryRun(params: {
       updateInstallKind: params.updateInstallKind,
       switchToGit: params.switchToGit,
       switchToPackage: params.switchToPackage,
-      restart: params.shouldRestart,
+      restart: params.shouldRestart && !params.packageAlreadyCurrent,
       requestedChannel: params.requestedChannel,
       storedChannel: params.storedChannel,
       effectiveChannel: params.channel,

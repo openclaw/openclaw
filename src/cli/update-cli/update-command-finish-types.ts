@@ -10,6 +10,8 @@ import type { UpdateRestartParams } from "./update-command-service-context-types
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  /** Alias retained for callers; prefer coreAlreadyCurrent for restart gating. */
+  packageAlreadyCurrent?: boolean;
   serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;

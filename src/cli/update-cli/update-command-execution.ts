@@ -180,6 +180,7 @@ export async function executeMutableUpdate(
           root: mutationRoot,
           shouldRestart: params.shouldRestart,
           jsonMode: Boolean(opts.json),
+          packageAlreadyCurrent: params.packageAlreadyCurrent,
           timeoutMs: updateStepTimeoutMs,
           phase,
           expectedService: admission?.services.get(mutationRoot),

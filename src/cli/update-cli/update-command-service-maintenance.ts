@@ -333,6 +333,8 @@ type ManagedServiceStopParams = {
   root: string;
   shouldRestart: boolean;
   jsonMode: boolean;
+  /** When true, leave a running managed gateway up (no-op version match). */
+  packageAlreadyCurrent?: boolean;
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<
@@ -509,7 +511,13 @@ async function stopManagedServiceBeforeMutableUpdate(
   }
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
-  if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
+  // A no-op version match must not hand off or SIGTERM the live gateway.
+  if (
+    params.shouldRestart &&
+    !params.packageAlreadyCurrent &&
+    serviceState.running &&
+    params.handoffFromGateway
+  ) {
     const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root, "handoff");
     if (blockMessage) {
       return { ...inspected, blockMessage };
@@ -549,18 +557,24 @@ async function stopManagedServiceBeforeMutableUpdate(
   // need the handoff marker to distinguish that transition from operator-stopped state.
   const supervisorMayRespawn =
     params.shouldRestart &&
+    !params.packageAlreadyCurrent &&
     serviceState.loadState.status === "loaded" &&
     (process.platform === "darwin"
       ? (await service.isEnabled?.({ env: serviceState.env, timeoutMs: params.timeoutMs })) === true
       : process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1");
   assertCurrent();
-  if (!params.shouldRestart || (!serviceState.running && !supervisorMayRespawn)) {
-    if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
-      const warning = `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
+  const leaveManagedGatewayRunning = !params.shouldRestart || Boolean(params.packageAlreadyCurrent);
+  if (leaveManagedGatewayRunning || (!serviceState.running && !supervisorMayRespawn)) {
+    if (leaveManagedGatewayRunning && !params.jsonMode && serviceState.running) {
+      const warning = params.packageAlreadyCurrent
+        ? "Package already matches the target version; leaving the managed gateway running."
+        : `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
       defaultRuntime.log(theme.warn(warning));
     }
     const windowsTaskAutoStartRecovery =
-      !params.shouldRestart && isGatewayServiceEnv(process.env) ? undefined : await suspendTask();
+      leaveManagedGatewayRunning && isGatewayServiceEnv(process.env)
+        ? undefined
+        : await suspendTask();
     return {
       ...inspected,
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),

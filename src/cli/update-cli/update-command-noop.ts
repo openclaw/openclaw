@@ -110,6 +110,7 @@ export async function finishAlreadyCurrentUpdate(
         ...inspection,
         root: params.root,
         phase: "inspect",
+        packageAlreadyCurrent: true,
         expectedService: admission.services.get(params.root),
         updateRun: params.opts.run,
         handoffFromGateway: (state) =>

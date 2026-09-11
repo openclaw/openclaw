@@ -216,6 +216,7 @@ export async function maybeRestartService(params: {
   requireRunningServiceAfterRestart?: boolean;
   serviceMutationSkipMessage?: string;
   timeoutMs: number;
+  packageAlreadyCurrent?: boolean;
   onVerificationFailure?: (reason: string) => void;
   onVerified?: (verifiedAtMs: number) => void;
 }): Promise<"ok" | "failed" | "restart-health-failed"> {
@@ -586,6 +587,14 @@ export async function maybeRestartService(params: {
         return await failed("restart-health-failed");
       }
       return await failed();
+    }
+    return "ok";
+  }
+
+  if (activation.packageAlreadyCurrent) {
+    if (!activation.opts.json) {
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.muted("Gateway: already at target version; left running."));
     }
     return "ok";
   }
