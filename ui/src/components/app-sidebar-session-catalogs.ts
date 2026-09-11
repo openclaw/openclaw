@@ -4,6 +4,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -137,20 +138,27 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   return [...messages];
 }
 
-/**
- * A catalog earns a sidebar section through rows, further pages, or a provider
- * failure. A successful empty catalog stays out of the sidebar even when it can
- * start sessions: the new-session page still lists it as a target, and hiding
- * it here keeps the zone peer list and the rendered sections in agreement.
- */
-export function catalogSectionHasContent(catalog: SessionCatalog): boolean {
-  return (
-    catalog.hosts.some((host) => host.sessions.length > 0 || Boolean(host.nextCursor)) ||
-    catalogErrorMessages(catalog).length > 0
-  );
+export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
+
+/** Section peers and rendering share owner-filtered rows; paging and failures remain visible. */
+export function projectSidebarSessionCatalogs(
+  catalogs: readonly SessionCatalog[],
+  ownerId: string | null,
+  liveRows: readonly GatewaySessionRow[],
+): SidebarSessionCatalog[] {
+  // The current list wins over cached agent lists, including an unset live owner.
+  const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
+  return catalogs.flatMap((catalog) => {
+    const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
+    return visibleHosts.length > 0 ||
+      catalog.hosts.some((host) => Boolean(host.nextCursor)) ||
+      catalogErrorMessages(catalog).length > 0
+      ? [{ ...catalog, visibleHosts }]
+      : [];
+  });
 }
 
-export function visibleCatalogHosts(
+function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
   ownerId?: string | null,
   liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),

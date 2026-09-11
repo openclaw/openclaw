@@ -450,9 +450,9 @@ describe("candidate executor delegation", () => {
       });
       if (revoked) {
         await expect(work).rejects.toThrow(/ownership|release/);
-        // The shipped worker owns the activated generation; the parent still
-        // refuses completion if its independent recovery owner was replaced.
-        expect(fs.existsSync(output)).toBe(revoked === "original");
+        // The current receiver also retains the original recovery owner after
+        // activation: changing either owner must refuse the child effect.
+        expect(fs.existsSync(output)).toBe(false);
         expect(
           createManagedHandoffLeaseStore().read(revoked === "original" ? root : candidateRoot),
         ).toMatchObject({

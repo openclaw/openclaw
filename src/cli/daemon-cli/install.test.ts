@@ -1,9 +1,11 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
@@ -29,14 +31,7 @@ const hasConfiguredSecretInputMock = vi.hoisted(() =>
     return resolveSecretInputRefMock(value)?.ref != null;
   }),
 );
-const resolveGatewayAuthMock = vi.hoisted(() =>
-  vi.fn<() => ResolvedGatewayAuth>(() => ({
-    mode: "token",
-    token: undefined,
-    password: undefined,
-    allowTailscale: false,
-  })),
-);
+const resolveGatewayAuthMock = vi.hoisted(() => vi.fn<() => ResolvedGatewayAuth>());
 const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
@@ -170,8 +165,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
-  const firstArg = readFirstInstallPlanArg();
-  expect("token" in firstArg).toBe(false);
+  expect("token" in readFirstInstallPlanArg()).toBe(false);
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -293,6 +287,27 @@ describe("runDaemonInstall", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     envSnapshot.restore();
+  });
+
+  it("refuses update-owned gateway defaults when authority expires during write preparation", async () => {
+    const snapshot = await readConfigFileSnapshotMock();
+    readConfigFileSnapshotMock.mockResolvedValue({ ...snapshot, sourceConfig: {} });
+    let current = true;
+    let committed = false;
+    replaceConfigFileMock.mockImplementationOnce(async (params) => {
+      await Promise.resolve();
+      current = false;
+      await params.writeOptions.beforeCommit?.();
+      committed = true;
+    });
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => expect(current, "original owner revoked").toBe(true),
+        () => runDaemonInstall({ force: true, json: true }),
+      ),
+    ).rejects.toThrow("original owner revoked");
+    expect(committed).toBe(false);
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
   it("fails install when token auth requires an unresolved token SecretRef", async () => {
@@ -487,8 +502,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = readFirstConfigWriteParams();
-    expect(writeParams.sourceConfig?.gateway?.auth?.token).toBe("minted-token");
+    expect(readFirstConfigWriteParams().sourceConfig?.gateway?.auth?.token).toBe("minted-token");
     expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
@@ -764,7 +778,7 @@ describe("runDaemonInstall", () => {
     "refuses runtime repair on $failure without claiming success",
     async ({ failure, message }) => {
       service.isLoaded.mockResolvedValue(true);
-      const oldNode = failure === "probe" ? process.execPath : "/opt/old/bin/node";
+      const oldNode = failure === "probe" ? resolveTestNodeExecPath() : "/opt/old/bin/node";
       service.readCommand.mockResolvedValue({
         programArguments: [oldNode, "/opt/openclaw/dist/index.js", "gateway"],
       });

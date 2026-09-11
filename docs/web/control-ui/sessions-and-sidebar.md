@@ -82,6 +82,8 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 Enable **Hide empty groups** in the same menu to hide custom groups with no sessions in the current sidebar view. It is off by default, and the browser remembers your choice. Collapsed groups with sessions stay visible. Hidden groups keep their membership and order and remain available in **Move to group**; turn the setting off to use their headers as drag targets again.
 
+Native CLI catalogs with no rows matching the owner filter are hidden unless they have more pages to load or a discovery error to show. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section.
+
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 
 Opening a read-only or suggestion session as a viewer leaves its unread marker intact. Draft sessions acknowledge reads automatically only for their owner or an administrator.

@@ -26,6 +26,10 @@ import {
   assertServiceDefinitionWritable,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "../../daemon/service-update-authority.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
@@ -366,6 +370,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       writeOptions: {
         baseSnapshot: configSnapshot,
         ...configWriteOptions,
+        ...(isUpdateOwnedGatewayServiceCommand()
+          ? {
+              beforeCommit: async () => {
+                await configWriteOptions.beforeCommit?.();
+                assertGatewayServiceUpdateCurrent();
+              },
+            }
+          : {}),
         skipRuntimeSnapshotRefresh: true,
       },
       afterWrite: { mode: "auto" },

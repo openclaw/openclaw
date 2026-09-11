@@ -324,6 +324,7 @@ async function testPreflightCandidate(params: {
   runLint: boolean;
   beforeCandidate?: (revision: string) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
+  inspectGitCandidate?: UpdateRunnerOptions["inspectGitCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   runCommand: CommandRunner;
@@ -511,6 +512,7 @@ async function testPreflightCandidate(params: {
         "Candidate source differs from the selected commit. Repair the source revision before retrying the update.";
       return { status: "failed" };
     }
+    await params.inspectGitCandidate?.(params.worktreeDir);
     await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
   } finally {
@@ -524,6 +526,7 @@ export async function runGitCandidatePreflight(params: {
   targetRevision?: string;
   beforeSha?: string | null;
   validateCandidate?: (root: string) => Promise<void>;
+  inspectGitCandidate?: UpdateRunnerOptions["inspectGitCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   needsCheckoutMain: boolean;
