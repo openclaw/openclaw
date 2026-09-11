@@ -249,12 +249,16 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
           requireRunningService: true,
         }),
       );
-      expect(mocks.waitForHttpReadiness).toHaveBeenCalledWith(
-        expect.objectContaining({
-          port: mocks.waitForHealthyRestart.mock.calls[0]?.[0]?.port,
-          config: {},
-        }),
-      );
+      if (outcome === "old-version") {
+        expect(mocks.waitForHttpReadiness).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.waitForHttpReadiness).toHaveBeenCalledWith(
+          expect.objectContaining({
+            port: mocks.waitForHealthyRestart.mock.calls[0]?.[0]?.port,
+            config: {},
+          }),
+        );
+      }
       expect(mocks.doctorCommand).not.toHaveBeenCalled();
       if (outcome === "healthy") {
         expect(runtime.exit).not.toHaveBeenCalled();

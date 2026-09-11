@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -53,14 +54,19 @@ function createDatabase(paddingBytes: number | null): string {
 describe("resolveSqliteInspectionBudget", () => {
   it.each(
     [
-      { label: "0 B", sizeBytes: 0, expected: 30_000 },
-      { label: "1 B", sizeBytes: 1, expected: 31_000 },
-      { label: "32 MiB", sizeBytes: 32 * 1024 * 1024, expected: 31_000 },
-      { label: "32 MiB + 1 B", sizeBytes: 32 * 1024 * 1024 + 1, expected: 32_000 },
-      { label: "300 MiB", sizeBytes: 300 * 1024 * 1024, expected: 40_000 },
-      { label: "9.4 GiB", sizeBytes: Math.floor(9.4 * 1024 ** 3), expected: 331_000 },
-      { label: "64 GiB (capped)", sizeBytes: 64 * 1024 ** 3, expected: 1_800_000 },
-      { label: "huge file (capped)", sizeBytes: Number.MAX_SAFE_INTEGER, expected: 1_800_000 },
+      { label: "0 B", sizeBytes: 0, expected: 300_000 },
+      { label: "1 B", sizeBytes: 1, expected: 301_000 },
+      { label: "32 MiB", sizeBytes: 32 * 1024 * 1024, expected: 340_000 },
+      { label: "32 MiB + 1 B", sizeBytes: 32 * 1024 * 1024 + 1, expected: 341_000 },
+      { label: "300 MiB", sizeBytes: 300 * 1024 * 1024, expected: 675_000 },
+      { label: "2 GiB", sizeBytes: 2 * 1024 ** 3, expected: 2_860_000 },
+      { label: "9.4 GiB", sizeBytes: Math.floor(9.4 * 1024 ** 3), expected: 12_332_000 },
+      { label: "64 GiB", sizeBytes: 64 * 1024 ** 3, expected: 82_220_000 },
+      {
+        label: "huge file (Node timer limit)",
+        sizeBytes: Number.MAX_SAFE_INTEGER,
+        expected: MAX_TIMER_TIMEOUT_MS,
+      },
     ].flatMap((testCase) => [
       { ...testCase, inputType: "number" },
       { ...testCase, inputType: "bigint", sizeBytes: BigInt(testCase.sizeBytes) },
@@ -88,9 +94,9 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
   }
 
   it.each([
-    { label: "empty", paddingBytes: null, timeout: 30_000 },
-    { label: "small", paddingBytes: 0, timeout: 31_000 },
-    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, timeout: 32_000 },
+    { label: "empty", paddingBytes: null, timeout: 300_000 },
+    { label: "small", paddingBytes: 0, timeout: 301_000 },
+    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, timeout: 341_000 },
   ])("snapshots a $label database with its size budget", async ({ paddingBytes, timeout }) => {
     const source = createDatabase(paddingBytes);
     if (paddingBytes) {
@@ -100,7 +106,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     const snapshot = await run(source);
     expect(fs.existsSync(snapshot)).toBe(true);
     expectBudget(timeout);
-    if (timeout > 30_000) {
+    if (timeout > 300_000) {
       expect(logs.debug).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(`SQLite read-only snapshot for ${source}:`),
       );
@@ -112,10 +118,38 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     }
   });
 
+  it("budgets the WAL family while copying committed data from an open writer", async () => {
+    const source = createDatabase(null);
+    const sqlite = requireNodeSqlite();
+    const writer = new sqlite.DatabaseSync(source);
+    try {
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
+      );
+      writer.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(32 * 1024 * 1024);
+      const mainBytes = fs.statSync(source).size;
+      const walBytes = fs.statSync(`${source}-wal`).size;
+      expect(mainBytes).toBeLessThan(32 * 1024);
+      expect(walBytes).toBeGreaterThan(32 * 1024 * 1024);
+      const snapshot = await run(source);
+      const copied = new sqlite.DatabaseSync(snapshot, { readOnly: true });
+      try {
+        expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
+          { bytes: 32 * 1024 * 1024 },
+        ]);
+      } finally {
+        copied.close();
+      }
+      expectBudget(341_000);
+    } finally {
+      writer.close();
+    }
+  });
+
   it.each([
-    { label: "empty", paddingBytes: null, seconds: 30, size: "0 B" },
-    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, seconds: 32, size: "32.0 MiB" },
-    { label: "missing", paddingBytes: null, seconds: 30, size: "unknown size" },
+    { label: "empty", paddingBytes: null, seconds: 300, size: "0 B" },
+    { label: "over 32 MiB", paddingBytes: 32 * 1024 * 1024, seconds: 341, size: "32.0 MiB" },
+    { label: "missing", paddingBytes: null, seconds: 300, size: "unknown size" },
   ])(
     "reports the applied budget and size for a $label timeout",
     async ({ label, paddingBytes, seconds, size }) => {
@@ -145,7 +179,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
   it("uses the base budget on stat failure and retains the child's source error", async () => {
     const source = path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite");
     await expect(run(source)).rejects.toThrow(/SQLite read-only worker.*ENOENT/);
-    expectBudget(30_000);
+    expectBudget(300_000);
     expect(logs.debug).not.toHaveBeenCalled();
   });
 });

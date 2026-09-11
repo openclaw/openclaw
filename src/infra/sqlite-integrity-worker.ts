@@ -5,7 +5,7 @@ import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import {
-  resolveSqliteInspectionBudget,
+  readSqliteInspectionBudget,
   sqliteInspectionTimeoutError,
 } from "./sqlite-readonly-worker.js";
 
@@ -55,7 +55,7 @@ export function assertSqliteIntegrityInWorker(
   // The caller retains its owning lease through native exit. This witness
   // detects observed path swaps; it is not native descriptor authority.
   const identity = readSqliteIntegrityFileIdentity(pathname);
-  const { timeoutMs, size } = resolveSqliteInspectionBudget(
+  const { timeoutMs, size } = readSqliteInspectionBudget(
     "integrity check",
     pathname,
     identity.size,

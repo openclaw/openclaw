@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { formatByteSize } from "@openclaw/normalization-core";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
@@ -14,9 +15,9 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
 
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
-export const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
-const SQLITE_INSPECTION_TIMEOUT_MAX_MS = 30 * 60_000;
-export const SQLITE_INSPECTION_BYTES_PER_SECOND = 32 * 1024 * 1024;
+const SLOW_HARDWARE_HEADROOM = 10;
+const SQLITE_INSPECTION_TIMEOUT_MS = 30_000 * SLOW_HARDWARE_HEADROOM;
+const SQLITE_INSPECTION_BYTES_PER_SECOND = 32 * 1024 * 1024;
 const log = createSubsystemLogger("state/sqlite");
 
 export function resolveSqliteInspectionBudget(
@@ -24,13 +25,15 @@ export function resolveSqliteInspectionBudget(
   pathname: string,
   sizeBytes: number | bigint | undefined,
 ): { timeoutMs: number; size: string } {
-  // A full copy or integrity scan reads the whole file at least once.
-  // 32 MiB/s is a conservative cold-cache floor on cloud block storage; the
-  // fixed 30 seconds covers child startup and shutdown.
-  const timeoutMs = Math.min(
+  // Copy reads source and writes private files; comparison reads both again.
+  // Leave tenfold headroom below the cloud-storage rate for old, slow disks.
+  const timeoutMs = resolveTimerTimeoutMs(
     SQLITE_INSPECTION_TIMEOUT_MS +
-      Math.ceil(Number(sizeBytes ?? 0) / SQLITE_INSPECTION_BYTES_PER_SECOND) * 1000,
-    SQLITE_INSPECTION_TIMEOUT_MAX_MS,
+      Math.ceil(
+        (4 * SLOW_HARDWARE_HEADROOM * Number(sizeBytes ?? 0)) / SQLITE_INSPECTION_BYTES_PER_SECOND,
+      ) *
+        1000,
+    SQLITE_INSPECTION_TIMEOUT_MS,
   );
   const size =
     sizeBytes === undefined
@@ -47,14 +50,27 @@ export function resolveSqliteInspectionBudget(
   return { timeoutMs, size };
 }
 
-function readSqliteSnapshotBudget(pathname: string): { timeoutMs: number; size: string } {
-  let sizeBytes: bigint | undefined;
+export function readSqliteInspectionBudget(
+  operation: string,
+  pathname: string,
+  mainSizeBytes?: bigint,
+): { timeoutMs: number; size: string } {
+  let sizeBytes = mainSizeBytes;
   try {
-    sizeBytes = fs.statSync(pathname, { bigint: true }).size;
+    sizeBytes ??= fs.statSync(pathname, { bigint: true }).size;
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      try {
+        sizeBytes += fs.statSync(pathname + suffix, { bigint: true }).size;
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
   } catch {
     // Let the child report the source error with its normal diagnostics.
   }
-  return resolveSqliteInspectionBudget("read-only snapshot", pathname, sizeBytes);
+  return resolveSqliteInspectionBudget(operation, pathname, sizeBytes);
 }
 
 export function sqliteInspectionTimeoutError(
@@ -198,7 +214,7 @@ export function runSqliteReadOnlyWorker(
   options: { mode: SqliteReadOnlyWorkerMode; stagingRoot?: string; signal?: AbortSignal },
 ): Promise<string | SqliteSchemaHeader> {
   return new Promise<string | SqliteSchemaHeader>((resolve, reject) => {
-    const { timeoutMs, size } = readSqliteSnapshotBudget(pathname);
+    const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
     let output: SqliteReadOnlyWorkerOutput = { stderr: "", stdout: "" };
     const child = execFile(
       process.execPath,
@@ -244,7 +260,7 @@ export function runSqliteReadOnlyWorker(
 }
 
 export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
-  const { timeoutMs, size } = readSqliteSnapshotBudget(pathname);
+  const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
     process.execPath,
     sqliteReadOnlyWorkerArgv(pathname, "sync", stagingRoot),
