@@ -189,7 +189,6 @@ export function createChannelProgressDraftCompositor(params: {
     const linesRenderedByChannel =
       params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
     return formatChannelProgressDraftTextForStreaming({
-      toolProgress: !quietProgress,
       presentation: params.presentation,
       entry: params.entry,
       lines: linesRenderedByChannel ? [] : draftLines,
@@ -416,7 +415,6 @@ export function createChannelProgressDraftCompositor(params: {
     const shouldStartImmediately = shouldStoreLine && isChannelProgressAttentionLine(progressLine);
     const nextLines = shouldStoreLine
       ? mergeChannelProgressDraftLineForStreaming(lines, progressLine, {
-          toolProgress: !quietProgress,
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         })
       : lines;
@@ -703,7 +701,6 @@ export function createChannelProgressDraftCompositor(params: {
           },
           {
             maxLines: resolveChannelProgressDraftMaxLines(params.entry),
-            toolProgress: !quietProgress,
           },
         );
       } else if (priorIndex >= 0) {
@@ -711,7 +708,6 @@ export function createChannelProgressDraftCompositor(params: {
         lines[priorIndex] = displayLine;
       } else {
         lines = mergeChannelProgressDraftLineForStreaming(lines, displayLine, {
-          toolProgress: !quietProgress,
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         });
       }
@@ -756,7 +752,6 @@ export function createChannelProgressDraftCompositor(params: {
         prefix: false,
       };
       lines = mergeChannelProgressDraftLineForStreaming(lines, line, {
-        toolProgress: !quietProgress,
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
       });
       if (!itemId) {
