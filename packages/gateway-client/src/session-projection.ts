@@ -11,6 +11,7 @@ import {
 import {
   hasDisplayableSessionMessage,
   isSessionProjectionErrorMessage,
+  readSessionMessageDisplayContent,
 } from "./session-projection-message-content.js";
 import {
   normalizeSessionProjectionRunId,
@@ -383,6 +384,21 @@ function insertEntry(
     : [...entries.slice(0, nextIndex), incoming, ...entries.slice(nextIndex)];
 }
 
+/** Pick the unique matched row whose display text equals the live replay's. */
+function findUniqueDisplayTextMatch(
+  matches: readonly SessionProjectionEntry[],
+  incoming: SessionProjectionEntry,
+): SessionProjectionEntry | undefined {
+  const text = readSessionMessageDisplayContent(incoming.message).text;
+  if (!text) {
+    return undefined;
+  }
+  const sameText = matches.filter(
+    (entry) => readSessionMessageDisplayContent(entry.message).text === text,
+  );
+  return sameText.length === 1 ? sameText[0] : undefined;
+}
+
 export function projectLiveSessionMessage(
   state: SessionProjectionState,
   message: unknown,
@@ -399,7 +415,7 @@ export function projectLiveSessionMessage(
   const matches = state.entries.filter((entry) => entryMatches(entry, incoming));
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
-    (matches.length === 1 ? matches[0] : undefined);
+    (matches.length === 1 ? matches[0] : findUniqueDisplayTextMatch(matches, incoming));
   if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }

@@ -531,6 +531,29 @@ describe("session transcript projection", () => {
     ]);
   });
 
+  it("resolves a live replay against several same-run rows by identical display text", () => {
+    const runId = "duplicate-run";
+    const toolCall = createMessage("assistant", "[toolCall]", {
+      id: "assistant-tool",
+      seq: 2,
+      runId,
+    });
+    const reply = createMessage("assistant", "answered with red", {
+      id: "assistant-reply",
+      seq: 5,
+      runId,
+    });
+    const replay = createMessage("assistant", "answered with red");
+
+    const state = projectLiveSessionMessage(
+      createSessionProjection(primaryScope, [toolCall, reply]),
+      replay,
+      { runId },
+    );
+
+    expect(state.messages).toEqual([toolCall, reply]);
+  });
+
   it("promotes a native sequence-only live row to its durable snapshot identity", () => {
     const live = createMessage("user", "live projection", { seq: 7 });
     const persisted = createMessage("user", "persisted projection", {
