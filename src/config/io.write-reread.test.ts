@@ -182,6 +182,11 @@ describe("writeConfigFile canonical reread", () => {
             },
           ).catch((error: unknown) => error);
           expect(failure).toBeInstanceOf(Error);
+          expect(failure).toMatchObject({
+            name: "ConfigWritePostCommitError",
+            configPath,
+            rollbackStatus: revoke ? "unknown" : "restored",
+          });
           expect(failure).toHaveProperty(
             "message",
             expect.stringMatching(/runtime snapshot refresh failed/),
@@ -268,15 +273,28 @@ describe("writeConfigFile canonical reread", () => {
               : writer === "runtime"
                 ? writeConfigFile(nextConfig, options)
                 : replaceConfigFile({ snapshot, writeOptions: options, nextConfig });
-          await expect(pending).rejects.toThrow(
-            writer === "direct" ? /config path changed/ : /runtime snapshot refresh failed/,
+          const failure = await pending.catch((error: unknown) => error);
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure).toMatchObject({
+            name: "ConfigWritePostCommitError",
+            configPath,
+            rollbackStatus: authority === "ordinary" ? "restored" : "unknown",
+          });
+          expect(failure).toHaveProperty(
+            "message",
+            expect.stringMatching(
+              writer === "direct" ? /config path changed/ : /runtime snapshot refresh failed/,
+            ),
           );
           if (writer === "direct") {
-            await expect(pending).rejects.toBeInstanceOf(ConfigMutationConflictError);
-            await expect(pending).rejects.toMatchObject({
-              message: "config path changed since last load",
-              retryable: false,
-            });
+            expect(failure).toHaveProperty("cause", expect.any(ConfigMutationConflictError));
+            expect(failure).toHaveProperty(
+              "cause",
+              expect.objectContaining({
+                message: "config path changed since last load",
+                retryable: false,
+              }),
+            );
             expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
               priorAudit,
             );

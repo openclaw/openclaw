@@ -28,9 +28,14 @@ For read-only diagnosis, use `--lint` or bare `--json`. Ordinary `doctor`, inclu
 
 When ordinary `doctor` asks **Apply recommended config repairs now?**, it checks
 that the selected root config file still matches the source of that proposal.
-If its contents or selected path changed, Doctor preserves the newer file,
+If its contents or selected path changed before the write, Doctor preserves the newer file,
 leaves the pending config fixes unwritten, and exits with an error. Rerun
 `openclaw doctor` to review an updated proposal.
+
+If saving succeeds but later processing fails, Doctor stops with an error, names
+the file that was written, and reports whether the write was rolled back. When it was not rolled
+back or recovery could not be confirmed, inspect that file and the active config
+before rerunning Doctor.
 
 If the shared state database uses a newer schema, Doctor refuses before offering
 an interactive update because update admission also needs that database. Run
