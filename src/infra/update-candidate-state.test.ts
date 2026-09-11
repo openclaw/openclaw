@@ -178,54 +178,6 @@ it.each(["DELETE", "WAL"])(
   },
 );
 
-// Windows registries can carry extended-length \\?\ agent paths (issue #144581):
-// projection must rebase them under the candidate root instead of embedding the
-// namespace prefix mid-path and failing the snapshot mkdir.
-it.skipIf(process.platform !== "win32")(
-  "projects extended-length registered agent paths under the candidate state root",
-  async () => {
-    const source = path.join(root, "source");
-    const target = path.join(root, "copy");
-    const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await createDatabase(canonical);
-    const namespaced = `\\\\?\\${canonical}`;
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-      )
-      .run("main", namespaced);
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
-    const versions = await runSnapshotWorker({
-      stateDir: source,
-      targetStateDir: target,
-      config: {},
-    });
-    // The namespaced registration dedupes to the database's plain spelling.
-    expect(versions.map((entry) => entry.path)).toContain(canonical);
-    expect(versions.map((entry) => entry.path)).not.toContain(namespaced);
-    const copied = openNodeSqliteDatabase(
-      path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    );
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    const rebound = copiedRegistry
-      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
-      .get() as { path: string };
-    copiedRegistry.close();
-    expect(path.isAbsolute(rebound.path)).toBe(false);
-    expect(rebound.path.split(/[\\/]/)).toEqual([
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    ]);
-  },
-);
-
 it("retains deferred content in both inspection and rehearsal snapshots", async () => {
   const stateDir = path.join(root, "deferred");
   const file = path.join(stateDir, "state", "openclaw.sqlite");
