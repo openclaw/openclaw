@@ -134,6 +134,8 @@ export function createUpdateRun(
     runId?: string;
     trigger: UpdateRunRecord["trigger"];
     supersedeStaleIdentityless?: boolean;
+    /** Preview history must not repair canonical task data. */
+    preview?: boolean;
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
@@ -215,8 +217,11 @@ export function createUpdateRun(
       return decodeRun(admittedRow);
     },
     options,
-    schema,
-    ensureUpdateRunLedgerSchema,
+    {
+      schemaSql: schema,
+      initializeSchema: ensureUpdateRunLedgerSchema,
+      recoverTaskDeliveryOrphans: !input.preview,
+    },
   );
 }
 

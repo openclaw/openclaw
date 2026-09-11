@@ -2225,7 +2225,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("rejects foreign-key violations before creating a backup archive", async () => {
+  it("rejects repairable task-delivery orphans before creating a backup archive", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -2260,9 +2260,20 @@ describe("createBackupArchive", () => {
             nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
           }),
         ).rejects.toThrow(
-          /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu,
+          /repairable task_delivery_state\.task_id references task_runs\.task_id.*\(1 rows\).*openclaw doctor --fix/iu,
         );
         expect(await fs.readdir(outputDir)).toEqual([]);
+        const unchanged = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env), {
+          readOnly: true,
+        });
+        try {
+          expect(unchanged.prepare("SELECT task_id FROM task_delivery_state").all()).toEqual([
+            { task_id: "missing-task" },
+          ]);
+          expect(unchanged.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+        } finally {
+          unchanged.close();
+        }
       },
     );
   });

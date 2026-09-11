@@ -68,6 +68,22 @@ function inspect<T>(filename: string, run: (db: DatabaseSync) => T): T {
   }
 }
 
+it("keeps repairable task-delivery state unchanged during update preview", async () => {
+  const f = seededOrphans();
+  await expect(
+    admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root }).then(() => "admitted"),
+  ).rejects.toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
+  inspect(f.filename, (db) => {
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
+  expect(
+    fs
+      .readdirSync(path.dirname(f.filename))
+      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
+  ).toEqual([]);
+});
+
 it("admits cascade-owned task-delivery orphans with preservation and a durable recovery record", async () => {
   const f = seededOrphans();
   const run = await admitUpdateCommandRun({ opts: {}, root: f.root });

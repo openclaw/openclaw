@@ -11,8 +11,11 @@ const readyDatabases = new WeakSet<DatabaseSync>();
 export function runUpdateRunAdmission<T>(
   operation: (db: DatabaseSync, recoveryChanges: string[]) => T,
   options: OpenClawStateDatabaseOptions,
-  schemaSql: string,
-  initializeSchema: (db: DatabaseSync) => void,
+  contract: {
+    schemaSql: string;
+    initializeSchema: (db: DatabaseSync) => void;
+    recoverTaskDeliveryOrphans: boolean;
+  },
 ): T {
   if (options.database) {
     throw new Error("Update run admission requires its own writable connection");
@@ -32,12 +35,15 @@ export function runUpdateRunAdmission<T>(
     }
   }, options);
   if (inspection) {
+    if (inspection.repairable && !contract.recoverTaskDeliveryOrphans) {
+      throw inspection.repairable;
+    }
     try {
       return runExistingOpenClawStateWriteTransaction(
         ({ db, recoveryChanges }) => operation(db, recoveryChanges),
         options,
         {
-          schemaSql,
+          schemaSql: contract.schemaSql,
           operationLabel: "update.run",
           initializeAdditiveSchema: true,
           ...(inspection.repairable ? { recoverTaskDeliveryOrphans: true } : {}),
@@ -58,7 +64,7 @@ export function runUpdateRunAdmission<T>(
     ({ db }) => {
       // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
       if (!readyDatabases.has(db)) {
-        initializeSchema(db);
+        contract.initializeSchema(db);
       }
       committedDatabase = db;
       return operation(db, []);

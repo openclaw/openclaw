@@ -47,6 +47,8 @@ the entry records the row count and recovery directory. A live Gateway owner,
 read-only store, or failed preservation prevents repair and reports
 `openclaw doctor --fix` as the next action. Other foreign-key violations and
 structural damage still refuse admission.
+`--dry-run` reports the repairable condition without recovering rows or creating
+an update ledger entry for that refused preview.
 
 The installed 2026.9.4 updater cannot use this recovery before updating itself.
 If it refuses with a database integrity error, install the corrective release
