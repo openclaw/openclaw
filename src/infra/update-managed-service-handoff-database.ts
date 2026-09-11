@@ -1,5 +1,3 @@
-import childProcess from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs, { type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
@@ -21,62 +19,12 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
-import { createPrivateWindowsDirectory } from "./windows-private-directory.js";
+import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
 export type LeaseRow = { owner: string; payload_json: string; updated_at: number };
 export type LeaseTable = LeaseRow & { install_root: string };
 export const leaseQueries = (db: HandoffDatabase) =>
   getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
-
-// Sealed lease consumers must not resolve installed publication dependencies.
-const renameNoReplaceScript = () => `
-  import fs from "node:fs";
-  import { publishFileExclusive } from ${JSON.stringify(import.meta.resolve("@openclaw/fs-safe/durability"))};
-  try {
-    const input = JSON.parse(process.argv[1]);
-    const source = fs.lstatSync(input.sourcePath);
-    const parent = fs.lstatSync(input.parentPath);
-    if (
-      source.isSymbolicLink() ||
-      !source.isFile() ||
-      source.nlink !== 1 ||
-      source.dev !== input.sourceIdentity.dev ||
-      source.ino !== input.sourceIdentity.ino ||
-      source.mode !== input.sourceIdentity.mode ||
-      source.uid !== input.sourceIdentity.uid ||
-      parent.isSymbolicLink() ||
-      !parent.isDirectory() ||
-      parent.dev !== input.parentIdentity.dev ||
-      parent.ino !== input.parentIdentity.ino ||
-      parent.mode !== input.parentIdentity.mode ||
-      parent.uid !== input.parentIdentity.uid ||
-      fs.realpathSync.native(input.parentPath) !== input.parentRealPath
-    ) {
-      throw Object.assign(new Error("publication input identity changed"), {
-        code: "ESTALE",
-      });
-    }
-    await publishFileExclusive({
-      sourcePath: input.sourcePath,
-      targetPath: input.targetPath,
-      strategy: "rename-noreplace",
-      expectedSourceIdentity: source,
-      parentReceipt: {
-        path: input.parentPath,
-        realPath: input.parentRealPath,
-        identity: parent,
-      },
-    });
-    process.stdout.write(JSON.stringify({ ok: true }));
-  } catch (error) {
-    process.stdout.write(JSON.stringify({
-      ok: false,
-      code: typeof error?.code === "string" ? error.code : undefined,
-      message: error instanceof Error ? error.message : String(error),
-    }));
-    process.exitCode = 2;
-  }
-`;
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
   executeSqliteQuerySync(
@@ -96,70 +44,6 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
-}
-
-function renameNoReplaceSync(params: {
-  sourcePath: string;
-  targetPath: string;
-  sourceIdentity: Stats;
-  parentReceipt: DirectoryReceipt;
-}): void {
-  const input = JSON.stringify({
-    sourcePath: params.sourcePath,
-    targetPath: params.targetPath,
-    sourceIdentity: {
-      dev: params.sourceIdentity.dev,
-      ino: params.sourceIdentity.ino,
-      mode: params.sourceIdentity.mode,
-      uid: params.sourceIdentity.uid,
-    },
-    parentPath: params.parentReceipt.path,
-    parentRealPath: params.parentReceipt.realPath,
-    parentIdentity: {
-      dev: params.parentReceipt.identity.dev,
-      ino: params.parentReceipt.identity.ino,
-      mode: params.parentReceipt.identity.mode,
-      uid: params.parentReceipt.identity.uid,
-    },
-  });
-  const child = childProcess.spawnSync(
-    process.execPath,
-    ["--no-warnings", "--input-type=module", "--eval", renameNoReplaceScript(), input],
-    {
-      encoding: "utf8",
-      env: {},
-      killSignal: "SIGKILL",
-      maxBuffer: 64 * 1024,
-      timeout: 10_000,
-      windowsHide: true,
-    },
-  );
-  if (child.error) {
-    throw new Error("managed handoff lease publication helper failed", { cause: child.error });
-  }
-  let result: unknown;
-  try {
-    result = JSON.parse(child.stdout);
-  } catch (error) {
-    throw new Error("managed handoff lease publication helper returned an invalid result", {
-      cause: error,
-    });
-  }
-  if (!result || typeof result !== "object") {
-    throw new Error("managed handoff lease publication helper returned an invalid result");
-  }
-  const ok = "ok" in result ? result.ok : undefined;
-  const code = "code" in result && typeof result.code === "string" ? result.code : undefined;
-  const message =
-    "message" in result && typeof result.message === "string" ? result.message : undefined;
-  if (child.status === 0 && ok === true && child.stderr === "") {
-    return;
-  }
-  const failure = Object.assign(
-    new Error(message ?? "managed handoff lease publication helper failed"),
-    code ? { code } : {},
-  );
-  throw failure;
 }
 
 export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
@@ -191,111 +75,40 @@ function assertSamePath(stat: Stats, expected: Stats, kind: "directory" | "file"
   }
 }
 
-function makePrivateStagingDirectory(dir: string): string {
-  if (process.platform !== "win32") {
-    return fs.mkdtempSync(path.join(dir, ".managed-update-handoffs-"));
-  }
-  const stagingDir = path.join(dir, `.managed-update-handoffs-${randomUUID()}`);
-  createPrivateWindowsDirectory(stagingDir);
-  return stagingDir;
-}
-
-function cleanupStagingDirectory(params: {
-  stagingDir: string;
-  stagingDirectoryIdentity: Stats;
-  stagedDatabasePath?: string;
-  stagedDatabaseIdentity?: Stats;
-}): void {
+function createMissingDatabaseFile(databasePath: string, parentReceipt: DirectoryReceipt): void {
+  let descriptor: number | undefined;
   try {
-    assertSamePath(fs.lstatSync(params.stagingDir), params.stagingDirectoryIdentity, "directory");
-    if (params.stagedDatabasePath && params.stagedDatabaseIdentity) {
-      try {
-        const current = fs.lstatSync(params.stagedDatabasePath);
-        if (!current.isSymbolicLink() && sameFileIdentity(current, params.stagedDatabaseIdentity)) {
-          fs.unlinkSync(params.stagedDatabasePath);
-        }
-      } catch (error) {
-        if (errorCode(error) !== "ENOENT") {
-          return;
-        }
-      }
+    descriptor =
+      process.platform === "win32"
+        ? createPrivateWindowsFile(databasePath)
+        : fs.openSync(
+            databasePath,
+            fs.constants.O_RDWR |
+              fs.constants.O_CREAT |
+              fs.constants.O_EXCL |
+              fs.constants.O_NOFOLLOW,
+            0o600,
+          );
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") {
+      throw error;
     }
-    assertSamePath(fs.lstatSync(params.stagingDir), params.stagingDirectoryIdentity, "directory");
-    if (fs.readdirSync(params.stagingDir).length === 0) {
-      fs.rmdirSync(params.stagingDir);
-    }
-  } catch {
-    // An absent or changed staging path is no longer ours to remove.
   }
-}
-
-function initializeMissingDatabase(databasePath: string, parentReceipt: DirectoryReceipt): void {
-  const dir = parentReceipt.path;
-  const stagingDir = makePrivateStagingDirectory(dir);
-  fs.chmodSync(stagingDir, 0o700);
-  const stagingDirectoryIdentity = fs.lstatSync(stagingDir);
-  assertPath(stagingDirectoryIdentity, "directory");
-  const stagedDatabasePath = path.join(stagingDir, path.basename(databasePath));
-  let stagedDatabaseIdentity: Stats | undefined;
   try {
-    const stagedDatabase = openNodeSqliteDatabase(stagedDatabasePath, { readOnly: false });
-    try {
-      setSqliteBusyTimeout(stagedDatabase, 5000);
-      initializeLeaseSchema(stagedDatabase);
-    } finally {
-      if (stagedDatabase.isOpen) {
-        stagedDatabase.close();
-      }
-    }
-    fs.chmodSync(stagedDatabasePath, 0o600);
-    // Windows fsync requires write access after the SQLite handle closes.
-    const descriptor = fs.openSync(
-      stagedDatabasePath,
-      fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0),
-    );
-    try {
-      stagedDatabaseIdentity = fs.fstatSync(descriptor);
-      assertPath(stagedDatabaseIdentity, "file");
+    if (descriptor !== undefined) {
+      fs.fchmodSync(descriptor, 0o600);
+      // SQLite commits schema on this inode; a crash here leaves its existing empty-file recovery.
       fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
     }
-    assertSamePath(fs.lstatSync(dir), parentReceipt.identity, "directory");
-    assertSamePath(fs.lstatSync(stagingDir), stagingDirectoryIdentity, "directory");
-    assertSamePath(fs.lstatSync(stagedDatabasePath), stagedDatabaseIdentity, "file");
-    if (fs.readdirSync(stagingDir).toSorted().join("\0") !== path.basename(databasePath)) {
-      throw new Error("managed handoff lease staging directory contains unexpected files");
-    }
-
-    let published = true;
-    try {
-      renameNoReplaceSync({
-        sourcePath: stagedDatabasePath,
-        targetPath: databasePath,
-        sourceIdentity: stagedDatabaseIdentity,
-        parentReceipt,
-      });
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") {
-        throw error;
-      }
-      published = false;
-    }
-
-    const canonicalIdentity = fs.lstatSync(databasePath);
-    assertPath(canonicalIdentity, "file");
-    if (published && !sameFileIdentity(canonicalIdentity, stagedDatabaseIdentity)) {
-      throw new Error("managed handoff lease file changed during initialization");
-    }
-    assertSamePath(fs.lstatSync(dir), parentReceipt.identity, "directory");
+    const identity =
+      descriptor === undefined ? fs.lstatSync(databasePath) : fs.fstatSync(descriptor);
+    assertSamePath(fs.lstatSync(databasePath), identity, "file");
+    assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
     requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
   } finally {
-    cleanupStagingDirectory({
-      stagingDir,
-      stagingDirectoryIdentity,
-      stagedDatabasePath,
-      stagedDatabaseIdentity,
-    });
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
   }
 }
 
@@ -378,19 +191,21 @@ export function createManagedHandoffLeaseDatabase(
     const directoryIdentity = fs.lstatSync(dir);
     assertPath(directoryIdentity, "directory");
     if (write && !fs.existsSync(databasePath)) {
-      initializeMissingDatabase(databasePath, {
+      createMissingDatabaseFile(databasePath, {
         path: dir,
         realPath: fs.realpathSync.native(dir),
         identity: directoryIdentity,
       });
-    } else {
-      assertPath(fs.lstatSync(databasePath), "file");
     }
+    const databaseIdentity = fs.lstatSync(databasePath);
+    assertPath(databaseIdentity, "file");
     const db = openNodeSqliteDatabase(
       write ? resolveExistingSqliteFileUri(databasePath) : databasePath,
       { readOnly: !write },
     );
     try {
+      assertSamePath(fs.lstatSync(dir), directoryIdentity, "directory");
+      assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
       setSqliteBusyTimeout(db, 5000);
       if (write) {
         initializeLeaseSchema(db);

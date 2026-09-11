@@ -1,4 +1,4 @@
-import childProcess, { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
+import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const databaseModule = new URL("./update-managed-service-handoff-database.ts", import.meta.url)
   .href;
-const realSpawnSync = childProcess.spawnSync.bind(childProcess);
 const repoRoot = process.cwd();
 const tsxLoader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 let root: string;
@@ -114,7 +114,12 @@ describe("managed handoff database publication", () => {
 
   it("publishes a complete private single-link database", () => {
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    withDatabase(true, (db) => insertRow(db, root, "first"));
+    const umask = process.umask(0o777);
+    try {
+      withDatabase(true, (db) => insertRow(db, root, "first"));
+    } finally {
+      process.umask(umask);
+    }
 
     const stat = fs.statSync(databasePath);
     if (process.platform !== "win32") {
@@ -142,86 +147,106 @@ describe("managed handoff database publication", () => {
     expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 
-  it("leaves the canonical path absent when no-replace publication is unavailable", () => {
-    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
-      pid: 1,
-      output: [null, '{"ok":false,"code":"ENOTSUP","message":"unsupported"}', ""],
-      stdout: '{"ok":false,"code":"ENOTSUP","message":"unsupported"}',
-      stderr: "",
-      status: 2,
-      signal: null,
+  it("retains an exclusively created inode after a durability failure for ordinary recovery", () => {
+    vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => {
+      throw new Error("fixture sync failed");
     });
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-
-    expect(() => withDatabase(true, () => undefined)).toThrow("unsupported");
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(fs.readdirSync(root)).toEqual([]);
-  });
-
-  it("never removes a published database after the publication helper reports failure", () => {
-    vi.spyOn(childProcess, "spawnSync").mockImplementation((_command, args) => {
-      const input = JSON.parse(String(args?.at(-1)));
-      const source = String(input.sourcePath);
-      const target = String(input.targetPath);
-      fs.renameSync(source, target);
-      const peer = new DatabaseSync(target);
-      try {
-        insertRow(peer, "peer", "peer");
-      } finally {
-        peer.close();
-      }
-      return {
-        pid: 1,
-        output: [null, '{"ok":false,"code":"EIO","message":"sync failed"}', ""],
-        stdout: '{"ok":false,"code":"EIO","message":"sync failed"}',
-        stderr: "",
-        status: 2,
-        signal: null,
-      };
-    });
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-
-    expect(() => withDatabase(true, () => undefined)).toThrow("sync failed");
-    expect(readOwners()).toEqual(["peer"]);
-    expect(fs.statSync(databasePath).nlink).toBe(1);
+    expect(() => withDatabase(true, () => undefined)).toThrow("fixture sync failed");
+    const before = fs.statSync(databasePath);
+    expect(before.size).toBe(0);
+    expect(before.nlink).toBe(1);
     vi.restoreAllMocks();
-
-    withDatabase(true, (db) => insertRow(db, "next", "next"));
-    expect(readOwners()).toEqual(["next", "peer"]);
+    withDatabase(true, (db) => insertRow(db, root, "recovered"));
+    expect(fs.statSync(databasePath).ino).toBe(before.ino);
+    expect(readOwners()).toEqual(["recovered"]);
   });
 
-  it.each(["source", "parent"] as const)(
-    "refuses a replaced publication %s before the no-replace rename",
+  it.each(["file", "parent"] as const)(
+    "preserves initialization ownership when %s replacement is attempted",
     (target) => {
-      let retainedParent: string | undefined;
-      vi.spyOn(childProcess, "spawnSync").mockImplementation((command, args, options) => {
-        const input = JSON.parse(String(args?.at(-1)));
-        if (target === "source") {
-          fs.renameSync(input.sourcePath, input.sourcePath + ".retained");
-          fs.writeFileSync(input.sourcePath, "replacement", { mode: 0o600 });
+      const sync = fs.fsyncSync;
+      const retained = dirs.make("retained-initialization-");
+      const originalParent = fs.statSync(root);
+      let originalFile: fs.Stats | undefined;
+      vi.spyOn(fs, "fsyncSync").mockImplementationOnce((descriptor) => {
+        originalFile = fs.fstatSync(descriptor);
+        if (target === "file") {
+          fs.renameSync(databasePath, path.join(retained, "original.sqlite"));
+          fs.writeFileSync(databasePath, "replacement", { mode: 0o600 });
         } else {
-          retainedParent = input.parentPath + ".retained";
-          const stagingName = path.basename(path.dirname(input.sourcePath));
-          fs.renameSync(input.parentPath, retainedParent);
-          fs.mkdirSync(input.parentPath, { mode: 0o700 });
+          fs.renameSync(root, path.join(retained, "original-parent"));
+          fs.mkdirSync(root, { mode: 0o700 });
           fs.renameSync(
-            path.join(retainedParent, stagingName),
-            path.join(input.parentPath, stagingName),
+            path.join(retained, "original-parent", path.basename(databasePath)),
+            databasePath,
           );
         }
-        return realSpawnSync(command, args, options);
+        sync(descriptor);
       });
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-      try {
-        expect(() => withDatabase(true, () => undefined)).toThrow(
-          "publication input identity changed",
+      const initialize = () =>
+        createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+      if (process.platform === "win32" && target === "parent") {
+        expect(initialize).toThrow(expect.objectContaining({ code: "EPERM" }));
+        if (!originalFile) {
+          throw new Error("fixture did not capture the created descriptor");
+        }
+        expect(fs.statSync(root)).toMatchObject({
+          dev: originalParent.dev,
+          ino: originalParent.ino,
+        });
+        expect(fs.statSync(databasePath)).toMatchObject({
+          dev: originalFile.dev,
+          ino: originalFile.ino,
+          size: 0,
+          nlink: 1,
+        });
+        expect(fs.readFileSync(databasePath, "utf8")).toBe("");
+        vi.restoreAllMocks();
+        createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+          insertRow(db, root, "recovered"),
         );
-        expect(fs.existsSync(databasePath)).toBe(false);
-      } finally {
-        if (retainedParent) {
-          fs.rmSync(retainedParent, { recursive: true, force: true });
+        expect(fs.statSync(databasePath)).toMatchObject({
+          dev: originalFile.dev,
+          ino: originalFile.ino,
+          nlink: 1,
+        });
+        expect(readOwners()).toEqual(["recovered"]);
+      } else {
+        expect(initialize).toThrow(/changed during initialization/);
+        expect(fs.readFileSync(databasePath, "utf8")).toBe(target === "file" ? "replacement" : "");
+        expect(fs.statSync(databasePath).nlink).toBe(1);
+      }
+    },
+  );
+
+  it.each(["empty-file", "empty-schema", "foreign-schema", "wrong-table", "malformed"] as const)(
+    "ordinary observation preserves an existing %s",
+    (state) => {
+      fs.writeFileSync(databasePath, state === "malformed" ? "not SQLite" : "", { mode: 0o600 });
+      if (state !== "empty-file" && state !== "malformed") {
+        const db = new DatabaseSync(databasePath);
+        try {
+          db.exec(
+            state === "empty-schema"
+              ? "VACUUM"
+              : state === "foreign-schema"
+                ? "CREATE TABLE unrelated(value TEXT)"
+                : "CREATE TABLE managed_update_handoffs(wrong TEXT)",
+          );
+        } finally {
+          db.close();
         }
       }
+      const bytes = fs.readFileSync(databasePath);
+      const before = fs.statSync(databasePath);
+      const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+      expect(store.read(root)).toEqual({
+        kind: state === "empty-file" || state === "empty-schema" ? "absent" : "unreadable",
+      });
+      expect(fs.readFileSync(databasePath)).toEqual(bytes);
+      expect(fs.statSync(databasePath).ino).toBe(before.ino);
+      expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
     },
   );
 
@@ -262,55 +287,40 @@ describe("managed handoff database publication", () => {
     }
   });
 
-  it("never exposes an incomplete database to a real peer reader", async () => {
+  it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
     const script = `
       const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
-      const withDatabase = createManagedHandoffLeaseDatabase(process.argv[1]);
-      withDatabase(true, (db) => db.prepare(
-        "INSERT INTO managed_update_handoffs " +
-        "(install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)"
-      ).run("writer", "writer", "{}", 1));
+      createManagedHandoffLeaseDatabase(process.argv[1])(true, () => undefined);
     `;
     const writer = spawnFixture(script, [databasePath]);
-    let reads = 0;
+    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
     try {
-      while (writer.child.exitCode === null && writer.child.signalCode === null) {
+      do {
+        expect(store.read(root)).toEqual({ kind: "absent" });
         if (fs.existsSync(databasePath)) {
-          expect(() => {
-            const reader = new DatabaseSync(databasePath, { readOnly: true });
-            try {
-              reader.exec("PRAGMA busy_timeout=5000");
-              reader.prepare("SELECT install_root FROM managed_update_handoffs").all();
-              const stat = fs.statSync(databasePath);
-              if (process.platform !== "win32") {
-                expect(stat.mode & 0o777).toBe(0o600);
-              }
-              expect(stat.nlink).toBe(1);
-              reads += 1;
-            } finally {
-              reader.close();
-            }
-          }).not.toThrow();
+          const stat = fs.statSync(databasePath);
+          if (process.platform !== "win32") {
+            expect(stat.mode & 0o777).toBe(0o600);
+          }
+          expect(stat.nlink).toBe(1);
         }
         await new Promise((resolve) => {
           setTimeout(resolve, 1);
         });
-      }
+      } while (writer.child.exitCode === null && writer.child.signalCode === null);
       expect(await writer.closed).toEqual([0, null]);
       expect(writer.output().stderr).toBe("");
-      expect(readOwners()).toEqual(["writer"]);
-      expect(reads).toBeGreaterThan(0);
+      expect(readOwners()).toEqual([]);
     } finally {
       await stopChildProcess(writer.child, 5_000);
     }
   });
 
-  it("recovers when the first writer crashes before publication", async () => {
+  it("recovers the same inode when its first writer crashes before schema initialization", async () => {
     const script = `
-      import childProcess from "node:child_process";
       import fs from "node:fs";
-      childProcess.spawnSync = () => {
-        fs.writeSync(1, "before-publication\\n");
+      fs.fsyncSync = () => {
+        fs.writeSync(1, "before-schema\\n");
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
       };
       const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
@@ -318,17 +328,55 @@ describe("managed handoff database publication", () => {
     `;
     const writer = spawnFixture(script, [databasePath]);
     try {
-      await writer.waitForMarker("before-publication");
+      await writer.waitForMarker("before-schema");
+      const before = fs.statSync(databasePath);
+      expect(before.size).toBe(0);
+      expect(before.nlink).toBe(1);
+      expect(
+        createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} }).read(root),
+      ).toEqual({
+        kind: "absent",
+      });
       await killFixture(writer);
-      expect(fs.existsSync(databasePath)).toBe(false);
-
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-      withDatabase(true, (db) => insertRow(db, root, "recovered"));
+      createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+        insertRow(db, root, "recovered"),
+      );
+      expect(fs.statSync(databasePath).ino).toBe(before.ino);
       expect(readOwners()).toEqual(["recovered"]);
     } finally {
       await stopChildProcess(writer.child, 5_000);
     }
   });
+
+  it.each(["reader", "writer"] as const)(
+    "waits for a held SQLite %s before writing",
+    async (kind) => {
+      createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+        insertRow(db, root, "original"),
+      );
+      const script = `
+      import { DatabaseSync } from "node:sqlite";
+      import fs from "node:fs";
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec(process.argv[2] === "writer" ? "BEGIN IMMEDIATE" : "BEGIN");
+      db.prepare("SELECT * FROM managed_update_handoffs").all();
+      fs.writeSync(1, "held\\n");
+      setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 300);
+    `;
+      const holder = spawnFixture(script, [databasePath, kind]);
+      try {
+        await holder.waitForMarker("held");
+        createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+          insertRow(db, "next", "next"),
+        );
+        expect(await holder.closed).toEqual([0, null]);
+        expect(holder.output().stderr).toBe("");
+        expect(readOwners()).toEqual(["next", "original"]);
+      } finally {
+        await stopChildProcess(holder.child, 5_000);
+      }
+    },
+  );
 
   it("preserves a committed row when its writer crashes afterward", async () => {
     const script = `

@@ -264,23 +264,25 @@ database under the secure OpenClaw temporary directory. This owner must remain
 available while an update replaces an installation or changes its runtime state.
 The update history above remains in the profile's shared state database.
 
-First creation publishes a complete private database atomically, so concurrent
-updaters cannot observe unfinished permissions or schema. A competing initializer
-opens the published winner without replacing it. Reads of an absent database
-create no state. Existing lease rows, transactions, recovery behavior, and the
-rule that one updater owns an installation are unchanged.
+First creation exclusively creates a private file with one filesystem link.
+Concurrent initializers use that same file without replacing it. SQLite commits
+the existing schema atomically; ordinary lease inspection reports no lease while
+the first-use schema is empty. Reads of an absent database create no state.
+Existing lease rows, claim transactions, and the rule that one updater owns an
+installation are unchanged.
 
 The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
-missing state.
+missing or empty state.
 
-Publication uses the filesystem owner's atomic no-replace rename and follows
-the existing platform policy for directory durability. The published database
-always has one filesystem link.
-Failure stops that lease admission before its operation runs. A crash before publication can leave
-private staging; it cannot expose an incomplete canonical database. This change
-requires no schema migration. See the
+File creation applies private permissions before SQLite opens the file, including
+a protected ACL on Windows. Initialization follows the existing directory-durability
+policy and does not require the optional fs-safe native binding. Failure stops
+lease admission before its operation runs. After an interrupted first creation,
+the normal owner can finish initialization through its existing empty-database
+recovery path; committed rows remain governed by SQLite's normal transactions.
+This change requires no schema migration. See the
 [accepted initialization design](https://github.com/openclaw/openclaw/pull/144155).
 
 ### Cloud repository workspaces

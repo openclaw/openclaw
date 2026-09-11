@@ -6455,7 +6455,16 @@ describe("update-cli", () => {
     expect(schemaCalls.some((order) => order > stoppedAt)).toBe(true);
     expect(freshRestartCalls()).toEqual([
       [
-        [process.execPath, entrypoint, "gateway", "restart", "--preserve-definition", "--json"],
+        [
+          process.execPath,
+          entrypoint,
+          "gateway",
+          "restart",
+          "--preserve-definition",
+          "--json",
+          "--update-executor",
+          "run",
+        ],
         expect.objectContaining({ cwd: root, timeoutMs: 17_000, baseEnv: {} }),
       ],
     ]);
