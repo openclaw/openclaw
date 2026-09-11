@@ -342,19 +342,13 @@ async function observeOAuthRefreshSettlementBeforeDeadline<T>(
         },
         Math.max(0, deadline - Date.now()),
       );
-      settlement.then(
-        (value) => {
+      settlement
+        .finally(() => {
           if (Date.now() >= deadline) {
-            reject(createOAuthRefreshTimeoutError(label, timeoutMs));
-          } else {
-            resolve(value);
+            throw createOAuthRefreshTimeoutError(label, timeoutMs);
           }
-        },
-        (error: unknown) => {
-          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the backend's original rejection before the observation deadline.
-          reject(Date.now() >= deadline ? createOAuthRefreshTimeoutError(label, timeoutMs) : error);
-        },
-      );
+        })
+        .then(resolve, reject);
     });
   } finally {
     if (timeoutHandle) {

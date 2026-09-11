@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   observeOAuthRefreshFenceSettlement,
+  observeOAuthRefreshSettlement,
   refreshSerializedOAuthCredential,
 } from "./oauth-refresh-fence.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
@@ -21,6 +22,22 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("awaited OAuth persistence", () => {
+  it.each([
+    { label: "Error", rejection: new Error("synthetic backend failure") },
+    { label: "primitive", rejection: "synthetic backend failure" },
+    { label: "undefined", rejection: undefined },
+  ])("preserves the original pre-deadline $label rejection", async ({ rejection }) => {
+    const settlement = createDeferredCore<never>();
+    const observing = observeOAuthRefreshSettlement(
+      "synthetic rejection",
+      1_000,
+      settlement.promise,
+    );
+    const rejected = expect(observing).rejects.toBe(rejection);
+    settlement.reject(rejection);
+    await rejected;
+  });
+
   it.each(["stalled read", "expired snapshot", "expired rejection"])(
     "bounds an observer waiting for a %s",
     async (scenario) => {
