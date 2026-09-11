@@ -83,6 +83,7 @@ export async function repairUpdateService(params: {
           opts: params.opts,
           serviceEnv: params.env,
           gatewayPort: params.gatewayPort,
+          timeoutMs: params.timeoutMs,
           nodeRunner: params.nodeRunner,
           expectedVersion: params.result.after?.version ?? undefined,
           expectedBuildId: params.result.after?.buildId ?? undefined,

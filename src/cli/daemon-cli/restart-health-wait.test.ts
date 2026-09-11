@@ -314,6 +314,28 @@ describe("restart health", () => {
     expect(isStartupMigrationActive).toHaveBeenCalledTimes(7);
   });
 
+  it.each([false, true])(
+    "bounds an explicit readiness budget (migration=%s)",
+    async (migration) => {
+      const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
+        await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        timeoutMs: 120_000,
+        isStartupMigrationActive: () => migration,
+      });
+      expect(snapshot).toMatchObject({
+        healthy: false,
+        waitOutcome: "timeout",
+        elapsedMs: 120_000,
+      });
+      expect(renderRestartDiagnostics(snapshot)).toContain(
+        `Readiness budget exhausted after 120s. Last observed startup phase: ${migration ? "startup migration" : "waiting for Gateway listener"}.`,
+      );
+    },
+  );
+
   it("bounds a startup migration that never reaches readiness", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,

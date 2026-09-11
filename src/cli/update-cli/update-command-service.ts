@@ -278,6 +278,7 @@ export async function maybeRestartService(params: {
     return "ok";
   }
   let activationAccepted = false;
+  let childReadinessPending = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -290,6 +291,7 @@ export async function maybeRestartService(params: {
       opts: activation.opts,
       serviceEnv: activation.serviceEnv,
       gatewayPort: activation.gatewayPort,
+      timeoutMs: activation.timeoutMs,
       nodeRunner: activation.nodeRunner,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
@@ -299,6 +301,9 @@ export async function maybeRestartService(params: {
       assertCurrent,
       recoverHealth: async (initialHealth, reinspect) => {
         assertCurrent();
+        if (childReadinessPending) {
+          return { health: initialHealth, launchAgentRecovery: null };
+        }
         let health = initialHealth;
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!activation.opts.json) {
@@ -324,6 +329,7 @@ export async function maybeRestartService(params: {
           health,
           service: resolveGatewayService(),
           port: activation.gatewayPort,
+          timeoutMs: activation.timeoutMs,
           expectedVersion: expectedGatewayVersion,
           ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
           env: activation.serviceEnv,
@@ -390,6 +396,7 @@ export async function maybeRestartService(params: {
             const health = await waitForGatewayHealthyRestart({
               service,
               port: activation.gatewayPort,
+              timeoutMs: activation.timeoutMs,
               expectedVersion: expectedGatewayVersion,
               ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
               env: activation.serviceEnv,
@@ -503,7 +510,17 @@ export async function maybeRestartService(params: {
           activation,
           "restart",
           preserveDefinition,
-        );
+        ).catch((error: unknown) => {
+          if (!(error instanceof GatewayRestartHealthError)) {
+            throw error;
+          }
+          // Activation succeeded; the update verifier owns the longer readiness budget.
+          childReadinessPending = true;
+          defaultRuntime.error(
+            "Gateway is not ready yet; continuing update readiness verification.",
+          );
+          return "accepted" as const;
+        });
         restarted = true;
         activationAccepted = restart === "accepted";
         if (

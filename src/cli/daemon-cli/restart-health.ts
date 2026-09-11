@@ -297,6 +297,7 @@ export async function waitForGatewayHealthyRestart(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  timeoutMs?: number;
   settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
@@ -314,7 +315,7 @@ export async function waitForGatewayHealthyRestart(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const settleProbes = Math.max(1, params.settle?.probes ?? 1);
   const settleDurationMs = (settleProbes - 1) * delayMs;
-  const standardDeadlineMs = attempts * delayMs;
+  const standardDeadlineMs = params.timeoutMs ?? attempts * delayMs;
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
     auth: undefined,
@@ -364,6 +365,13 @@ export async function waitForGatewayHealthyRestart(params: {
       (!params.requireRunningService ||
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
+    snapshot.startupPhase = healthy
+      ? "settling healthy Gateway"
+      : snapshot.runtime.status !== "running"
+        ? "waiting for managed service"
+        : snapshot.portUsage.status === "free"
+          ? "waiting for Gateway listener"
+          : "waiting for Gateway health and identity";
     if (healthy) {
       if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
@@ -432,11 +440,19 @@ export async function waitForGatewayHealthyRestart(params: {
       }
     }
 
+    if (migrationActive) {
+      snapshot.startupPhase = "startup migration";
+    }
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
       // Settling gets its own readiness time, but cannot extend an active migration's watchdog.
-      const deadlineMs = migrationActive
-        ? migrationDeadlineMs
-        : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
+      // An update supplies its complete readiness budget, including migration progress.
+      // Standalone restarts retain their migration watchdog and post-migration window.
+      const deadlineMs =
+        params.timeoutMs !== undefined
+          ? standardDeadlineMs + settleDurationMs
+          : migrationActive
+            ? migrationDeadlineMs
+            : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
       if (deadlineMs === undefined || elapsedMs >= deadlineMs) {
         return withWaitContext(snapshot, "timeout", elapsedMs);
       }

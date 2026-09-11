@@ -195,6 +195,12 @@ After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
 identity, a 12-probe health settle passes, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
+Startup receives the update's existing per-step `--timeout` budget (1800 seconds
+by default), including migration and listener initialization, followed by the
+12-probe settle window. A slow startup does not trigger another restart at the
+ordinary restart command's 60-second deadline. The budget remains finite even
+while migration activity continues; an exhausted wait reports the last observed
+startup phase. Standalone restart deadlines are unchanged.
 Verification facts and measured downtime are retained in the
 [update run report](/cli/update#run-history-and-reports).
 

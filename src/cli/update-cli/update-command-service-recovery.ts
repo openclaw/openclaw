@@ -45,6 +45,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
+  timeoutMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
@@ -111,6 +112,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   const health = await waitForHealthy({
     service: params.service,
     port: params.port,
+    timeoutMs: params.timeoutMs,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
@@ -241,6 +243,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       service,
       port,
       env: current.env,
+      timeoutMs: params.timeoutMs,
       expectedVersion: params.recovery.version,
       expectedBuildId: params.recovery.buildId,
       requireRunningService: true,
