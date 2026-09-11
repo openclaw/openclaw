@@ -43,6 +43,7 @@ type InboundRtpState = {
 };
 
 export type OpenAIQuicksilverAudioPeerCallbacks = {
+  onReady?: () => void;
   onAudio: (audio: Buffer) => void;
   onError: (error: Error) => void;
   // Omission preserves the existing fatal packet-error callback contract.
@@ -106,6 +107,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     const [werift, libopus] = await Promise.all([import("werift"), import("libopus-wasm")]);
     params.signal?.throwIfAborted();
     const peer = new werift.RTCPeerConnection({
+      bundlePolicy: "max-bundle",
       codecs: {
         audio: [werift.useOPUS({ payloadType: 111 })],
         video: [],
@@ -203,6 +205,12 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       werift: WeriftModule;
     },
   ) {
+    // Negotiate the provider event channel even though the sideband owns event handling.
+    state.peer.createDataChannel("oai-events").stateChanged.subscribe((channelState) => {
+      if (channelState === "open" && !this.closed) {
+        state.callbacks.onReady?.();
+      }
+    });
     state.peer.onTrack.subscribe((track) => this.attachInboundTrack(track));
     state.peer.connectionStateChange.subscribe((connectionState) => {
       if (this.closed) {

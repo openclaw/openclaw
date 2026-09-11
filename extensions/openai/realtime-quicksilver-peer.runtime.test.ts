@@ -114,7 +114,7 @@ async function createInboundAudioHarness(params?: {
 }
 
 describe("GPT-Live werift audio peer", () => {
-  it("creates a full-candidate Opus sendrecv offer without a data channel", async () => {
+  it("creates a bundled full-candidate Opus and events offer", async () => {
     const peer = await OpenAIQuicksilverAudioPeer.create({
       callbacks: { onAudio: vi.fn(), onError: vi.fn() },
       iceServers: [],
@@ -126,9 +126,48 @@ describe("GPT-Live werift audio peer", () => {
       expect(offer).toMatch(/^a=sendrecv$/m);
       expect(offer).toMatch(/^a=candidate:/m);
       expect(offer).toMatch(/^a=end-of-candidates$/m);
-      expect(offer).not.toMatch(/^m=application /m);
+      expect(offer).toMatch(/^m=application .*UDP\/DTLS\/SCTP /m);
+      expect(offer).toMatch(/^a=group:BUNDLE 0 1$/m);
     } finally {
       peer.close();
+    }
+  });
+
+  it("reports readiness from the negotiated events channel and closes it with the peer", async () => {
+    const { RTCPeerConnection, useOPUS } = await import("werift");
+    const onReady = vi.fn();
+    const onError = vi.fn();
+    const channels = vi.spyOn(RTCPeerConnection.prototype, "createDataChannel");
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError, onReady },
+      iceServers: [],
+    });
+    const channel = channels.mock.results[0]?.value;
+    channels.mockRestore();
+    const remote = new RTCPeerConnection({
+      bundlePolicy: "max-bundle",
+      iceServers: [],
+      codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] },
+    });
+    try {
+      if (!channel) {
+        throw new Error("expected event channel");
+      }
+      expect(channel.label).toBe("oai-events");
+      expect(onReady).not.toHaveBeenCalled();
+      await remote.setRemoteDescription({ type: "offer", sdp: await peer.createOffer() });
+      await remote.setLocalDescription(await remote.createAnswer());
+      await peer.applyAnswer(remote.localDescription!.sdp);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+      expect(channel.readyState).toBe("open");
+      expect(onError).not.toHaveBeenCalled();
+      peer.close();
+      await vi.waitFor(() => expect(channel.readyState).toBe("closed"));
+      channel.stateChanged.execute("open");
+      expect(onReady).toHaveBeenCalledOnce();
+    } finally {
+      peer.close();
+      await remote.close();
     }
   });
 

@@ -40,6 +40,9 @@ describe("GPT-Live gateway relay bridge", () => {
   function createPendingPeerBridge(params?: {
     onClose?: (reason: "completed" | "error") => void;
     onError?: (error: Error) => void;
+    onReady?: () => void;
+    applyAnswer?: () => Promise<void>;
+    webSocketFactory?: OpenAIQuicksilverSocketFactory;
   }) {
     let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
     let rejectPeer: ((error: Error) => void) | undefined;
@@ -48,9 +51,10 @@ describe("GPT-Live gateway relay bridge", () => {
       resolvePeer = resolve;
       rejectPeer = reject;
     });
+    const socket = new FakeSocket("manual");
     const peer = {
       createOffer: vi.fn(async () => "v=offer\r\n"),
-      applyAnswer: vi.fn(async () => undefined),
+      applyAnswer: vi.fn(params?.applyAnswer ?? (async () => undefined)),
       adoptPendingAudio: vi.fn(),
       sendAudio: vi.fn(),
       close: vi.fn(),
@@ -71,6 +75,7 @@ describe("GPT-Live gateway relay bridge", () => {
         onClearAudio: vi.fn(),
         onClose: params?.onClose ?? onClose,
         onError: params?.onError,
+        onReady: params?.onReady,
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
         logger,
         resolveAuth: vi.fn(async () => ({
@@ -80,7 +85,15 @@ describe("GPT-Live gateway relay bridge", () => {
         })),
         createPeer,
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-        webSocketFactory: () => new FakeSocket(),
+        webSocketFactory:
+          params?.webSocketFactory ??
+          (() => {
+            queueMicrotask(() => {
+              socket.readyState = 1;
+              socket.emit("open");
+            });
+            return socket;
+          }),
       },
       openAIRealtimeHost,
     );
@@ -91,6 +104,8 @@ describe("GPT-Live gateway relay bridge", () => {
       onClose,
       logger,
       peer,
+      socket,
+      triggerPeerReady: () => peerCallbacks?.onReady?.(),
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
       triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
@@ -100,6 +115,90 @@ describe("GPT-Live gateway relay bridge", () => {
       },
     };
   }
+
+  it.each(["sideband", "peer"] as const)(
+    "holds %s readiness until the SDP answer is accepted",
+    async (source) => {
+      const onReady = vi.fn();
+      let acceptAnswer!: () => void;
+      const answer = new Promise<void>((resolve) => {
+        acceptAnswer = resolve;
+      });
+      const harness = createPendingPeerBridge({ onReady, applyAnswer: () => answer });
+      try {
+        harness.resolvePeer();
+        await vi.waitFor(() => expect(harness.peer.applyAnswer).toHaveBeenCalledOnce());
+        expect(harness.socket.readyState).toBe(1);
+        expect(harness.socket.listenerCount("message")).toBe(1);
+        if (source === "sideband") {
+          emitSideband(harness.socket, { type: "session.started", session: {} });
+        } else {
+          harness.triggerPeerReady();
+        }
+        expect(onReady).not.toHaveBeenCalled();
+        expect(harness.bridge.isConnected()).toBe(false);
+        acceptAnswer();
+        await harness.connection;
+        expect(onReady).toHaveBeenCalledOnce();
+        expect(harness.bridge.isConnected()).toBe(true);
+        harness.triggerPeerReady();
+        emitSideband(harness.socket, { type: "session.started", session: {} });
+        expect(onReady).toHaveBeenCalledOnce();
+      } finally {
+        harness.bridge.close();
+        acceptAnswer();
+        await harness.connection.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each(["close", "error"] as const)(
+    "rejects buffered startup %s without publishing readiness",
+    async (terminal) => {
+      const onReady = vi.fn();
+      const socket = new FakeSocket("manual");
+      const harness = createPendingPeerBridge({
+        onReady,
+        webSocketFactory: () => {
+          queueMicrotask(() => {
+            socket.readyState = 1;
+            socket.emit("open");
+            emitSideband(socket, { type: "session.started", session: {} });
+            if (terminal === "close") {
+              socket.close(1000, "complete");
+            } else {
+              socket.emit("error", new Error("startup failed"));
+            }
+          });
+          return socket;
+        },
+      });
+      harness.resolvePeer();
+      await expect(harness.connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
+      expect(onReady).not.toHaveBeenCalled();
+      expect(harness.bridge.isConnected()).toBe(false);
+      expect(socket.closed).toBe(true);
+      expect(harness.peer.close).toHaveBeenCalledOnce();
+      harness.triggerPeerReady();
+      expect(onReady).not.toHaveBeenCalled();
+    },
+  );
+
+  it("closes both transports when the answer fails after provider readiness", async () => {
+    const onReady = vi.fn();
+    const harness = createPendingPeerBridge({
+      onReady,
+      applyAnswer: async () => {
+        harness.triggerPeerReady();
+        throw new Error("invalid answer");
+      },
+    });
+    harness.resolvePeer();
+    await expect(harness.connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
+    expect(onReady).not.toHaveBeenCalled();
+    expect(harness.socket.closed).toBe(true);
+    expect(harness.peer.close).toHaveBeenCalledOnce();
+  });
 
   it("preserves the call on media errors without logging raw error details", async () => {
     const harness = createPendingPeerBridge();
