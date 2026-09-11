@@ -324,6 +324,8 @@ describe("runDetachedWebhookWork", () => {
       await import("../gateway/server/http-work-admission.js");
     const { AsyncWorkScope, captureAsyncWorkTracker } =
       await import("../shared/async-work-scope.js");
+    const { getActiveGatewayRootWorkHolders } =
+      await import("../process/gateway-work-admission.js");
 
     const requester = new AsyncWorkScope();
     let detached: Promise<string> | undefined;
@@ -344,6 +346,7 @@ describe("runDetachedWebhookWork", () => {
 
     requester.beginClose();
     await requester.drain();
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["webhook:detached"]);
     await expect(detached).resolves.toBe("tracked-after-close");
   });
 
