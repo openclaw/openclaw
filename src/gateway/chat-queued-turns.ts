@@ -126,7 +126,7 @@ export function completeQueuedChatTurn(
 /** Default TTL for retired follow-up runId mappings (5 minutes). */
 export const RETIRED_FOLLOWUP_RUNID_TTL_MS = 5 * 60 * 1000;
 /** Hard cap on the retired follow-up runId map size to bound process memory. */
-export const RETIRED_FOLLOWUP_RUNID_MAX_SIZE = 4096;
+const RETIRED_FOLLOWUP_RUNID_MAX_SIZE = 4096;
 
 /**
  * Retire a completed queued turn's follow-up runId so that subsequent

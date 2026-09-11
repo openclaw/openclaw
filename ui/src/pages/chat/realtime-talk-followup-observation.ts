@@ -67,6 +67,14 @@ export function observePendingFollowupRunId(params: {
           return;
         }
         const status = result?.status;
+        // A follow-up can finish between identity polls: the Gateway returns
+        // its retired identifier with a terminal status. Consume the
+        // followupRunId from terminal and timeout responses too, not only
+        // from pending ones, so the buffered answer is never lost.
+        if (result?.followupRunId) {
+          params.onFollowupObserved(result.followupRunId);
+          return;
+        }
         // A terminal error here is unexpected during follow-up observation.
         // Surface it to the caller so the turn is rejected rather than
         // silently dropped; stop polling once the error is reported.
@@ -78,8 +86,24 @@ export function observePendingFollowupRunId(params: {
           params.onError(new Error(errorMessage));
           return;
         }
-        if (status === "pending" && result?.followupRunId) {
-          params.onFollowupObserved(result.followupRunId);
+        // Terminal timeout/aborted without a followupRunId: surface the
+        // failure instead of scheduling another poll.
+        if (
+          status === "timeout" ||
+          status === "aborted" ||
+          status === "error" ||
+          result?.aborted === true ||
+          result?.endedAt !== undefined
+        ) {
+          params.onError(
+            new Error(
+              status === "timeout"
+                ? "OpenClaw follow-up observation timed out"
+                : status === "aborted"
+                  ? "OpenClaw follow-up observation was aborted"
+                  : "OpenClaw follow-up observation failed",
+            ),
+          );
           return;
         }
         // Schedule the next poll using the remaining consultation deadline.

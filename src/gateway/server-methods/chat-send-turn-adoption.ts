@@ -67,6 +67,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       if (params.hasCronCreatorAuthority) {
         lifecycle.cronCreatorAuthorityUnavailable = "queued-local-operator";
       }
+      // Clear any stale retired correlation for this runId before fresh
+      // admission. A reused original identifier must not return a previous
+      // follow-up association from the retired map.
+      params.retiredFollowupRunIds.delete(params.runId);
       enqueued = registerQueuedChatTurn({
         chatQueuedTurns: params.chatQueuedTurns,
         runId: params.runId,
@@ -103,8 +107,11 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       // handles the fast-completion race where the follow-up finishes before
       // the client's next identity poll discovers the ID. The entry carries
       // an inline TTL so the retired map can be pruned periodically.
+      // Require controller ownership before retiring: a reused original
+      // identifier must not inherit a follow-up association from a different
+      // turn's entry.
       const entry = params.chatQueuedTurns.get(params.runId);
-      if (entry) {
+      if (entry && entry.controller === params.controller) {
         const followupRunId = entry.followupRunId
           ? `${entry.followupRunId}|${Date.now() + RETIRED_FOLLOWUP_RUNID_TTL_MS}`
           : undefined;

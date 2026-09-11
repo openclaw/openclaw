@@ -148,15 +148,6 @@ const config = {
   ignoreIssues: {
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
-    "src/gateway/chat-queued-turns.ts": ["exports"],
-    "ui/src/pages/chat/__tests__/realtime-talk-consult.helpers.ts": [
-      "exports",
-      "types",
-      "nsExports",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",

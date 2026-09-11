@@ -524,12 +524,6 @@ describe("oxlint config", () => {
           "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
         },
       },
-      {
-        files: ["src/gateway/server-lifecycle.ts"],
-        rules: {
-          "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
-        },
-      },
     ]);
   });
 

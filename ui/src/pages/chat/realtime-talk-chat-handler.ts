@@ -90,11 +90,15 @@ export function createChatHandler(deps: ChatHandlerDeps) {
   };
 
   const bufferEvent = (payload: ChatPayload) => {
+    // Never buffer an individual event that exceeds the byte ceiling on its
+    // own. This bounds memory even when a single oversized terminal event
+    // arrives — the event is dropped rather than retained as a lone exception.
+    if (isOversized(payload)) {
+      return;
+    }
     const bytes = estimatePayloadBytes(payload);
     // Evict oldest entries until there is room under both the count and byte
-    // ceilings, or the buffer is empty. A single oversized terminal event is
-    // always retained (it is the newest known answer) so the byte ceiling may
-    // be exceeded only by a lone entry — never by accumulation.
+    // ceilings, or the buffer is empty.
     while (
       bufferedFollowupEvents.length > 0 &&
       (bufferedFollowupEvents.length >= MAX_BUFFERED_TERMINAL_EVENTS ||
@@ -108,6 +112,9 @@ export function createChatHandler(deps: ChatHandlerDeps) {
     bufferedFollowupEvents.push(payload);
     bufferedBytes += bytes;
   };
+
+  const isOversized = (payload: ChatPayload): boolean =>
+    estimatePayloadBytes(payload) > MAX_BUFFERED_BYTES;
 
   const processChatEvent = (payload: ChatPayload): ChatEventDisposition => {
     if (!matchesActiveRun(payload.runId ?? "")) {
@@ -124,10 +131,15 @@ export function createChatHandler(deps: ChatHandlerDeps) {
       }
       return { type: "buffer" };
     }
-    // This event belongs to a known active run. Clear the buffer since we
-    // no longer need to check future events against the undiscovered runId.
-    bufferedFollowupEvents.length = 0;
-    bufferedBytes = 0;
+    // This event belongs to a known active run. When it is for the follow-up
+    // run itself, the buffer has been replayed and can be cleared. Events
+    // for the original run may arrive while the follow-up is still pending,
+    // so preserve the buffer in that case — follow-up events awaiting replay
+    // must not be discarded by a non-terminal original-run event.
+    if (acceptedFollowupRunId && payload.runId === acceptedFollowupRunId) {
+      bufferedFollowupEvents.length = 0;
+      bufferedBytes = 0;
+    }
 
     if (payload.stream === "tool") {
       emitRealtimeTalkAgentProgress(deps.emitTalkEvent, payload);
