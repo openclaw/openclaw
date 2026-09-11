@@ -287,6 +287,11 @@ describe("qa scenario catalog channel contracts", () => {
       "received.some((message) => String(message.botApiMessageId) === String(receipt.messageId))",
     );
     expect(semanticFlow).not.toContain("received.at(-1)?.botApiMessageId");
+    expect(semanticFlow).toContain('"set":"expectedNormalized"');
+    expect(semanticFlow).toContain("JSON.stringify(actual) === JSON.stringify(expectedNormalized)");
+    expect(semanticFlow).not.toContain(
+      "JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)",
+    );
     expect(compactionFlow).toContain('"minimumPreviewEvents":2');
     expect(compactionFlow).toContain("config.commentaryOne");
     expect(compactionFlow).toContain("config.commentaryTwo");
