@@ -181,7 +181,9 @@ describe("ConnectionPage session selection", () => {
       const found = [...sessionSection.querySelectorAll<HTMLButtonElement>("button")].find(
         (item) => item.textContent?.trim() === name,
       );
-      if (!found) throw new Error(`Missing session action: ${name}`);
+      if (!found) {
+        throw new Error(`Missing session action: ${name}`);
+      }
       return found;
     };
     editInput(page, "Gateway secret", "pending-token");
