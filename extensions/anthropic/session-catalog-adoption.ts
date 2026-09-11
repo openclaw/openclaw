@@ -14,3 +14,8 @@ export function adoptedSessionKey(hostId: string, threadId: string): string {
     hostId === CLAUDE_LOCAL_SESSION_HOST_ID ? threadId : adoptedSourceKey(hostId, threadId);
   return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
 }
+
+/** True for session keys minted by the catalog adoption flow (see adoptedSessionKey). */
+export function isClaudeAdoptedSessionKey(sessionKey: string | undefined): boolean {
+  return typeof sessionKey === "string" && sessionKey.startsWith(CLAUDE_ADOPTED_SESSION_KEY_PREFIX);
+}
