@@ -2,7 +2,6 @@ import { rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import type { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverInboundEvent,
@@ -131,7 +130,11 @@ export async function closeOpenAILiveSocket(
 export function retireOpenAIQuicksilverSessionWire(params: {
   model: string;
   socket: OpenAIQuicksilverSocket;
-  delegations: OpenAIQuicksilverDelegationController;
+  delegations: {
+    beginTranscriptDrain: (disposition: "abort" | "detach") => void;
+    detach: () => void;
+    stop: (reason: Error) => void;
+  };
   controller: AbortController;
   isFinalized: () => boolean;
   reportTerminal: (error?: Error) => void;

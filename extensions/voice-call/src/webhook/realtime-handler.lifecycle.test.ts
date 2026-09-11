@@ -326,6 +326,7 @@ describe("RealtimeCallHandler lifecycle", () => {
   ])(
     "hangs up a rejected startup exactly once when provider close is $closeOutcome",
     async ({ closeOutcome, closeReason }) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       let onProviderClose: ((reason: "completed" | "error") => void) | undefined;
       const closeBridge = vi.fn(() => {
         if (closeOutcome === "throws") {
@@ -357,6 +358,12 @@ describe("RealtimeCallHandler lifecycle", () => {
         );
 
         expect(await closed).toEqual({ code: 1011, reason: closeReason });
+        await handler.close();
+        expect(
+          warn.mock.calls.filter(([message]) =>
+            String(message).includes("realtime provider close failed"),
+          ),
+        ).toHaveLength(closeOutcome === "throws" ? 1 : 0);
         expect(closeBridge).toHaveBeenCalledTimes(1);
         expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
           callId: call.callId,
@@ -384,6 +391,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         }
         await handler.close();
         await server.close();
+        warn.mockRestore();
       }
     },
   );

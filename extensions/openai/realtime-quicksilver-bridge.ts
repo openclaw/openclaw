@@ -1,6 +1,5 @@
 // GPT-Live backend bridge over the Frameless Bidi WebSocket protocol used by Codex realtime v3.
 import { randomUUID } from "node:crypto";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   canonicalizeBase64,
@@ -44,7 +43,6 @@ import {
   parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverInboundEvent,
-  type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
@@ -72,7 +70,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private outboundTelephonyResampler = createStreamingPcmResampler(PCM_SAMPLE_RATE, 8_000);
   private activeDelegations = new Set<string>();
   private readonly transcript = new OpenAIQuicksilverTranscript();
-  private readonly requestIds: OpenAIQuicksilverRequestIds = {
+  private readonly requestIds = {
     realtimeSessionId: randomUUID(),
     sessionId: randomUUID(),
     threadId: randomUUID(),
@@ -646,10 +644,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     const socket = this.socket;
-    const drain = isOpenAIGptLiveApiModel(this.config.model) ? createDeferred<void>() : undefined;
-    if (drain) {
-      this.closing = { connection, completion: drain.promise };
-      void drain.promise.catch(() =>
+    let drain: { resolve: () => void; reject: (error: unknown) => void } | undefined;
+    if (isOpenAIGptLiveApiModel(this.config.model)) {
+      const completion = new Promise<void>((resolve, reject) => {
+        drain = { resolve, reject };
+      });
+      this.closing = { connection, completion };
+      void completion.catch(() =>
         (this.config.logger?.warn ?? console.warn)("GPT-Live failure cleanup observer failed"),
       );
     }

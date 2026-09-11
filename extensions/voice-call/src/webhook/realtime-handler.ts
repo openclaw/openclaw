@@ -1482,21 +1482,11 @@ export class RealtimeCallHandler {
 
     session.connect().catch(async (error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
-      const ownsCallState = this.isActiveBridgeOwner(callId, session);
-      this.streamDisconnectLifecycle.retire(callSid, streamSid);
       try {
-        await session.close();
-      } catch (closeError) {
-        console.warn(
-          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(closeError)}`,
-        );
+        await closeBinding(telephonyBinding, "error");
+      } catch {
+        // The binding reports cleanup failure and preserves it for concurrent shutdown.
       } finally {
-        if (
-          ownsCallState &&
-          this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding
-        ) {
-          void emitCallEnd("error");
-        }
         ws.close(1011, "Failed to connect");
       }
     });

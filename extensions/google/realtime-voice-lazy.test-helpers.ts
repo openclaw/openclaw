@@ -1,12 +1,23 @@
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
-export function createMockRealtimeBridge(connectImpl: () => Promise<void> = async () => {}) {
-  const connect = vi.fn(connectImpl);
-  const sendAudio = vi.fn();
-  const sendUserMessage = vi.fn();
-  const triggerGreeting = vi.fn();
-  const close = vi.fn();
+type MockRealtimeBridge = {
+  bridge: RealtimeVoiceBridge;
+  connect: Mock<RealtimeVoiceBridge["connect"]>;
+  sendAudio: Mock<RealtimeVoiceBridge["sendAudio"]>;
+  sendUserMessage: Mock<NonNullable<RealtimeVoiceBridge["sendUserMessage"]>>;
+  triggerGreeting: Mock<NonNullable<RealtimeVoiceBridge["triggerGreeting"]>>;
+  close: Mock<RealtimeVoiceBridge["close"]>;
+};
+
+export function createMockRealtimeBridge(
+  connectImpl: RealtimeVoiceBridge["connect"] = async () => {},
+): MockRealtimeBridge {
+  const connect = vi.fn<RealtimeVoiceBridge["connect"]>(connectImpl);
+  const sendAudio = vi.fn<RealtimeVoiceBridge["sendAudio"]>();
+  const sendUserMessage = vi.fn<NonNullable<RealtimeVoiceBridge["sendUserMessage"]>>();
+  const triggerGreeting = vi.fn<NonNullable<RealtimeVoiceBridge["triggerGreeting"]>>();
+  const close = vi.fn<RealtimeVoiceBridge["close"]>();
   const bridge: RealtimeVoiceBridge = {
     supportsToolResultContinuation: false,
     supportsToolResultSuppression: false,
