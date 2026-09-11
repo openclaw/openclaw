@@ -7,6 +7,7 @@ import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import type { SandboxBackendInternalMount } from "./backend.types.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import {
@@ -19,6 +20,7 @@ import {
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -463,6 +465,7 @@ async function createSandboxContainer(params: {
   scopeKey: string;
   configHash?: string;
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
+  internalMounts?: readonly SandboxBackendInternalMount[];
   podmanRuntimeInfo?: PodmanSandboxRuntimeInfo;
 }) {
   const { engine, name, cfg, workspaceDir, scopeKey } = params;
@@ -503,11 +506,17 @@ async function createSandboxContainer(params: {
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
   });
+  for (const mount of params.internalMounts ?? []) {
+    args.push("-v", `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro,z" : "z"}`);
+  }
   // Protected skill overlays are authoritative. Remove exact destination
   // collisions before Docker or Podman sees duplicate mount arguments.
   const protectedPaths = resolveProtectedSkillMountContainerPaths(
     params.readOnlyWorkspaceSkillMounts,
   );
+  for (const mount of params.internalMounts ?? []) {
+    protectedPaths.add(mount.containerPath.replace(/\/+$/, "") || "/");
+  }
   let safeBinds = cfg.binds;
   if (protectedPaths.size > 0 && cfg.binds?.length) {
     safeBinds = filterBindsConflictingWithProtectedMounts(cfg.binds, protectedPaths);
@@ -550,6 +559,7 @@ type EnsureSandboxContainerParams = {
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
+  internalMounts?: readonly SandboxBackendInternalMount[];
 };
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
@@ -626,6 +636,9 @@ async function ensureSandboxContainerLifecycle(
     readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
       readOnlyWorkspaceSkillMounts,
     ),
+    internalMounts: params.internalMounts?.map(
+      (mount) => `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro" : "rw"}`,
+    ),
   });
   const expectedHash =
     engine.id === "podman"
@@ -670,20 +683,38 @@ async function ensureSandboxContainerLifecycle(
     }
   }
   if (!hasContainer) {
-    await createSandboxContainer({
-      engine,
-      name: containerName,
-      cfg: params.cfg.docker,
-      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
-      workspaceDir: params.workspaceDir,
-      workspaceAccess: params.cfg.workspaceAccess,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey: params.scopeKey,
-      configHash: expectedHash,
-      readOnlyWorkspaceSkillMounts,
-      podmanRuntimeInfo,
-    });
+    try {
+      await createSandboxContainer({
+        engine,
+        name: containerName,
+        cfg: params.cfg.docker,
+        dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+        workspaceDir: params.workspaceDir,
+        workspaceAccess: params.cfg.workspaceAccess,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+        skillsWorkspaceDir: params.skillsWorkspaceDir,
+        scopeKey: params.scopeKey,
+        configHash: expectedHash,
+        readOnlyWorkspaceSkillMounts,
+        internalMounts: params.internalMounts,
+        podmanRuntimeInfo,
+      });
+      await updateRegistry({
+        containerName,
+        backendId: engine.id,
+        ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
+        runtimeLabel: containerName,
+        sessionKey: params.scopeKey,
+        createdAtMs: now,
+        lastUsedAtMs: now,
+        image: params.cfg.docker.image,
+        configLabelKind: "Image",
+        configHash: expectedHash,
+      });
+      return containerName;
+    } catch (creationError) {
+      await throwAfterPartialSandboxCleanup({ engine, containerName, creationError });
+    }
   } else if (!running) {
     await execContainer(engine, ["start", containerName]);
   }

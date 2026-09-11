@@ -27,9 +27,13 @@ export type SandboxBackendPreparedWorkdirDiscarder = (workdir: string) => void;
 export type SandboxBackendCommandParams = {
   script: string;
   args?: string[];
+  /** Environment delivered through backend-private transport, never process arguments. */
+  env?: Record<string, string>;
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+  /** Kill and reap the in-sandbox process group before an abort is reported. */
+  terminateOnAbort?: boolean;
 };
 
 /** Buffered command result returned by sandbox backend shell helpers. */
@@ -93,5 +97,7 @@ export type SandboxBackendHandle = {
     token?: unknown;
   }) => Promise<void>;
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
+  /** Stop and remove this exact runtime, revoking all of its filesystem grants. */
+  disposeRuntime?: () => Promise<void>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

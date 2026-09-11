@@ -1,3 +1,5 @@
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   normalizeRpcAttachmentsToChatAttachments,
   type RpcAttachmentInput,
@@ -45,4 +47,20 @@ export function isFreshChatSendStarted(params: { cached?: boolean; payload: unkn
       ? (params.payload as { status?: unknown }).status
       : undefined;
   return status === "started";
+}
+
+export function resolveSessionCreateResponseState(params: {
+  entry: InternalSessionEntry;
+  resetExisting: boolean;
+  payload: unknown;
+  cached?: boolean;
+}) {
+  return {
+    responseEntry: sessionEntryForkedFromParent(params.entry)
+      ? { ...params.entry, forkedFromParent: true as const }
+      : params.entry,
+    runStarted:
+      !params.resetExisting &&
+      isFreshChatSendStarted({ payload: params.payload, cached: params.cached }),
+  };
 }

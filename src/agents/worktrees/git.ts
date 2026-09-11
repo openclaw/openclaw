@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -14,6 +15,53 @@ import {
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
+
+type WorktreeGitRunOptions = {
+  env?: NodeJS.ProcessEnv;
+  input?: string | Uint8Array;
+  maxOutputBytes?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+export type WorktreeGitExecutor = {
+  run(cwd: string, args: string[], options: WorktreeGitRunOptions): Promise<GitResult>;
+  runBuffer(
+    cwd: string,
+    args: string[],
+    options: Pick<WorktreeGitRunOptions, "env" | "input" | "maxOutputBytes">,
+  ): Promise<Buffer>;
+  dispose?: () => Promise<void>;
+};
+
+const worktreeGitExecutor = new AsyncLocalStorage<WorktreeGitExecutor>();
+
+/** Routes one managed-worktree lifecycle through its admitted Git execution boundary. */
+export async function withWorktreeGitExecutor<T>(
+  executor: WorktreeGitExecutor | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!executor) {
+    return await run();
+  }
+  let result: T;
+  try {
+    result = await worktreeGitExecutor.run(executor, run);
+  } catch (operationError) {
+    try {
+      await executor.dispose?.();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        "Managed worktree operation and Git sandbox cleanup both failed.",
+        { cause: cleanupError },
+      );
+    }
+    throw operationError;
+  }
+  await executor.dispose?.();
+  return result;
+}
 
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
@@ -80,6 +128,10 @@ export async function runGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<GitResult> {
+  const scopedExecutor = worktreeGitExecutor.getStore();
+  if (scopedExecutor) {
+    return await scopedExecutor.run(cwd, args, options);
+  }
   const baseEnv = { ...process.env };
   const env = gitEnvironment(options.env, args, process.platform, baseEnv);
   // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
@@ -123,7 +175,11 @@ export async function requireGit(
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitCommandRaw(cwd, args, { env: gitEnvironment(undefined, args) });
+  const scopedExecutor = worktreeGitExecutor.getStore();
+  if (!scopedExecutor) {
+    return await requireGitCommandRaw(cwd, args, { env: gitEnvironment(undefined, args) });
+  }
+  return requireGitCommandOutput(`git ${args.join(" ")}`, await runGit(cwd, args));
 }
 
 export async function requireGitBuffer(
@@ -131,6 +187,10 @@ export async function requireGitBuffer(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
 ): Promise<Buffer> {
+  const scopedExecutor = worktreeGitExecutor.getStore();
+  if (scopedExecutor) {
+    return await scopedExecutor.runBuffer(cwd, args, options);
+  }
   return await requireGitCommandBuffer(cwd, args, {
     ...options,
     env: gitEnvironment(options.env, args),

@@ -15,6 +15,13 @@ export type SandboxBackendRuntimeInfo = {
   configLabelMatch: boolean;
 };
 
+/** Core-owned bind required to construct a privileged sandbox boundary. */
+export type SandboxBackendInternalMount = {
+  hostPath: string;
+  containerPath: string;
+  readOnly: boolean;
+};
+
 /** Optional lifecycle manager for an existing registered sandbox runtime. */
 export type SandboxBackendManager = {
   describeRuntime(params: {
@@ -40,6 +47,11 @@ export type CreateSandboxBackendParams = {
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
+  /**
+   * Core-owned mounts required by a privileged provisioning boundary.
+   * These are not user configuration and must be canonicalized by the caller.
+   */
+  internalMounts?: readonly SandboxBackendInternalMount[];
 };
 
 /** Factory that creates a backend handle for a sandbox session. */

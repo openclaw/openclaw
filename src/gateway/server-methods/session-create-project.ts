@@ -34,6 +34,7 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
+import { resolvePersistedWorktreeGitIsolation } from "./session-worktree-isolation.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const SESSION_PROJECT_OWNERSHIP_ERROR =
@@ -323,7 +324,18 @@ export async function prepareSessionWorkspace(params: {
     };
     if (pending) {
       if (pending.baseRef && !pending.baseCommit) {
-        let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        const gitIsolation = resolvePersistedWorktreeGitIsolation({
+          sandboxGit: pending.sandboxGit,
+          config: cfg,
+          sessionKey,
+          agentId,
+        });
+        let resolved = await resolveSessionWorktreeBase(
+          directory,
+          pending.baseRef,
+          signal,
+          gitIsolation,
+        );
         if (
           !resolved.ok &&
           resolved.error.code === ErrorCodes.INVALID_REQUEST &&
@@ -334,7 +346,12 @@ export async function prepareSessionWorkspace(params: {
             token: githubApiToken(process.env, cfg),
           });
           assertRunOwnership();
-          resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+          resolved = await resolveSessionWorktreeBase(
+            directory,
+            pending.baseRef,
+            signal,
+            gitIsolation,
+          );
         }
         if (!resolved.ok) {
           throw new Error(resolved.error.message);
@@ -372,6 +389,12 @@ export async function prepareSessionWorkspace(params: {
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+        gitIsolation: resolvePersistedWorktreeGitIsolation({
+          sandboxGit: pending.sandboxGit,
+          config: cfg,
+          sessionKey,
+          agentId,
+        }),
       });
       if (!result.ok) {
         throw new Error(result.error.message);

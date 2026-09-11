@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -233,6 +234,51 @@ test("worktree spawns do not inherit an unregistered parent working directory", 
     ok: false,
     error: { message: "agent workspace is not a git checkout" },
   });
+});
+
+test("sandbox-originated worktree preparation fails closed before host Git", async () => {
+  testState.agentConfig = {
+    workspace: repository,
+    sandbox: { mode: "all", workspaceAccess: "rw" },
+  };
+  const config = await getGatewayConfigModule();
+  config.clearRuntimeConfigSnapshot();
+  config.clearConfigCache();
+  const marker = path.join(state.root, "gateway-host-marker");
+  const sshCommand = path.join(state.root, "repository-ssh-command.sh");
+  await fs.writeFile(
+    sshCommand,
+    `#!/bin/sh\nprintf '%s\\n' 'executed-on-gateway' > ${JSON.stringify(marker)}\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  await execFileAsync("git", ["-C", repository, "config", "core.sshCommand", sshCommand]);
+  await execFileAsync("git", [
+    "-C",
+    repository,
+    "remote",
+    "add",
+    "origin",
+    "ssh://invalid@127.0.0.1:1/does-not-exist",
+  ]);
+  const restoreBackend = registerSandboxBackend("docker", async () => {
+    throw new Error("provisioning sandbox unavailable");
+  });
+  try {
+    const created = await createChild({
+      key: "agent:main:dashboard:sandbox-fail-closed",
+      worktreeName: "sandbox-boundary-proof",
+    });
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: expect.stringContaining("sandbox unavailable") },
+    });
+    expect(
+      managedWorktrees.findLiveByOwner("session", "agent:main:dashboard:sandbox-fail-closed"),
+    ).toBeUndefined();
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    restoreBackend();
+  }
 });
 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {

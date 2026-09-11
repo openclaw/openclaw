@@ -5124,6 +5124,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
   it.each([
     { columnName: "run_end_cleanup_json", tableName: "worktrees" },
+    { columnName: "sandbox_git", tableName: "worktrees" },
     { columnName: "desktop_json", tableName: "worker_environments" },
     { columnName: "shared_host", tableName: "worker_environments" },
   ])(

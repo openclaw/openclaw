@@ -15,11 +15,39 @@ import {
   listGitWorktrees,
   requireGit,
   runGit,
+  withWorktreeGitExecutor,
 } from "./git.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe("managed worktree Git boundary lifetime", () => {
+  it.each(["success", "failure"] as const)(
+    "revokes the executor after an operation %s",
+    async (outcome) => {
+      const dispose = vi.fn(async () => {});
+      const executor = {
+        run: vi.fn(),
+        runBuffer: vi.fn(),
+        dispose,
+      };
+      const operation = withWorktreeGitExecutor(executor, async () => {
+        if (outcome === "failure") {
+          throw new Error("operation failed");
+        }
+        return "completed";
+      });
+
+      if (outcome === "failure") {
+        await expect(operation).rejects.toThrow("operation failed");
+      } else {
+        await expect(operation).resolves.toBe("completed");
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("Git ref mutation ownership", () => {

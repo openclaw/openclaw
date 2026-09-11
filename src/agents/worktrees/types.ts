@@ -1,3 +1,5 @@
+import type { WorktreeGitIsolation } from "./git-isolation.js";
+
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
 export type ManagedWorktreeRunEndCleanupOutcome =
@@ -30,6 +32,8 @@ export type ManagedWorktreeRecord = {
   baseRef: string;
   ownerKind: ManagedWorktreeOwnerKind;
   ownerId?: string;
+  /** Repository metadata was writable by a sandbox and must never return to host Git. */
+  sandboxGit?: true;
   snapshotRef?: string;
   createdAt: number;
   lastActiveAt: number;
@@ -53,6 +57,8 @@ export type CreateManagedWorktreeParams = {
   onProgress?: (phase: "checkout" | "setup") => void;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
+  /** Provenance that requires repository Git to stay inside a sandbox boundary. */
+  gitIsolation?: WorktreeGitIsolation;
 };
 
 export type RemoveManagedWorktreeResult = {

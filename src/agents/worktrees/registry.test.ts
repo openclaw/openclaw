@@ -21,6 +21,8 @@ import {
   listRegistryWorktreesForMigration,
   updateRegistryWorktree,
 } from "./registry.js";
+import { getRegistryRepositoryGitIsolation } from "./repository-isolation-store.js";
+import { markRegistryRepositorySandboxGit } from "./repository-provenance.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 describe("managed worktree registry", () => {
@@ -55,6 +57,7 @@ describe("managed worktree registry", () => {
       baseRef: "HEAD",
       ownerKind: "workboard",
       ownerId: "card-1",
+      sandboxGit: true,
       createdAt: 10,
       lastActiveAt: 10,
     };
@@ -77,6 +80,7 @@ describe("managed worktree registry", () => {
       id: "first",
       ownerKind: "workboard",
       ownerId: "card-1",
+      sandboxGit: true,
     });
     expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
     expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
@@ -133,6 +137,64 @@ describe("managed worktree registry", () => {
       .db.prepare("UPDATE worktrees SET provisioned_paths_json = ? WHERE id = ?")
       .run("not-json", "second");
     expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
+  });
+
+  it("marks sandbox Git provenance only for the live owning session", () => {
+    const record: ManagedWorktreeRecord = {
+      id: "session-worktree",
+      name: "task",
+      repoFingerprint: "0123456789abcdef",
+      repoRoot: path.join(root, "repo"),
+      path: path.join(root, "worktrees", "task"),
+      branch: "openclaw/task",
+      baseRef: "HEAD",
+      ownerKind: "session",
+      ownerId: "agent:main:subagent:task",
+      createdAt: 10,
+      lastActiveAt: 10,
+    };
+    insertRegistryWorktree(env, record);
+    insertRegistryWorktree(env, {
+      ...record,
+      id: "manual-sibling",
+      path: path.join(root, "worktrees", "manual"),
+      ownerKind: "manual",
+      ownerId: undefined,
+    });
+
+    openOpenClawStateDatabase({ env }).db.exec("DROP TABLE worktree_repository_git_isolations;");
+    expect(getRegistryRepositoryGitIsolation(env, record.repoRoot)).toBeUndefined();
+
+    expect(markRegistryRepositorySandboxGit({ env, record, ownerId: "agent:other:main" })).toBe(
+      false,
+    );
+    expect(getRegistryWorktree(env, record.id)?.sandboxGit).toBeUndefined();
+    expect(markRegistryRepositorySandboxGit({ env, record, ownerId: record.ownerId! })).toBe(true);
+    expect(getRegistryWorktree(env, record.id)?.sandboxGit).toBe(true);
+    expect(getRegistryWorktree(env, "manual-sibling")?.sandboxGit).toBe(true);
+    updateRegistryWorktree(env, record.id, { removedAt: 20 });
+    insertRegistryWorktree(env, {
+      ...record,
+      id: "later-sibling",
+      path: path.join(root, "worktrees", "later"),
+      ownerKind: "manual",
+      ownerId: undefined,
+    });
+    expect(getRegistryWorktree(env, "later-sibling")?.sandboxGit).toBe(true);
+    deleteRegistryWorktree(env, record.id);
+    deleteRegistryWorktree(env, "manual-sibling");
+    deleteRegistryWorktree(env, "later-sibling");
+    expect(getRegistryRepositoryGitIsolation(env, record.repoRoot)).toEqual({
+      sessionKey: record.ownerId,
+    });
+    insertRegistryWorktree(env, {
+      ...record,
+      id: "post-retention-sibling",
+      path: path.join(root, "worktrees", "post-retention"),
+      ownerKind: "manual",
+      ownerId: undefined,
+    });
+    expect(getRegistryWorktree(env, "post-retention-sibling")?.sandboxGit).toBe(true);
   });
 
   it("adds the provisioned-path ledger to an existing worktree registry", () => {

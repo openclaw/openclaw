@@ -6,12 +6,14 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
+import { ensureWorktreeRepositoryGitIsolationSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { hasRepositoryGitIsolation } from "./repository-isolation-store.js";
 import {
   collectLiveRunLeases,
   WORKTREE_REMOVING_LEASE_KEY,
@@ -27,10 +29,6 @@ import type {
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;
 type WorktreeRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "worktrees">;
-type WorktreeProvisionedDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "worktree_provisioned_file_chunks"
->;
 type WorktreeLeaseDatabase = Pick<OpenClawStateKyselyDatabase, "worktrees" | "state_leases">;
 
 function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
@@ -39,10 +37,6 @@ function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
 
 function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<WorktreeRegistryDatabase>(db);
-}
-
-function kyselyProvisionedFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<WorktreeProvisionedDatabase>(db);
 }
 
 function kyselyLeaseFor(db: DatabaseSync) {
@@ -94,6 +88,7 @@ function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
     baseRef: row.base_ref,
     ownerKind: row.owner_kind as ManagedWorktreeOwnerKind,
     ...(row.owner_id ? { ownerId: row.owner_id } : {}),
+    ...(row.sandbox_git === 1 ? { sandboxGit: true as const } : {}),
     ...(row.snapshot_ref ? { snapshotRef: row.snapshot_ref } : {}),
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
@@ -115,6 +110,7 @@ function recordToRow(
     base_ref: record.baseRef,
     owner_kind: record.ownerKind,
     owner_id: record.ownerId ?? null,
+    sandbox_git: record.sandboxGit ? 1 : 0,
     snapshot_ref: record.snapshotRef ?? null,
     created_at: record.createdAt,
     last_active_at: record.lastActiveAt,
@@ -307,58 +303,6 @@ export function getRegistryWorktreeProvisionedState(
     : undefined;
 }
 
-export function clearRegistryWorktreeProvisionedChunks(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyProvisionedFor(db)
-        .deleteFrom("worktree_provisioned_file_chunks")
-        .where("worktree_id", "=", worktreeId),
-    );
-  });
-}
-
-export function insertRegistryWorktreeProvisionedChunk(
-  env: NodeJS.ProcessEnv,
-  params: {
-    worktreeId: string;
-    path: string;
-    chunkIndex: number;
-    data: Uint8Array;
-  },
-): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyProvisionedFor(db).insertInto("worktree_provisioned_file_chunks").values({
-        worktree_id: params.worktreeId,
-        path: params.path,
-        chunk_index: params.chunkIndex,
-        data: params.data,
-      }),
-    );
-  });
-}
-
-export function getRegistryWorktreeProvisionedChunk(
-  env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; path: string; chunkIndex: number },
-): Uint8Array | undefined {
-  const db = dbFor(env);
-  const query = kyselyProvisionedFor(db)
-    .selectFrom("worktree_provisioned_file_chunks")
-    .select("data")
-    .where("worktree_id", "=", params.worktreeId)
-    .where("path", "=", params.path)
-    .where("chunk_index", "=", params.chunkIndex);
-  return executeSqliteQuerySync(db, query).rows[0]?.data;
-}
-
 export function findLiveRegistryWorktreeByPath(
   env: NodeJS.ProcessEnv,
   worktreePath: string,
@@ -399,10 +343,19 @@ export function insertRegistryWorktree(
   options: { provisionedPaths?: readonly string[] } = {},
 ): void {
   const db = dbFor(env);
+  ensureWorktreeRepositoryGitIsolationSchema(db);
   runOpenClawStateWriteTransaction(() => {
+    const repositoryTainted = hasRepositoryGitIsolation(db, record.repoRoot);
     executeSqliteQuerySync(
       db,
-      kyselyFor(db).insertInto("worktrees").values(recordToRow(record, options.provisionedPaths)),
+      kyselyFor(db)
+        .insertInto("worktrees")
+        .values(
+          recordToRow(
+            repositoryTainted ? { ...record, sandboxGit: true } : record,
+            options.provisionedPaths,
+          ),
+        ),
     );
   });
 }
@@ -459,18 +412,12 @@ export function updateRegistryWorktree(
   });
 }
 
-export function deleteRegistryWorktree(env: NodeJS.ProcessEnv, id: string): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyProvisionedFor(db)
-        .deleteFrom("worktree_provisioned_file_chunks")
-        .where("worktree_id", "=", id),
-    );
-    executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
-  });
-}
+export {
+  clearRegistryWorktreeProvisionedChunks,
+  deleteRegistryWorktree,
+  getRegistryWorktreeProvisionedChunk,
+  insertRegistryWorktreeProvisionedChunk,
+} from "./registry-provisioned-chunks.js";
 
 const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 

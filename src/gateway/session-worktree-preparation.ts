@@ -7,14 +7,53 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
+import {
+  withWorktreeGitIsolation,
+  type WorktreeGitIsolation,
+} from "../agents/worktrees/sandbox-git.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveProjectRegistry } from "../projects/project-registry.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import type {
+  PreparedGatewaySessionLifecycle,
+  PrepareGatewaySessionLifecycle,
+} from "./session-lifecycle-preparation.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+export function resolveSessionWorktreeGitIsolation(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  targetAgentId: string,
+): WorktreeGitIsolation | undefined {
+  const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+  if (runtime.agentId !== targetAgentId) {
+    return undefined;
+  }
+  const sandboxConfig = resolveSandboxConfigForAgent(cfg, runtime.agentId);
+  // Immutable creator-isolated sessions downgrade configured rw access to ro.
+  // Taint only sessions that could actually mutate repository metadata.
+  const workspaceAccess = runtime.sandboxRequired
+    ? runtime.workspaceAccess
+    : sandboxConfig.workspaceAccess;
+  if (!runtime.sandboxed || workspaceAccess !== "rw") {
+    return undefined;
+  }
+  return { config: cfg, sessionKey, agentId: runtime.agentId };
+}
+
+export function projectPreparedSessionWorktree(
+  prepared: PreparedGatewaySessionLifecycle | undefined,
+) {
+  return prepared?.worktree
+    ? { id: prepared.worktree.id, path: prepared.sessionRoot, branch: prepared.worktree.branch }
+    : undefined;
+}
 
 export function resolveSpawnParentWorktreeSource(
   parentSessionKey: string,
@@ -87,9 +126,15 @@ export async function resolveSessionWorktreeBase(
   workspace: string,
   baseRef: string,
   signal?: AbortSignal,
+  gitIsolation?: WorktreeGitIsolation,
 ): Promise<Result<string, ErrorShape>> {
   try {
-    return ok((await resolveWorktreeBase(workspace, baseRef, signal)).commit);
+    return ok(
+      await withWorktreeGitIsolation(
+        { isolation: gitIsolation, repoRoot: workspace },
+        async () => (await resolveWorktreeBase(workspace, baseRef, signal)).commit,
+      ),
+    );
   } catch (error) {
     return err(
       errorShape(
@@ -114,96 +159,103 @@ export async function prepareSessionWorktree(params: {
   signal?: AbortSignal;
   commitGuard?: () => void;
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  gitIsolation?: WorktreeGitIsolation;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, workspace, commitGuard } = params;
   try {
-    const repository = await managedWorktrees.resolveRepositoryPaths(workspace);
-    commitGuard?.();
-    const boundId = normalizeOptionalString(target.entry?.worktree?.id);
-    let existing = boundId ? managedWorktrees.findLiveById(boundId) : undefined;
-    if (existing && (existing.ownerKind !== "session" || existing.ownerId !== target.key)) {
-      return err(
-        errorShape(ErrorCodes.UNAVAILABLE, "session worktree binding has a different owner"),
-      );
-    }
-    existing ??= managedWorktrees.findLiveByOwner("session", target.key);
-    let existingDirectory = false;
-    if (existing) {
-      try {
-        existingDirectory = fs.lstatSync(existing.path).isDirectory();
-      } catch {
-        // Missing registry targets are replaced by create() under its owner lease.
-      }
-    }
-    if (existing && existingDirectory) {
-      if (existing.repoRoot !== repository.canonicalRoot) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session worktree belongs to a different repository",
-          ),
-        );
-      }
-      // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
-      if (
-        (params.name && existing.name !== params.name) ||
-        (params.baseRef && existing.baseRef !== params.baseRef)
-      ) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `session is already bound to worktree ${existing.name} (${existing.branch})`,
-          ),
-        );
-      }
-    }
-    commitGuard?.();
-    const worktree = await managedWorktrees.create({
-      repoRoot: workspace,
-      ownerKind: "session",
-      ownerId: target.key,
-      name: params.name,
-      suggestedName: slugifyWorktreeTitle(params.label ?? ""),
-      baseRef: params.baseRef,
-      checkoutCommit: params.checkoutCommit,
-      runSetupScript: params.runSetupScript,
-      signal: params.signal,
-      commitGuard,
-      onProgress: params.onProgress,
-    });
-    const rollback = existingDirectory
-      ? undefined
-      : async () => {
-          await managedWorktrees.remove({
-            id: worktree.id,
-            reason: "session-create-failed",
-            allowSnapshotLoss: true,
+    return await withWorktreeGitIsolation(
+      { isolation: params.gitIsolation, repoRoot: workspace },
+      async () => {
+        const repository = await managedWorktrees.resolveRepositoryPaths(workspace);
+        commitGuard?.();
+        const boundId = normalizeOptionalString(target.entry?.worktree?.id);
+        let existing = boundId ? managedWorktrees.findLiveById(boundId) : undefined;
+        if (existing && (existing.ownerKind !== "session" || existing.ownerId !== target.key)) {
+          return err(
+            errorShape(ErrorCodes.UNAVAILABLE, "session worktree binding has a different owner"),
+          );
+        }
+        existing ??= managedWorktrees.findLiveByOwner("session", target.key);
+        let existingDirectory = false;
+        if (existing) {
+          try {
+            existingDirectory = fs.lstatSync(existing.path).isDirectory();
+          } catch {
+            // Missing registry targets are replaced by create() under its owner lease.
+          }
+        }
+        if (existing && existingDirectory) {
+          if (existing.repoRoot !== repository.canonicalRoot) {
+            return err(
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "session worktree belongs to a different repository",
+              ),
+            );
+          }
+          // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
+          if (
+            (params.name && existing.name !== params.name) ||
+            (params.baseRef && existing.baseRef !== params.baseRef)
+          ) {
+            return err(
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `session is already bound to worktree ${existing.name} (${existing.branch})`,
+              ),
+            );
+          }
+        }
+        commitGuard?.();
+        const worktree = await managedWorktrees.create({
+          repoRoot: workspace,
+          ownerKind: "session",
+          ownerId: target.key,
+          name: params.name,
+          suggestedName: slugifyWorktreeTitle(params.label ?? ""),
+          baseRef: params.baseRef,
+          checkoutCommit: params.checkoutCommit,
+          runSetupScript: params.runSetupScript,
+          signal: params.signal,
+          commitGuard,
+          onProgress: params.onProgress,
+          gitIsolation: params.gitIsolation,
+        });
+        const rollback = existingDirectory
+          ? undefined
+          : async () => {
+              await managedWorktrees.remove({
+                id: worktree.id,
+                reason: "session-create-failed",
+                allowSnapshotLoss: true,
+              });
+            };
+        try {
+          commitGuard?.();
+          // A nested source workspace keeps its relative cwd inside the new checkout.
+          let spawnedCwd = worktree.path;
+          const relative = path.relative(repository.sourceRoot, fs.realpathSync(workspace));
+          if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+            spawnedCwd = path.join(worktree.path, relative);
+            fs.mkdirSync(spawnedCwd, { recursive: true });
+          }
+          return ok({
+            spawnedCwd,
+            sessionRoot: fs.realpathSync(worktree.path),
+            worktree: {
+              id: worktree.id,
+              branch: worktree.branch,
+              repoRoot: worktree.repoRoot,
+              canonicalWorkspaceDir: workspace,
+            },
+            ...(rollback ? { rollback } : {}),
           });
-        };
-    try {
-      commitGuard?.();
-      // A nested source workspace keeps its relative cwd inside the new checkout.
-      let spawnedCwd = worktree.path;
-      const relative = path.relative(repository.sourceRoot, fs.realpathSync(workspace));
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-        spawnedCwd = path.join(worktree.path, relative);
-        fs.mkdirSync(spawnedCwd, { recursive: true });
-      }
-      return ok({
-        spawnedCwd,
-        sessionRoot: fs.realpathSync(worktree.path),
-        worktree: {
-          id: worktree.id,
-          branch: worktree.branch,
-          repoRoot: worktree.repoRoot,
-          canonicalWorkspaceDir: workspace,
-        },
-        ...(rollback ? { rollback } : {}),
-      });
-    } catch (error) {
-      await rollback?.();
-      throw error;
-    }
+        } catch (error) {
+          await rollback?.();
+          throw error;
+        }
+      },
+    );
   } catch (error) {
     // Closed delegated authority remains an exception for its admission owner.
     commitGuard?.();

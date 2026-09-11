@@ -1818,6 +1818,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   base_ref TEXT NOT NULL,
   owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
   owner_id TEXT,
+  sandbox_git INTEGER,
   snapshot_ref TEXT,
   provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
@@ -1831,6 +1832,12 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+CREATE TABLE IF NOT EXISTS worktree_repository_git_isolations (
+  repo_root TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  agent_id TEXT
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   worktree_id TEXT NOT NULL,

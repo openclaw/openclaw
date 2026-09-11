@@ -1694,6 +1694,12 @@ export interface WorktreeProvisionedFileChunks {
   worktree_id: string;
 }
 
+export interface WorktreeRepositoryGitIsolations {
+  agent_id: string | null;
+  repo_root: string;
+  session_key: string;
+}
+
 export interface Worktrees {
   base_ref: string;
   branch: string;
@@ -1708,6 +1714,7 @@ export interface Worktrees {
   repo_fingerprint: string;
   repo_root: string;
   run_end_cleanup_json: string | null;
+  sandbox_git: number | null;
   snapshot_ref: string | null;
 }
 
@@ -1837,5 +1844,6 @@ export interface DB {
   workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
   worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
+  worktree_repository_git_isolations: WorktreeRepositoryGitIsolations;
   worktrees: Worktrees;
 }

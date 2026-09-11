@@ -70,6 +70,18 @@ export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): 
   database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
 }
 
+export function ensureWorktreeRepositoryGitIsolationSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS worktree_repository_git_isolations (",
+  );
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Worktree repository Git isolation schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical additive DDL; worktree containment rows use Kysely.
+}
+
 export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
     "CREATE TABLE IF NOT EXISTS github_repository_publication_requests (",

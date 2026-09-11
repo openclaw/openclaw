@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -44,6 +43,7 @@ import {
   requireGitBuffer,
   resolveGitRepositoryPaths,
   runGit,
+  withWorktreeGitExecutor,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
@@ -70,11 +70,16 @@ import {
   WorktreeRemovalContentionError,
 } from "./registry.js";
 import {
+  resolveRegistryRepositoryGitIsolation,
+  resolveRepositoryIsolationRoot,
+} from "./repository-provenance.js";
+import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
   hasLiveWorktreeRunLease,
 } from "./run-lease.js";
+import { createWorktreeGitExecutor, type WorktreeGitIsolation } from "./sandbox-git.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeBranch,
@@ -212,6 +217,7 @@ type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   getConfig?: () => Pick<OpenClawConfig, "worktreeRoot">;
+  getRuntimeConfig?: () => OpenClawConfig;
 };
 
 export type WorktreeCleanupLimits = {
@@ -438,7 +444,6 @@ async function shouldPreserveOrphanCandidate(
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
   const removed = await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
   const deletedBranch = await runGit(repoRoot, ["branch", "-D", branch]);
-  await runGit(repoRoot, ["worktree", "prune"]);
   if (removed.code !== 0 || deletedBranch.code !== 0) {
     const failure =
       removed.code !== 0
@@ -474,7 +479,6 @@ async function resetFailedWorktreeAdd(
   if (branchExists.code === 0) {
     await requireGit(repoRoot, ["branch", "-D", branch]);
   }
-  await requireGit(repoRoot, ["worktree", "prune"]);
 }
 
 async function canResetFailedWorktreeAdd(
@@ -622,7 +626,7 @@ async function containsSnapshotGitMarker(
 }
 
 async function snapshotWorktree(
-  stateEnv: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
   reason: string,
   provisionedPaths: readonly string[] | undefined,
@@ -632,11 +636,13 @@ async function snapshotWorktree(
   if (!provisionedPaths) {
     throw new Error("provisioned path ledger is unavailable");
   }
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-index-"));
+  const worktreeTempRoot = path.join(resolveStateDir(env), "worktree-tmp");
+  await fs.mkdir(worktreeTempRoot, { recursive: true });
+  const tempDir = await fs.mkdtemp(path.join(worktreeTempRoot, "index-"));
   const indexPath = path.join(tempDir, "index");
   const snapshotRef = `${SNAPSHOT_REF_PREFIX}/${record.id}`;
   const filemodeArgs = process.platform === "win32" ? [] : ["-c", "core.filemode=true"];
-  const env: NodeJS.ProcessEnv = {
+  const gitEnv: NodeJS.ProcessEnv = {
     GIT_INDEX_FILE: indexPath,
     GIT_AUTHOR_NAME: "OpenClaw",
     GIT_AUTHOR_EMAIL: "openclaw@localhost",
@@ -719,14 +725,14 @@ async function snapshotWorktree(
     }
     commitGuard?.();
     const { missing, tracked } = await prepareSnapshotIndex(
-      stateEnv,
+      env,
       record,
       snapshotPaths,
       provisionedPaths,
-      env,
+      gitEnv,
     );
     const provisionedState = await snapshotProvisionedFiles(
-      stateEnv,
+      env,
       record.id,
       record.path,
       provisionedPaths,
@@ -754,7 +760,7 @@ async function snapshotWorktree(
       record.path,
       [...filemodeArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
       {
-        env,
+        env: gitEnv,
         input:
           snapshotPaths.size > 0
             ? Buffer.concat(
@@ -767,7 +773,7 @@ async function snapshotWorktree(
       },
     );
     commitGuard?.();
-    const tree = await requireGit(record.path, [...filemodeArgs, "write-tree"], { env });
+    const tree = await requireGit(record.path, [...filemodeArgs, "write-tree"], { env: gitEnv });
     for (const provisionedPath of provisionedPaths) {
       const overlap = await requireGit(record.path, [
         "--literal-pathspecs",
@@ -800,7 +806,7 @@ async function snapshotWorktree(
         "-m",
         `OpenClaw worktree snapshot: ${reason}`,
       ],
-      { env },
+      { env: gitEnv },
     );
     commitGuard?.();
     await requireGit(record.repoRoot, ["update-ref", snapshotRef, commit]);
@@ -825,7 +831,7 @@ async function prepareSnapshotIndex(
     0,
   );
   requireWorktreeDiskSpace(
-    [{ path: os.tmpdir(), bytes: 2 * metadataBytes }],
+    [{ path: path.join(resolveStateDir(env), "worktree-tmp"), bytes: 2 * metadataBytes }],
     "worktree safety snapshot index",
     true,
   );
@@ -890,7 +896,7 @@ async function prepareSnapshotIndex(
     [
       { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
       { path: resolveStateDir(env), bytes: 2 * provisionedBytes },
-      { path: os.tmpdir(), bytes: 2 * metadataBytes },
+      { path: path.join(resolveStateDir(env), "worktree-tmp"), bytes: 2 * metadataBytes },
     ],
     "worktree safety snapshot",
     true,
@@ -902,11 +908,72 @@ export class ManagedWorktreeService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
   private readonly getConfig: ServiceOptions["getConfig"];
+  private readonly getRuntimeConfig: ServiceOptions["getRuntimeConfig"];
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
     this.getConfig = options.getConfig;
+    this.getRuntimeConfig = options.getRuntimeConfig;
+  }
+
+  private async gitExecutor(
+    repoRoot: string,
+    isolation: WorktreeGitIsolation | undefined,
+    allocationRoot?: string,
+  ) {
+    return await createWorktreeGitExecutor({
+      isolation,
+      repoRoot,
+      worktreeRoot: isolation ? await this.worktreesRoot() : undefined,
+      allocationRoot,
+      env: this.env,
+    });
+  }
+
+  private isolationForRecord(record: ManagedWorktreeRecord): WorktreeGitIsolation | undefined {
+    if (!record.sandboxGit) {
+      return undefined;
+    }
+    const isolation = this.isolationForRepository(record.repoRoot);
+    if (!isolation) {
+      throw new Error("Sandbox Git repository provenance has no durable isolation policy.");
+    }
+    return isolation;
+  }
+
+  private isolationForRepository(repoRoot: string): WorktreeGitIsolation | undefined {
+    const provenance = resolveRegistryRepositoryGitIsolation(this.env, repoRoot);
+    if (!provenance) {
+      return undefined;
+    }
+    if (!this.getRuntimeConfig) {
+      throw new Error("Sandbox Git repository provenance requires runtime configuration.");
+    }
+    return { config: this.getRuntimeConfig(), ...provenance, required: true };
+  }
+
+  private async withRecordGit<T>(record: ManagedWorktreeRecord, run: () => Promise<T>): Promise<T> {
+    const executor = await this.gitExecutor(
+      record.repoRoot,
+      this.isolationForRecord(record),
+      record.path,
+    );
+    return await withWorktreeGitExecutor(executor, run);
+  }
+
+  private async recordForWorkspace(workspace: string): Promise<ManagedWorktreeRecord | undefined> {
+    const canonical = await fs.realpath(workspace).catch(() => path.resolve(workspace));
+    const records = listRegistryWorktrees(this.env);
+    return (
+      records.find(
+        (record) =>
+          record.removedAt === undefined &&
+          (canonical === path.resolve(record.path) ||
+            isPathInside(path.resolve(record.path), canonical)),
+      ) ??
+      records.find((record) => record.sandboxGit && canonical === path.resolve(record.repoRoot))
+    );
   }
 
   private async worktreesRoot(): Promise<string> {
@@ -919,36 +986,52 @@ export class ManagedWorktreeService {
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
-    params.signal?.throwIfAborted();
-    const repository = await resolveRepository(params.repoRoot);
-    return await this.withAllocationLease(params, async (guard) => {
-      if (params.ownerId) {
-        const existing = findLiveRegistryWorktreeByOwner(
-          this.env,
-          params.ownerKind ?? "manual",
-          params.ownerId,
-        );
-        if (existing && (await worktreePathExists(existing.path))) {
-          const validated = await this.rebindLiveRepository(existing, guard);
-          if (validated.repoRoot !== repository.repoRoot) {
-            throw new Error(
-              `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
-            );
-          }
-          guard.commitGuard?.();
-          return validated;
-        }
-        if (existing) {
-          guard.commitGuard?.();
-          updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
-        }
-      }
-      return await this.createForRepository(
-        { ...params, ...guard },
-        repository,
-        params.name ?? params.suggestedName ?? createCrustaceanSlug(),
+    const sourceRecord = await this.recordForWorkspace(params.repoRoot);
+    const repositoryIsolationRoot = await resolveRepositoryIsolationRoot(params.repoRoot);
+    const gitIsolation =
+      params.gitIsolation ??
+      (sourceRecord ? this.isolationForRecord(sourceRecord) : undefined) ??
+      (repositoryIsolationRoot ? this.isolationForRepository(repositoryIsolationRoot) : undefined);
+    const effectiveParams = gitIsolation ? { ...params, gitIsolation } : params;
+    return await this.withAllocationLease(effectiveParams, async (guard) => {
+      const executor = await this.gitExecutor(params.repoRoot, gitIsolation);
+      return await withWorktreeGitExecutor(executor, () =>
+        this.createWithExecutor({ ...effectiveParams, ...guard }),
       );
     });
+  }
+
+  private async createWithExecutor(
+    params: CreateManagedWorktreeParams,
+  ): Promise<ManagedWorktreeRecord> {
+    params.signal?.throwIfAborted();
+    const repository = await resolveRepository(params.repoRoot);
+    if (params.ownerId) {
+      const existing = findLiveRegistryWorktreeByOwner(
+        this.env,
+        params.ownerKind ?? "manual",
+        params.ownerId,
+      );
+      if (existing && (await worktreePathExists(existing.path))) {
+        const validated = await this.rebindLiveRepository(existing, params);
+        if (validated.repoRoot !== repository.repoRoot) {
+          throw new Error(
+            `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
+          );
+        }
+        params.commitGuard?.();
+        return validated;
+      }
+      if (existing) {
+        params.commitGuard?.();
+        updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
+      }
+    }
+    return await this.createForRepository(
+      params,
+      repository,
+      params.name ?? params.suggestedName ?? createCrustaceanSlug(),
+    );
   }
 
   private async withAllocationLease<T>(
@@ -1154,6 +1237,7 @@ export class ManagedWorktreeService {
       baseRef: recordBase,
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+      ...(params.gitIsolation ? { sandboxGit: true as const } : {}),
       createdAt,
       lastActiveAt: createdAt,
     };
@@ -1195,6 +1279,19 @@ export class ManagedWorktreeService {
     canonicalRoot: string;
     sourceRoot: string;
   }> {
+    const record = await this.recordForWorkspace(repoRoot);
+    if (record) {
+      return await this.withRecordGit(record, () =>
+        this.resolveRepositoryPathsWithExecutor(repoRoot),
+      );
+    }
+    return await this.resolveRepositoryPathsWithExecutor(repoRoot);
+  }
+
+  private async resolveRepositoryPathsWithExecutor(repoRoot: string): Promise<{
+    canonicalRoot: string;
+    sourceRoot: string;
+  }> {
     const resolved = await resolveRepository(repoRoot);
     return {
       canonicalRoot: resolved.repoRoot,
@@ -1204,6 +1301,21 @@ export class ManagedWorktreeService {
 
   /** Resolves the repository facts shared by managed worktrees and project discovery. */
   async resolveRepositoryIdentity(repoRoot: string): Promise<{
+    checkoutRoot: string;
+    repoRoot: string;
+    originUrl: string;
+    fingerprint: string;
+  }> {
+    const record = await this.recordForWorkspace(repoRoot);
+    if (record) {
+      return await this.withRecordGit(record, () =>
+        this.resolveRepositoryIdentityWithExecutor(repoRoot),
+      );
+    }
+    return await this.resolveRepositoryIdentityWithExecutor(repoRoot);
+  }
+
+  private async resolveRepositoryIdentityWithExecutor(repoRoot: string): Promise<{
     checkoutRoot: string;
     repoRoot: string;
     originUrl: string;
@@ -1224,6 +1336,19 @@ export class ManagedWorktreeService {
    * when no explicit ref is chosen.
    */
   async listRepositoryBranches(
+    repoRoot: string,
+    options: { includeRepositoryStatus?: boolean } = {},
+  ): Promise<ManagedWorktreeBranchesResult> {
+    const record = await this.recordForWorkspace(repoRoot);
+    if (record) {
+      return await this.withRecordGit(record, () =>
+        this.listRepositoryBranchesWithExecutor(repoRoot, options),
+      );
+    }
+    return await this.listRepositoryBranchesWithExecutor(repoRoot, options);
+  }
+
+  private async listRepositoryBranchesWithExecutor(
     repoRoot: string,
     options: { includeRepositoryStatus?: boolean } = {},
   ): Promise<ManagedWorktreeBranchesResult> {
@@ -1340,13 +1465,16 @@ export class ManagedWorktreeService {
   }
 
   async remove(params: RemoveWorktreeParams): Promise<RemoveManagedWorktreeResult> {
+    const record = this.requireLiveRecord(params.id);
     const timing = startRemovalTiming();
     let outcome: "returned" | "threw" = "threw";
     try {
       const result = await this.withAllocationLease(params, async (guard) => {
         timing?.enter();
         try {
-          return await this.removeWithAllocation({ ...params, ...guard });
+          return await this.withRecordGit(record, () =>
+            this.removeWithAllocation({ ...params, ...guard }),
+          );
         } finally {
           timing?.finishBody();
         }
@@ -1426,8 +1554,7 @@ export class ManagedWorktreeService {
       if (branchDelete.code !== 0) {
         throw commandError("git branch -D", branchDelete);
       }
-      await requireGit(record.repoRoot, ["worktree", "prune"]);
-      // Only prune the recorded checkout's empty parent; a changed allocation
+      // Only remove the recorded checkout's empty parent; a changed allocation
       // root is neither required for removal nor authority to walk other parents.
       await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
       params.commitGuard?.();
@@ -1452,9 +1579,12 @@ export class ManagedWorktreeService {
   }
 
   async restore(params: { id: string } & WorktreeMutationGuard): Promise<ManagedWorktreeRecord> {
-    return await this.withAllocationLease(
-      params,
-      async (guard) => await this.restoreWithAllocation({ ...params, ...guard }),
+    const record = getRegistryWorktree(this.env, params.id);
+    if (!record) {
+      throw new Error(`worktree ${params.id} is not restorable`);
+    }
+    return await this.withAllocationLease(params, async (guard) =>
+      this.withRecordGit(record, () => this.restoreWithAllocation({ ...params, ...guard })),
     );
   }
 
@@ -1509,7 +1639,7 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     await requireGit(
       record.repoRoot,
-      ["worktree", "add", "--detach", record.path, record.snapshotRef],
+      ["worktree", "add", "--detach", "--", record.path, record.snapshotRef],
       { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, signal: params.signal },
     );
     let branchCreated = false;
@@ -1568,6 +1698,11 @@ export class ManagedWorktreeService {
   }
 
   async removeIfLossless(id: string): Promise<boolean> {
+    const record = this.requireLiveRecord(id);
+    return await this.withRecordGit(record, () => this.removeIfLosslessWithExecutor(id));
+  }
+
+  private async removeIfLosslessWithExecutor(id: string): Promise<boolean> {
     let record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
@@ -1724,8 +1859,11 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (record.snapshotRef && (await worktreePathExists(record.repoRoot))) {
-          await requireGit(record.repoRoot, ["update-ref", "-d", record.snapshotRef]);
+        const snapshotRef = record.snapshotRef;
+        if (snapshotRef && (await worktreePathExists(record.repoRoot))) {
+          await this.withRecordGit(record, async () => {
+            await requireGit(record.repoRoot, ["update-ref", "-d", snapshotRef]);
+          });
         }
         deleteRegistryWorktree(this.env, record.id);
         snapshotsPruned += 1;
@@ -1980,7 +2118,10 @@ export class ManagedWorktreeService {
   }
 }
 
-export const managedWorktrees = new ManagedWorktreeService({ getConfig: getRuntimeConfig });
+export const managedWorktrees = new ManagedWorktreeService({
+  getConfig: getRuntimeConfig,
+  getRuntimeConfig,
+});
 
 export type {
   CreateManagedWorktreeParams,

@@ -643,6 +643,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     baseRef?: string;
     /** Verified commit used for checkout while baseRef remains user-facing metadata. */
     baseCommit?: string;
+    /** Source provenance requires Git preparation inside a local sandbox boundary. */
+    sandboxGit?: true;
     titleSource: string;
   };
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
