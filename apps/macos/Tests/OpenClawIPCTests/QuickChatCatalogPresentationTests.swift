@@ -178,8 +178,10 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
                      "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}]}}
                     """
                 default:
-                    throw NSError(domain: "QuickChatCatalogFixture", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "Unexpected request: \(method)"])
+                    throw NSError(
+                        domain: "QuickChatCatalogFixture",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Unexpected request: \(method)"])
                 }
                 socket.emitReceiveSuccess(.data(Data(
                     #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)))
@@ -213,7 +215,9 @@ private final class QuickChatCatalogObservation {
         }
     }
 
-    func stop() { self.stopped = true }
+    func stop() {
+        self.stopped = true
+    }
 }
 
 @MainActor
@@ -241,10 +245,18 @@ private final class QuickChatCatalogMenuTracking: NSObject {
         self.observed = true
         self.menu = menu
         // AppKit tracks menus in a nested run loop. Schedule both inspection and cancellation there.
-        let inspection = Timer(timeInterval: 0, target: self, selector: #selector(self.inspectMenu),
-                               userInfo: nil, repeats: false)
-        let deadline = Timer(timeInterval: 3, target: self, selector: #selector(self.expire),
-                             userInfo: nil, repeats: false)
+        let inspection = Timer(
+            timeInterval: 0,
+            target: self,
+            selector: #selector(self.inspectMenu),
+            userInfo: nil,
+            repeats: false)
+        let deadline = Timer(
+            timeInterval: 3,
+            target: self,
+            selector: #selector(self.expire),
+            userInfo: nil,
+            repeats: false)
         self.inspection = inspection
         self.deadline = deadline
         for timer in [inspection, deadline] {

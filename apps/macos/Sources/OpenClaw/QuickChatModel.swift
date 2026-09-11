@@ -391,22 +391,6 @@ final class QuickChatModel {
                 self.sendState != .sending)
     }
 
-    var messagePlaceholder: String {
-        if let targetSessionOverride {
-            return String(format: String(localized: "Reply in %@"), targetSessionOverride.displayName)
-        }
-        return String(format: String(localized: "Message %@"), self.agentDisplay.name)
-    }
-
-    var routingTarget: QuickChatRoutingTarget? {
-        guard !self.sessionKey.isEmpty else { return nil }
-        return QuickChatRoutingTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
-    }
-
-    var activePresentationID: UUID? {
-        self.isPresentationActive ? self.presentationID : nil
-    }
-
     func beginPresentation() -> UUID {
         self.presentationID = UUID()
         self.isPresentationActive = true
@@ -1050,6 +1034,22 @@ final class QuickChatModel {
 }
 
 extension QuickChatModel {
+    var messagePlaceholder: String {
+        if let targetSessionOverride {
+            return String(format: String(localized: "Reply in %@"), targetSessionOverride.displayName)
+        }
+        return String(format: String(localized: "Message %@"), self.agentDisplay.name)
+    }
+
+    var routingTarget: QuickChatRoutingTarget? {
+        guard !self.sessionKey.isEmpty else { return nil }
+        return QuickChatRoutingTarget(sessionKey: self.sessionKey, agentID: self.sendAgentID)
+    }
+
+    var activePresentationID: UUID? {
+        self.isPresentationActive ? self.presentationID : nil
+    }
+
     var canUseModelControls: Bool {
         !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&

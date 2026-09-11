@@ -43,7 +43,8 @@ final class QuickChatPresentationTests: XCTestCase {
         XCTAssertFalse(panel.hidesOnDeactivate)
         try await self.waitUntil { panel.firstResponder is NSTextView }
         XCTAssertTrue(panel.firstResponder is NSTextView)
-        print("Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow), editorReady=\(panel.firstResponder is NSTextView)")
+        print(
+            "Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow), editorReady=\(panel.firstResponder is NSTextView)")
 
         let content = try XCTUnwrap(panel.contentView)
         content.layoutSubtreeIfNeeded()
