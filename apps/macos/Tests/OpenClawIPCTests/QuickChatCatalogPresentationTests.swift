@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Observation
 import OpenClawChatUI
 import SwiftUI
@@ -8,9 +9,10 @@ import XCTest
 
 @MainActor
 final class QuickChatCatalogPresentationTests: XCTestCase {
-    func testRenderedPickerUsesCatalogAvailabilityAndReasoning() async throws {
+    func testRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
-        let gateway = Self.makeGateway()
+        let fixture = QuickChatCatalogFixture()
+        let gateway = Self.makeGateway(fixture: fixture)
         let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "main")
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -19,16 +21,18 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             permissionStatusProvider: { _ in [:] },
             connectionGateProvider: { .available },
             modelControlsProvider: { target in
-                async let models = transport.listModels(agentID: target.agentID)
+                async let catalog = transport.loadModelCatalog(sessionKey: target.sessionKey, agentID: target.agentID)
                 async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
                 async let agents = gateway.agentsList()
                 return try await QuickChatModelControlLogic.snapshot(
-                    target: target, models: models, sessions: sessions, agents: agents)
+                    target: target, models: catalog.choices, sessions: sessions, agents: agents)
             },
-            modelPatchProvider: { target, selection in
-                try await transport.patchSessionSettings(
+            settingsPatchProvider: { target, settings in
+                let routeLease = await transport.acquireSessionSettingsRouteLease()
+                let lease = try XCTUnwrap(routeLease)
+                return try await lease.patchSessionSettings(
                     sessionKey: target.sessionKey, agentID: target.agentID,
-                    patch: OpenClawChatSessionSettingsPatch(model: .some(selection)))
+                    patch: settings)
             })
         let controller = QuickChatController(
             enableUI: true, model: model, monitoringEnabled: false,
@@ -57,9 +61,11 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
                 let unavailable = try XCTUnwrap(choices.items.first { $0.title.hasPrefix("Locked fixture") })
                 XCTAssertFalse(unavailable.isEnabled, "The catalog requires sign-in before this model can be selected")
                 XCTAssertTrue(unavailable.title.contains("Sign-in needed"))
+                let unknown = try XCTUnwrap(choices.items.first { $0.title.hasPrefix("Unknown fixture") })
+                XCTAssertTrue(unknown.isEnabled, "Missing availability must not refuse a model")
                 let reasoningHeader = try XCTUnwrap(menu.items.firstIndex { $0.title == "Reasoning" })
                 XCTAssertEqual(
-                    menu.items.dropFirst(reasoningHeader + 1).map(\.title),
+                    menu.items.dropFirst(reasoningHeader + 1).prefix { $0.submenu == nil }.map(\.title),
                     ["Auto", "Brief", "Thorough"],
                     "The picker must use catalog choices, without inferring levels from the model name")
                 let allowed = try XCTUnwrap(choices.items.firstIndex { $0.title.hasPrefix("Allowed fixture") })
@@ -82,6 +88,40 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             }
             XCTAssertEqual(model.selectedThinkingLevel, "high")
             XCTAssertTrue(model.modelControlLabel.contains("Thorough"))
+            try self.press(button) { menu in
+                try Self.record(menu: menu, content: content, name: "effort")
+                let speed = try XCTUnwrap(menu.items.first { $0.title == "Speed" }?.submenu)
+                XCTAssertEqual(speed.items.map(\.title), ["Session default", "Fast", "Normal"])
+                XCTAssertTrue(speed.items.allSatisfy(\.isEnabled))
+                XCTAssertEqual(speed.items[0].state, .on)
+                speed.performActionForItem(at: 1)
+            }
+            try await self.waitForModel { !model.isUpdatingModel }
+            XCTAssertTrue(model.speed.isEnabled)
+            XCTAssertEqual(model.speed.override, .on)
+            XCTAssertTrue(model.modelControlLabel.contains("Fast"))
+            try self.press(button) { menu in
+                try Self.record(menu: menu, content: content, name: "fast")
+                let speed = try XCTUnwrap(menu.items.first { $0.title == "Speed" }?.submenu)
+                XCTAssertEqual(speed.items[1].state, .on)
+                speed.performActionForItem(at: 0)
+            }
+            try await self.waitForModel { !model.isUpdatingModel }
+            XCTAssertNil(model.speed.override)
+            XCTAssertFalse(model.speed.isEnabled)
+            XCTAssertEqual(model.selectedThinkingLevel, "high")
+            try self.press(button) { menu in
+                try Self.record(menu: menu, content: content, name: "inherited")
+                let speed = try XCTUnwrap(menu.items.first { $0.title == "Speed" }?.submenu)
+                XCTAssertEqual(speed.items.map(\.state), [.on, .off, .off])
+                let choices = try XCTUnwrap(menu.items.first { $0.title == "Fixture" }?.submenu)
+                let unknown = try XCTUnwrap(choices.items.firstIndex { $0.title == "Unknown fixture" })
+                choices.performActionForItem(at: unknown)
+            }
+            try await self.waitForModel { !model.isUpdatingModel }
+            XCTAssertEqual(model.displayedModelSelectionID, "fixture/unknown")
+            let patches = await fixture.patches
+            XCTAssertEqual(patches, ["model=fixture/allowed", "fast=true", "fast=null", "model=fixture/unknown"])
             controller.stop()
             await gateway.shutdown()
         } catch {
@@ -130,66 +170,102 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
         content.cacheDisplay(in: content.bounds, to: image)
         try XCTUnwrap(image.representation(using: .png, properties: [:]))
             .write(to: output.appendingPathComponent("\(name)-window.png"))
+        if CGPreflightScreenCaptureAccess(),
+           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], 0) as? [[String: Any]]
+        {
+            for window in windows where window[kCGWindowOwnerPID as String] as? Int32 == ProcessInfo.processInfo.processIdentifier {
+                guard window[kCGWindowLayer as String] as? Int == NSWindow.Level.popUpMenu.rawValue,
+                      let number = window[kCGWindowNumber as String] as? UInt32 else { continue }
+                let capture = Process()
+                capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                capture.arguments = ["-x", "-l", String(number), output.appendingPathComponent("\(name)-menu-\(number).png").path]
+                try capture.run()
+                capture.waitUntilExit()
+                XCTAssertEqual(capture.terminationStatus, 0)
+            }
+        }
     }
 
-    private static func makeGateway() -> GatewayConnection {
+    private static func makeGateway(fixture: QuickChatCatalogFixture) -> GatewayConnection {
         // Real request encoding and payload decoding stop at the owner's in-memory WebSocket fake.
         // This does not exercise a network listener, device authentication, or a live Gateway.
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
-                let id = try XCTUnwrap(GatewayWebSocketTestSupport.requestID(from: message))
-                let method = try XCTUnwrap(GatewayWebSocketTestSupport.requestMethod(from: message))
-                let payload: String
-                switch method {
-                case "agents.list":
-                    payload = #"{"defaultId":"main","mainKey":"main","scope":"per-agent","agents":[{"id":"main","kind":"agent","name":"Fixture"}]}"#
-                case "models.list":
-                    payload = """
-                    {"models":[
-                      {"id":"current","name":"Current fixture","provider":"fixture","available":true,
-                       "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}],
-                       "thinkingDefault":"low"},
-                      {"id":"allowed","name":"Allowed fixture","provider":"fixture","available":true,
-                       "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}],
-                       "thinkingDefault":"low"},
-                      {"id":"locked","name":"Locked fixture","provider":"fixture","available":false,
-                       "unavailableReason":"missing-auth"}
-                    ]}
-                    """
-                case "sessions.list":
-                    payload = """
-                    {"sessions":[{"key":"agent:main:main","modelProvider":"fixture","model":"current"}]}
-                    """
-                case "sessions.patch":
-                    let data: Data
-                    switch message {
-                    case let .data(bytes): data = bytes
-                    case let .string(text): data = Data(text.utf8)
-                    @unknown default: throw URLError(.badServerResponse)
-                    }
-                    let request = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-                    let params = try XCTUnwrap(request["params"] as? [String: Any])
-                    XCTAssertEqual(params["key"] as? String, "agent:main:main")
-                    XCTAssertEqual(params["model"] as? String, "fixture/allowed")
-                    payload = """
-                    {"ok":true,"key":"agent:main:main","entry":{},
-                     "resolved":{"modelProvider":"fixture","model":"allowed","thinkingLevel":"low",
-                     "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}]}}
-                    """
-                default:
-                    throw NSError(
-                        domain: "QuickChatCatalogFixture",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "Unexpected request: \(method)"])
+                let data: Data = switch message {
+                case let .data(bytes): bytes
+                case let .string(text): Data(text.utf8)
+                @unknown default: throw URLError(.badServerResponse)
                 }
-                socket.emitReceiveSuccess(.data(Data(
-                    #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)))
+                socket.emitReceiveSuccess(.data(try await fixture.response(to: data)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    capabilities: ["published-model-catalog"]))
             })
         })
         return GatewayConnection(
             configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
+    }
+}
+
+private actor QuickChatCatalogFixture {
+    private var model = "current"
+    private var fastMode: Bool?
+    private(set) var patches: [String] = []
+
+    func response(to data: Data) throws -> Data {
+        let request = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let id = try XCTUnwrap(request["id"] as? String)
+        let method = try XCTUnwrap(request["method"] as? String)
+        let payload: String
+        switch method {
+        case "health": payload = "{}"
+        case "agents.list":
+            payload = #"{"defaultId":"main","mainKey":"main","scope":"per-agent","agents":[{"id":"main","kind":"agent","name":"Fixture"}]}"#
+        case "models.list":
+            let params = try XCTUnwrap(request["params"] as? [String: Any])
+            XCTAssertEqual(params["sessionKey"] as? String, "agent:main:main")
+            payload = """
+            {"models":[
+              {"id":"current","name":"Current fixture","provider":"fixture","available":true,
+               "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}],
+               "thinkingDefault":"low","supportsFastMode":true,"effectiveFastMode":false},
+              {"id":"allowed","name":"Allowed fixture","provider":"fixture","available":true,
+               "thinkingLevels":[{"id":"low","label":"Brief"},{"id":"high","label":"Thorough"}],
+               "thinkingDefault":"low","supportsFastMode":true,"effectiveFastMode":false},
+              {"id":"locked","name":"Locked fixture","provider":"fixture","available":false,
+               "unavailableReason":"missing-auth"},
+              {"id":"unknown","name":"Unknown fixture","provider":"fixture"}
+            ]}
+            """
+        case "sessions.list":
+            let fast = self.fastMode.map { ",\"fastMode\":\($0),\"effectiveFastMode\":\($0)" } ?? ""
+            payload = """
+            {"sessions":[{"key":"agent:main:main","modelProvider":"fixture","model":"\(self.model)"\(fast)}]}
+            """
+        case "sessions.patch":
+            let params = try XCTUnwrap(request["params"] as? [String: Any])
+            XCTAssertEqual(params["key"] as? String, "agent:main:main")
+            if let model = params["model"] as? String {
+                XCTAssertTrue(["fixture/allowed", "fixture/unknown"].contains(model))
+                self.model = model
+                self.patches.append("model=\(model)")
+            } else {
+                let fast = try XCTUnwrap(params["fastMode"])
+                XCTAssertTrue(fast is Bool || fast is NSNull)
+                self.fastMode = fast as? Bool
+                self.patches.append(self.fastMode.map { "fast=\($0)" } ?? "fast=null")
+            }
+            payload = #"{"ok":true,"key":"agent:main:main","entry":{}}"#
+        default:
+            throw NSError(
+                domain: "QuickChatCatalogFixture", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Unexpected request: \(method)"])
+        }
+        return Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)
     }
 }
 

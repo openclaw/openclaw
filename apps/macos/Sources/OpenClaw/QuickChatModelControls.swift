@@ -10,6 +10,7 @@ struct QuickChatModelControlSnapshot: Sendable {
     let defaultProvider: String?
     var catalogMessage: String?
     var catalogRefreshFailed = false
+    var speed = OpenClawChatFastModeProfile.resolve(session: nil, model: nil)
 }
 
 enum QuickChatModelPatchDecision: Equatable {
@@ -47,7 +48,8 @@ enum QuickChatModelControlLogic {
             currentModelSelectionID: selectionID,
             currentThinkingLevel: thinkingLevel,
             thinkingOptions: profile?.levels ?? [],
-            defaultProvider: self.provider(selectionID: selectionID))
+            defaultProvider: self.provider(selectionID: selectionID),
+            speed: .resolve(session: entry, model: models.first { $0.selectionID == selectionID }))
     }
 
     static func modelPatchDecision(

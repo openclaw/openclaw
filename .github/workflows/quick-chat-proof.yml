@@ -94,12 +94,13 @@ jobs:
       - name: Check touched Swift owners
         run: |
           set -euo pipefail
-          swiftformat apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel.swift apps/macos/Tests/OpenClawIPCTests/QuickChat*PresentationTests.swift --config config/swiftformat
+          swiftformat apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel{,Controls,Menu}.swift apps/macos/Tests/OpenClawIPCTests/QuickChat*PresentationTests.swift apps/macos/Tests/OpenClawIPCTests/QuickChatPowerFeaturesTests.swift --config config/swiftformat
+          swiftformat apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessions.swift apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ModelControls.swift --config config/swiftformat --unexclude "$PWD/apps/shared/OpenClawKit/Sources/OpenClawChatUI"
           if [ -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPublicationTests.swift ]; then
             swiftformat apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPublicationTests.swift --config config/swiftformat
           fi
           git diff --binary > "$RUNNER_TEMP/quick-chat-proof/format.patch"
-          swiftlint lint --strict --config config/swiftlint.yml apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel.swift
+          swiftlint lint --strict --config config/swiftlint.yml apps/macos/Sources/OpenClaw/QuickChatController.swift apps/macos/Sources/OpenClaw/QuickChatModel{,Controls,Menu}.swift
       - name: Build app and native tests
         run: |
           set -o pipefail
@@ -110,6 +111,11 @@ jobs:
         run: |
           set -o pipefail
           node scripts/test-macos-native.mts named --package-path apps/macos --build-system native --skip-build --filter "$SWIFT_FILTER" 2>&1 | tee "$RUNNER_TEMP/quick-chat-proof/tests.log"
+      - name: Exercise shared catalog projection
+        run: |
+          set -o pipefail
+          swift build --package-path apps/shared/OpenClawKit --build-system native --build-tests -j 4 2>&1 | tee "$RUNNER_TEMP/quick-chat-proof/shared-build.log"
+          node scripts/test-macos-native.mts named --package-path apps/shared/OpenClawKit --build-system native --skip-build --filter ChatCatalogProjectionTests 2>&1 | tee "$RUNNER_TEMP/quick-chat-proof/shared-tests.log"
       - name: Retain proof
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

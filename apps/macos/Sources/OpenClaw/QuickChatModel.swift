@@ -99,14 +99,19 @@ enum QuickChatSendState: Equatable {
     case failed(String)
 }
 
-private struct ModelPatchRequest: Equatable {
+private struct ControlPatchRequest: Equatable {
     let presentationID: UUID
     let target: QuickChatRoutingTarget
-    let selectionID: String
+    let settings: OpenClawChatSessionSettingsPatch
+
+    var selectionID: String? {
+        guard let model = self.settings.model else { return nil }
+        return model ?? OpenClawChatViewModel.defaultModelSelectionID
+    }
 }
 
-private struct ModelPatchSettlement {
-    let request: ModelPatchRequest
+private struct ControlPatchSettlement {
+    let request: ControlPatchRequest
     let task: Task<Bool, Never>
 }
 
@@ -147,9 +152,9 @@ final class QuickChatModel {
     typealias ModelControlsProvider = @MainActor (
         QuickChatRoutingTarget) async throws -> QuickChatModelControlSnapshot
     typealias ModelCatalogEventsProvider = @MainActor () async -> AsyncStream<GatewayConnection.PushDelivery>
-    typealias ModelPatchProvider = @MainActor (
+    typealias SettingsPatchProvider = @MainActor (
         QuickChatRoutingTarget,
-        String?) async throws -> OpenClawChatModelPatchResult?
+        OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
 
     static let trackedPermissions: [Capability] = [.notifications, .accessibility, .screenRecording]
 
@@ -191,6 +196,7 @@ final class QuickChatModel {
     private(set) var currentSessionModelSelectionID: String?
     private(set) var currentSessionThinkingLevel: String?
     private(set) var thinkingOptions: [OpenClawChatThinkingLevelOption] = []
+    private(set) var speed = OpenClawChatFastModeProfile.resolve(session: nil, model: nil)
     private(set) var selectedModelSelectionID: String?
     private(set) var selectedThinkingLevel: String?
     private(set) var modelDefaultProvider: String?
@@ -213,7 +219,7 @@ final class QuickChatModel {
     @ObservationIgnored private let textContextCaptureProvider: TextContextCaptureProvider
     @ObservationIgnored private let modelControlsProvider: ModelControlsProvider
     @ObservationIgnored private let modelCatalogEventsProvider: ModelCatalogEventsProvider
-    @ObservationIgnored private let modelPatchProvider: ModelPatchProvider
+    @ObservationIgnored private let settingsPatchProvider: SettingsPatchProvider
     /// Invoked with the snapshotted route just before a send is dispatched, for every
     /// send path (text and capture); wires the reply consumer's pre-bind.
     @ObservationIgnored var onSendDispatched: ((QuickChatRoutingTarget) -> Void)?
@@ -232,7 +238,7 @@ final class QuickChatModel {
     @ObservationIgnored private var modelControlsTask: Task<Void, Never>?
     @ObservationIgnored private var modelCatalogEventsTask: Task<Void, Never>?
     @ObservationIgnored private var modelControlsRequestID = UUID()
-    @ObservationIgnored private var modelPatchSettlementsByTarget: [QuickChatRoutingTarget: ModelPatchSettlement] = [:]
+    @ObservationIgnored private var controlPatchSettlementsByTarget: [QuickChatRoutingTarget: ControlPatchSettlement] = [:]
     @ObservationIgnored private var appliedModelSelections: [QuickChatRoutingTarget: String] = [:]
 
     init(
@@ -299,12 +305,15 @@ final class QuickChatModel {
         modelCatalogEventsProvider: @escaping ModelCatalogEventsProvider = {
             await GatewayConnection.shared.subscribe()
         },
-        modelPatchProvider: @escaping ModelPatchProvider = { target, model in
+        settingsPatchProvider: @escaping SettingsPatchProvider = { target, settings in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
-            return try await transport.patchSessionSettings(
+            guard let lease = await transport.acquireSessionSettingsRouteLease() else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            return try await lease.patchSessionSettings(
                 sessionKey: target.sessionKey,
                 agentID: target.agentID,
-                patch: OpenClawChatSessionSettingsPatch(model: .some(model)))
+                patch: settings)
         })
     {
         self.sessionKeyProvider = sessionKeyProvider
@@ -318,7 +327,7 @@ final class QuickChatModel {
         self.textContextCaptureProvider = textContextCaptureProvider
         self.modelControlsProvider = modelControlsProvider
         self.modelCatalogEventsProvider = modelCatalogEventsProvider
-        self.modelPatchProvider = modelPatchProvider
+        self.settingsPatchProvider = settingsPatchProvider
     }
 
     deinit {
@@ -406,6 +415,7 @@ final class QuickChatModel {
         self.selectedThinkingLevel = nil
         self.currentSessionModelSelectionID = nil
         self.currentSessionThinkingLevel = nil
+        self.speed = .resolve(session: nil, model: nil)
         self.modelControlStatusMessage = nil
         self.targetSessionOverride = nil
         self.baseRoutingTarget = nil
@@ -437,11 +447,11 @@ final class QuickChatModel {
         switch agentsResult {
         case let .success(result):
             let resolution = self.resolveAgents(result)
-            await self.awaitModelPatchSettlement(for: resolution.target)
+            await self.awaitControlPatchSettlement(for: resolution.target)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.applyAgentsList(result, resolution: resolution)
             let modelControlsTask = self.modelControlsTask
-            await modelControlsTask?.value
+            _ = await modelControlsTask?.value
         case .failure:
             await self.refreshFallbackIdentity(id: id)
         }
@@ -525,36 +535,6 @@ final class QuickChatModel {
     func failDictation(message: String) {
         self.stopDictation()
         self.dictationStatusMessage = message
-    }
-
-    func selectThinkingLevel(_ level: String?) {
-        let normalized = level?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let selection = normalized?.isEmpty == false ? normalized : nil
-        guard selection != self.selectedThinkingLevel else { return }
-        self.selectedThinkingLevel = selection
-        self.modelControlStatusMessage = nil
-        self.retryIdentity = nil
-    }
-
-    func selectModel(_ selectionID: String) {
-        guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
-        let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
-            self.modelChoices.contains(where: { $0.selectionID == normalized && $0.available != false })
-        else { return }
-        guard normalized != self.selectedModelSelectionID else { return }
-        let patchDecision = QuickChatModelControlLogic.modelPatchDecision(
-            selectionID: normalized,
-            appliedSelectionID: self.appliedModelSelections[target],
-            currentSessionSelectionID: self.currentSessionModelSelectionID)
-        self.selectedModelSelectionID = normalized
-        self.modelControlStatusMessage = nil
-        if patchDecision != .none {
-            self.retryIdentity = nil
-        }
-        if case let .patch(model) = patchDecision {
-            self.startModelPatch(model: model, selectionID: normalized, target: target)
-        }
     }
 
     func send() async -> Bool {
@@ -765,6 +745,7 @@ final class QuickChatModel {
         self.selectedThinkingLevel = nil
         self.currentSessionModelSelectionID = nil
         self.currentSessionThinkingLevel = nil
+        self.speed = .resolve(session: nil, model: nil)
         self.modelControlStatusMessage = nil
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
         self.cancelPermissionTask()
@@ -833,7 +814,7 @@ final class QuickChatModel {
         let resolvedSessionKey = await self.sessionKeyProvider()
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         let target = QuickChatRoutingTarget(sessionKey: resolvedSessionKey, agentID: nil)
-        await self.awaitModelPatchSettlement(for: target)
+        await self.awaitControlPatchSettlement(for: target)
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.baseRoutingTarget = target
         self.applyRoutingTarget()
@@ -855,7 +836,7 @@ final class QuickChatModel {
         } catch {
             // The fallback session remains sendable even when its optional identity cannot load.
         }
-        await modelControlsTask?.value
+        _ = await modelControlsTask?.value
     }
 
     private func applyRoutingTarget() {
@@ -874,6 +855,7 @@ final class QuickChatModel {
             self.currentSessionThinkingLevel = nil
             self.modelDefaultProvider = nil
             self.thinkingOptions = []
+            self.speed = .resolve(session: nil, model: nil)
         }
         self.refreshModelControls(for: target)
     }
@@ -881,7 +863,7 @@ final class QuickChatModel {
     private func setRoutingTarget(_ target: QuickChatRoutingTarget?) {
         self.sessionKey = target?.sessionKey ?? ""
         self.sendAgentID = target?.agentID
-        self.isUpdatingModel = target.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
+        self.isUpdatingModel = target.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
     private func performSend(
@@ -1034,6 +1016,45 @@ final class QuickChatModel {
 }
 
 extension QuickChatModel {
+    func selectThinkingLevel(_ level: String?) {
+        let normalized = level?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let selection = normalized?.isEmpty == false ? normalized : nil
+        guard selection != self.selectedThinkingLevel else { return }
+        self.selectedThinkingLevel = selection
+        self.modelControlStatusMessage = nil
+        self.retryIdentity = nil
+    }
+
+    func selectModel(_ selectionID: String) {
+        guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
+        let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
+            self.modelChoices.contains(where: { $0.selectionID == normalized && $0.available != false })
+        else { return }
+        guard normalized != self.selectedModelSelectionID else { return }
+        let patchDecision = QuickChatModelControlLogic.modelPatchDecision(
+            selectionID: normalized,
+            appliedSelectionID: self.appliedModelSelections[target],
+            currentSessionSelectionID: self.currentSessionModelSelectionID)
+        self.selectedModelSelectionID = normalized
+        self.modelControlStatusMessage = nil
+        if patchDecision != .none {
+            self.retryIdentity = nil
+        }
+        if case let .patch(model) = patchDecision {
+            self.startControlPatch(settings: .init(model: .some(model)), target: target)
+        }
+    }
+
+    func selectSpeed(_ mode: OpenClawChatFastMode?) {
+        guard self.canUseModelControls, let target = self.routingTarget,
+              mode == nil || self.speed.supportsFastMode,
+              mode != self.speed.override else { return }
+        self.retryIdentity = nil
+        self.modelControlStatusMessage = nil
+        self.startControlPatch(settings: .init(fastMode: .some(mode)), target: target)
+    }
+
     var messagePlaceholder: String {
         if let targetSessionOverride {
             return String(format: String(localized: "Reply in %@"), targetSessionOverride.displayName)
@@ -1092,7 +1113,7 @@ extension QuickChatModel {
         let thinking = self.thinkingOptions.first(where: { $0.id == self.displayedThinkingLevel })?.label
             ?? self.displayedThinkingLevel
             ?? automatic
-        return "\(model) · \(thinking)"
+        return self.speed.isEnabled ? "\(model) · \(thinking) · \(String(localized: "Fast"))" : "\(model) · \(thinking)"
     }
 
     private func startModelCatalogEvents(id: UUID) {
@@ -1122,74 +1143,76 @@ extension QuickChatModel {
         case .snapshot, .seqGap:
             break
         }
-        await self.awaitModelPatchSettlement(for: target)
+        await self.awaitControlPatchSettlement(for: target)
         guard !Task.isCancelled, delivery.isCurrent,
               self.isCurrentPresentation(presentationID), self.routingTarget == target else { return }
         self.refreshModelControls(for: target)
     }
 
-    private func refreshModelControls(for target: QuickChatRoutingTarget) {
+    private func refreshModelControls(for target: QuickChatRoutingTarget, afterSettingsChange: Bool = false) {
         guard self.isPresentationActive else { return }
         let requestID = UUID()
         self.modelControlsRequestID = requestID
         self.modelControlsTask?.cancel()
         self.isLoadingModelControls = true
-        let task = Task { [weak self] in
+        self.modelControlsTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.modelControlsRequestID == requestID {
+                    self.isLoadingModelControls = false
+                    self.modelControlsTask = nil
+                }
+            }
             do {
                 let snapshot = try await self.modelControlsProvider(target)
-                guard !Task.isCancelled,
-                      self.modelControlsRequestID == requestID,
-                      self.routingTarget == target
-                else { return }
+                guard !Task.isCancelled, self.modelControlsRequestID == requestID,
+                      self.routingTarget == target else { return }
                 self.modelChoices = snapshot.models
                 self.currentSessionModelSelectionID = snapshot.currentModelSelectionID
                 self.currentSessionThinkingLevel = snapshot.currentThinkingLevel
                 self.thinkingOptions = snapshot.thinkingOptions
                 self.modelDefaultProvider = snapshot.defaultProvider
+                self.speed = snapshot.speed
+                if afterSettingsChange, !snapshot.catalogRefreshFailed, !self.thinkingOptions.isEmpty {
+                    self.selectThinkingLevel(QuickChatModelControlLogic.validatedThinkingSelection(
+                        self.selectedThinkingLevel, options: self.thinkingOptions))
+                }
                 self.modelControlStatusMessage = snapshot.catalogMessage ?? (self.isSelectedThinkingLevelSupported
-                    ? nil
-                    : String(localized: "Selected reasoning is unavailable for this target."))
+                    ? nil : String(localized: "Selected reasoning is unavailable for this target."))
             } catch is CancellationError {
                 return
             } catch {
-                guard self.modelControlsRequestID == requestID,
-                      self.routingTarget == target
-                else { return }
+                guard self.modelControlsRequestID == requestID, self.routingTarget == target else { return }
                 self.modelControlStatusMessage = String(localized: "Couldn't load model settings.")
+                return
             }
-            guard self.modelControlsRequestID == requestID else { return }
-            self.isLoadingModelControls = false
-            self.modelControlsTask = nil
         }
-        self.modelControlsTask = task
     }
 
     @discardableResult
-    private func startModelPatch(
-        model: String?,
-        selectionID: String,
-        target: QuickChatRoutingTarget) -> ModelPatchSettlement
+    private func startControlPatch(
+        settings: OpenClawChatSessionSettingsPatch,
+        target: QuickChatRoutingTarget) -> ControlPatchSettlement
     {
-        let previousSettlement = self.modelPatchSettlementsByTarget[target]
-        if let previousSettlement, previousSettlement.request.selectionID == selectionID {
+        let previousSettlement = self.controlPatchSettlementsByTarget[target]
+        if let previousSettlement, previousSettlement.request.settings == settings {
             return previousSettlement
         }
         self.cancelModelControlRefresh()
-        let request = ModelPatchRequest(
+        let request = ControlPatchRequest(
             presentationID: self.presentationID,
             target: target,
-            selectionID: selectionID)
+            settings: settings)
         // Install synchronously and serialize same-target settlements: a dispatched mutation
         // cannot be cancelled, and the latest selection must reach the provider last.
         if self.routingTarget == target { self.isUpdatingModel = true }
         let task = Task { [weak self, previousTask = previousSettlement?.task] in
             _ = await previousTask?.value
             guard let self else { return false }
-            return await self.settleModelPatch(request: request, model: model)
+            return await self.settleControlPatch(request: request)
         }
-        let settlement = ModelPatchSettlement(request: request, task: task)
-        self.modelPatchSettlementsByTarget[target] = settlement
+        let settlement = ControlPatchSettlement(request: request, task: task)
+        self.controlPatchSettlementsByTarget[target] = settlement
         return settlement
     }
 
@@ -1197,10 +1220,13 @@ extension QuickChatModel {
         to target: QuickChatRoutingTarget,
         selectionID: String?) async -> Bool
     {
-        if let settlement = self.modelPatchSettlementsByTarget[target] {
-            guard settlement.request.selectionID == selectionID
+        if let settlement = self.controlPatchSettlementsByTarget[target] {
+            guard settlement.request.selectionID == nil || settlement.request.selectionID == selectionID
             else { return false }
-            return await settlement.task.value
+            let presentationID = self.presentationID
+            guard await settlement.task.value,
+                  self.isCurrentPresentation(presentationID), self.routingTarget == target else { return false }
+            if settlement.request.selectionID != nil { return true }
         }
 
         let appliedSelectionID = self.appliedModelSelections[target]
@@ -1214,98 +1240,50 @@ extension QuickChatModel {
         case .none:
             return true
         case let .patch(model):
-            guard let selectionID else { return false }
-            let settlement = self.startModelPatch(
-                model: model,
-                selectionID: selectionID,
+            let settlement = self.startControlPatch(
+                settings: .init(model: .some(model)),
                 target: target)
             return await settlement.task.value
         }
     }
 
-    private func settleModelPatch(request: ModelPatchRequest, model: String?) async -> Bool {
-        // Model is a persistent session setting. This task owns provider mutation,
-        // authoritative refresh, guarded state commit, and cleanup as one settlement.
-        defer { self.clearModelPatchState(request: request) }
+    private func settleControlPatch(request: ControlPatchRequest) async -> Bool {
+        defer { self.clearControlPatchState(request: request) }
         do {
-            let result = try await self.modelPatchProvider(request.target, model)
-            guard self.modelPatchSettlementsByTarget[request.target]?.request == request else { return false }
-            var refreshedSnapshot: QuickChatModelControlSnapshot?
-            var refreshFailed = false
-            if result?.thinkingLevels == nil, self.isCurrentModelPatchPresentation(request) {
-                do {
-                    refreshedSnapshot = try await self.modelControlsProvider(request.target)
-                    refreshFailed = refreshedSnapshot?.catalogRefreshFailed == true
-                } catch {
-                    refreshFailed = true
+            _ = try await self.settingsPatchProvider(request.target, request.settings)
+            guard self.controlPatchSettlementsByTarget[request.target]?.request == request else { return false }
+            if self.isCurrentControlPatchPresentation(request) {
+                if let selectionID = request.selectionID {
+                    self.appliedModelSelections[request.target] = selectionID
                 }
-            }
-            guard self.modelPatchSettlementsByTarget[request.target]?.request == request else { return false }
-            if self.isCurrentModelPatchPresentation(request) {
-                self.appliedModelSelections[request.target] = request.selectionID
-                self.cancelModelControlRefresh()
-                if let refreshedSnapshot {
-                    self.modelChoices = refreshedSnapshot.models
-                    self.currentSessionModelSelectionID = refreshedSnapshot.currentModelSelectionID
-                    self.currentSessionThinkingLevel = refreshedSnapshot.currentThinkingLevel
-                    self.modelDefaultProvider = refreshedSnapshot.defaultProvider
-                } else if let model = result?.model {
-                    self.currentSessionModelSelectionID = QuickChatModelControlLogic.selectionID(
-                        model: model,
-                        provider: result?.modelProvider)
-                } else if request.selectionID != OpenClawChatViewModel.defaultModelSelectionID {
-                    self.currentSessionModelSelectionID = request.selectionID
-                } else {
-                    self.currentSessionModelSelectionID = nil
-                }
-                // The refreshedSnapshot branch above already seeded currentSessionThinkingLevel
-                // from the authoritative fetch, so when the patch response omits both
-                // thinkingLevels and thinkingLevel both branches here are skipped and the
-                // refreshed level survives; these only override when the patch itself
-                // returned a level.
-                if result?.thinkingLevels != nil {
-                    self.currentSessionThinkingLevel = result?.thinkingLevel
-                } else if let thinkingLevel = result?.thinkingLevel {
-                    self.currentSessionThinkingLevel = thinkingLevel
-                }
-                let thinkingOptions = result?.thinkingLevels ?? refreshedSnapshot?.thinkingOptions ?? []
-                self.thinkingOptions = thinkingOptions
-                if !refreshFailed, !thinkingOptions.isEmpty {
-                    let validated = QuickChatModelControlLogic.validatedThinkingSelection(
-                        self.selectedThinkingLevel,
-                        options: thinkingOptions)
-                    if validated != self.selectedThinkingLevel {
-                        self.selectedThinkingLevel = validated
-                        self.retryIdentity = nil
-                    }
-                }
-                self.modelControlStatusMessage = refreshedSnapshot?.catalogMessage ?? (refreshFailed
-                    ? String(localized: "Couldn't load model settings.")
-                    : nil)
+                // The published catalog owns capabilities after every settings write.
+                self.thinkingOptions = []
+                self.refreshModelControls(for: request.target, afterSettingsChange: true)
+                await self.modelControlsTask?.value
             }
             return true
         } catch {
-            guard self.modelPatchSettlementsByTarget[request.target]?.request == request else { return false }
-            if self.isCurrentModelPatchPresentation(request) {
-                self.modelControlStatusMessage = String(localized: "Couldn't change the model.")
+            guard self.controlPatchSettlementsByTarget[request.target]?.request == request else { return false }
+            if self.isCurrentControlPatchPresentation(request) {
+                self.modelControlStatusMessage = String(localized: "Couldn't change model settings.")
             }
             return false
         }
     }
 
-    private func isCurrentModelPatchPresentation(_ request: ModelPatchRequest) -> Bool {
+    private func isCurrentControlPatchPresentation(_ request: ControlPatchRequest) -> Bool {
         self.isCurrentPresentation(request.presentationID) && self.routingTarget == request.target
     }
 
-    private func clearModelPatchState(request: ModelPatchRequest) {
-        guard self.modelPatchSettlementsByTarget[request.target]?.request == request else { return }
-        self.modelPatchSettlementsByTarget.removeValue(forKey: request.target)
-        self.isUpdatingModel = self.routingTarget.map { self.modelPatchSettlementsByTarget[$0] != nil } ?? false
+    private func clearControlPatchState(request: ControlPatchRequest) {
+        guard self.controlPatchSettlementsByTarget[request.target]?.request == request else { return }
+        self.controlPatchSettlementsByTarget.removeValue(forKey: request.target)
+        self.isUpdatingModel = self.routingTarget.map { self.controlPatchSettlementsByTarget[$0] != nil } ?? false
     }
 
-    private func awaitModelPatchSettlement(for target: QuickChatRoutingTarget?) async {
+    private func awaitControlPatchSettlement(for target: QuickChatRoutingTarget?) async {
         guard let target,
-              let settlement = self.modelPatchSettlementsByTarget[target]
+              let settlement = self.controlPatchSettlementsByTarget[target]
         else { return }
         _ = await settlement.task.value
     }

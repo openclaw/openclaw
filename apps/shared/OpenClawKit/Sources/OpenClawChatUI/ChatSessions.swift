@@ -131,6 +131,30 @@ public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
     }
 }
 
+public struct OpenClawChatFastModeProfile: Sendable, Equatable {
+    public let supportsFastMode: Bool
+    public let `override`: OpenClawChatFastMode?
+    public let effective: OpenClawChatFastMode?
+
+    public var isEnabled: Bool {
+        self.effective?.isEnabled == true
+    }
+
+    public var showsControls: Bool {
+        self.supportsFastMode || self.override != nil
+    }
+
+    public static func resolve(
+        session: OpenClawChatSessionEntry?,
+        model: OpenClawChatModelChoice?) -> Self
+    {
+        Self(
+            supportsFastMode: model?.supportsFastMode == true,
+            override: session?.fastMode,
+            effective: session?.effectiveFastMode ?? session?.fastMode ?? model?.effectiveFastMode)
+    }
+}
+
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
     public var id: String {
         self.selectionID
