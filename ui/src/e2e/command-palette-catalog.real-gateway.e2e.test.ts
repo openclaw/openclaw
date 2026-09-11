@@ -283,6 +283,7 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(requireRecord(replies.get(requests.at(-1)!.id)?.payload).refreshFailed).toBe(true);
           stages.push({ stage: "failed-first-open", acquisitions: acquisitions() });
+          await retry.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
