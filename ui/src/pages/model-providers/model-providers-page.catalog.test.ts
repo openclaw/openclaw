@@ -132,6 +132,64 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
+  it.each(["before", "after"])(
+    "keeps one actionable catalog warning when failure publishes %s the picker reply",
+    async (publicationTiming) => {
+      const { context, discover, readPublished, publishEvent } = createCatalogHarness();
+      const pending = deferred<ModelCatalogResult>();
+      const failed = { ...preparedCatalog, refreshFailed: true };
+      discover.mockReturnValueOnce(pending.promise).mockResolvedValue({
+        models: [
+          ...preparedCatalog.models,
+          { id: "recovered", name: "Recovered model", provider: "openai", available: true },
+        ],
+      });
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      await openModelPicker(page);
+      expect(discover).toHaveBeenCalledOnce();
+      if (publicationTiming === "after") {
+        pending.resolve(failed);
+        await waitForFast(() =>
+          expect(
+            page.querySelector('.model-providers__catalog-progress[role="alert"]'),
+          ).not.toBeNull(),
+        );
+      }
+
+      readPublished.mockReturnValue(failed);
+      publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForFast(() => expect(page.data?.catalogError).not.toBeNull());
+      if (publicationTiming === "before") {
+        pending.resolve(failed);
+      }
+      await drainPageUpdates(page);
+
+      const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
+      expect(
+        page.querySelector(".model-providers__provider-list .provider-usage-error"),
+      ).toBeNull();
+      expect(page.data?.models).toEqual(preparedCatalog.models);
+      expect(page.data?.config).toEqual(savedModelConfig);
+      expect(
+        page.querySelector('[role="option"][data-value="openai/prepared-primary"]'),
+      ).not.toBeNull();
+      const retry = warnings[0]!.querySelector<HTMLButtonElement>("button");
+      expect(retry?.textContent?.trim()).toBe("Retry");
+
+      retry!.click();
+
+      await waitForFast(() => expect(page.data?.models?.at(-1)?.id).toBe("recovered"));
+      await drainPageUpdates(page);
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+      expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
+      expect(page.data?.catalogError).toBeNull();
+    },
+  );
+
   it.each([false, true])(
     "shows a catalog refresh failure without changing saved choices (retained rows: %s)",
     async (hasRows) => {
@@ -354,10 +412,21 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
-  it.each(["core refresh", "route data"] as const)(
-    "keeps newer %s after an older picker response settles",
-    async (replacement) => {
-      const { context, request, discover, readPublished, snapshot } = createCatalogHarness();
+  it.each([
+    { replacement: "core refresh", catalogRequests: 3, discoveries: 3, publicationReads: 1 },
+    { replacement: "route data", catalogRequests: 2, discoveries: 2, publicationReads: 1 },
+    { replacement: "config.changed", catalogRequests: 3, discoveries: 1, publicationReads: 3 },
+    {
+      replacement: "chat.metadata.changed",
+      catalogRequests: 3,
+      discoveries: 1,
+      publicationReads: 3,
+    },
+  ])(
+    "keeps newer $replacement after an older picker response settles",
+    async ({ replacement, catalogRequests, discoveries, publicationReads }) => {
+      const { context, request, discover, readPublished, snapshot, publishEvent } =
+        createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       const newer: ModelCatalogResult = {
         models: [{ id: "newer", name: "Newer model", provider: "openai", available: true }],
@@ -373,7 +442,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       // Replacing page data retires its request; direct reads have no cache to invalidate.
       if (replacement === "core refresh") {
         page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
-      } else {
+      } else if (replacement === "route data") {
         page.routeData = {
           gateway: context.gateway,
           gatewaySnapshot: snapshot,
@@ -387,6 +456,9 @@ describe("ModelProvidersPage catalog discovery", () => {
             updatedAt: 2,
           },
         };
+      } else {
+        readPublished.mockReturnValue(newer);
+        publishEvent({ type: "event", event: replacement, payload: {} });
       }
       await waitForFast(() => expect(page.data?.models).toEqual(newer.models));
 
@@ -402,13 +474,13 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(page.querySelector('[role="option"][data-value="openai/retired"]')).toBeNull();
       expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
-        replacement === "core refresh" ? 3 : 2,
+        catalogRequests,
       );
       readPublished.mockReturnValue(newer);
       await openModelPicker(page, 1);
       await drainPageUpdates(page);
-      expect(discover).toHaveBeenCalledTimes(replacement === "core refresh" ? 3 : 2);
-      expect(readPublished).toHaveBeenCalledOnce();
+      expect(discover).toHaveBeenCalledTimes(discoveries);
+      expect(readPublished).toHaveBeenCalledTimes(publicationReads);
       expect(page.data?.models).toEqual(newer.models);
     },
   );

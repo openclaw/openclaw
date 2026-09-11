@@ -57,6 +57,8 @@ import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, renderModelProvidersPageShell } from "./view.ts";
 
 type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
+type RefreshReason = "publication" | "replacement" | "forced";
+type RefreshRequest = [GatewayBrowserClient | null, string, RefreshReason];
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -89,17 +91,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private probeEpochs = new Map<string, number>();
   private readonly refreshTask = new Task(this, {
     autoRun: false,
-    task: ([client, agentId, force]: [GatewayBrowserClient | null, string, boolean], { signal }) =>
+    task: ([client, agentId, reason]: RefreshRequest, { signal }) =>
       client && agentId
         ? loadModelProvidersData(client, {
             agentId,
-            ...(force ? { refresh: true } : {}),
+            ...(reason === "forced" ? { refresh: true } : {}),
             signal,
-          }).then((data) => ({ client, data }))
+          }).then((data) => ({ client, data, reason }))
         : initialState,
-    onComplete: ({ client, data }) => {
+    onComplete: ({ client, data, reason }) => {
       this.loadClient = null;
-      this.catalogDiscovery.reset();
+      this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
       this.supplemental.adoptCoreData(client, data);
     },
     onError: () => (this.loadClient = null),
@@ -149,7 +151,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.routeDataObserved &&
         !this.loaderPending
       ) {
-        void this.refresh({ force: false });
+        void this.refresh("replacement");
       }
     },
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -167,7 +169,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
     cancelRefresh: () => this.cancelCoreRefresh(),
-    refresh: () => this.refresh({ force: true }),
+    refresh: () => this.refresh("forced"),
     isCurrentClient: (client, epoch) => this.gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(this.busy[key]),
     setBusy: (key, value) => this.setBusy(key, value),
@@ -179,12 +181,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh({ force: true }),
+    refresh: () => this.refresh("forced"),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
-      (gateway) => subscribeModelCatalogChanges(gateway, () => void this.refresh({ force: false })),
+      (gateway) => subscribeModelCatalogChanges(gateway, () => void this.refresh("publication")),
     )
     .watch(
       () => this.context?.runtimeConfig,
@@ -263,13 +265,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    void this.refresh({ force: false });
+    void this.refresh("replacement");
   }
 
   private cancelCoreRefresh() {
     this.catalogDiscovery.reset();
     this.loadClient = null;
-    void this.refreshTask.run([null, this.selectedAgentId, false]);
+    void this.refreshTask.run([null, this.selectedAgentId, "replacement"]);
   }
 
   private invalidateRequests() {
@@ -301,7 +303,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-    this.catalogDiscovery.reset();
   }
 
   private resolveSelectedAgentId(): string {
@@ -334,7 +335,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private refresh(opts: { force: boolean }): Promise<void> {
+  private refresh(reason: RefreshReason): Promise<void> {
     if (!this.selectedAgentId) {
       return Promise.resolve();
     }
@@ -343,16 +344,16 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    // Core replacement retires picker and supplemental work even on the same client and agent.
-    this.catalogDiscovery.reset();
-    this.supplemental.beginCoreRefresh(opts.force);
-    if (opts.force) {
+    // Publication replaces pending results but retains this owner's completed discovery.
+    this.catalogDiscovery.reset({ preserveHistory: reason === "publication" });
+    this.supplemental.beginCoreRefresh(reason === "forced");
+    if (reason === "forced") {
       this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach((account) =>
         account.refreshUsage(),
       );
     }
     this.loadClient = client;
-    return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
+    return this.refreshTask.run([client, this.selectedAgentId, reason]);
   }
 
   private mutationBlockedReason(): string | null {
@@ -412,7 +413,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         agentEpoch,
         isCurrentClient: () => this.gateway.isCurrent({ client, epoch: clientEpoch }),
         isCurrentAgent: () => this.agentEpoch === agentEpoch,
-        refreshProviders: () => this.refresh({ force: true }),
+        refreshProviders: () => this.refresh("forced"),
         setBusy: (busy) => this.setBusy(params.key, busy),
         setMessage: (message) => this.setMessage(params.key, message),
       },
@@ -456,7 +457,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         canMutate: () => this.canMutate(),
         refreshProviders: async () => {
           const previous = this.data;
-          await this.refresh({ force: false });
+          await this.refresh("replacement");
           if (isCurrent() && this.data?.error) {
             const warning = this.data.error;
             this.data = previous;
@@ -648,7 +649,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
       refreshing: this.loadClient !== null,
-      error: rosterError ?? data.error ?? data.catalogError,
+      error: rosterError ?? data.error,
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
@@ -662,7 +663,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
       catalogDiscovering: this.catalogDiscovery.discovering,
-      catalogDiscoveryError: this.catalogDiscovery.error,
+      catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
       configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
@@ -686,7 +687,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
       onRefresh: () =>
-        void (rosterError ? this.context.agents.refreshList() : this.refresh({ force: true })),
+        void (rosterError ? this.context.agents.refreshList() : this.refresh("forced")),
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
       onCloseKeyEditor: () => this.closeKeyEditor(),
       onKeyDraftChange: (value) => (this.keyDraft = value),
