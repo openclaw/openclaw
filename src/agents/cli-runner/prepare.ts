@@ -2321,7 +2321,7 @@ async function prepareCliRunContextWithinReadFence(
       fallbackReason: params.modelRoutingProvenance?.fallbackReason,
     });
 
-    const note = claimHeartbeatContextForUserRun({
+    const note = await claimHeartbeatContextForUserRun({
       ...preparedParams,
       agentId: sessionAgentId,
       storePath: params.sessionTarget?.storePath ?? params.storePath,
