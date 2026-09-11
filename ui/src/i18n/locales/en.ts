@@ -2211,6 +2211,16 @@ export const en: TranslationMap & {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    gateway: {
+      sectionLabel: "Gateway",
+      menuLabel: "Gateway: {gateway}",
+      primaryTag: "primary",
+      setPrimary: "Set as primary…",
+      openSettings: "Gateway settings…",
+      connected: "Connected",
+      unreachable: "Unreachable",
+      unknown: "Unknown status",
+    },
     owner: "Owner",
     back: "Back",
     forward: "Forward",
@@ -4970,15 +4980,6 @@ export const en: TranslationMap & {
       oneMessage: "{count} message",
       messages: "{count} messages",
       activeBranch: "Active branch",
-      gatewayPicker: {
-        menuLabel: "Gateway: {gateway}",
-        primaryTag: "primary",
-        setPrimary: "Set as primary…",
-        openSettings: "Gateway settings…",
-        connected: "Connected",
-        unreachable: "Unreachable",
-        unknown: "Unknown status",
-      },
     },
     board: {
       faceLabel: "Session face",
