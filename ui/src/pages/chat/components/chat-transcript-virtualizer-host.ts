@@ -126,6 +126,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (!anchor) {
       return;
     }
+    this.endAnchor = null;
     this.offsetState.pendingInteractionAnchor = anchor;
     queueMicrotask(
       () => this.offsetState.pendingInteractionAnchor === anchor && this.host.requestUpdate(),
@@ -355,6 +356,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.reconcileInteractionResize();
     if (
       !this.offsetState.touching &&
@@ -370,7 +372,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.reconcileImplicitEndAnchor();
     applyPendingScrollOffset(this.scrollRestoreHost);
-    this.reconcileEndAnchor();
+    // Disclosure measurement owns this commit; its sizer lands on the next update.
+    if (!interactionResizePending) {
+      this.reconcileEndAnchor();
+    }
   }
 
   disconnect(): void {
