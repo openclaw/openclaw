@@ -223,42 +223,6 @@ it("releases the shared discovery snapshot before agent inspection", async () =>
   expect(await fs.readdir(stagingRoot)).toEqual([]);
 });
 
-it("falls back to a legacy candidate worker that only accepts versions mode", async () => {
-  const stateDir = path.join(root, "state-owner");
-  const shared = path.join(stateDir, "state", "openclaw.sqlite");
-  await createDatabase(shared);
-  const candidateRoot = path.join(root, "candidate-package");
-  const workerFile = path.join(candidateRoot, "dist/infra/update-candidate-state.worker.js");
-  await fs.mkdir(path.dirname(workerFile), { recursive: true });
-  await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}');
-  await fs.writeFile(
-    workerFile,
-    `
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-let input = "";
-for await (const chunk of process.stdin) input += chunk;
-const parsed = JSON.parse(input);
-if (parsed.mode !== "versions") {
-  console.error("Unknown update state inspection mode");
-  process.exitCode = 1;
-} else {
-  const file = path.join(parsed.stateDir, "state", "openclaw.sqlite");
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    console.log(JSON.stringify([{ path: file, userVersion: db.prepare("PRAGMA user_version").get().user_version }]));
-  } finally {
-    db.close();
-  }
-}
-`,
-  );
-
-  await expect(
-    readUpdateStateSchemaVersions({ stateDir, config: {}, root: candidateRoot }),
-  ).resolves.toEqual([{ path: shared, userVersion: 3 }]);
-});
-
 it.each([false, true])(
   "removes parent-owned schema staging after worker settlement (readError=%s)",
   async (readError) => {

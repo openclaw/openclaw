@@ -19,7 +19,10 @@ import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import {
+  runtimeProcessEntrypoints,
+  SQLITE_READONLY_CHILD_ARG,
+} from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createSqliteSnapshotStagingDirectory,
@@ -437,28 +440,39 @@ async function runUpdateStateInspectionWorker(params: {
   sourceEnv: NodeJS.ProcessEnv;
   stagingRoot: string;
   timeoutMs: number;
+  readOnlySource?: string;
 }) {
   const workerUrl = resolveRuntimeWorkerUrl({
-    ...runtimeProcessEntrypoints.updateCandidateState,
+    ...(params.readOnlySource
+      ? runtimeProcessEntrypoints.sqliteReadOnly
+      : runtimeProcessEntrypoints.updateCandidateState),
     root: params.root,
   });
   const sourceTsconfigPath = /\.[cm]?ts$/.test(fileURLToPath(workerUrl))
     ? fileURLToPath(new URL("../../tsconfig.json", workerUrl))
     : undefined;
   return await runCommandBuffered(
-    [params.nodeRunner, ...resolveRuntimeWorkerArgv(workerUrl, params.nodeRunner)],
+    [
+      params.nodeRunner,
+      ...resolveRuntimeWorkerArgv(workerUrl, params.nodeRunner),
+      ...(params.readOnlySource
+        ? [SQLITE_READONLY_CHILD_ARG, "sync", params.readOnlySource, params.stagingRoot]
+        : []),
+    ],
     {
       cwd: os.tmpdir(),
-      input: JSON.stringify({
-        ...params.input,
-        env: {
-          HOME: params.sourceEnv.HOME,
-          OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
-          USERPROFILE: params.sourceEnv.USERPROFILE,
-          OPENCLAW_AGENT_DIR: params.sourceEnv.OPENCLAW_AGENT_DIR,
-          PI_CODING_AGENT_DIR: params.sourceEnv.PI_CODING_AGENT_DIR,
-        },
-      }),
+      input: params.readOnlySource
+        ? undefined
+        : JSON.stringify({
+            ...params.input,
+            env: {
+              HOME: params.sourceEnv.HOME,
+              OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
+              USERPROFILE: params.sourceEnv.USERPROFILE,
+              OPENCLAW_AGENT_DIR: params.sourceEnv.OPENCLAW_AGENT_DIR,
+              PI_CODING_AGENT_DIR: params.sourceEnv.PI_CODING_AGENT_DIR,
+            },
+          }),
       baseEnv: params.sourceEnv,
       env: {
         XDG_CACHE_HOME: params.stagingRoot,
@@ -479,10 +493,56 @@ function parseUpdateStateInspectionWorker<T>(
   if (result.code !== 0) {
     const signal = result.signal ? `, signal ${result.signal}` : "";
     throw new Error(
-      `State schema inspection failed (${result.termination}${signal}): ${result.stderr.toString("utf8")}`,
+      `State schema inspection failed (${result.termination}${signal}): ${result.stderr.toString("utf8") || result.stdout.toString("utf8")}`,
     );
   }
   return schema.parse(JSON.parse(result.stdout.toString("utf8")));
+}
+
+/** Released candidates can snapshot shared state even when they cannot expose discovery. */
+async function discoverLegacyUpdateStateSchemaInspection(
+  params: Parameters<typeof runUpdateStateInspectionWorker>[0],
+): Promise<UpdateStateSchemaInspectionPlan> {
+  const shared = path.resolve(params.input.stateDir, "state", "openclaw.sqlite");
+  const files = await collectStateDatabasePaths(params.input);
+  if (!(await fileExists(shared))) {
+    return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
+  }
+  const stagingRoot = await createSqliteSnapshotStagingDirectory(params.stagingRoot);
+  let outcome: { value: UpdateStateSchemaInspectionPlan } | { cause: unknown };
+  try {
+    // The selected candidate owns source access; the loaded parent only opens its private copy.
+    const snapshot = parseUpdateStateInspectionWorker(
+      await runUpdateStateInspectionWorker({ ...params, stagingRoot, readOnlySource: shared }),
+      z.object({ ok: z.literal(true), location: z.string() }),
+    );
+    const relative = path.relative(stagingRoot, snapshot.location);
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error("Legacy state inspection returned a snapshot outside parent-owned staging.");
+    }
+    const sharedVersion = {
+      path: shared,
+      ...readStateDatabaseVersion(snapshot.location, shared, shared, files),
+    };
+    outcome = { value: { files: [...files], sharedVersion } };
+  } catch (cause) {
+    outcome = { cause };
+  }
+  // Settle the copy worker and close the private reader before removing discovery staging.
+  if (!removeTempDirectory(stagingRoot)) {
+    throw new Error(`State schema inspection snapshot cleanup failed: ${stagingRoot}`, {
+      cause: "cause" in outcome ? outcome.cause : undefined,
+    });
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
 
 /** Schema fencing reads private copies in candidate workers under size-aware deadlines. */
@@ -521,24 +581,21 @@ export async function readUpdateStateSchemaVersions({
     const legacyWorker =
       discoveryResult.code !== 0 &&
       discoveryResult.stderr.toString("utf8").includes("Unknown update state inspection mode");
-    // Released workers cannot expose their registry inventory. Our own discovery
-    // worker reads it from a private shared copy; never open live SQLite in the parent.
-    const discovery = parseUpdateStateInspectionWorker(
-      legacyWorker
-        ? await runUpdateStateInspectionWorker({
-            input: { ...input, mode: "discover", stagingRoot },
-            nodeRunner: process.execPath,
-            signal,
-            sourceEnv,
-            stagingRoot,
-            timeoutMs: resolveAggregateSqliteInspectionTimeoutMs(
-              "state schema inspection",
-              sharedDatabase ? [sharedDatabase] : [],
-            ),
-          })
-        : discoveryResult,
-      UpdateStateSchemaInspectionPlanSchema,
-    );
+    // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
+    const discovery = legacyWorker
+      ? await discoverLegacyUpdateStateSchemaInspection({
+          input,
+          nodeRunner,
+          root,
+          signal,
+          sourceEnv,
+          stagingRoot,
+          timeoutMs: resolveAggregateSqliteInspectionTimeoutMs(
+            "state schema inspection",
+            sharedDatabase ? [sharedDatabase] : [],
+          ),
+        })
+      : parseUpdateStateInspectionWorker(discoveryResult, UpdateStateSchemaInspectionPlanSchema);
     const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
     // Legacy workers recopy the shared database and may inspect every raw alias.
     // Current workers reuse the discovered shared version and inspect each remaining identity once.

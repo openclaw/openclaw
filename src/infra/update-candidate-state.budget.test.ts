@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: vi.fn() }));
@@ -25,7 +26,10 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
   const shared = path.join(stateDir, "state", "openclaw.sqlite");
   const external = path.join(tempDirs.make("openclaw-registry-only-"), "agent.sqlite");
   fs.mkdirSync(path.dirname(shared));
-  fs.writeFileSync(shared, "");
+  const database = openNodeSqliteDatabase(shared);
+  database.exec("PRAGMA user_version = 3; CREATE TABLE agent_databases (path TEXT);");
+  database.prepare("INSERT INTO agent_databases VALUES (?)").run(external);
+  database.close();
   fs.writeFileSync(external, "");
   fs.truncateSync(external, 3_489_660_928);
   fs.writeFileSync(`${external}-wal`, "");
@@ -42,10 +46,17 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
     vi.mocked(runCommandBuffered).mockResolvedValueOnce(
       result(null, "Unknown update state inspection mode"),
     );
+    vi.mocked(runCommandBuffered).mockImplementationOnce(async (_argv, options) => {
+      const location = path.join(String(options?.env?.XDG_CACHE_HOME), "database.sqlite");
+      fs.copyFileSync(shared, location);
+      return result({ ok: true, location });
+    });
+  } else {
+    vi.mocked(runCommandBuffered).mockResolvedValueOnce(result(discovery));
   }
-  vi.mocked(runCommandBuffered)
-    .mockResolvedValueOnce(result(discovery))
-    .mockResolvedValueOnce(result([sharedVersion, { path: external, userVersion: 7 }]));
+  vi.mocked(runCommandBuffered).mockResolvedValueOnce(
+    result([sharedVersion, { path: external, userVersion: 7 }]),
+  );
 
   await expect(readUpdateStateSchemaVersions({ stateDir, config: {} })).resolves.toContainEqual({
     path: external,
@@ -53,9 +64,9 @@ it.each([false, true])("budgets the discovered registry inventory (legacy=%s)", 
   });
   const calls = vi.mocked(runCommandBuffered).mock.calls;
   expect(calls).toHaveLength(legacy ? 3 : 2);
-  expect(calls[0]?.[1]?.timeoutMs).toBe(30_000);
+  expect(calls[0]?.[1]?.timeoutMs).toBe(31_000);
   // 134 seconds for the database plus 2 for its WAL; legacy also recopies shared.
-  expect(calls.at(-1)?.[1]?.timeoutMs).toBe(legacy ? 166_000 : 136_000);
+  expect(calls.at(-1)?.[1]?.timeoutMs).toBe(legacy ? 167_000 : 136_000);
   for (const [, options] of calls) {
     expect(options).toMatchObject({ killGraceMs: 500 });
     expect(fs.existsSync(String(options?.env?.XDG_CACHE_HOME))).toBe(false);
