@@ -51,15 +51,15 @@ vi.mock("../../video-generation/runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../media-understanding/runtime.js", async (importOriginal) => {
-  const describe = async (params: ProviderEgressParams) => {
+  const understandMedia = async (params: ProviderEgressParams) => {
     await resolveEgressAuth(params);
     return { text: "synthetic-ok", provider: "customacct", model: "test-model" };
   };
   return {
     ...(await importOriginal<typeof import("../../media-understanding/runtime.js")>()),
-    describeImageFile: vi.fn(describe),
-    describeVideoFile: vi.fn(describe),
-    transcribeAudioFile: vi.fn(describe),
+    describeImageFile: vi.fn(understandMedia),
+    describeVideoFile: vi.fn(understandMedia),
+    transcribeAudioFile: vi.fn(understandMedia),
   };
 });
 
