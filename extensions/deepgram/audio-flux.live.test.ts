@@ -52,18 +52,17 @@ it("transcribes audio beyond twenty minutes while another transcription complete
   const frames: Buffer[] = [];
   sockets.on("connection", (socket) => {
     socket.on("message", (data, binary) => {
+      const bytes = Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data);
       if (binary) {
-        frames.push(
-          Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.isBuffer(data)
-              ? data
-              : Buffer.from(data),
-        );
+        frames.push(bytes);
         firstFrame.resolve();
         return;
       }
-      if (JSON.parse(data.toString()).type === "CloseStream") {
+      if (JSON.parse(bytes.toString("utf8")).type === "CloseStream") {
         void releaseTranscript.promise.then(() => {
           const received = Buffer.concat(frames);
           const includesMarker = received.subarray(1260 * 32_000, 1261 * 32_000).equals(marker);
