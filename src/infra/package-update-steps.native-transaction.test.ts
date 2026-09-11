@@ -34,6 +34,12 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
       })),
     ),
     {
+      layout: "pnpm12",
+      siblingChange: "none",
+      shimFailure: false,
+      rollbackFailure: "none",
+    } as const,
+    {
       layout: "pnpm11",
       siblingChange: "none",
       shimFailure: true,
@@ -63,22 +69,17 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
   ])(
     "preserves $layout native project ownership (sibling change=$siblingChange, shim failure=$shimFailure, rollback failure=$rollbackFailure)",
     async ({ layout, siblingChange, shimFailure, rollbackFailure }) => {
+      const isolatedPnpm = layout === "pnpm11" || layout === "pnpm12";
       await withTestDir({ prefix: "openclaw-native-update-" }, async (base) => {
         const manager = layout === "bun" ? "bun" : "pnpm";
         const project = path.join(base, manager, "global");
-        const globalRoot =
-          layout === "pnpm11"
-            ? path.join(project, "v11")
-            : path.join(
-                project,
-                ...(layout === "pnpm10" ? ["5", "node_modules"] : ["node_modules"]),
-              );
-        const oldOwner =
-          layout === "pnpm11" ? path.join(globalRoot, "old") : path.dirname(globalRoot);
-        const packageRoot =
-          layout === "pnpm11"
-            ? path.join(oldOwner, "node_modules", "openclaw")
-            : path.join(globalRoot, "openclaw");
+        const globalRoot = isolatedPnpm
+          ? path.join(project, "v11")
+          : path.join(project, ...(layout === "pnpm10" ? ["5", "node_modules"] : ["node_modules"]));
+        const oldOwner = isolatedPnpm ? path.join(globalRoot, "old") : path.dirname(globalRoot);
+        const packageRoot = isolatedPnpm
+          ? path.join(oldOwner, "node_modules", "openclaw")
+          : path.join(globalRoot, "openclaw");
         const binDir = path.join(base, "native-bin");
         const launcher = path.join(binDir, "openclaw");
         const metadata = path.join(project, "manager-metadata");
@@ -94,7 +95,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         await fs.writeFile(launcher, "old launcher\n");
         await fs.writeFile(metadata, "original metadata\n");
         await fs.writeFile(sibling, "unrelated package\n");
-        if (layout === "pnpm11") {
+        if (isolatedPnpm) {
           await fs.writeFile(
             path.join(oldOwner, "package.json"),
             JSON.stringify({ dependencies: { openclaw: "1.0.0" } }),
@@ -107,7 +108,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           command: manager,
           globalRoot,
           packageRoot,
-          ...(layout === "pnpm11" ? { pnpmIsolated: { layoutVersion: 11 } } : {}),
+          ...(isolatedPnpm ? { pnpmIsolated: { layoutVersion: 11 } } : {}),
         };
         let retained: PackageUpdateTransaction | undefined;
         let stagedLauncher: string;
@@ -153,6 +154,12 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           },
           runCommand: async (argv, options) => {
             const stage = readPnpmStageArgs(argv);
+            const selectedBin =
+              layout === "pnpm12"
+                ? (options.env?.pnpm_config_global_bin_dir ??
+                  options.env?.PNPM_CONFIG_GLOBAL_BIN_DIR ??
+                  binDir)
+                : (stage.binDir ?? binDir);
             if (stage.projectRoot) {
               expect(options.cwd).toBe(stage.projectRoot);
               expect(stage.projectRoot).not.toBe(project);
@@ -164,7 +171,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               stderr: "",
               stdout: argv.includes("root")
                 ? `${stage.projectRoot ? path.join(stage.projectRoot, path.relative(project, globalRoot)) : globalRoot}\n`
-                : `${stage.binDir ?? binDir}\n`,
+                : `${selectedBin}\n`,
             };
           },
           runStep: async ({ name, argv, cwd, env }) => {
@@ -172,7 +179,12 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             const stageArgs = readPnpmStageArgs(argv);
             const stageProject =
               manager === "bun" ? env?.BUN_INSTALL_GLOBAL_DIR : stageArgs.projectRoot;
-            const stageBin = manager === "bun" ? env?.BUN_INSTALL_BIN : stageArgs.binDir;
+            const stageBin =
+              manager === "bun"
+                ? env?.BUN_INSTALL_BIN
+                : layout === "pnpm12"
+                  ? (env?.pnpm_config_global_bin_dir ?? env?.PNPM_CONFIG_GLOBAL_BIN_DIR)
+                  : stageArgs.binDir;
             if (!stageProject || !stageBin) {
               throw new Error("native staging destinations missing");
             }
@@ -182,15 +194,15 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               fs.readFile(path.join(stageProject, "sibling-package"), "utf8"),
             ).resolves.toBe("unrelated package\n");
             const stageGlobal = path.join(stageProject, path.relative(project, globalRoot));
-            const nextOwner =
-              layout === "pnpm11" ? path.join(stageGlobal, "new") : path.dirname(stageGlobal);
-            const candidateRoot =
-              layout === "pnpm11"
-                ? path.join(nextOwner, "node_modules", "openclaw")
-                : path.join(stageGlobal, "openclaw");
+            const nextOwner = isolatedPnpm
+              ? path.join(stageGlobal, "new")
+              : path.dirname(stageGlobal);
+            const candidateRoot = isolatedPnpm
+              ? path.join(nextOwner, "node_modules", "openclaw")
+              : path.join(stageGlobal, "openclaw");
             await writePackageRoot(candidateRoot, "2.0.0");
             await fs.writeFile(path.join(stageProject, "manager-metadata"), "candidate metadata\n");
-            if (layout === "pnpm11") {
+            if (isolatedPnpm) {
               await fs.writeFile(
                 path.join(nextOwner, "package.json"),
                 JSON.stringify({ dependencies: { openclaw: "2.0.0" } }),
@@ -205,10 +217,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
                 await fs.rm(path.join(stageGlobal, "old"), { recursive: true });
               }
             }
-            const linkedPackage =
-              layout === "pnpm11"
-                ? path.join(stageGlobal, "hash-openclaw", "node_modules", "openclaw")
-                : candidateRoot;
+            const linkedPackage = isolatedPnpm
+              ? path.join(stageGlobal, "hash-openclaw", "node_modules", "openclaw")
+              : candidateRoot;
             await fs.mkdir(stageBin, { recursive: true });
             stagedLauncher = path.join(stageBin, "openclaw");
             await fs.symlink(
@@ -251,8 +262,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           },
           timeoutMs: 1000,
         });
-        const siblingOwner =
-          layout === "pnpm11" ? path.join(globalRoot, "sibling-owner") : oldOwner;
+        const siblingOwner = isolatedPnpm ? path.join(globalRoot, "sibling-owner") : oldOwner;
         const siblingManifest = path.join(siblingOwner, "package.json");
         const siblingEntry = path.join(siblingOwner, "node_modules", "sibling", "index.js");
         const concurrentManifest = JSON.stringify({
@@ -264,7 +274,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             await fs.mkdir(path.dirname(siblingEntry), { recursive: true });
             await fs.writeFile(siblingEntry, "concurrent sibling package\n");
             await fs.writeFile(siblingManifest, concurrentManifest);
-            if (layout === "pnpm11") {
+            if (isolatedPnpm) {
               await fs.symlink("sibling-owner", path.join(globalRoot, "hash-sibling"));
             }
           } finally {
