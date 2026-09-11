@@ -168,6 +168,7 @@ async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
 }
 
 async function runQaParityReport(opts: {
+  crossHarness?: boolean;
   repoRoot?: string;
   candidateSummary?: string;
   baselineSummary?: string;
@@ -534,9 +535,16 @@ export function registerQaLabCli(program: Command) {
     });
 
   qa.command("parity-report")
-    .description("Write either a model-axis parity gate report or a runtime-axis parity report")
+    .description(
+      "Write a model-axis parity gate, runtime-axis parity, or cross-harness comparison report",
+    )
     .option("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
+    .option(
+      "--cross-harness",
+      "Compare completed runs only when their captured conditions match",
+      false,
+    )
     .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
     .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
     .option(
@@ -563,6 +571,7 @@ export function registerQaLabCli(program: Command) {
         runtimeAxis?: boolean;
         summary?: string;
         tokenEfficiency?: boolean;
+        crossHarness?: boolean;
       }) => {
         await runQaParityReport(opts);
       },
