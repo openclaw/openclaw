@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { ChannelMessagingAdapter } from "../../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -380,7 +381,10 @@ const committedSessionSpawnEvidence = {
   acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
 } as const;
 
-function registerDirectTargetTestChannel(channelId: string): void {
+function registerDirectTargetTestChannel(
+  channelId: string,
+  resolveOutboundSessionRoute?: NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>,
+): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -394,6 +398,7 @@ function registerDirectTargetTestChannel(channelId: string): void {
           messaging: {
             inferTargetChatType: ({ to }: { to: string }) =>
               to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+            ...(resolveOutboundSessionRoute ? { resolveOutboundSessionRoute } : {}),
           },
         },
       },
@@ -4497,6 +4502,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       } else {
         expect(sendMessage).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    ["source receipt first", (source: object, unrelated: object) => [source, unrelated]],
+    ["source receipt second", (source: object, unrelated: object) => [unrelated, source]],
+  ] as const)(
+    "does not fallback-resend after an exact source final when an unrelated lookup stalls (%s)",
+    async (_label, order) => {
+      const resolveOutboundSessionRoute = vi.fn(
+        async (
+          ..._args: Parameters<NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>>
+        ) => await new Promise<never>(() => {}),
+      );
+      registerDirectTargetTestChannel("discord", resolveOutboundSessionRoute);
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: order(
+            {
+              tool: "message",
+              provider: "discord",
+              accountId: "acct-1",
+              to: "dm:U123",
+              sourceReplyFinal: true,
+            },
+            {
+              tool: "message",
+              provider: "discord",
+              accountId: "acct-1",
+              to: "dm:OTHER",
+              sourceReplyFinal: true,
+            },
+          ),
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        runtimeConfig: { agents: { defaults: { subagents: { announceTimeoutMs: 25 } } } },
+        sourceTool: "subagent_announce",
+        internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      });
+
+      expect(result).toMatchObject({ delivered: true, path: "direct" });
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(resolveOutboundSessionRoute).not.toHaveBeenCalled();
     },
   );
 

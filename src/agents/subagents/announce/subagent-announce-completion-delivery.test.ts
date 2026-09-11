@@ -114,6 +114,52 @@ describe("resolveMessagingToolDeliveryEvidence", () => {
     expect(resolveEquivalentTarget).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["exact source receipt first", (source: object, unrelated: object) => [source, unrelated]],
+    ["exact source receipt second", (source: object, unrelated: object) => [unrelated, source]],
+  ] as const)(
+    "preserves an exact source final before an unrelated lookup stalls (%s)",
+    async (_label, order) => {
+      const sourceReceipt = {
+        tool: "message",
+        provider: "slack",
+        accountId: "secondary",
+        to: deliveryTarget.to,
+        threadId: deliveryTarget.threadId,
+        sourceReplyFinal: true,
+      };
+      const unrelatedReceipt = {
+        tool: "message",
+        provider: "slack",
+        accountId: "secondary",
+        to: "D000000002",
+        threadId: deliveryTarget.threadId,
+        sourceReplyFinal: true,
+      };
+      const resolveEquivalentTarget = vi.fn(
+        async () => await new Promise<string | undefined>(() => {}),
+      );
+
+      await expect(
+        resolveMessagingToolDeliveryEvidence({
+          cfg: {} as never,
+          requesterSessionKey: "test-requester",
+          result: {
+            didSendViaMessagingTool: true,
+            messagingToolSentTargets: order(sourceReceipt, unrelatedReceipt),
+          },
+          deliveryTarget,
+          timeoutMs: 25,
+          resolveEquivalentTarget,
+        }),
+      ).resolves.toEqual({
+        hasFinalMessagingToolDelivery: true,
+        hasMessagingToolDelivery: true,
+      });
+      expect(resolveEquivalentTarget).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a wrong thread uncredited after recipient resolution", async () => {
     const wrongThreadResult = {
       ...result,

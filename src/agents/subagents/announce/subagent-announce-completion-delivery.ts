@@ -272,6 +272,7 @@ async function hasMessagingToolDeliveryToSource(
     ? result.messagingToolSentTargets
     : [];
   const sourceTargets: MessagingToolDeliveryTarget[] = [];
+  const equivalentTargetCandidates: MessagingToolDeliveryTarget[] = [];
   for (const target of targets) {
     if (
       !target ||
@@ -301,26 +302,10 @@ async function hasMessagingToolDeliveryToSource(
     if (deliveryTarget.accountId && record.accountId !== deliveryTarget.accountId) {
       continue;
     }
-    // A provider-native conversation ID (for example Slack's D… DM channel)
-    // can represent the configured source user without being textually equal.
-    // Lookup failures are unverified evidence, not delivery failures.
-    try {
-      const equivalentTarget = await options.resolveEquivalentTarget(
-        sourceTarget,
-        deliveryTarget,
-        options.signal,
-      );
-      if (
-        equivalentTarget &&
-        sourceDeliveryTargetsMatch({ ...sourceTarget, to: equivalentTarget }, deliveryTarget)
-      ) {
-        sourceTargets.push({ ...sourceTarget, to: equivalentTarget });
-      }
-    } catch {
-      // Keep the completion owed when the provider cannot verify the recipient.
-    }
+    equivalentTargetCandidates.push(sourceTarget);
   }
-  if (options?.requireFinalReply) {
+
+  const hasFinalSourceDelivery = () => {
     const hasCommittedSourceDelivery =
       hasCommittedSourceReplyDeliveryEvidence(result) ||
       (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
@@ -333,19 +318,70 @@ async function hasMessagingToolDeliveryToSource(
         messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
       }) !== false
     );
-  }
-  if (
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
-  ) {
+  };
+  const hasSourceDelivery = () => {
+    if (
+      hasCommittedSourceReplyDeliveryEvidence(result) ||
+      hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
+    ) {
+      return true;
+    }
+
+    if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
+      return hasMessagingToolDeliveryEvidence(result);
+    }
+
+    return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+  };
+
+  // Exact source receipts are already authoritative. Evaluate them before any
+  // provider-native lookup, so a slow or stuck unrelated lookup cannot erase a
+  // delivery that was confirmed by the gateway result itself.
+  if (options?.requireFinalReply ? hasFinalSourceDelivery() : hasSourceDelivery()) {
     return true;
   }
 
-  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
-    return hasMessagingToolDeliveryEvidence(result);
+  const resolveEquivalentTarget = options?.resolveEquivalentTarget;
+  if (resolveEquivalentTarget && equivalentTargetCandidates.length > 0) {
+    // Provider-native IDs (for example Slack's D… DM channels) can represent
+    // the configured source user without being textually equal. Resolve all
+    // candidates concurrently: one unrelated lookup may stall, but a source
+    // match that completes must still be allowed to settle the announcement.
+    const hasResolvedSourceDelivery = await Promise.any(
+      equivalentTargetCandidates.map(async (sourceTarget) => {
+        try {
+          const equivalentTarget = await resolveEquivalentTarget(
+            sourceTarget,
+            deliveryTarget,
+            options.signal,
+          );
+          if (
+            equivalentTarget &&
+            sourceDeliveryTargetsMatch({ ...sourceTarget, to: equivalentTarget }, deliveryTarget)
+          ) {
+            sourceTargets.push({ ...sourceTarget, to: equivalentTarget });
+            if (options.requireFinalReply ? hasFinalSourceDelivery() : hasSourceDelivery()) {
+              return true;
+            }
+          }
+        } catch {
+          // Keep the completion owed when the provider cannot verify the recipient.
+        }
+        throw new Error("provider-native source delivery was not verified");
+      }),
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (hasResolvedSourceDelivery) {
+      return true;
+    }
   }
 
-  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+  if (options?.requireFinalReply) {
+    return hasFinalSourceDelivery();
+  }
+  return hasSourceDelivery();
 }
 
 export async function resolveMessagingToolDeliveryEvidence(params: {
