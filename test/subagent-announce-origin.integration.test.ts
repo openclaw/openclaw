@@ -1,23 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../../../channels/plugins/types.plugin.js";
-import type { SessionEntry } from "../../../config/sessions.js";
-import {
-  testing as sessionBindingServiceTesting,
-  registerSessionBindingAdapter,
-} from "../../../infra/outbound/session-binding-service.js";
-import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
 import {
   resolveAnnounceOrigin,
   resolveCompletionDeliveryOrigins,
   resolveGeneratedMediaSessionDeliveryRoute,
   resolveSubagentCompletionOrigin,
-} from "./subagent-announce-origin.js";
+} from "../src/agents/subagents/announce/subagent-announce-origin.js";
+import type { ChannelPlugin } from "../src/channels/plugins/types.plugin.js";
+import type { SessionEntry } from "../src/config/sessions.js";
+import {
+  testing as sessionBindingServiceTesting,
+  registerSessionBindingAdapter,
+} from "../src/infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../src/infra/state-migrations.legacy-session-store.js";
+import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../src/test-utils/channel-plugins.js";
 
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
