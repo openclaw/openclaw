@@ -813,6 +813,38 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
+  it("links accepted delegations and their completion-watch ownership", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        acceptedSessionSpawns: [
+          {
+            runId: "child-inline",
+            childSessionKey: "agent:main:subagent:inline",
+            expectsCompletionMessage: false,
+          },
+          {
+            runId: "child-watched",
+            childSessionKey: "agent:main:subagent:watched",
+            expectsCompletionMessage: true,
+          },
+        ],
+      },
+    });
+
+    expect(prepared.agentMeta.terminalReceipt?.acceptedDelegations).toEqual([
+      {
+        runId: "child-inline",
+        childSessionKey: "agent:main:subagent:inline",
+        completionWatch: false,
+      },
+      {
+        runId: "child-watched",
+        childSessionKey: "agent:main:subagent:watched",
+        completionWatch: true,
+      },
+    ]);
+  });
+
   it("marks a provider-only response route as rerouted", async () => {
     const prepared = await prepareStats({ assistantProvider: "routed-provider" });
 

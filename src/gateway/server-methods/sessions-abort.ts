@@ -21,7 +21,10 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import {
+  readDurableAgentJobTerminalReceipt,
+  setGatewayDedupeEntry,
+} from "../agent-turn/agent-job.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -34,6 +37,10 @@ import {
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
+import {
+  authorizeResolvedSessionMutation,
+  resolveSessionSharingTarget,
+} from "../session-sharing.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveWorkerSessionTarget } from "../worker-environments/session-target.js";
@@ -163,6 +170,45 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const embeddedRun = requestedRunId
       ? resolveActiveEmbeddedRunOwnerByRunId(requestedRunId)
       : undefined;
+    const hasLiveExactRun = Boolean(
+      requestedRunId &&
+      (context.chatAbortControllers.has(requestedRunId) || embeddedRun || workerRunSessionId),
+    );
+    const durableRun =
+      requestedRunId && !hasLiveExactRun
+        ? readDurableAgentJobTerminalReceipt(requestedRunId)
+        : undefined;
+    if (durableRun) {
+      const owner = durableRun.owner;
+      const ownerSessionKey = owner.sessionKey;
+      const requestedAgentMatches =
+        !requestedParamAgentId ||
+        normalizeAgentId(requestedParamAgentId) === normalizeAgentId(owner.agentId);
+      const requestedKeyMatches = !requestedKey || requestedKey === ownerSessionKey;
+      const target = ownerSessionKey
+        ? resolveSessionSharingTarget({ cfg, sessionKey: ownerSessionKey, agentId: owner.agentId })
+        : null;
+      const authorizationError = ownerSessionKey
+        ? authorizeResolvedSessionMutation({
+            cfg,
+            client,
+            sessionKey: ownerSessionKey,
+            agentId: owner.agentId,
+          })
+        : errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized");
+      if (!requestedAgentMatches || !requestedKeyMatches || !target || authorizationError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      respond(true, {
+        ok: true,
+        abortedRunId: null,
+        status: "no-active-run",
+        runState: "completed",
+        terminalStatus: durableRun.terminal.status,
+      });
+      return;
+    }
     const embeddedRunSessionKey = embeddedRun?.sessionKey;
     const scopedRequestedKey = resolveScopedAbortKey({
       cfg,
@@ -225,7 +271,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;
     if (!keyCandidate && requestedRunId) {
-      respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
+      respond(true, {
+        ok: true,
+        abortedRunId: null,
+        status: "no-active-run",
+        runState: "unknown",
+      });
       return;
     }
     const key = requireSessionKey(keyCandidate, respond);
@@ -344,6 +395,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
           ok: true,
           abortedRunId: aborted ? embeddedRun.runId : null,
           status: aborted ? "aborted" : "no-active-run",
+          ...(requestedRunId ? { runState: "active" as const } : {}),
         });
       }
       if (aborted) {
@@ -434,6 +486,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             ok: true,
             abortedRunId: result.value.runIds[0] ?? null,
             status: result.value.aborted ? "aborted" : "no-active-run",
+            ...(requestedRunId ? { runState: "active" as const } : {}),
           },
           undefined,
           undefined,
@@ -512,6 +565,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ok: true,
         abortedRunId,
         status: aborted ? "aborted" : "no-active-run",
+        ...(requestedRunId ? { runState: hasLiveExactRun ? "active" : "unknown" } : {}),
       },
       undefined,
       responseMeta,

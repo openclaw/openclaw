@@ -511,6 +511,19 @@ export const SessionsAbortParamsSchema = closedObject({
   clearQueued: Type.Optional(Type.Boolean()),
 });
 
+/** Backward-compatible result for broad and exact session abort requests. */
+export const SessionsAbortResultSchema = closedObject({
+  ok: Type.Literal(true),
+  abortedRunId: Type.Union([NonEmptyString, Type.Null()]),
+  status: Type.Union([Type.Literal("aborted"), Type.Literal("no-active-run")]),
+  runState: Type.Optional(
+    Type.Union([Type.Literal("active"), Type.Literal("completed"), Type.Literal("unknown")]),
+  ),
+  terminalStatus: Type.Optional(
+    Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("timeout")]),
+  ),
+});
+
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,
@@ -845,6 +858,7 @@ export type SessionsMessagesUnsubscribeParams = Static<
   typeof SessionsMessagesUnsubscribeParamsSchema
 >;
 export type SessionsAbortParams = Static<typeof SessionsAbortParamsSchema>;
+export type SessionsAbortResult = Static<typeof SessionsAbortResultSchema>;
 export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsSchema>;
 export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;

@@ -8,6 +8,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { writeAgentRunTerminalReceipt } from "../../state/agent-run-terminal-receipts.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { testState } from "../test-helpers.js";
 import {
@@ -127,6 +128,32 @@ test("sessions.abort aborts an exact active run for an unconfigured agent withou
   );
 });
 
+test("sessions.abort reports an exact active configured run", async () => {
+  const agentId = "main";
+  const sessionKey = "agent:main:exact-active";
+  const runId = "run-exact-active";
+  const activeRun = createActiveRun(sessionKey, { agentId });
+  const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+    chatAbortControllers: new Map([[runId, activeRun]]),
+  });
+
+  const result = await directSessionReq(
+    "sessions.abort",
+    { key: sessionKey, runId },
+    { context: abortContext },
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    payload: {
+      ok: true,
+      abortedRunId: runId,
+      status: "aborted",
+      runState: "active",
+    },
+  });
+});
+
 test("sessions.abort rejects an unknown agent when only the fixed store file exists", async () => {
   const storePath = await configureFixedSessionStore();
 
@@ -242,4 +269,68 @@ test.each(["main", "work"])("sessions.abort still resolves the %s agent store", 
       }),
     ),
   ).toBe(true);
+});
+
+test("sessions.abort reports an authorized exact completed run after hot state is lost", async () => {
+  const agentId = "main";
+  const sessionKey = "agent:main:durable-completed";
+  const sessionId = "session-durable-completed";
+  const runId = "run-durable-completed";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  writeAgentRunTerminalReceipt({
+    runId,
+    owner: { agentId, sessionKey, sessionId },
+    terminalJson: JSON.stringify({ status: "ok", startedAt: 10, endedAt: 20 }),
+  });
+
+  const result = await directSessionReq("sessions.abort", { runId });
+
+  expect(result).toMatchObject({
+    ok: true,
+    payload: {
+      ok: true,
+      abortedRunId: null,
+      status: "no-active-run",
+      runState: "completed",
+      terminalStatus: "ok",
+    },
+  });
+});
+
+test("sessions.abort reports an exact unknown run without changing legacy status", async () => {
+  const result = await directSessionReq("sessions.abort", { runId: "run-unknown-durable" });
+
+  expect(result).toMatchObject({
+    ok: true,
+    payload: {
+      ok: true,
+      abortedRunId: null,
+      status: "no-active-run",
+      runState: "unknown",
+    },
+  });
+  expect(result.payload).not.toHaveProperty("terminalStatus");
+});
+
+test("sessions.abort fails closed when durable ownership conflicts with the request", async () => {
+  const agentId = "main";
+  const sessionKey = "agent:main:durable-private";
+  const sessionId = "session-durable-private";
+  const runId = "run-durable-private";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  writeAgentRunTerminalReceipt({
+    runId,
+    owner: { agentId, sessionKey, sessionId },
+    terminalJson: JSON.stringify({ status: "error", endedAt: 20 }),
+  });
+
+  const result = await directSessionReq("sessions.abort", { runId, agentId: "work" });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "unauthorized" },
+  });
+  expect(result).not.toHaveProperty("payload.terminalStatus");
 });

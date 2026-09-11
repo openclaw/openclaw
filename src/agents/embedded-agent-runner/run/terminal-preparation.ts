@@ -2,7 +2,10 @@ import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
+import {
+  AGENT_RUN_TERMINAL_LINK_MAX_ITEMS,
+  type AgentRunTerminalReceipt,
+} from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
@@ -181,6 +184,24 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames,
+      ...(attempt.acceptedSessionSpawns?.length
+        ? {
+            acceptedDelegations: attempt.acceptedSessionSpawns
+              .slice(0, AGENT_RUN_TERMINAL_LINK_MAX_ITEMS)
+              .filter(
+                (spawn) =>
+                  spawn.runId.trim().length > 0 &&
+                  spawn.runId.trim().length <= 256 &&
+                  spawn.childSessionKey.trim().length > 0 &&
+                  spawn.childSessionKey.trim().length <= 1_024,
+              )
+              .map((spawn) => ({
+                runId: spawn.runId.trim(),
+                childSessionKey: spawn.childSessionKey.trim(),
+                completionWatch: spawn.expectsCompletionMessage === true,
+              })),
+          }
+        : {}),
       sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },

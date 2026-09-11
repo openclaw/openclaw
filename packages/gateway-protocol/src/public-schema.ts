@@ -282,6 +282,7 @@ export {
   SessionsMoveResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
+  SessionsAbortResultSchema,
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   SessionsPatchParamsSchema,
   SessionsPatchMutationSchema,

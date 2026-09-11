@@ -84,6 +84,16 @@ export interface AgentProvenance {
   creator_agent_id: string | null;
 }
 
+export interface AgentRunTerminalReceipts {
+  agent_id: string;
+  created_at_ms: number;
+  expires_at_ms: number;
+  run_id: string;
+  session_id: string | null;
+  session_key: string | null;
+  terminal_json: string;
+}
+
 export interface ApnsRegistrationTombstones {
   deleted_at_ms: number;
   node_id: string;
@@ -1719,6 +1729,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_provenance: AgentProvenance;
+  agent_run_terminal_receipts: AgentRunTerminalReceipts;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;

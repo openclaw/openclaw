@@ -15,6 +15,22 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Agent run terminal receipts
+
+`agent_run_terminal_receipts` stores bounded terminal control-plane snapshots in
+`state/openclaw.sqlite` so `agent.wait` and exact `sessions.abort` calls can recover the
+final status after a Gateway process restart. The row records the run ID, trusted
+agent/session ownership tuple, normalized terminal JSON, and creation/expiry
+timestamps. It never stores transcript messages or raw model output.
+
+The table and expiry index are additive and installed on first admitted run
+start without changing the shared schema version. The first terminal insert for
+a run ID wins. A newly admitted owner deletes any retained row for a reused run
+ID before execution, and reads with live ownership metadata require an exact
+owner match. Rows expire after seven days; writes prune expired rows and cap the
+table at 5,000 newest receipts. Terminal JSON is limited to 64 KiB of UTF-8 bytes.
+Older readers ignore the table.
+
 ### Plugin state listing index
 
 Plugin keyed stores use the shared `plugin_state_entries` table. Its listing

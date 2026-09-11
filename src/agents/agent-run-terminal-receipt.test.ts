@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAgentRunRouteChange,
+  normalizeAgentRunTerminalReceipt,
   type AgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipt.js";
 import { isProviderModelRerouted } from "./provider-model-route.js";
@@ -106,5 +107,53 @@ describe("formatAgentRunRouteChange", () => {
 
     expect(routeChange).not.toContain(secret);
     expect(routeChange?.length).toBeLessThanOrEqual(320);
+  });
+});
+
+describe("normalizeAgentRunTerminalReceipt", () => {
+  it("bounds and deduplicates delegation and approval linkage", () => {
+    const normalized = normalizeAgentRunTerminalReceipt({
+      ...visibleRerouteReceipt,
+      acceptedDelegations: [
+        { runId: "child-1", childSessionKey: "agent:main:child", completionWatch: true },
+        { runId: "", childSessionKey: "agent:main:invalid", completionWatch: false },
+      ],
+      approvalReceipts: [
+        { approvalId: "approval-1", toolCallId: "tool-1", state: "waiting" },
+        { approvalId: "approval-1", state: "resolved" },
+        { approvalId: "approval-invalid", state: "pending" },
+      ],
+    });
+
+    expect(normalized).toMatchObject({
+      acceptedDelegations: [
+        { runId: "child-1", childSessionKey: "agent:main:child", completionWatch: true },
+      ],
+      approvalReceipts: [{ approvalId: "approval-1", toolCallId: "tool-1", state: "resolved" }],
+    });
+  });
+
+  it("omits absent optional linkage", () => {
+    const normalized = normalizeAgentRunTerminalReceipt(visibleRerouteReceipt);
+    expect(normalized).not.toHaveProperty("acceptedDelegations");
+    expect(normalized).not.toHaveProperty("approvalReceipts");
+  });
+
+  it("rejects malformed required terminal facts", () => {
+    expect(
+      normalizeAgentRunTerminalReceipt({ ...visibleRerouteReceipt, runId: "" }),
+    ).toBeUndefined();
+    expect(
+      normalizeAgentRunTerminalReceipt({
+        ...visibleRerouteReceipt,
+        successfulToolNames: "sessions_spawn",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeAgentRunTerminalReceipt({
+        ...visibleRerouteReceipt,
+        terminalDisposition: "hidden",
+      }),
+    ).toBeUndefined();
   });
 });

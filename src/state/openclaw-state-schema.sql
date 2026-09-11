@@ -2515,6 +2515,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
   WHERE state = 'pending';
 
+-- Bounded, first-use terminal control-plane receipts let waiters recover after
+-- gateway process loss without retaining transcript or assistant reply content.
+CREATE TABLE IF NOT EXISTS agent_run_terminal_receipts (
+  run_id TEXT NOT NULL PRIMARY KEY CHECK (length(run_id) BETWEEN 1 AND 256),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  session_key TEXT CHECK (session_key IS NULL OR length(session_key) BETWEEN 1 AND 1024),
+  session_id TEXT CHECK (session_id IS NULL OR length(session_id) BETWEEN 1 AND 256),
+  terminal_json TEXT NOT NULL CHECK (
+    length(CAST(terminal_json AS BLOB)) BETWEEN 2 AND 65536
+  ),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_terminal_receipts_expiry
+  ON agent_run_terminal_receipts(expires_at_ms, created_at_ms, run_id);
+
 CREATE TABLE IF NOT EXISTS fleet_cells (
   tenant_id TEXT NOT NULL PRIMARY KEY,
   created_at_ms INTEGER NOT NULL,

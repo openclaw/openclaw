@@ -33,6 +33,10 @@ const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
 const CONFIG_REVISION_KEY_SCHEMA_START = "CREATE TABLE IF NOT EXISTS config_revision_keys (";
 const CONFIG_REVISION_KEY_SCHEMA_END = "\n) STRICT;";
+const AGENT_RUN_TERMINAL_RECEIPT_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS agent_run_terminal_receipts (";
+const AGENT_RUN_TERMINAL_RECEIPT_SCHEMA_END =
+  "ON agent_run_terminal_receipts(expires_at_ms, created_at_ms, run_id);";
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
 
 export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
@@ -151,6 +155,24 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   database.exec(
     OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + CONFIG_REVISION_KEY_SCHEMA_END.length),
   ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
+}
+
+/** Lazily installs bounded terminal run receipts at the first admitted run start. */
+export function ensureAgentRunTerminalReceiptSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(AGENT_RUN_TERMINAL_RECEIPT_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    AGENT_RUN_TERMINAL_RECEIPT_SCHEMA_END,
+    start,
+  );
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("Agent run terminal receipt schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(
+      start,
+      endMarkerStart + AGENT_RUN_TERMINAL_RECEIPT_SCHEMA_END.length,
+    ),
+  ); // sqlite-allow-raw -- Canonical lazy additive DDL only.
 }
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
