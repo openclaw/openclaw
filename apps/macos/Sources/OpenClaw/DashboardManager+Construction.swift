@@ -176,3 +176,43 @@ extension DashboardManager {
         }
     }
 }
+
+extension DashboardManager {
+    func dashboardConfiguration(
+        endpoint: GatewayConnection.EndpointSnapshot,
+        mode: AppState.ConnectionMode,
+        target: DashboardGatewayTarget,
+        token: String?) async throws -> WindowConfiguration
+    {
+        let config = endpoint.config
+        let browserSession = endpoint.browserSession
+        try browserSession?.validate(for: config.url)
+        let identityURL = mode == .remote
+            ? try await browserIdentityURLProvider(target, config)
+            : nil
+        let dashboardConfig: GatewayConnection.Config = browserSession == nil
+            ? config : (url: config.url, token: nil, password: nil)
+        let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
+            for: dashboardConfig, mode: mode, authToken: browserSession == nil ? token : nil)
+        try browserSession?.validate(for: url)
+        let auth: DashboardWindowAuth = if identityURL != nil || browserSession != nil {
+            .browserIdentity(gatewayUrl: Self.websocketURLString(for: url))
+        } else {
+            DashboardWindowAuth(
+                gatewayUrl: Self.websocketURLString(for: url),
+                token: token,
+                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        }
+        let name = target == .primary ? "OpenClaw"
+            : self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
+        // The public sign-in origin owns normal HTTPS trust; an SSH/native TLS
+        // pin and its bearer credentials belong only to the device connection.
+        return WindowConfiguration(
+            url: url,
+            auth: auth,
+            tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
+            mode: mode,
+            displayName: name,
+            browserSession: browserSession)
+    }
+}
