@@ -10,7 +10,7 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
+import { nextWorkboardCardPosition, setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
 import {
   createGatewaySession,
@@ -271,7 +271,7 @@ describe("renderWorkboard", () => {
     async ({ path, agentId }) => {
       const card = createWorkboardCard({ agentId: "writer" });
       const saved = { ...card, agentId, updatedAt: card.updatedAt + 1 };
-      const request = vi.fn(async () => ({ card: saved }));
+      const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ card: saved });
       const { state, container, renderView } = createWorkboardView({
         client: { request, addEventListener: () => () => undefined },
         agentsList: {
@@ -383,8 +383,8 @@ describe("renderWorkboard", () => {
     expect(state.bulkResult).toEqual({ completed: 1, total: 2 });
     renderView();
     await waitForFast(() => {
-      const toast = container.querySelector("openclaw-workboard-toast:not([hidden])");
-      expect(toast?.shadowRoot?.querySelector('[role="alert"]')?.textContent).toContain(
+      const errorToast = container.querySelector("openclaw-workboard-toast:not([hidden])");
+      expect(errorToast?.shadowRoot?.querySelector('[role="alert"]')?.textContent).toContain(
         "Applied to 1 of 2 cards. Second card update rejected",
       );
     });
