@@ -17,12 +17,12 @@ import {
   isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
   prepareCronRunReceiptClaim,
-  retireCronRunTriggerStateInDatabase,
   trackCronRunReceiptSettlement,
   type PreparedCronRunReceiptClaim,
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
 } from "../store/run-receipt-store.js";
+import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
@@ -106,7 +106,28 @@ export function cronRunReceiptOwnerMutationHooks(params: {
   };
 }
 
-export function retireServiceCronRunTriggerStateInDatabase(params: {
+export function cronRunReceiptMutationHooks(params: {
+  state: CronServiceState;
+  jobId: string;
+  ownerChanged: boolean;
+  triggerStateChanged: boolean;
+}): CronStoreTransactionHooks | undefined {
+  const ownerHooks = params.ownerChanged ? cronRunReceiptOwnerMutationHooks(params) : undefined;
+  if (!ownerHooks && !params.triggerStateChanged) {
+    return undefined;
+  }
+  return {
+    ...ownerHooks,
+    beforeWrite: (database) => {
+      if (params.triggerStateChanged) {
+        retireServiceCronRunTriggerStateInDatabase({ ...params, database });
+      }
+      ownerHooks?.beforeWrite?.(database);
+    },
+  };
+}
+
+function retireServiceCronRunTriggerStateInDatabase(params: {
   state: CronServiceState;
   database: DatabaseSync;
   jobId: string;

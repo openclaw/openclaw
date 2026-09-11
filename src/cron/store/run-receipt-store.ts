@@ -16,7 +16,6 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -81,13 +80,7 @@ export type CronRunReceiptHandle = Pick<
   | "startedAtMs"
   | "storeKey"
 >;
-export type CronRunReceiptRecoveryCandidate = CronRunReceiptHandle & {
-  triggerStateRetired?: true;
-};
-type CronRunReceiptStateWriter = Pick<
-  CronRunReceiptHandle,
-  "receiptId" | "storeKey" | "jobId" | "startedAtMs"
->;
+export type CronRunReceiptRecoveryCandidate = CronRunReceiptHandle;
 
 type ResolveReceiptAgentId = (job: CronJob) => string;
 
@@ -166,7 +159,6 @@ function ensureCronRunReceiptSchema(database: DatabaseSync): void {
   database.exec(
     OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarker + CRON_RUN_RECEIPT_SCHEMA_END.length),
   );
-  ensureColumn(database, "cron_run_receipts", "trigger_state_retired INTEGER");
 }
 
 function query(database: DatabaseSync) {
@@ -529,62 +521,7 @@ export function findActiveCronRunReceiptInDatabase(params: {
   jobId: string;
 }): CronRunReceiptRecoveryCandidate | undefined {
   const row = activeRow(params.database, cronStoreKey(params.storePath), params.jobId);
-  return row
-    ? {
-        ...receiptHandle(receiptFromRow(row)),
-        ...(row.trigger_state_retired === 1 ? { triggerStateRetired: true as const } : {}),
-      }
-    : undefined;
-}
-
-function stateWriterRow(database: DatabaseSync, handle: CronRunReceiptStateWriter) {
-  return executeSqliteQueryTakeFirstSync(
-    database,
-    query(database)
-      .selectFrom("cron_run_receipts")
-      .selectAll()
-      .where("receipt_id", "=", handle.receiptId)
-      .where("store_key", "=", handle.storeKey)
-      .where("job_id", "=", handle.jobId)
-      .where("started_at_ms", "=", handle.startedAtMs),
-  );
-}
-
-/** Retires an exact outstanding state writer, atomically with its owning job edit. */
-export function retireCronRunTriggerStateInDatabase(params: {
-  database: DatabaseSync;
-  handle: CronRunReceiptStateWriter;
-}): void {
-  const receipt = stateWriterRow(params.database, params.handle);
-  if (!receipt || receipt.trigger_state_retired === 1) {
-    return;
-  }
-  const job = currentJob(params.database, params.handle.storeKey, params.handle.jobId);
-  // Queued receipts capture current state at activation. Only a matching
-  // durable execution marker identifies a writer still awaiting reconciliation,
-  // including a terminal receipt left behind by stale-owner adjudication.
-  if (job?.state.runningAtMs !== receipt.started_at_ms) {
-    return;
-  }
-  if (!initializedDatabases.has(params.database)) {
-    // The caller's transaction may still roll back this first-use upgrade.
-    ensureCronRunReceiptSchema(params.database);
-  }
-  executeSqliteQuerySync(
-    params.database,
-    query(params.database)
-      .updateTable("cron_run_receipts")
-      .set({ trigger_state_retired: 1 })
-      .where("receipt_id", "=", receipt.receipt_id),
-  );
-}
-
-/** Reads mutable state-writer retirement from the exact receipt in the write transaction. */
-export function isCronRunTriggerStateRetiredInDatabase(params: {
-  database: DatabaseSync;
-  handle: CronRunReceiptStateWriter;
-}): boolean {
-  return stateWriterRow(params.database, params.handle)?.trigger_state_retired === 1;
+  return row ? receiptHandle(receiptFromRow(row)) : undefined;
 }
 
 export function listActiveCronRunReceiptJobIdsInDatabase(

@@ -43,10 +43,7 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
-import {
-  cronRunReceiptOwnerMutationHooks,
-  retireServiceCronRunTriggerStateInDatabase,
-} from "./run-receipts.js";
+import { cronRunReceiptMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
@@ -249,9 +246,6 @@ async function persistUpdatedJob(params: {
   const ownerChanged =
     resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
     resolveEffectiveJobAgentId(nextJob, defaultAgentId);
-  const ownerMutationHooks = ownerChanged
-    ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
-    : undefined;
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
@@ -259,22 +253,12 @@ async function persistUpdatedJob(params: {
       !isDeepStrictEqual(previousJob.payload, nextJob.payload));
   await persistOrRestore(state, snapshot, {
     suppressScheduledJobId: nextJob.id,
-    transactionHooks:
-      ownerMutationHooks || triggerStateChanged
-        ? {
-            ...ownerMutationHooks,
-            beforeWrite: (database) => {
-              if (triggerStateChanged) {
-                retireServiceCronRunTriggerStateInDatabase({
-                  database,
-                  state,
-                  jobId: nextJob.id,
-                });
-              }
-              ownerMutationHooks?.beforeWrite?.(database);
-            },
-          }
-        : undefined,
+    transactionHooks: cronRunReceiptMutationHooks({
+      state,
+      jobId: nextJob.id,
+      ownerChanged,
+      triggerStateChanged,
+    }),
   });
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
