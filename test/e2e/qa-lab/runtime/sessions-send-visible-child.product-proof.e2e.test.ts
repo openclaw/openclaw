@@ -3,6 +3,7 @@
 // reply must come back inline without the generic A2A announce flow.
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -356,7 +357,7 @@ describe.runIf(process.env.OPENCLAW_PROOF_VISIBLE_CHILD_SEND === "1")(
         .poll(() => provider.proof.childRequests.length, { timeout: 60_000 })
         .toBeGreaterThanOrEqual(1);
       // Let the child's own completion announcement settle before the send.
-      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      await sleep(6_000);
       const childRequestsAfterSpawn = provider.proof.childRequests.length;
 
       // Turn 2: waited sessions_send to the persisted dashboard child.
@@ -374,7 +375,7 @@ describe.runIf(process.env.OPENCLAW_PROOF_VISIBLE_CHILD_SEND === "1")(
         timeoutMs: 120_000,
       });
       // Give a stray detached A2A flow time to show up before counting.
-      await new Promise((resolve) => setTimeout(resolve, 8_000));
+      await sleep(8_000);
 
       const childKey = provider.proof.childKey;
       const listing = (await gateway.call("sessions.list", { agentId: "qa", limit: 100 })) as {
