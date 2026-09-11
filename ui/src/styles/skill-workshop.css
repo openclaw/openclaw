@@ -1243,6 +1243,10 @@
     overflow-y: auto;
   }
 
+  .sw-action-toast {
+    position: fixed;
+  }
+
   .sw-hub-panel,
   #skill-workshop-mode-panel,
   .sw-hub-panel::part(base),

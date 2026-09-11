@@ -1,13 +1,13 @@
 import { vi } from "vitest";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { ApplicationGatewaySnapshot } from "../app/context.ts";
+import type { SkillWorkshopProposal } from "../lib/skill-workshop/index.ts";
 import {
   createSkillWorkshopState,
   type SkillWorkshopContext,
   type SkillWorkshopState,
-} from "./proposals.ts";
+} from "../pages/skill-workshop/proposals.ts";
+import { createTestGatewayClient } from "./gateway-client.ts";
+import { gatewayHelloForMethods } from "./gateway-methods.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 

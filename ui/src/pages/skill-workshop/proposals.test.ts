@@ -5,11 +5,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
-  requestSkillWorkshopRevision,
-  runSkillWorkshopEvaluation,
-  runSkillWorkshopLifecycleAction,
-} from "./proposal-actions.ts";
-import {
   clearNoticeTimer,
   createFixture,
   inspectResult,
@@ -19,7 +14,12 @@ import {
   proposalDecision,
   recordFrom,
   REVISION_HASH,
-} from "./proposals.test-support.ts";
+} from "../../test-helpers/skill-workshop-proposal-fixture.ts";
+import {
+  requestSkillWorkshopRevision,
+  runSkillWorkshopEvaluation,
+  runSkillWorkshopLifecycleAction,
+} from "./proposal-actions.ts";
 import {
   loadSkillWorkshopProposals,
   selectSkillWorkshopProposal,
