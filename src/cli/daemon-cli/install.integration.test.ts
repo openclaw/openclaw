@@ -179,7 +179,15 @@ describe("runDaemonInstall integration", () => {
   )(
     "repairs $condition Node in the $platform definition (force=$force)",
     async ({ platform, force, condition }) => {
+      const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
+      const testNodeExecPath = resolveTestNodeExecPath();
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      if (process.versions.bun) {
+        Object.defineProperty(process, "execPath", {
+          value: testNodeExecPath,
+          configurable: true,
+        });
+      }
       const entry = path.join(tempHome, "dist", "index.js");
       await fs.mkdir(path.dirname(entry), { recursive: true });
       await fs.writeFile(entry, "");
@@ -272,7 +280,7 @@ describe("runDaemonInstall integration", () => {
         if (!nodePath) {
           throw new Error("Missing repaired runtime");
         }
-        expect(await fs.realpath(nodePath)).toBe(await fs.realpath(resolveTestNodeExecPath()));
+        expect(await fs.realpath(nodePath)).toBe(await fs.realpath(testNodeExecPath));
         expect(repaired?.programArguments).toContain(entry);
         expect(await fs.readFile(definitionPath, "utf8")).not.toContain(oldNode);
         expect(runtimeLogs.join("\n")).toContain(
@@ -287,6 +295,9 @@ describe("runDaemonInstall integration", () => {
         }
       } finally {
         process.argv = originalArgv;
+        if (process.versions.bun) {
+          Object.defineProperty(process, "execPath", execPathDescriptor);
+        }
       }
     },
   );
@@ -1000,7 +1011,7 @@ describe("runDaemonInstall integration", () => {
         if (testCase.name === "operator heap cap") {
           const measure = (flags: string[]) => {
             const child = spawnSync(
-              process.execPath,
+              resolveTestNodeExecPath(),
               [
                 ...flags,
                 "-e",
