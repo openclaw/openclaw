@@ -91,7 +91,7 @@ describe("fresh candidate repair process", () => {
             process.send({ type: "result", result: { status: "repaired", attempts: [attempt], finalValidation: message.validation } }, () => process.disconnect());
           }
         });
-        send({ type: "ready", liveAuthority: true });
+        send({ type: "ready", candidateRehearsal: true });
       `,
           );
           const prepareAuthority = requesterOwner.createManagedUpdateRequesterAuthority;
@@ -214,7 +214,7 @@ describe("fresh candidate repair process", () => {
             process.send({ type: "result", result: { status: "repaired", attempts: [attempt], finalValidation: attempt.validation } }, () => process.disconnect());
           }
         });
-        send({ type: "ready", liveAuthority: true });
+        send({ type: "ready", candidateRehearsal: true });
       `,
         );
         const rehearsalStateDir = state.path("rehearsal");
@@ -243,7 +243,7 @@ describe("fresh candidate repair process", () => {
     );
   });
 
-  it("keeps disposable selectors but rejects hostile overrides in the repair child", async () => {
+  it("keeps admission separate from the rehearsal environment sent to the child", async () => {
     await withOpenClawTestState({ prefix: "repair-child-env-", layout: "home" }, async (state) => {
       const reported = [
         "HOME",
@@ -267,20 +267,26 @@ describe("fresh candidate repair process", () => {
         const send = message => process.send(message);
         process.on("message", message => {
           if (message.type === "start") {
-            fs.writeFileSync("repair-child-env.json", JSON.stringify(Object.fromEntries(
-              ${JSON.stringify(reported)}.map(key => [key, process.env[key]]),
-            )));
+            fs.writeFileSync("repair-child-env.json", JSON.stringify({
+              admission: Object.fromEntries(${JSON.stringify(reported)}.map(key => [key, process.env[key]])),
+              rehearsal: message.target.environment,
+            }));
             const validation = { ok: true, score: 1, summary: "Environment captured." };
             send({ type: "event", event: { type: "stopped", status: "repaired" } });
             process.send({ type: "result", result: { status: "repaired", attempts: [], finalValidation: validation } }, () => process.disconnect());
           }
         });
-        send({ type: "ready", liveAuthority: true });
+        send({ type: "ready", candidateRehearsal: true });
       `,
       );
       const before = { ...process.env };
+      const admissionEnv: NodeJS.ProcessEnv = {
+        ...state.env,
+        TMPDIR: state.path("admission-temp"),
+      };
       const result = await prepareUnattendedUpdateRepair({
         ...repairParams(state),
+        admissionEnv,
         target: {
           stateDir: state.stateDir,
           configPath: state.configPath,
@@ -302,21 +308,23 @@ describe("fresh candidate repair process", () => {
       });
 
       expect(result, JSON.stringify(result)).toMatchObject({ status: "repaired" });
-      expect(
-        JSON.parse(
-          await fs.readFile(path.join(state.workspaceDir, "repair-child-env.json"), "utf8"),
+      const captured = JSON.parse(
+        await fs.readFile(path.join(state.workspaceDir, "repair-child-env.json"), "utf8"),
+      );
+      expect(captured.admission).toEqual(
+        Object.fromEntries(
+          reported
+            .filter((key) => admissionEnv[key] !== undefined)
+            .map((key) => [key, admissionEnv[key]]),
         ),
-      ).toEqual({
-        HOME: state.home,
+      );
+      expect(captured.rehearsal).toMatchObject({
         TMPDIR: state.root,
-        OPENCLAW_HOME: state.home,
-        OPENCLAW_STATE_DIR: state.stateDir,
-        OPENCLAW_CONFIG_PATH: state.configPath,
-        OPENCLAW_WORKSPACE_DIR: state.workspaceDir,
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-        PATH: before.PATH,
+        PATH: "/synthetic-untrusted-bin",
+        LD_PRELOAD: "/synthetic-preload.so",
       });
-      // The launcher owns the child environment; repair leaves the parent's alone.
+      expect(captured.rehearsal).not.toHaveProperty("OPENCLAW_UPDATE_RUN_HANDOFF");
+      // Rehearsal projection and host filtering belong to the shared runtime scope.
       expect(process.env).toEqual(before);
     });
   });
@@ -331,7 +339,7 @@ describe("fresh candidate repair process", () => {
         process.on("message", message => {
           if (message.type === "start") process.send({ type: "validate", id: 1 });
         });
-        process.send({ type: "ready", liveAuthority: true });
+        process.send({ type: "ready", candidateRehearsal: true });
       `,
         );
         const controller = new AbortController();
@@ -381,8 +389,14 @@ describe("fresh candidate repair process", () => {
         process.send({ type: "ready" });
         `,
       );
-      const result = await prepareUnattendedUpdateRepair(repairParams(state));
-      expect(result.status).toBe("unavailable");
+      const result = await prepareUnattendedUpdateRepair({
+        ...repairParams(state),
+        context: { error: "Candidate validation failed.", phase: "validating" },
+      });
+      expect(result).toMatchObject({
+        status: "unavailable",
+        reason: expect.stringContaining("cannot repair isolated rehearsal state"),
+      });
       await expect(
         fs.stat(path.join(state.workspaceDir, "unexpected-start")),
       ).rejects.toMatchObject({

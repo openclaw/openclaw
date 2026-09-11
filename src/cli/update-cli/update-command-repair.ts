@@ -93,11 +93,7 @@ export async function runUpdateCommandRepair(params: {
         runId,
         requester: requesterAuthority?.requester,
         nodeRunner: params.nodeRunner,
-        authority: {
-          stateDir: target.stateDir,
-          configPath: target.configPath,
-          workspaceDir: target.defaultWorkspaceDir,
-        },
+        admissionEnv: options.env,
         target: {
           // Rehearsal state carries the candidate's schema, so the candidate must
           // host the repair. After activation that same owner is the replaced install.

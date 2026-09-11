@@ -16,46 +16,41 @@ const releasedStart = {
   context: { beforeVersion: "2026.9.4", targetVersion: "2026.9.5" },
   budget: { maxTurns: 1, wallClockMs: 10_000 },
 };
-const authority = {
-  stateDir: releasedStart.target.stateDir,
-  configPath: releasedStart.target.configPath,
-  workspaceDir: releasedStart.target.workspaceDir,
-};
-
 describe("update repair parent protocol", () => {
-  it("normalizes the released post-activation start to live target authority", () => {
-    expect(updateRepairParentMessageSchema.parse(releasedStart)).toMatchObject({
-      ...releasedStart,
-      authority,
-      context: { ...releasedStart.context, phase: "verifying" },
-    });
+  it("accepts the released post-activation start without a phase", () => {
+    expect(updateRepairParentMessageSchema.parse(releasedStart)).toMatchObject(releasedStart);
   });
 
-  it.each(["validating", "verifying"])(
-    "rejects an explicit %s phase without live authority",
-    (phase) => {
-      expect(
-        updateRepairParentMessageSchema.safeParse({
-          ...releasedStart,
-          context: { ...releasedStart.context, phase },
-        }).success,
-      ).toBe(false);
-    },
-  );
-
-  it("rejects authority-bearing starts without an explicit phase", () => {
-    expect(updateRepairParentMessageSchema.safeParse({ ...releasedStart, authority }).success).toBe(
-      false,
-    );
+  it.each(["validating", "verifying"])("preserves the explicit %s phase", (phase) => {
+    const start = { ...releasedStart, context: { ...releasedStart.context, phase } };
+    expect(updateRepairParentMessageSchema.parse(start)).toMatchObject(start);
   });
 
-  it("preserves separate live authority for a modern rehearsal", () => {
+  it.each(["repairing", "", null])("rejects an invalid phase %s", (phase) => {
+    expect(
+      updateRepairParentMessageSchema.safeParse({
+        ...releasedStart,
+        context: { ...releasedStart.context, phase },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("preserves copied-state selectors without accepting admission environment on the wire", () => {
     const start = {
       ...releasedStart,
-      authority,
-      target: { ...releasedStart.target, stateDir: "/synthetic/rehearsal" },
+      target: {
+        ...releasedStart.target,
+        stateDir: "/synthetic/rehearsal",
+        environment: { HOME: "/synthetic/rehearsal-home" },
+      },
       context: { ...releasedStart.context, phase: "validating" },
     };
     expect(updateRepairParentMessageSchema.parse(start)).toMatchObject(start);
+    expect(
+      updateRepairParentMessageSchema.parse({
+        ...start,
+        admissionEnv: { HOME: "/synthetic/untrusted-home" },
+      }),
+    ).not.toHaveProperty("admissionEnv");
   });
 });

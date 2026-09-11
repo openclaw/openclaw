@@ -40,8 +40,8 @@ describe("manual triage repair isolation", () => {
     "repairs synthetic state without Doctor service effects and restores policy (throws=%s)",
     async (throws) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
-        // Only the OS service boundary is synthetic. Triage, the repair loop,
-        // its environment owner, and Doctor maintenance run their real code.
+        // Triage, the repair loop, its environment owner, and Doctor maintenance
+        // run real code; inference, executor, oracle, and service effects are mocked.
         vi.spyOn(configPaths, "isDefaultInstallIdentity").mockReturnValue(true);
         vi.spyOn(doctorPolicy, "shouldManageGatewayService").mockResolvedValue(true);
         mocks.serviceStop.mockResolvedValue({

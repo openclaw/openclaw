@@ -5,7 +5,7 @@ import type { UpdateRepairValidation } from "./update-repair-protocol.js";
 type UpdateRepairParams = Parameters<typeof runUpdateRepairLoop>[0];
 
 const runtime = vi.hoisted(() => ({
-  withUpdateRepairTargetConfig: vi.fn((_target, run) => run()),
+  withUpdateRepairEnvironment: vi.fn((_target, run) => run()),
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));
@@ -182,7 +182,7 @@ describe("runUpdateRepairLoop", () => {
     const validate = vi.fn(() => new Promise<UpdateRepairValidation>(() => {}));
     const result = await runUpdateRepairLoop({ ...params(validate), budget: { wallClockMs: 10 } });
     expect(result).toMatchObject({ status: "aborted", reason: "wall-clock-budget" });
-    expect(runtime.withUpdateRepairTargetConfig).not.toHaveBeenCalled();
+    expect(runtime.withUpdateRepairEnvironment).not.toHaveBeenCalled();
     expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
   });
 

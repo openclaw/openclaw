@@ -1,7 +1,6 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
-import { installationTargetEnv } from "./installation-target-context.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
@@ -16,6 +15,9 @@ import {
 import { getUpdateRun } from "./update-run-ledger.js";
 
 const controller = new AbortController();
+// Capture admission before any rehearsal projection. Copied state is inference
+// input, never the authority for requester policy or update-run liveness.
+const ledgerEnv = { ...process.env };
 let started = false;
 let requestId = 0;
 let pending:
@@ -69,23 +71,21 @@ process.on("message", (raw: unknown) => {
         throw new Error("Repair worker already owns an execution.");
       }
       started = true;
-      // The process is pinned to rehearsal state. Only these read-only checks
-      // use the admitting installation, so revocation never follows a snapshot.
-      const ledgerEnv = {
-        ...process.env,
-        ...installationTargetEnv({
-          stateDir: message.authority.stateDir,
-          configPath: message.authority.configPath,
-          defaultWorkspaceDir: message.authority.workspaceDir,
-        }),
-      };
       void (async () => {
-        const requesterAuthority = message.requester
-          ? await createManagedUpdateRequesterAuthority(message.requester, ledgerEnv)
+        const runtime = await import("./update-repair-agent.runtime.js");
+        const requester = message.requester;
+        const requesterAuthority = requester
+          ? await runtime.withUpdateRepairEnvironment(message.target, () =>
+              createManagedUpdateRequesterAuthority(requester, ledgerEnv),
+            )
           : undefined;
         return runUpdateRepairLoop({
           target: message.target,
-          context: { ...message.failure, ...message.context },
+          context: {
+            ...message.failure,
+            ...message.context,
+            phase: message.context.phase ?? "verifying",
+          },
           budget: message.budget,
           signal: controller.signal,
           isCurrent: () => {
@@ -135,5 +135,4 @@ process.on("message", (raw: unknown) => {
     }
   }
 });
-// A parent must not entrust rehearsal repair to an older target-only guard.
-send({ type: "ready", liveAuthority: true });
+send({ type: "ready", candidateRehearsal: true });

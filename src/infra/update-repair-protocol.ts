@@ -38,7 +38,7 @@ const event = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stopped"), status, reason: text.optional() }),
 ]);
 export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("ready"), liveAuthority: z.literal(true) }),
+  z.object({ type: z.literal("ready"), candidateRehearsal: z.literal(true).optional() }),
   z.object({ type: z.literal("validate"), id: turn }),
   z.object({ type: z.literal("cancel-validation"), id: turn }),
   z.object({ type: z.literal("event"), event }),
@@ -52,29 +52,23 @@ export const updateRepairWorkerMessageSchema = z.discriminatedUnion("type", [
     }),
   }),
 ]);
-const currentParentMessageSchema = z.discriminatedUnion("type", [
+export const updateRepairParentMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("start"),
     runId: text.optional(),
     requester: z
       .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
       .optional(),
-    // Live authority is read-only and independent of the disposable repair target.
-    authority: z.object({
-      stateDir: z.string(),
-      configPath: z.string(),
-      workspaceDir: z.string(),
-    }),
     target: z.object({
       stateDir: z.string(),
       configPath: z.string(),
       workspaceDir: z.string(),
-      /** The installation that owns the target state and hosts the repair. */
       installRoot: z.string(),
+      environment: z.record(z.string(), z.string().optional()).optional(),
     }),
     failure: updateFailureSchema,
     context: z.object({
-      phase: z.enum(["validating", "verifying"]),
+      phase: z.enum(["validating", "verifying"]).optional(),
       beforeVersion: text.optional(),
       targetVersion: text.optional(),
       symptoms: z.array(text).max(20).optional(),
@@ -89,44 +83,18 @@ const currentParentMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("validation-error"), id: turn, reason: text }),
   z.object({ type: z.literal("cancel"), reason: text }),
 ]);
-// Released updaters launch this worker only after activation and omit both fields.
-// Keep this ingress adapter until supported updater parents send live authority.
-// Never reinterpret a partial modern/rehearsal request as a released-parent start.
-const currentStartSchema = currentParentMessageSchema.options[0];
-const releasedStartSchema = currentStartSchema
-  .extend({
-    authority: z.never().optional(),
-    context: currentStartSchema.shape.context.extend({ phase: z.never().optional() }),
-  })
-  .transform(({ target, context, ...message }) => ({
-    ...message,
-    target,
-    authority: {
-      stateDir: target.stateDir,
-      configPath: target.configPath,
-      workspaceDir: target.workspaceDir,
-    },
-    context: { ...context, phase: "verifying" as const },
-  }));
-export const updateRepairParentMessageSchema = z.union([
-  currentParentMessageSchema,
-  releasedStartSchema,
-]);
 export type UpdateRepairWorkerMessage = z.infer<typeof updateRepairWorkerMessageSchema>;
 export type UpdateRepairParentMessage = z.infer<typeof updateRepairParentMessageSchema>;
 export const UPDATE_REPAIR_IPC_MAX_BYTES = 64 * 1024;
 
-export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"] & {
-  /** Rehearsal isolation for the repair child; the launcher applies it, never the wire. */
-  environment?: NodeJS.ProcessEnv;
-};
+export type UpdateRepairTarget = Extract<UpdateRepairParentMessage, { type: "start" }>["target"];
 export type UpdateRepairValidation = z.infer<typeof updateRepairValidationSchema>;
 export type UpdateRepairResult = Extract<UpdateRepairWorkerMessage, { type: "result" }>["result"];
 export type UpdateRepairEvent = Extract<UpdateRepairWorkerMessage, { type: "event" }>["event"];
 export type UpdateRepairParams = {
   target: UpdateRepairTarget;
-  /** Original installation for read-only run and requester checks; defaults to the target. */
-  authority?: Extract<UpdateRepairParentMessage, { type: "start" }>["authority"];
+  /** Original installation environment for the admitting ledger and requester policy. */
+  admissionEnv?: NodeJS.ProcessEnv;
   nodeRunner?: string;
   runId?: string;
   requester?: { channel?: string; accountId?: string; senderId?: string };
