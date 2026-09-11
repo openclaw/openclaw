@@ -292,7 +292,8 @@ async function dispatchSlackMessageWithSetup(
         ? replyRenderPlan.blocks
         : replyRenderPlan.blockPart?.blocks;
     const slackBlocks = plannedBlocks;
-    const requiresSeparateFallbackDelivery = replyRenderPlan.mode === "split";
+    const requiresSeparateFallbackDelivery =
+      replyRenderPlan.mode === "split" || replyRenderPlan.textIsSlackPlainText === true;
     const trimmedFinalText =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.text.trim()
