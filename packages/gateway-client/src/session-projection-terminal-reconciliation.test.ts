@@ -462,6 +462,36 @@ describe("live terminal reconciliation", () => {
     ).toEqual([user, toolBoundary, unmarkedSecondFinal, laterToolBoundary, secondFinal]);
   });
 
+  it("keeps a sequence-fenced terminal tail reconciling against its later durable row", () => {
+    const runId = "fenced-tail-run";
+    const commentary = {
+      role: "assistant",
+      content: [{ type: "text", text: "Checking the workspace." }],
+      openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+      __openclaw: { id: "assistant-commentary", seq: 2, runId },
+    };
+    const answer = {
+      role: "assistant",
+      content: [{ type: "text", text: "The final answer is ready." }],
+      __openclaw: { id: "assistant-answer", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope, [commentary, answer]), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: createAssistantMessage("Checking the workspace.The final answer is ready."),
+    });
+    const messagesBefore = state.messages;
+    // A boundary-split tail replays only the suffix of the accepted final. Its
+    // sequence fence reconciles it against the later durable answer row, so it
+    // must not be retained as a distinct later final once that row matched.
+    state = projectLiveSessionMessage(state, createAssistantMessage("The final answer is ready."), {
+      runId,
+      afterSequence: 2,
+    });
+    expect(state.messages).toEqual(messagesBefore);
+  });
+
   it("keeps a same-caption reply with a distinct attachment and still deduplicates exact replays", () => {
     const runId = "attachment-run";
     const attachment = (data: string) => ({

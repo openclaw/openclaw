@@ -298,6 +298,7 @@ export function withTentativeRecovery<TRun extends { message?: unknown; status: 
  * Check whether a live unsequenced assistant reply is a distinct later reply of
  * the run rather than its immutable first final. Tentative recovery cannot
  * represent these entries, so suppression must not drop them silently.
+ * Sequence-fenced tails reconcile against their later durable row instead.
  */
 function isDistinctLaterLiveFinal(
   current: TerminalProjectionEntry,
@@ -309,6 +310,7 @@ function isDistinctLaterLiveFinal(
     current.identity?.role === "assistant" &&
     !current.identity.id &&
     current.identity.sequence === null &&
+    current.afterSequence === undefined &&
     run &&
     run.status !== "streaming" &&
     content !== null &&
