@@ -3,14 +3,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
+import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -60,7 +62,11 @@ async function withRunFixture(
     catalogStarted: ReturnType<typeof createDeferredCore<void>>;
     finishCatalog: ReturnType<typeof createDeferredCore<void>>;
   }) => Promise<void>,
-  options: { catalog?: "hold" | "reject" } = {},
+  options: {
+    catalog?: "hold" | "reject";
+    registrationFails?: boolean;
+    pluginsDisabled?: boolean;
+  } = {},
 ) {
   await withOpenClawTestState({ label: "run-registry-ownership" }, async (state) => {
     const bundled = state.path("bundled");
@@ -77,6 +83,7 @@ async function withRunFixture(
       finishDisposal,
       disposalStarted,
       catalog: options.catalog,
+      registrationFails: options.registrationFails,
       providers: {},
       catalogStarted,
       finishCatalog,
@@ -145,6 +152,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   bridge.providers[api.id] = provider;
   api.registerProvider(provider);
+  if (bridge.registrationFails && api.id === ${JSON.stringify(siblingId)}) throw new Error("optional fixture registration failed");
 } };
 `,
       );
@@ -187,6 +195,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ),
       },
       plugins: {
+        ...(options.pluginsDisabled ? { enabled: false } : {}),
         allow: [providerId, siblingId],
         slots: { memory: "none" },
         entries: { [providerId]: { enabled: true }, [siblingId]: { enabled: true } },
@@ -546,3 +555,60 @@ it("retains a managed RUN source borrowed after matching standalone publication 
     expectReopened(original());
   });
 });
+
+it("keeps a failed optional registration from invalidating the loaded model owner", async () => {
+  await withRunFixture(
+    async ({ acquire, original }) => {
+      const lease = await acquire();
+      expect(lease.snapshot.pluginRegistry?.plugins).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: providerId, status: "loaded" }),
+          expect.objectContaining({ id: siblingId, status: "error" }),
+        ]),
+      );
+      expect(readAnswer(original())).toBe(42);
+    },
+    { registrationFails: true },
+  );
+});
+
+it.each(["registry", "empty inventory"] as const)(
+  "rejects a build whose %s retires immediately before publication",
+  async (boundary) => {
+    await withRunFixture(
+      async ({ acquire, original, registrations }) => {
+        const lifetime = await import("./prepared-model-runtime.plugin-lifetime.js");
+        const publish = lifetime.publishPreparedPluginGeneration;
+        let retirement: Promise<unknown> | undefined;
+        const publication = vi
+          .spyOn(lifetime, "publishPreparedPluginGeneration")
+          .mockImplementationOnce((owner, generation) => {
+            if (boundary === "registry") {
+              quiescePluginRegistry(generation.pluginRegistry);
+            } else {
+              retirement = retirePluginCache(
+                getPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot),
+              );
+            }
+            publish(owner, generation);
+          });
+        try {
+          await expect(acquire().then(() => undefined)).rejects.toThrow(
+            "retired before publication",
+          );
+          expect(publication).toHaveBeenCalledOnce();
+          if (boundary === "registry") {
+            expect(original().database.isOpen).toBe(false);
+            expect(original().disposals).toBe(1);
+          } else {
+            expect(registrations).toHaveLength(0);
+            await retirement;
+          }
+        } finally {
+          publication.mockRestore();
+        }
+      },
+      { pluginsDisabled: boundary === "empty inventory" },
+    );
+  },
+);

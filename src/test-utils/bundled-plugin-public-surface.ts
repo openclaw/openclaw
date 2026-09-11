@@ -70,8 +70,14 @@ type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
 }) => Promise<T>;
 
 export const loadBundledPluginFacade: AsyncBundledPluginPublicSurfaceLoader = async (params) => {
+  const modulePath = resolveBundledPluginPublicModulePath(params);
+  if (!fs.existsSync(modulePath)) {
+    throw new Error(
+      `Unable to resolve bundled plugin public surface ${params.pluginId}/${params.artifactBasename}`,
+    );
+  }
   // Fixture imports must share the test runner's SDK state and mocks.
-  return import(pathToFileURL(resolveBundledPluginPublicModulePath(params)).href);
+  return import(pathToFileURL(modulePath).href);
 };
 
 export function resolveBundledPluginPublicModulePath(params: {

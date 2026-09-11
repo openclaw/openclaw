@@ -1217,7 +1217,6 @@ describe("scripts/changed-lanes", () => {
       "src/config/channel-config-metadata.ts",
       "src/plugins/manifest-registry.ts",
       "src/plugins/bundled-channel-config-metadata.ts",
-      "src/gateway/server-runtime-state.ts",
       "extensions/discord/channel-config-api.ts",
       "extensions/feishu/src/webhook-path.ts",
       "extensions/mattermost/src/secret-input.ts",

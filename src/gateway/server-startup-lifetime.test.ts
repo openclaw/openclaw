@@ -4,16 +4,36 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquirePublishedPreparedModelRuntime,
+  prepareModelRuntimeSnapshot,
+} from "../agents/prepared-model-runtime.js";
+import {
+  closePreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimeClose,
+} from "../agents/prepared-model-runtime.lifecycle.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
 import {
   getLegacyPluginSdkResourceHost,
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import {
+  createPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
-import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
+import {
+  bindPluginRegistryResourceOwner,
+  markPluginRegistryActive,
+} from "../plugins/registry-lifecycle.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -88,6 +108,210 @@ function registerSecretsClearFailure(
 }
 
 describe("Gateway startup lifetime", () => {
+  it.each(["donor", "metadata cache", "metadata borrower"] as const)(
+    "releases idle prepared %s custody when one of two Gateways closes",
+    async (mode) => {
+      const state = await createStartupTestState("gateway-nonfinal-prepared-donor");
+      const token = "gateway-nonfinal-donor-token";
+      const pluginId = "nonfinal-donor";
+      const pluginRoot = state.statePath("plugin");
+      await state.writeJson("plugin/package.json", {
+        name: pluginId,
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"] },
+      });
+      await state.writeJson("plugin/openclaw.plugin.json", {
+        id: pluginId,
+        configSchema: { type: "object", properties: {} },
+      });
+      await state.writeText(
+        "plugin/index.ts",
+        `
+      export default { id: "nonfinal-donor", register(api) {
+        if (api.registrationMode === "full") api.registerWidgetPresenter({
+          target: "node_panel", description: "Synthetic donor",
+          async availability() { return { ok: true, value: { available: true } }; },
+          async present() { return { ok: true, value: {} }; },
+        });
+      } };
+    `,
+      );
+      const config: OpenClawConfig = {
+        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false } },
+        plugins: {
+          enabled: mode === "donor",
+          allow: [pluginId],
+          load: { paths: [pluginRoot] },
+          slots: { memory: "none" },
+        },
+      };
+      await state.writeConfig(config);
+      state.applyEnv();
+      const previous = captureActivePluginRegistrySnapshot();
+      const bootstrapModule = await import("./server-startup-bootstrap.js");
+      const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
+      const registries: ReturnType<typeof loadAndActivateRootPluginRegistry>[] = [];
+      const bootstrapSpy = vi
+        .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
+        .mockImplementation(async (...args) => {
+          const result = await bootstrap(...args);
+          const registry = loadAndActivateRootPluginRegistry({
+            config,
+            env: state.env,
+            workspaceDir: state.workspaceDir,
+            cache: false,
+          });
+          result.pluginBootstrap.pluginRegistry = registry;
+          registries.push(registry);
+          return result;
+        });
+      const caches: ReturnType<typeof createPluginCache>[] = [];
+      const servers: GatewayServer[] = [];
+      let stopRetirementProbe: (() => void) | undefined;
+      const leases: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>[] = [];
+      let closing: Promise<void> | undefined;
+      const input = (id: string) => ({
+        config,
+        agentDir: state.agentDir(id),
+        workspaceDir: state.workspaceDir,
+        env: state.env,
+        skipCredentials: true,
+      });
+      try {
+        const { startGatewayServerCore } = await import("./server-start.js");
+        for (const id of ["closing", "survivor"]) {
+          const cache = createPluginCache();
+          caches.push(cache);
+          selectCurrentPluginMetadataCache(cache);
+          await withPluginCache(cache, async () => {
+            const server = await startGatewayServerCore(await getFreePort(), {
+              auth: { mode: "token", token },
+              bind: "loopback",
+              controlUiEnabled: false,
+              sidecarStartup: "defer",
+            });
+            servers.push(server);
+            await server.startupSettled;
+            const lease = await acquireAgentRunPreparedModelRuntime(input(id), {
+              retainIdleRunOwner: true,
+            });
+            leases.push(lease);
+            expect(getPluginMetadataSnapshotCache(lease.snapshot.metadataSnapshot)).toBe(cache);
+            expect(lease.snapshot.pluginRegistry?.widgetPresenters).toHaveLength(
+              mode === "donor" ? 1 : 0,
+            );
+          });
+        }
+        expect(registries[0]).not.toBe(registries[1]);
+        const [first, survivor] = leases;
+        const [closingRegistry] = registries;
+        const [closingServer] = servers;
+        assert(first && survivor && closingRegistry && closingServer);
+        const donorRecord = closingRegistry.plugins.find((record) => record.id === pluginId);
+        const donor = donorRecord && getPluginInstance(donorRecord);
+        if (mode === "donor") {
+          assert(donor);
+          expect(donor.hasRetainedConsumers).toBe(true);
+        }
+        const idle = await acquireAgentRunPreparedModelRuntime(input("closing"), {
+          retainIdleRunOwner: true,
+        });
+        leases.push(idle);
+        await idle[Symbol.asyncDispose]();
+        await first[Symbol.asyncDispose]();
+        if (donor) {
+          expect(donor.hasRetainedConsumers).toBe(true);
+        }
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "fixture:default": {
+                type: "api_key",
+                provider: "fixture",
+                key: "synthetic-donor-key",
+              },
+            },
+          },
+          "closing",
+        );
+        const refreshed = await acquirePublishedPreparedModelRuntime(input("closing"));
+        leases.push(refreshed);
+        expect(refreshed.snapshot).not.toBe(first.snapshot);
+        expect(refreshed.pluginGeneration).toBe(first.pluginGeneration);
+        if (mode !== "metadata borrower") {
+          await refreshed[Symbol.asyncDispose]();
+        }
+        markPluginRegistryActive(closingRegistry);
+        expect(await prepareModelRuntimeSnapshot(input("closing"))).toBe(refreshed.snapshot);
+        const disposalEntered = createDeferred();
+        if (donor) {
+          const dispose = donor.dispose.bind(donor);
+          const spy = vi.spyOn(donor, "dispose").mockImplementation((...args) => {
+            disposalEntered.resolve();
+            return dispose(...args);
+          });
+          stopRetirementProbe = () => spy.mockRestore();
+        } else {
+          const cacheModule = await import("../plugins/plugin-cache.js");
+          const retire = cacheModule.retirePluginCache;
+          const spy = vi.spyOn(cacheModule, "retirePluginCache").mockImplementation((...args) => {
+            const result = retire(...args);
+            if (args[0] === caches[0]) {
+              disposalEntered.resolve();
+            }
+            return result;
+          });
+          stopRetirementProbe = () => spy.mockRestore();
+        }
+        closing = closingServer.close();
+        await disposalEntered.promise;
+        // Registry retirement must revoke its cached publication without closing the survivor.
+        await expect(
+          prepareModelRuntimeSnapshot(input("closing")).then(() => undefined),
+        ).rejects.toThrow();
+        if (mode === "metadata borrower") {
+          expect(caches[0]?.retirement).toBeUndefined();
+          expect(getPluginMetadataSnapshotCache(refreshed.snapshot.metadataSnapshot)).toBe(
+            caches[0],
+          );
+          await refreshed[Symbol.asyncDispose]();
+        }
+        await closing;
+        if (donor) {
+          expect(donor.hasRetainedConsumers).toBe(false);
+        }
+        expect(await prepareModelRuntimeSnapshot(input("survivor"))).toBe(survivor.snapshot);
+        const presenter = survivor.snapshot.pluginRegistry?.widgetPresenters[0]?.presenter;
+        if (mode === "donor") {
+          assert(presenter);
+          await expect(presenter.availability({})).resolves.toMatchObject({
+            ok: true,
+            value: { available: true },
+          });
+        }
+        const admitted = await acquireAgentRunPreparedModelRuntime(input("survivor"));
+        leases.push(admitted);
+        expect(admitted.snapshot).toBe(survivor.snapshot);
+      } finally {
+        // A failing assertion still releases only this fixture's model claims before joining close.
+        for (const lease of leases) {
+          await lease[Symbol.asyncDispose]();
+        }
+        await closePreparedModelRuntimeSnapshots();
+        await closing;
+        for (const server of servers) {
+          await server.close();
+        }
+        stopRetirementProbe?.();
+        bootstrapSpy.mockRestore();
+        restoreActivePluginRegistrySnapshot(previous);
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each(["close", "startup failure"] as const)(
     "releases idle prepared donor custody before registry retirement during %s",
     async (entry) => {

@@ -13,6 +13,7 @@ import {
 } from "../gateway/server-model-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
@@ -921,18 +922,9 @@ describe("prepared model catalog worker boundary", () => {
   it("keeps native Codex logins out of prepared OpenClaw profiles", async () => {
     const codexHome = makeTempDir("openclaw-prepared-codex-");
     writeCodexAuth(codexHome, "startup");
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = codexHome;
-    let fixture: Awaited<ReturnType<typeof createStaticSnapshot>>;
-    try {
-      fixture = await createStaticSnapshot(0, {}, { hydrateExternalCliProviderIds: ["openai"] });
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-    }
+    const fixture = await withEnvAsync({ CODEX_HOME: codexHome }, () =>
+      createStaticSnapshot(0, {}, { hydrateExternalCliProviderIds: ["openai"] }),
+    );
     const preparedStore = getPreparedModelRuntimeAuthStore(fixture.snapshot);
     expect(fixture.hydratedAuthStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
     expect(preparedStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();

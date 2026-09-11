@@ -334,14 +334,24 @@ describe("prepared model runtime cancelled admission ownership", () => {
     },
   );
 
-  it("preserves immutable leased data and allows a fresh standalone activation after close", async () => {
+  it("preserves immutable leased data while close drains and allows a fresh standalone activation", async ({
+    signal,
+  }) => {
     const input = { config: {}, agentDir: state.agentDir("direct") };
-    const previous = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+    const options = { retainIdleRunOwner: true, abortSignal: signal };
+    const previous = await acquireAgentRunPreparedModelRuntime(input, options);
+    let closed = false;
+    const closing = drainGlobalSingletonLifecycleState("close").then(() => {
+      closed = true;
+    });
     try {
-      await drainGlobalSingletonLifecycleState("close");
+      await nextTurn(undefined, { signal });
+      expect(closed).toBe(false);
       expect(previous.snapshot.isCurrent()).toBe(false);
       expect(previous.snapshot.createStores()).toBeDefined();
-      const next = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+      await previous[Symbol.asyncDispose]();
+      await closing;
+      const next = await acquireAgentRunPreparedModelRuntime(input, options);
       try {
         expect(next.snapshot).not.toBe(previous.snapshot);
         await previous[Symbol.asyncDispose]();
@@ -352,6 +362,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
       }
     } finally {
       await previous[Symbol.asyncDispose]();
+      await closing;
     }
   });
 

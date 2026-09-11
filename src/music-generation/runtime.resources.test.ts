@@ -365,33 +365,26 @@ describe("music generation registration resources", () => {
             (error: unknown) => ({ value: undefined, error }),
           );
           try {
-            if (ownership === "managed-getter") {
-              fixture.resume.resolve();
-              const outcome = await settled;
-              expect(projectionRelease).toBeDefined();
-              expect(outcome.value).toBeUndefined();
-              expect(outcome.error).toMatchObject({
-                message: expect.stringContaining(
-                  "Plugin native-music-owner was reloaded or disabled",
-                ),
-              });
-              await projectionRelease;
-              expect(fixture.connections).toHaveLength(1);
-              expect(fixture.connections[0]!.reads).toEqual([42]);
-              expect(fixture.connections[0]!.database.isOpen).toBe(false);
-              expect(fixture.connections[0]!.disposals).toBe(1);
-              return;
-            }
             await waitForProviderStart(fixture.started.promise, settled);
             expect(fixture.connections).toHaveLength(1);
+            if (ownership === "managed-getter") {
+              expect(projectionRelease).toBeDefined();
+              await projectionRelease;
+            }
             await inspection?.release();
             expect(fixture.connections[0]!.database.isOpen).toBe(true);
+            expect(fixture.connections[0]!.disposals).toBe(0);
+            expect(fixture.connections[0]!.reads).toEqual([42]);
             fixture.resume.resolve();
             const outcome = await settled;
             expect(outcome.error).toBeUndefined();
             expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
+            expect(outcome.value?.provider).toBe("native-music-alias");
             expect(fixture.connections[0]!.database.isOpen).toBe(ownership === "raw");
             expect(fixture.connections[0]!.disposals).toBe(ownership === "raw" ? 0 : 1);
+            expect(fixture.connections[0]!.reads).toEqual(
+              ownership === "raw" ? [42, 42] : [42, 42, 42],
+            );
           } finally {
             fixture.resume.resolve();
             await settled;

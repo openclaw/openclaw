@@ -13,11 +13,6 @@ import {
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
-vi.mock("../media-understanding/image-runtime.js", () => ({
-  describeImageWithModel: async () => ({ text: "model image" }),
-  describeImagesWithModel: async () => ({ text: "model images" }),
-}));
-
 const registries: ReturnType<typeof createPluginRegistry>["registry"][] = [];
 
 afterEach(async () => {
@@ -268,22 +263,22 @@ describe("plugin registration diagnostics", () => {
         agentDir: "/virtual/agent",
         cfg: {},
       };
-      await expect(provider.describeImage?.({ ...request, ...image })).resolves.toEqual({
-        text:
-          single === "absent"
-            ? "inherited image"
-            : single === "custom"
-              ? "custom image"
-              : "model image",
-      });
-      await expect(provider.describeImages?.({ ...request, images: [image] })).resolves.toEqual({
-        text:
-          multiple === "absent"
-            ? "inherited images"
-            : multiple === "custom"
-              ? "custom images"
-              : "model images",
-      });
+      if (single === "undefined") {
+        expect(provider.describeImage).toBeUndefined();
+      } else {
+        const describeImage = expectDefined(provider.describeImage, "registered image hook");
+        await expect(describeImage({ ...request, ...image })).resolves.toEqual({
+          text: single === "absent" ? "inherited image" : "custom image",
+        });
+      }
+      if (multiple === "undefined") {
+        expect(provider.describeImages).toBeUndefined();
+      } else {
+        const describeImages = expectDefined(provider.describeImages, "registered images hook");
+        await expect(describeImages({ ...request, images: [image] })).resolves.toEqual({
+          text: multiple === "absent" ? "inherited images" : "custom images",
+        });
+      }
     },
   );
 

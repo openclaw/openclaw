@@ -66,21 +66,39 @@ const cacheRetainers = resolveGlobalSingleton(
       PluginCache,
       {
         references: Set<object>;
+        controller: AbortController;
         settled: ReturnType<typeof createDeferredCore<void>>;
         retirement?: Promise<PluginHostCleanupResult>;
       }
     >(),
 );
 
+function getPluginCacheRetainers(cache: PluginCache) {
+  let retained = cacheRetainers.get(cache);
+  if (!retained) {
+    retained = {
+      references: new Set(),
+      controller: new AbortController(),
+      settled: createDeferredCore(),
+    };
+    cacheRetainers.set(cache, retained);
+  }
+  return retained;
+}
+
+/** Cache retirement revokes cached publications before waiting for admitted borrowers. */
+export function getPluginCacheRetirementSignal(cache: PluginCache): AbortSignal {
+  return getPluginCacheRetainers(cache).controller.signal;
+}
+
 /** Admitted generations keep their exact prepared facts through publication replacement. */
 export function retainPluginCache(cache: PluginCache): () => void {
-  if (cache.retirement || cacheRetainers.get(cache)?.retirement) {
+  const retained = getPluginCacheRetainers(cache);
+  if (cache.retirement || retained.retirement) {
     throw new Error("Plugin inventory has retired; begin a new plugin operation.");
   }
-  let retained = cacheRetainers.get(cache);
-  if (!retained || retained.references.size === 0) {
-    retained = { references: new Set(), settled: createDeferredCore() };
-    cacheRetainers.set(cache, retained);
+  if (retained.references.size === 0) {
+    retained.settled = createDeferredCore();
   }
   const reference = {};
   retained.references.add(reference);
@@ -212,16 +230,20 @@ export function retirePluginCache(
   cache: PluginCache,
   beforeRetire?: () => void,
 ): Promise<PluginHostCleanupResult> {
-  const retained = cacheRetainers.get(cache);
-  if (retained?.retirement) {
+  const retained = getPluginCacheRetainers(cache);
+  if (retained.retirement) {
     return retained.retirement;
   }
-  if (retained?.references.size) {
-    return (retained.retirement = retained.settled.promise.then(() =>
-      beginPluginCacheRetirement(cache, beforeRetire),
-    ));
-  }
-  return beginPluginCacheRetirement(cache, beforeRetire);
+  const completion = createDeferredCore<PluginHostCleanupResult>();
+  retained.retirement = completion.promise;
+  // Abort listeners may reenter retirement or release the final generation immediately.
+  retained.controller.abort();
+  const begin = () => beginPluginCacheRetirement(cache, beforeRetire);
+  void (retained.references.size ? retained.settled.promise.then(begin) : begin()).then(
+    completion.resolve,
+    completion.reject,
+  );
+  return completion.promise;
 }
 
 function beginPluginCacheRetirement(

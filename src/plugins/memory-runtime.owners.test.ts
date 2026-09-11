@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -18,11 +17,7 @@ import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-s
 import type { PluginRuntime } from "./runtime/types.js";
 
 const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-  resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "memory-core",
-    artifactBasename: "runtime-api.js",
-  }),
+  "../../extensions/memory-core/runtime-api.js",
 );
 
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {

@@ -415,7 +415,11 @@ export function capturePluginGenerationArtifact(
         ) {
           return undefined;
         }
-        const resolved = module ? resolve(local) : undefined;
+        // Whole-package captures own local resolution even before a module's first load;
+        // the original TypeScript peer may already be edited or removed.
+        const moduleRequest =
+          owner.state === "body" ? path.join(destination, path.relative(root, local)) : local;
+        const resolved = module ? resolve(moduleRequest) : undefined;
         if (module && !resolved) {
           return undefined;
         }
