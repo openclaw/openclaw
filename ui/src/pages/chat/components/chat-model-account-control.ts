@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -204,7 +205,9 @@ export function renderChatModelAccountControl(params: {
           role="listbox"
           aria-label=${t("chat.modelAccounts.section")}
         >
-          ${options.map(
+          ${repeat(
+            options,
+            (option) => option.value,
             (option, index) => html`
               <button
                 class="chat-controls__inline-select-option chat-controls__model-option"

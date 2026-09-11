@@ -1,8 +1,12 @@
 // Register service command tests cover daemon service subcommand registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isVerbose, setVerbose } from "../../globals.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
+import { ensureConfigReady } from "../program/config-guard.js";
+import { registerPreActionHooks } from "../program/preaction.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 import { registerDaemonCli } from "./register.js";
 
@@ -12,6 +16,8 @@ const runDaemonStart = vi.fn(async (_opts: unknown) => {});
 const runDaemonStatus = vi.fn(async (_opts: unknown) => {});
 const runDaemonStop = vi.fn(async (_opts: unknown) => {});
 const runDaemonUninstall = vi.fn(async (_opts: unknown) => {});
+
+vi.mock("../program/config-guard.js", () => ({ ensureConfigReady: vi.fn(async () => {}) }));
 
 const RESTART_ROUTE_ENV_KEYS = [
   "OPENCLAW_SERVICE_MARKER",
@@ -83,6 +89,7 @@ describe("addGatewayServiceCommands", () => {
     runDaemonStatus.mockClear();
     runDaemonStop.mockClear();
     runDaemonUninstall.mockClear();
+    vi.mocked(ensureConfigReady).mockClear();
   });
 
   afterEach(() => {
@@ -90,16 +97,38 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["install", "restart", "stop"])(
-    "probes %s update custody without invoking the action",
-    async (action) => {
+  it.each(
+    ["gateway", "daemon"].flatMap((parent) =>
+      ["install", "restart", "stop"].map((action) => ({ parent, action })),
+    ),
+  )(
+    "probes $parent $action update custody without startup mutation or invoking the action",
+    async ({ parent, action }) => {
+      const program = new Command().name("openclaw").enablePositionalOptions();
+      addGatewayServiceCommands(program.command(parent));
+      registerPreActionHooks(program, "9.9.9-test");
+      const previousArgv = process.argv;
+      const previousTitle = process.title;
+      const previousVerbose = isVerbose();
+      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+      process.argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
       const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      await createGatewayParentLikeCommand().parseAsync([action, "--update-executor", "check"], {
-        from: "user",
-      });
-      expect(output).toHaveBeenCalledWith(
+      try {
+        await withConsoleLogsRoutedToStderrForJson(
+          process.argv,
+          () => program.parseAsync(process.argv),
+          { restoreChanges: true },
+        );
+      } finally {
+        process.argv = previousArgv;
+        process.title = previousTitle;
+        setVerbose(previousVerbose);
+        startupEnv.restore();
+      }
+      expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toBe(
         JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
       );
+      expect(ensureConfigReady).not.toHaveBeenCalled();
       expect(runDaemonInstall).not.toHaveBeenCalled();
       expect(runDaemonRestart).not.toHaveBeenCalled();
       expect(runDaemonStop).not.toHaveBeenCalled();

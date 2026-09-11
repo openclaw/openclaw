@@ -59,6 +59,14 @@ its matching build; do not lower version markers or drop the cold archive
 table. Restoring cold events alone does not make the newer schema a supported
 downgrade.
 
+After an interrupted update, the agent database maintenance lease can remain
+valid for up to 60 seconds. If Doctor reports a maintenance lease timeout,
+keep writers stopped, allow that lease to expire, then run
+[`openclaw update repair`](/cli/update/repair-and-recovery#update-repair)
+from the compatible installation. The package may already have been replaced
+even when the schema transaction rolled back. Do not delete lease records or
+change schema markers to bypass recovery.
+
 See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for retention, missing-file recovery, and physical space reclamation, and
 [cold transcript backups](/install/backups#cold-transcript-backups) for portable

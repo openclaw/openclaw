@@ -153,7 +153,11 @@ empty transcript. Restore the matching file from a backup, or restore a
 complete supported database backup; a checksum cannot reconstruct deleted
 bytes. Keep independent backups before enabling extraction.
 
-Supported OpenClaw full archives, SQLite snapshots, and Git backups embed
+An update that does not need transcript contents can succeed while an archive
+is missing. It preserves the cold reference; updating the package does not
+recover the missing history.
+
+Supported backup commands for full archives, SQLite snapshots, and Git backups embed
 verified cold payloads in their private database copies. Their restored
 databases are self-contained and do not require the original archive directory.
 With cold storage enabled, background maintenance moves those embedded
