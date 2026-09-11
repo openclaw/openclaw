@@ -3019,7 +3019,7 @@ describe("talk.client.toolCall handler", () => {
       respond: vi.fn(),
       context: { getRuntimeConfig: () => ({}) },
     });
-    const copiedClient = expectDefined(forwardedClient);
+    const copiedClient = expectDefined(forwardedClient, "Talk consult must dispatch its client");
     expect(copiedClient).not.toBe(client);
     const ctx = resolveChatSendCallerContext(copiedClient);
     const authorize = () =>
