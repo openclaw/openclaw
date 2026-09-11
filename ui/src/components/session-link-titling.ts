@@ -242,7 +242,13 @@ export class SessionLinkTitler {
       return;
     }
     anchor.classList.add("markdown-session-link--titled");
-    anchor.textContent = title;
+    // Keep a producer's label node so Lit can still update its text binding.
+    const label =
+      anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??
+      document.createElement("span");
+    label.className = "session-label";
+    label.textContent = title;
+    anchor.replaceChildren(label);
     anchor.title = target.sessionKey;
   }
 }

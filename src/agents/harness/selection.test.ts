@@ -591,7 +591,7 @@ describe("runAgentHarnessAttempt", () => {
         storePath: path.join(root, "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...target,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -649,7 +649,9 @@ describe("runAgentHarnessAttempt", () => {
       expect(JSON.stringify(await loadTranscriptEvents(target))).not.toContain(
         "ISOLATED_OUTCOME_731",
       );
-      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" })).toBeUndefined();
+      expect(
+        await claimHeartbeatOutcomeForRun({ ...target, runId: "later-user-run" }),
+      ).toBeUndefined();
     },
   );
 
@@ -665,7 +667,7 @@ describe("runAgentHarnessAttempt", () => {
         storePath: path.join(root, "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      persistHeartbeatOutcome({
+      await persistHeartbeatOutcome({
         ...target,
         runSessionKey: "agent:main:main:heartbeat",
         occurredAt: 1,
@@ -685,7 +687,7 @@ describe("runAgentHarnessAttempt", () => {
         await runAgentHarnessAttempt(params);
         expect(agentRunAttempt.mock.calls.at(-1)?.[0].currentInboundContext).toBeUndefined();
       }
-      expect(claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" })?.summary).toBe(
+      expect((await claimHeartbeatOutcomeForRun({ ...target, runId: "next-user" }))?.summary).toBe(
         "Retained outcome",
       );
     },

@@ -583,13 +583,15 @@ suite.define(() => {
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
-        await page.getByRole("status").filter({ hasText: "Disabled Workboard." }).waitFor();
-        expect(
-          await page
-            .locator(".plugins-row-message")
-            .filter({ hasText: "Disabled Workboard." })
-            .count(),
-        ).toBe(1);
+        await expect
+          .poll(() =>
+            page
+              .getByRole("status")
+              .filter({ hasText: "Disabled Workboard." })
+              .and(page.locator(".plugins-row-message:visible"))
+              .count(),
+          )
+          .toBe(1);
 
         await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const workspace = page.getByLabel("Workspace label", { exact: true });

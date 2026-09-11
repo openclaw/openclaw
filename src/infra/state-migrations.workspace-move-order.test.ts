@@ -74,7 +74,7 @@ describe("Doctor workspace move ordering", () => {
       expect(fs.existsSync(carriedSource)).toBe(false);
       expect(fs.existsSync(`${carriedSource}.doctor-importing`)).toBe(false);
       const identity = resolveWorkspaceStateIdentity(moved);
-      expect(readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
         identity,
         setup: milestones,
       });

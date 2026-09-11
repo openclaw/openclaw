@@ -537,11 +537,11 @@ export async function runAgentHarnessAttempt(
                       : input;
                   },
               (prepared) =>
-                pluginAttempt.runWithHostScope(() => {
+                pluginAttempt.runWithHostScope(async () => {
                   if (prepared.trigger !== "user" || !prepared.sessionKey) {
                     return runAgentHarnessLifecycleAttempt(harness, prepared);
                   }
-                  const note = claimHeartbeatContextForUserRun({
+                  const note = await claimHeartbeatContextForUserRun({
                     ...prepared,
                     agentId: resolveSessionAgentIds(prepared).sessionAgentId,
                     storePath: prepared.sessionTarget?.storePath,

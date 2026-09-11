@@ -9,6 +9,8 @@
     "../../src/logging/**/*.test.ts",
     "../../src/logging/**/*.test.tsx",
     "../../src/shared/**/*.test.ts",
-    "../../src/shared/**/*.test.tsx"
+    "../../src/shared/**/*.test.tsx",
+    "../../src/infra/update-managed-service-handoff-database.test.ts",
+    "../../src/infra/package-update-activation-journal.test.ts"
   ]
 }

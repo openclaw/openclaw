@@ -25,10 +25,15 @@ function loadWithCategories(categories?: unknown) {
 }
 
 describe("plugin manifest categories", () => {
-  it("preserves one to three unique categories in declaration order", () => {
-    expect(loadWithCategories(["web", "tools", "runtime"])).toMatchObject({
+  it.each([
+    ["agent-runtimes"],
+    ["documents-files", "context", "research"],
+    ["scheduling", "productivity", "inbox-collaboration"],
+    ["tools", "runtime", "gateway"],
+  ])("preserves ordered current and legacy declarations: %j", (...categories) => {
+    expect(loadWithCategories(categories)).toMatchObject({
       ok: true,
-      manifest: { categories: ["web", "tools", "runtime"] },
+      manifest: { categories },
     });
   });
 

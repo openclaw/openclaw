@@ -4,6 +4,7 @@
  * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
  */
 import fs from "node:fs";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
@@ -14,7 +15,7 @@ import type {
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
-import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
+import { SandboxFsPathGuard, type PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
@@ -23,6 +24,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
+import { normalizeContainerPathCore } from "./path-utils.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -32,6 +34,14 @@ type RunCommandOptions = {
 };
 
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
+
+const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
 
 /** Create the filesystem bridge for local Docker-style mounted sandboxes. */
 export function createSandboxFsBridge(params: {
@@ -66,6 +76,20 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       relativePath: target.relativePath,
       containerPath: target.containerPath,
     };
+  }
+
+  async resolvePinnedMutationTarget(
+    params: Parameters<NonNullable<SandboxFsBridge["resolvePinnedMutationTarget"]>>[0],
+  ): Promise<{ policyPath: string; pinnedPath: string }> {
+    const target = this.resolveResolvedPath(params);
+    // The container namespace is both the policy namespace and the runtime
+    // namespace for mounted sandboxes, so the two views agree here.
+    const canonicalPath = await this.pathGuard.resolveCanonicalMutationTarget(
+      target,
+      PINNED_MUTATION_ACTION_LABELS[params.action],
+      { directory: params.action === "mkdir" },
+    );
+    return { policyPath: canonicalPath, pinnedPath: canonicalPath };
   }
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
@@ -112,7 +136,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         sourceCheck,
         destinationCheck,
         source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
-        destination: await this.pathGuard.resolveAnchoredPinnedEntry(destination, "copy files"),
+        destination: await this.resolveMutationPin(destination, params.pinnedPath, "copy files"),
         mkdir: params.mkdir !== false,
       }),
       signal: params.signal,
@@ -130,8 +154,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const pinnedWriteTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+    const pinnedWriteTarget = await this.resolveMutationPin(
       target,
+      params.pinnedPath,
       "write files",
     );
     await this.runCheckedCommand({
@@ -159,8 +184,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const pinnedCreateTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+    const pinnedCreateTarget = await this.resolveMutationPin(
       target,
+      params.pinnedPath,
       "create files",
     );
     const result = await this.runCheckedCommand({
@@ -185,7 +211,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return "created";
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    pinnedPath?: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
     const mkdirCheck = {
@@ -200,7 +231,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       ...buildPinnedMutationPlan({
         kind: "mkdirp",
         check: mkdirCheck,
-        pinned: this.pathGuard.resolvePinnedDirectoryEntry(target, "create directories"),
+        pinned: this.pathGuard.resolvePinnedDirectoryEntry(
+          params.pinnedPath === undefined
+            ? target
+            : this.authorizedPinnedTarget(target, params.pinnedPath, "create directories", {
+                directory: true,
+              }),
+          "create directories",
+        ),
       }),
       signal: params.signal,
     });
@@ -221,7 +259,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       ...buildPinnedMutationPlan({
         kind: "remove",
         check: removeCheck,
-        pinned: this.pathGuard.resolvePinnedEntry(target, "remove files"),
+        pinned: this.pathGuard.resolvePinnedEntry(
+          params.pinnedPath === undefined
+            ? target
+            : this.authorizedPinnedTarget(target, params.pinnedPath, "remove files"),
+          "remove files",
+        ),
         recursive: params.recursive,
         force: params.force,
       }),
@@ -377,6 +420,48 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       defaultContainerRoot: this.sandbox.containerWorkdir,
       mounts: this.mounts,
     });
+  }
+
+  /**
+   * Pins a mutation for a destination the caller already authorized via
+   * resolvePinnedMutationTarget. The canonical path is pinned lexically so no
+   * sandbox-writable path component is resolved again after authorization;
+   * the no-follow pinned walk then fails closed on any post-authorization
+   * swap instead of redirecting the mutation.
+   */
+  private async resolveMutationPin(
+    target: SandboxResolvedFsPath,
+    pinnedPath: string | undefined,
+    action: string,
+  ): Promise<PinnedSandboxEntry> {
+    if (pinnedPath === undefined) {
+      return await this.pathGuard.resolveAnchoredPinnedEntry(target, action);
+    }
+    return this.pathGuard.resolvePinnedEntry(
+      this.authorizedPinnedTarget(target, pinnedPath, action),
+      action,
+    );
+  }
+
+  private authorizedPinnedTarget(
+    target: SandboxResolvedFsPath,
+    pinnedPath: string,
+    action: string,
+    options?: { directory?: boolean },
+  ): SandboxResolvedFsPath {
+    const canonicalPath = normalizeContainerPathCore(pinnedPath);
+    // File-backed pins must preserve the requested basename so the mutation
+    // lands on the authorized entry. Directory pins authorize the full
+    // directory, which an existing alias may rename.
+    if (
+      !options?.directory &&
+      path.posix.basename(canonicalPath) !== path.posix.basename(target.containerPath)
+    ) {
+      throw new Error(
+        `Pinned sandbox destination does not match the requested path; cannot ${action}: ${target.containerPath}`,
+      );
+    }
+    return { ...target, containerPath: canonicalPath };
   }
 }
 

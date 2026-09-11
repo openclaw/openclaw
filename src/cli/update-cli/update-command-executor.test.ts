@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
@@ -18,6 +19,7 @@ import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import {
+  captureUpdateCommandExecutorAuthority,
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
@@ -53,6 +55,78 @@ function replaceOwner() {
 }
 
 describe("live update executor", () => {
+  it("recovery acquires a fresh owner without reactivating the original fence", async () => {
+    const store = createManagedHandoffLeaseStore();
+    const runId = randomUUID();
+    const original = await withUpdateCommandExecutor(runId, async (executor) => {
+      const fence = await executor.enter(root);
+      const current = store.read(root);
+      assert(current.kind === "current", "Original executor was not acquired");
+      return {
+        fence,
+        lease: current.lease,
+        authority: captureUpdateCommandExecutorAuthority(fence),
+      };
+    });
+    expect(Object.isFrozen(original.authority)).toBe(true);
+    expect(original.authority.owner).toBe(original.lease.owner);
+    expect(() => captureUpdateCommandExecutorAuthority(original.fence)).toThrow(
+      "no longer current",
+    );
+    await withUpdateCommandExecutor(
+      runId,
+      async (executor) => {
+        const fence = await executor.enter(root);
+        const current = store.read(root);
+        assert(current.kind === "current", "Recovery executor was not acquired");
+        expect(current.lease.owner).not.toBe(original.lease.owner);
+        expect(current.lease.helper.pid).toBe(process.pid);
+        const recoveredAuthority = captureUpdateCommandExecutorAuthority(fence);
+        expect(recoveredAuthority).toEqual({
+          ...original.authority,
+          owner: current.lease.owner,
+        });
+        expect(recoveredAuthority.owner).not.toBe(original.authority.owner);
+        expect(Object.isFrozen(recoveredAuthority)).toBe(true);
+        expect(store.current(original.lease)).toBe(false);
+        expect(store.release(original.lease)).toBe(false);
+        expect(original.fence.assertCurrent).toThrow("no longer current");
+        fence.assertCurrent();
+      },
+      { existingAuthority: original.authority },
+    );
+    expect(store.read(root)).toEqual({ kind: "absent" });
+  });
+
+  it("recovery keeps the admitted installation key when the package root is missing", async () => {
+    const packageRoot = path.join(root, "package");
+    fs.mkdirSync(packageRoot);
+    const authority = await withUpdateCommandExecutor(randomUUID(), async (executor) =>
+      captureUpdateCommandExecutorAuthority(await executor.enter(packageRoot)),
+    );
+    fs.rmdirSync(packageRoot);
+    await withUpdateCommandExecutor(
+      randomUUID(),
+      async (executor) => {
+        const fence = await executor.enter(packageRoot);
+        fence.assertCurrent();
+        await expect(executor.enter(root)).rejects.toThrow("installation key changed");
+        const { owner: originalOwner, ...originalBinding } = authority;
+        const { owner: recoveredOwner, ...recoveredBinding } =
+          captureUpdateCommandExecutorAuthority(fence);
+        expect(recoveredBinding).toEqual(originalBinding);
+        expect(recoveredOwner).not.toBe(originalOwner);
+        expect(createManagedHandoffLeaseStore().read(packageRoot)).toMatchObject({
+          kind: "current",
+          lease: { owner: recoveredOwner },
+        });
+      },
+      { existingAuthority: authority },
+    );
+    expect(fs.existsSync(packageRoot)).toBe(false);
+    expect(createManagedHandoffLeaseStore().read(packageRoot)).toEqual({ kind: "absent" });
+  });
+
   it("retires the direct preflight owner before a supervised helper independently acquires", async () => {
     const store = createManagedHandoffLeaseStore();
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
@@ -538,10 +612,27 @@ describe("candidate executor delegation", () => {
     expect(parent.status, parent.stderr).toBe(0);
     const pid = Number(parent.stdout);
     expect(Number.isInteger(pid) && pid > 0).toBe(true);
+    const existingAuthority = {
+      ...captureManagedUpdateLeaseDatabaseIdentity(options.databasePath),
+      installKey: root,
+    };
+    const recover = () =>
+      withUpdateCommandExecutor(
+        randomUUID(),
+        async (executor) => {
+          const fence = await executor.enter(root);
+          fence.assertCurrent();
+          const recovered = createManagedHandoffLeaseStore().read(root);
+          assert(recovered.kind === "current", "Recovery executor was not acquired");
+          expect(recovered.lease.owner).not.toBe("parent");
+        },
+        { existingAuthority },
+      );
     try {
       expect(createManagedHandoffLeaseStore().acquire(root, "new", { kind: "update" }).kind).toBe(
         "busy",
       );
+      await expect(recover()).rejects.toThrow("Another update executor");
     } finally {
       process.kill(pid, "SIGTERM");
       await vi.waitFor(() => expect(isChildProcessTreeAlive({ pid })).toBe(false), {
@@ -549,6 +640,7 @@ describe("candidate executor delegation", () => {
         interval: 25,
       });
     }
+    await recover();
     const store = createManagedHandoffLeaseStore();
     const acquired = store.acquire(root, "new", { kind: "update" });
     expect(acquired.kind).toBe("acquired");

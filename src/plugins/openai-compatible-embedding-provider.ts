@@ -292,30 +292,23 @@ function malformedEmbeddingResponse(): Error {
   return new Error("openai-compatible embeddings failed: malformed JSON response");
 }
 
-async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
-  if (!response.body || response.bodyUsed) {
-    return undefined;
-  }
-  const prefix = await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
-    () => undefined,
-  );
-  if (!prefix?.text) {
-    return undefined;
-  }
-  const { text, truncated } = prefix;
-  if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
-    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
-  }
-  return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
-}
-
 async function createEmbeddingHttpError(
   response: Response,
   requestHeaders: HeadersInit,
 ): Promise<Error> {
-  const snippet = await readEmbeddingErrorBodySnippet(response);
+  const prefix =
+    response.body && !response.bodyUsed
+      ? await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+          () => undefined,
+        )
+      : undefined;
+  const safeBody = prefix?.text
+    ? redactProviderResponseErrorText(prefix.text, requestHeaders, {
+        sourceTruncated: prefix.truncated,
+      })
+    : undefined;
   const error = await createProviderHttpError(
-    new Response(snippet, {
+    new Response(safeBody, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -323,12 +316,13 @@ async function createEmbeddingHttpError(
     "openai-compatible embeddings failed",
     { requestHeaders },
   );
-  const safeSnippet = snippet
-    ? redactProviderResponseErrorText(snippet, requestHeaders, {
-        sourceTruncated: snippet.endsWith(EMBEDDING_ERROR_TRUNCATED_SUFFIX),
-      })
-    : undefined;
-  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${safeSnippet ? `: ${safeSnippet}` : ""}`;
+  let snippet = safeBody;
+  if (snippet && snippet.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
+    snippet = `${truncateUtf16Safe(snippet, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  } else if (snippet && prefix?.truncated) {
+    snippet = `${snippet}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  }
+  error.message = `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
   return error;
 }
 

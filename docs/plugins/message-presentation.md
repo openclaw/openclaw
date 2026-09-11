@@ -152,21 +152,27 @@ Button semantics:
 - `action.type: "question"` identifies one choice for a live, runtime-authored
   `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
   agents and plugins must not synthesize question IDs. Telegram, Discord,
-  Slack, and Mattermost map it to transport-private native callbacks and
-  resolve the choice through the Gateway. When the question becomes answered,
+  Slack, Mattermost, and LINE direct chats map it to transport-private native
+  callbacks and resolve the choice through the Gateway. When the question becomes answered,
   expired, or cancelled, Telegram, Discord, and Slack edit the delivered
-  message, remove its actions, and append the terminal status; Mattermost
+  message, remove its actions, and append the terminal status. Mattermost
   retires its prompt only on the click it accepts, so a question that ends
-  elsewhere keeps its buttons until one is clicked. WhatsApp, Signal, and
-  iMessage render up to four single-select choices as `1️⃣` through `4️⃣`
-  reactions. Other question shapes degrade to label text, and the user can
-  answer with a plain-text reply.
+  elsewhere keeps its buttons; a later click gets private feedback. Denied
+  Mattermost clicks also receive private feedback and leave the prompt unchanged.
+  LINE group and multi-person chats keep readable choices because their postbacks
+  do not include the sender identity needed to admit an answer. Unknown LINE
+  destinations also use text. LINE cannot edit a message it already delivered, so a
+  tap after the question ends receives a notice.
+  LINE draws at most four controls on one card, matching its two-to-four option
+  bound. WhatsApp, Signal, and iMessage render up to four single-select choices
+  as `1️⃣` through `4️⃣` reactions. Other question shapes degrade to label text,
+  and the user can answer with a plain-text reply.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping
   declared-choice controls native when it cannot target a text composer safely.
-  Telegram maps it to **Other…** and Force Reply. Discord, Slack, and
-  Mattermost keep the visible text route.
+  Telegram maps it to **Other…** and Force Reply. Discord, Slack, Mattermost,
+  and LINE keep the visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch

@@ -23,7 +23,6 @@ import {
   discoveryCategories,
   discoveryResult,
   finalDiscoveryPageItems,
-  featuredResult,
   localOnlyDiscoveryPlugin,
   matrixDiscoveryPlugin,
   secondDiscoveryPageItems,
@@ -481,11 +480,6 @@ function pluginMethodResponses() {
     },
     "plugins.catalog.browse": {
       cases: [
-        { match: { intent: "featured", pageSize: 8 }, response: featuredResult },
-        {
-          match: { intent: "trending", pageSize: 8 },
-          response: { items: discoveryResult.items.slice(0, 8) },
-        },
         {
           match: { intent: "all", cursor: "catalog-page-2", pageSize: 100 },
           response: {
