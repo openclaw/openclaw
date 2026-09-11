@@ -31,6 +31,7 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     lastError: null,
     systemInfo: null,
     systemInfoUnavailable: false,
+    systemInfoLoading: false,
     dirty: false,
     showGatewaySecret: false,
     onConnectionChange: () => undefined,
@@ -252,7 +253,7 @@ describe("connection view rendering", () => {
     expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
       "463 GB free of 926 GB",
     );
-    expect(disk.getAttribute("title")).toBe("/");
+    expect(disk.hasAttribute("title")).toBe(false);
     expect(disk.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Disk / usage");
     const archive = expectStatByLabel(container, "Disk /Volumes/Archive");
     expect(archive.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
