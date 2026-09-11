@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 export const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
+const AGENT_SCOPED_KEY_PREFIX = "agent:";
 
 export function adoptedSourceKey(hostId: string, threadId: string): string {
   return `${hostId}\0${threadId}`;
@@ -17,5 +18,21 @@ export function adoptedSessionKey(hostId: string, threadId: string): string {
 
 /** True for session keys minted by the catalog adoption flow (see adoptedSessionKey). */
 export function isClaudeAdoptedSessionKey(sessionKey: string | undefined): boolean {
-  return typeof sessionKey === "string" && sessionKey.startsWith(CLAUDE_ADOPTED_SESSION_KEY_PREFIX);
+  if (typeof sessionKey !== "string" || sessionKey.length === 0) {
+    return false;
+  }
+  // Session creation persists the minted key agent-scoped
+  // (`agent:<agentId>:<minted>`); agent ids never contain colons, so stripping
+  // one scope restores the minted shape. Bound-session enumeration returns that
+  // persisted key, and the projector must keep recognizing adopted rows while
+  // every other binding stays unprojected.
+  let minted = sessionKey;
+  if (sessionKey.startsWith(AGENT_SCOPED_KEY_PREFIX)) {
+    const separator = sessionKey.indexOf(":", AGENT_SCOPED_KEY_PREFIX.length);
+    if (separator < 0) {
+      return false;
+    }
+    minted = sessionKey.slice(separator + 1);
+  }
+  return minted.startsWith(CLAUDE_ADOPTED_SESSION_KEY_PREFIX);
 }

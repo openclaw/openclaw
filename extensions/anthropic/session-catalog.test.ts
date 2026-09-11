@@ -1018,6 +1018,20 @@ describe("Claude session catalog", () => {
         pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
       }),
     },
+    {
+      // Real adoption hands the minted key to session creation, which persists
+      // it agent-scoped (agent:<agentId>:<minted>); bound-session enumeration
+      // returns that canonical shape, so it must stay recognized here.
+      label: "canonical persisted key after session creation agent-scopes it",
+      sessionKey: (sessionId: string) =>
+        `agent:main:${adoptedSessionKey("gateway:local", sessionId)}`,
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId } },
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
+      }),
+    },
   ])(
     "links a catalog row to an existing OpenClaw session via $label",
     async ({ entry, sessionKey }) => {
