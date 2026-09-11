@@ -66,9 +66,3 @@ Phase 3 of 3 — **Landing**: Fixed pre-commit hook blocker (shim at `node_modul
 
 _Phase 1 verification report: `.planning/phases/01-fix-implementation/01-VERIFICATION.md`_
 _Phase 2 verification report: `.planning/phases/02-verification/02-VERIFICATION.md`_
-
-## Session
-
-**Last session:** 2026-09-11T07:30:00.000Z
-**Stopped at:** —
-**Resume file:** —

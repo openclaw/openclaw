@@ -395,6 +395,12 @@
       }
     },
     {
+      "files": ["src/gateway/server-lifecycle.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["**/*.{ts,tsx,mts,cts}"],
       "rules": {
         // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.
