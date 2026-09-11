@@ -1,10 +1,13 @@
 import { consume } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { icons } from "../../components/icons.ts";
+import { renderPanelEmptyState } from "../../components/panel-empty-state.ts";
 import "../../components/terminal/terminal-panel-registration.ts";
+import { t } from "../../i18n/index.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
@@ -43,6 +46,10 @@ class TerminalPage extends OpenClawLightDomElement {
   override render() {
     const context = this.context;
     const snapshot = context.gateway.snapshot;
+    const available = isTerminalAvailable(
+      snapshot,
+      context.config.current.terminalEnabled ?? false,
+    );
     const owner = context.agentSelection.state.selectedId ?? snapshot.assistantAgentId;
     const target = this.location
       ? resolveTerminalRouteLocation(this.location, context.basePath)
@@ -55,16 +62,29 @@ class TerminalPage extends OpenClawLightDomElement {
     return keyed(
       key,
       html`<openclaw-terminal-panel
-        embedded
-        fullscreen
-        .page=${true}
-        .routeTarget=${target}
-        .client=${snapshot.phase === "connected" ? snapshot.client : null}
-        .available=${isTerminalAvailable(snapshot, context.config.current.terminalEnabled ?? false)}
-        .agentId=${owner ? normalizeAgentId(owner) : null}
-        .basePath=${context.basePath}
-        .themeMode=${context.theme.resolvedMode}
-      ></openclaw-terminal-panel>`,
+          ?hidden=${!available}
+          embedded
+          fullscreen
+          .page=${true}
+          .routeTarget=${target}
+          .client=${snapshot.phase === "connected" ? snapshot.client : null}
+          .available=${available}
+          .agentId=${owner ? normalizeAgentId(owner) : null}
+          .basePath=${context.basePath}
+          .themeMode=${context.theme.resolvedMode}
+        ></openclaw-terminal-panel>
+        ${
+          available
+            ? nothing
+            : renderPanelEmptyState({
+                icon: icons.terminal,
+                heading: t("terminal.title"),
+                description: t("terminal.unavailable"),
+                action: html`<button class="btn" @click=${() => context.navigate("new-session")}>
+                  ${t("newSession.title")}
+                </button>`,
+              })
+        }`,
     );
   }
 }

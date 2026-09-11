@@ -36,6 +36,8 @@ Home can include a bounded, quoted work-context reference with your message. Tha
 
 The operator terminal is enabled by default; set `gateway.terminal.enabled: false` to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
 
+When the terminal is disabled or your connection lacks admin access, the main terminal page shows an unavailable notice and a **New session** button to return to the composer.
+
 On Linux and macOS, a Gateway running on Bun uses a Node helper for terminal
 I/O. Keep Node available on the Gateway's `PATH`; an unavailable Node executable
 produces a startup error with installation guidance.
