@@ -56,6 +56,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Protects an admitted provider wait through the retained logical-turn owner. */
+  onRetryWait?: (
+    deadlineAtMs: number,
+    signal?: AbortSignal,
+  ) => ((completed?: boolean) => void) | undefined;
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
