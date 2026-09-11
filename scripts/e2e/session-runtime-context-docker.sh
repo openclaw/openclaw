@@ -16,11 +16,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-session-runtime-context-e2e" OP
 CONTAINER_NAME="openclaw-session-runtime-context-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-session-runtime-context-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$RUN_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$RUN_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" session-runtime-context
 

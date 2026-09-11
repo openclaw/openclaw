@@ -860,9 +860,30 @@ export function createHookRunner(
         const handlerEvent = policy.isolateEventPerHandler
           ? cloneHookIsolationValue(hookName, dispatchEvent)
           : dispatchEvent;
-        const promise = Promise.resolve(handler(handlerEvent, ctx));
-        const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const invocation = hookName === "before_prompt_build" ? { active: true } : undefined;
+        const handlerContext = invocation
+          ? {
+              ...ctx,
+              hookInvocation: Object.freeze({
+                assertActive() {
+                  if (!invocation.active) {
+                    throw new Error("prompt hook invocation is no longer active");
+                  }
+                },
+              }),
+            }
+          : ctx;
+        let handlerResult: TResult | undefined;
+        try {
+          const promise = Promise.resolve(handler(handlerEvent, handlerContext));
+          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+          handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        } finally {
+          // Expiry closes this handler even while its work or a later handler continues.
+          if (invocation) {
+            invocation.active = false;
+          }
+        }
 
         policy.onHandlerResult?.({ hook, result: handlerResult });
 

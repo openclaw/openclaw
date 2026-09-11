@@ -20,6 +20,17 @@ read_when:
 
 ### Legacy ownership warnings during an update
 
+Doctor discovers historical workspace setup files from retained Workshop proposals
+and collection backups, even when the agent now uses a different workspace. It
+imports valid setup history before relocating Workshop records, preserving the
+original timestamps and an archived copy without changing workspace configuration.
+
+If an unconfigured historical workspace has missing or unreadable setup state,
+Doctor preserves its files and reports a warning. Obsolete proposals become stale;
+proposals with unfinished apply recovery and ambiguous collection backups remain
+available for manual review. Configured workspace failures and failures after an
+import has begun still block repair.
+
 Doctor leaves legacy proposal metadata and collection backups in place when
 their workspace has no configured owner or maps to more than one agent. The
 warning names the retained path and candidate agents. These ownership warnings
@@ -28,8 +39,9 @@ do not stop the other migrations or later Doctor repairs.
 Review the retained proposal or backup manifest alongside the configured agent
 workspaces. Correct a workspace mapping only when it identifies the actual
 owner; do not assign an arbitrary agent or delete the artifacts to clear the
-warning. Rerun Doctor after resolving ownership. Invalid metadata, failed writes,
-and unfinished recovery remain migration failures.
+warning. Rerun Doctor after resolving ownership. Outside the historical-workspace
+deferrals above, invalid metadata, failed writes, and unfinished recovery remain
+migration failures.
 
 A retarget count describes proposals changed during that pass. Any remaining
 external targets can belong to different proposals whose migration is blocked.

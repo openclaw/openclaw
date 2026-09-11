@@ -4,7 +4,6 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
@@ -23,6 +22,7 @@ export class SidebarCatalogMenuController {
       beforeOpen: () => void;
       requestUpdate: () => void;
       terminalAvailable: () => boolean;
+      openTerminal: (key: CatalogSessionKey, agentId: string) => void;
       beginMutation: () => SidebarSessionMutationScope | null;
       isMutationCurrent: (scope: SidebarSessionMutationScope) => boolean;
       archive: (
@@ -90,7 +90,7 @@ export class SidebarCatalogMenuController {
   ): void {
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
-        openCatalogSessionInTerminal(menu.key, menu.agentId);
+        this.hooks.openTerminal(menu.key, menu.agentId);
       }
       return;
     }

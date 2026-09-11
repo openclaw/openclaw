@@ -21,11 +21,7 @@ function catalogReference(value: unknown): TerminalPanelCatalogReference | null 
   return nonEmptyString(value.catalogId) &&
     nonEmptyString(value.hostId) &&
     nonEmptyString(value.threadId)
-    ? {
-        catalogId: value.catalogId,
-        hostId: value.hostId,
-        threadId: value.threadId,
-      }
+    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
     : null;
 }
 
@@ -49,6 +45,8 @@ function terminalAction(value: unknown): TerminalPanelAction | null {
   if (value.kind === "restore" || value.kind === "open") {
     return { kind: value.kind, agentId };
   }
+  // v2026.9.4 persisted pending catalog requests. Drain those once through the
+  // existing dock owner; new catalog requests use non-persistent page queues.
   if (value.kind === "catalog") {
     const catalog = catalogReference(value.catalog);
     return catalog ? { kind: "catalog", agentId, catalog } : null;
@@ -56,45 +54,33 @@ function terminalAction(value: unknown): TerminalPanelAction | null {
   return null;
 }
 
-export function loadPersistedTerminalSessionIds(): string[] {
+function loadPersistedArray(key: string): unknown[] {
   try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_SESSIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
+    const raw = globalThis.sessionStorage?.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-export function persistTerminalSessionIds(ids: readonly string[]): void {
+export function loadPersistedTerminalSessionIds(scope = ""): string[] {
+  return loadPersistedArray(TERMINAL_SESSIONS_KEY + scope).filter(nonEmptyString);
+}
+
+export function persistTerminalSessionIds(ids: readonly string[], scope = ""): void {
   try {
-    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(ids));
+    globalThis.sessionStorage?.setItem(TERMINAL_SESSIONS_KEY + scope, JSON.stringify(ids));
   } catch {
     // Storage may be unavailable (private mode); reattach just won't work.
   }
 }
 
 export function loadPersistedTerminalActions(): TerminalPanelAction[] {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_ACTIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.flatMap((value) => {
-          const action = terminalAction(value);
-          return action ? [action] : [];
-        })
-      : [];
-  } catch {
-    return [];
-  }
+  return loadPersistedArray(TERMINAL_ACTIONS_KEY).flatMap((value) => {
+    const action = terminalAction(value);
+    return action ? [action] : [];
+  });
 }
 
 export function persistTerminalActions(actions: readonly TerminalPanelAction[]): void {

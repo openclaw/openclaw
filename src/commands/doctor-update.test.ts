@@ -560,6 +560,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       if (safe) {
         expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).toHaveBeenCalledWith({
           recovery: { serviceRestartSafe: true, version: "2026.4.24", buildId: "synthetic-build" },
+          updateRun: await mocks.admitUpdateCommandRun.mock.results[0]!.value,
           preManagedServiceStop: expect.objectContaining({ stopped: true }),
           jsonMode: false,
           timeoutMs: 1_200_000,

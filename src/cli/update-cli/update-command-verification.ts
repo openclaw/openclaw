@@ -1,6 +1,9 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -19,9 +22,50 @@ import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
+  gatewayServiceCommandUsesRoot,
+  resolveUpdatedGatewayRestartPort,
+} from "./update-command-service-plan.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
 } from "./update-command-service-recovery.js";
+
+export async function verifyPreviousGatewayForUpdate(params: {
+  root: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const { config, env } = params;
+  const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
+  const [expectedVersion, expectedBuildId] = await Promise.all([
+    readPackageVersion(params.root),
+    readBuiltGatewayBuildId(params.root),
+  ]);
+  const [health, readiness, servesPreviousPackage] = await Promise.all([
+    inspectGatewayRestart({
+      service: resolveGatewayService(),
+      env,
+      port,
+      expectedVersion,
+      expectedBuildId: expectedBuildId ?? undefined,
+    }),
+    waitForGatewayHttpReadiness({
+      config,
+      port,
+      deadlineAt: Date.now() + 3_000,
+      attempts: 1,
+      delayMs: 0,
+    }),
+    gatewayServiceCommandUsesRoot({ root: params.root, env }),
+  ]);
+  return Boolean(
+    expectedVersion &&
+    servesPreviousPackage === true &&
+    health.healthy &&
+    health.runtime.status === "running" &&
+    readiness.readyz === 200,
+  );
+}
 
 export function recordUpdateGatewayHealth(
   run: UpdateCommandOptions["run"],

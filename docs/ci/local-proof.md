@@ -132,7 +132,7 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
 The wrapper uses the bundled Crabbox plugin's binary manager. OpenClaw supports
-the current Crabbox CLI contract, starting at 0.55.0. If the selected binary is
+the current Crabbox CLI contract, starting at 0.56.0. If the selected binary is
 missing or older, the plugin installs a verified current release in its own
 managed directory before provider discovery or lease work. It leaves the original
 binary untouched. Provider readiness and broker authentication still determine

@@ -247,7 +247,7 @@ async function collectMemoryFilesFromDir(
   if (operationalFailure) {
     throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
-  files.push(...scan.entries.map((entry) => entry.path));
+  files.push(...scan.entries.map((entry) => entry.path).toSorted());
 }
 
 export async function listMemoryFiles(

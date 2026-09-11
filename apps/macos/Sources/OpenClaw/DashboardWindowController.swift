@@ -139,6 +139,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var hasLiveContent = false
     private var nativeCommandsReady = false
     private(set) var isShowingFailurePage = false
+    private(set) var signedOut: DashboardFailurePage.SignedOut?
+    private(set) var signedOutNeedsRefresh = false
+    private var reconnectTask: (id: UUID, task: Task<Void, Never>)?
     private var navigationGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private var pendingLoad: Task<Void, Never>?
@@ -385,6 +388,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
+        if self.signedOut != nil {
+            self.signedOutNeedsRefresh = true
+            return
+        }
         self.nativeBrowser.dispose()
         showFailure(
             title: error == .expired ? "Gateway sign-in expired" : "Gateway reconnecting",
@@ -452,6 +459,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard let window else { return nil }
         // Route changes replace the privileged document, not its native shell;
         // detaching first transfers AppKit ownership without a close/focus cycle.
+        self.reconnectTask?.task.cancel()
+        self.reconnectTask = nil
         self.retirePendingLoad()
         self.deviceSettingsMessageHandler.stopObserving()
         self.webView.stopLoading()
@@ -950,15 +959,61 @@ extension DashboardWindowController {
         present: Bool = true,
         preservingPendingCommands: Bool = false)
     {
-        self.prepareForFailure(preservingPendingCommands: preservingPendingCommands)
-        self.currentURL = URL(string: "about:blank")!
+        self.signedOut = nil
+        self.showFailureHTML(
+            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
+            present: present,
+            preservingPendingCommands: preservingPendingCommands)
+    }
+
+    func showSignedOut(_ page: DashboardFailurePage.SignedOut, present: Bool, autoStart: Bool) {
+        self.signedOut = page
+        self.signedOutNeedsRefresh = false
+        self.showFailureHTML(DashboardFailurePage.html(signedOut: page), present: present)
+        if autoStart { self.reconnectGateway(page.target) }
+    }
+
+    func reconnectGateway(_ target: DashboardGatewayTarget) {
+        guard let page = self.signedOut, page.target == target,
+              case let .profile(id) = target, self.reconnectTask == nil else { return }
+        self.showFailureHTML(DashboardFailurePage.html(signedOut: page, signingIn: true), present: false)
+        let attempt = UUID()
+        let task = Task { @MainActor [weak self] in
+            do {
+                try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id)
+                // The profile-store notification replaces this document in its existing window.
+            } catch {
+                guard let self, self.reconnectTask?.id == attempt, self.isWindowOpen else { return }
+                self.reconnectTask = nil
+                self.signedOut = page
+                self.showFailureHTML(
+                    DashboardFailurePage.html(signedOut: page, error: error.localizedDescription), present: false)
+            }
+        }
+        self.reconnectTask = (attempt, task)
+    }
+
+    func cancelGatewayReconnect(_ target: DashboardGatewayTarget) {
+        guard let page = self.signedOut, page.target == target, let reconnectTask else { return }
+        self.reconnectTask = nil
+        reconnectTask.task.cancel()
+        self.showFailureHTML(
+            DashboardFailurePage.html(signedOut: page, error: String(localized: "Sign-in cancelled. Try again.")),
+            present: false)
+    }
+
+    private func showFailureHTML(
+        _ html: String, present: Bool, preservingPendingCommands: Bool = false)
+    {
+        let pendingNavigation = self.signedOut == nil ? nil : self.pendingNativeNavigation
+        self.prepareForFailure(preservingPendingCommands: preservingPendingCommands || self.signedOut != nil)
+        self.pendingNativeNavigation = pendingNavigation
+        if self.signedOut == nil { self.currentURL = URL(string: "about:blank")! }
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         self.setUpdateBridgeEnabled(false)
         self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
         self.webView.stopLoading()
-        self.webView.loadHTMLString(
-            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
-            baseURL: nil)
+        self.webView.loadHTMLString(html, baseURL: nil)
         if present {
             self.show()
         }
@@ -1117,6 +1172,8 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.reconnectTask?.task.cancel()
+        self.reconnectTask = nil
         self.retirePendingLoad()
         (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         self.deviceSettingsMessageHandler.stopObserving()

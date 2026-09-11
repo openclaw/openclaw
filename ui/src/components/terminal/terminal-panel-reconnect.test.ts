@@ -37,6 +37,54 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await i18n.setLocale("en");
   });
 
+  it("finishes a catalog request persisted by v2026.9.4 exactly once", async () => {
+    const catalog = { catalogId: "codex", hostId: "gateway:local", threadId: "pending-upgrade" };
+    sessionStorage.setItem(
+      "openclaw.terminal.actions.v1",
+      JSON.stringify([{ kind: "catalog", agentId: "ops", catalog }]),
+    );
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return terminalOpenResult("upgraded-session") as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const mountPanel = () => {
+      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      panel.client = client;
+      panel.available = true;
+      document.body.append(panel);
+      return panel;
+    };
+    const panel = mountPanel();
+    await waitForFast(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.open",
+        params: { agentId: "ops", cols: 100, rows: 30, catalog },
+      });
+      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();
+    });
+
+    panel.remove();
+    mountPanel();
+    await waitForFast(() => {
+      expect(requests.filter(({ method }) => method === "terminal.open")).toHaveLength(2);
+    });
+    expect(
+      requests.filter(
+        ({ params }) => typeof params === "object" && params !== null && "catalog" in params,
+      ),
+    ).toHaveLength(1);
+  });
+
   it.each(["conn", "agent:agent:main:background-task"] as const)(
     "attaches a %s session with its native title and actual owner",
     async (owner) => {
@@ -321,7 +369,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
 
-    const catalog = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" };
     const requested = new CustomEvent("openclaw:terminal-toggle", {
       detail: { open: true, terminalSessionId: "requested-terminal" },
     });
@@ -343,12 +390,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(newSession?.disabled).toBe(false);
     newSession?.click();
     newSession?.click();
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", { detail: { open: true, catalog } }),
-    );
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", { detail: { open: true, catalog } }),
-    );
     panel.agentId = "main";
 
     expect(requests).toHaveLength(0);
@@ -363,7 +404,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     releaseRefresh?.(false);
     await waitForFast(() => {
       expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(2);
-      expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
+      expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(1);
     });
     expect(
       requests.filter(
@@ -375,10 +416,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
       {
         method: "terminal.open",
         params: { agentId: "research", cols: 100, rows: 30 },
-      },
-      {
-        method: "terminal.open",
-        params: { agentId: "research", cols: 100, rows: 30, catalog },
       },
     ]);
     expect(panel.renderRoot.querySelectorAll(".tabstrip-tab__badge")).toHaveLength(1);

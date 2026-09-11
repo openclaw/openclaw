@@ -2,6 +2,7 @@
 // surface-specific registrars so route-only controls stay out of startup.
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
+import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 
 const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
 
@@ -112,6 +113,14 @@ function startDropdownLabelSync(event: Event) {
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
+  // Native NSViews also cover browser top-layer popovers. Wait for all show
+  // listeners to accept opening; retain occlusion through the hide animation.
+  queueMicrotask(() => {
+    // SAFETY: The registered wa-dropdown host exposes its boolean open property.
+    if (!event.defaultPrevented && (dropdown as HTMLElement & { open: boolean }).open) {
+      occludeNativeBrowserSurface(dropdown, "wa-after-hide");
+    }
+  });
   // Reopening must restore the menu before Web Awesome moves focus into it.
   dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.removeAttribute("inert");
   labelDropdownMenu(dropdown);

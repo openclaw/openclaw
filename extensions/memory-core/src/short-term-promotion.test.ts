@@ -3174,6 +3174,8 @@ describe("short-term promotion", () => {
           expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
 
           const secondSnippet = "Keep writing through a shared read-only directory.";
+          const lexicalCollisionPath = path.join(workspaceDir, "memory-alias.md");
+          await fs.writeFile(lexicalCollisionPath, "Do not overwrite this lexical collision.");
           await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
           await recordMemoryRecalls(
             workspaceAlias,
@@ -3191,6 +3193,9 @@ describe("short-term promotion", () => {
             });
             expect(applied.applied).toBe(1);
             expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(await fs.readFile(lexicalCollisionPath, "utf-8")).toBe(
+              "Do not overwrite this lexical collision.",
+            );
             expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
           } finally {
             await fs.chmod(sharedDir, 0o755);

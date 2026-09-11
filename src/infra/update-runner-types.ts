@@ -130,6 +130,8 @@ export type UpdateRunnerOptions = {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;
   }) => Promise<void>;
+  /** Admit the built candidate after validation, before retention or activation. */
+  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
   /** CLI-owned activation Doctor retains its config writer and requester authority. */
   runGitDoctor?: (root: string) => Promise<UpdateStepResult | null>;

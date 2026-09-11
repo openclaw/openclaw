@@ -212,6 +212,15 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
   generation: string;
 };
 
+export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Strict direct-listener and locator publication result. */
+  ready: Promise<void>;
+  /** Requires current foreground authority; direct publication may use the Gateway fallback. */
+  prepareInvocation: () => Promise<void>;
+  /** Joins accepted publication, renewal and cleanup without retiring retained children. */
+  drain: () => Promise<void>;
+};
+
 export type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
   agentId?: string;
@@ -253,11 +262,16 @@ export type NativeHookRelayBridgeRegistration = {
   stateDbPath: string;
   token: string;
   server: Server;
+  ready: Promise<void>;
+  pending: Promise<void>;
+  cancelStartup: () => void;
+  closing?: Promise<void>;
 };
 
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  pendingBridgeOperations: Set<Promise<unknown>>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;

@@ -4019,7 +4019,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not handle plugin HTTP descendants when basePath is empty", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        for (const pluginPath of ["/plugins/", "/plugins/diffs/view/abc/def"]) {
+        for (const pluginPath of ["/plugins/webhook", "/plugins/diffs/view/abc/def"]) {
           const { handled } = await runControlUiRequest({
             url: pluginPath,
             method: "GET",

@@ -367,7 +367,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           },
         } as CodexServerNotification;
         await harness.notify(childTerminal);
-        nativeHookRelayUnregisterQueue.flush();
+        await nativeHookRelayUnregisterQueue.flush();
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeUndefined();

@@ -6,6 +6,7 @@ import {
   commitMemoryContent,
   hashMemoryContent,
   MemoryWriteConflictError,
+  resolveMemoryWritePath,
 } from "./short-term-promotion-memory-write.js";
 
 const openState = vi.hoisted(() => ({
@@ -88,6 +89,26 @@ it.runIf(process.platform !== "win32")(
 
     expect((await fs.stat(memoryPath)).mode & 0o777).toBe(0o640);
     expect(await fs.readFile(memoryPath, "utf-8")).toContain("replacement entry");
+  },
+);
+
+it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
+  "rejects a non-directory symlink before a parent traversal",
+  async () => {
+    const tempRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "memory-write-not-directory-")),
+    );
+    cleanups.push(async () => await fs.rm(tempRoot, { recursive: true, force: true }));
+    const regularFile = path.join(tempRoot, "regular-file");
+    const regularLink = path.join(tempRoot, "regular-link");
+    const collision = path.join(tempRoot, "collision.md");
+    await fs.writeFile(regularFile, "regular");
+    await fs.writeFile(collision, "collision");
+    await fs.symlink(regularFile, regularLink);
+
+    const invalidPath = `${regularLink}${path.sep}..${path.sep}${path.basename(collision)}`;
+    await expect(resolveMemoryWritePath(invalidPath)).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(await fs.readFile(collision, "utf8")).toBe("collision");
   },
 );
 

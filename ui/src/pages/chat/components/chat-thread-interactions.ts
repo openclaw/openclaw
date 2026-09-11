@@ -102,6 +102,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runUsageById?: ReadonlyMap<string, RunOutputUsage>;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;

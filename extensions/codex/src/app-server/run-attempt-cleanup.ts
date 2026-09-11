@@ -205,7 +205,7 @@ export async function cleanupCodexAttempt(
     );
     const nativeHookRelay = resourceState.nativeHookRelay;
     resourceState.nativeHookRelay = undefined;
-    await runCleanupStep("codex-native-hook-relay-release", () => {
+    await runCleanupStep("codex-native-hook-relay-release", async () => {
       if (!nativeHookRelay) {
         return;
       }
@@ -218,6 +218,7 @@ export async function cleanupCodexAttempt(
       } else {
         nativeHookRelay.unregister();
       }
+      await nativeHookRelay.drain();
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
     await runCleanupStep("codex-abort-listener-remove", () => {

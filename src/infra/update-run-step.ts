@@ -1,7 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
-import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-record.js";
+import {
+  summarizeUpdateStepFailure,
+  UPDATE_RUN_DIAGNOSTIC_LIMIT,
+  UPDATE_RUN_TEXT_LIMIT,
+  type UpdateRunStep,
+} from "./update-run-record.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 type ResultStep = Pick<

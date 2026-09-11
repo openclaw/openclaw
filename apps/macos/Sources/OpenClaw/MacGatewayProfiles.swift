@@ -377,6 +377,27 @@ actor MacGatewayProfileStore {
             ])
     }
 
+    struct BrowserSignInRequired: LocalizedError, Sendable {
+        let profile: MacGatewayProfile
+        let expiresAt: Date
+
+        var errorDescription: String? {
+            GatewayBrowserSessionError.expired.errorDescription
+        }
+    }
+
+    func dashboardEndpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
+        do {
+            return try self.endpoint(profileID: profileID)
+        } catch GatewayBrowserSessionError.expired {
+            // endpoint already loaded this registry. Keep its credential-free failure
+            // context within the same actor turn and injectable endpoint operation.
+            guard let stored = try self.loadRegistry().profiles.first(where: { $0.profile.id == profileID }),
+                  let session = stored.credentials.browserSession else { throw GatewayBrowserSessionError.expired }
+            throw BrowserSignInRequired(profile: stored.profile, expiresAt: session.expiresAt)
+        }
+    }
+
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
         if let attempt = self.browserSignInAttempts[profileID],
            self.committingBrowserSignIns[attempt.id] != nil

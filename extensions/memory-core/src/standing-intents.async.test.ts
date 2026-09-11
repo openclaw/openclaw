@@ -24,10 +24,16 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { createStandingIntentTool } from "./standing-intents-tool.js";
-import { createStandingIntent, matchStandingIntents } from "./standing-intents.js";
+import {
+  createStandingIntent,
+  listStandingIntents,
+  matchStandingIntents,
+} from "./standing-intents.js";
 
 const admission = vi.hoisted(() => ({
   pause: undefined as ((db: DatabaseSync) => Promise<void>) | undefined,
+  started: undefined as (() => void) | undefined,
+  operations: [] as Promise<unknown>[],
 }));
 
 // Delay the operation inside the real admission owner so its actual connection
@@ -42,7 +48,7 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
       assertCurrent?: () => void,
     ): Promise<T> => {
       const pause = admission.pause;
-      return actual.withOpenClawAgentDatabaseAsync(
+      const work = actual.withOpenClawAgentDatabaseAsync(
         options,
         pause
           ? async (database) => {
@@ -52,6 +58,10 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
           : operation,
         assertCurrent,
       );
+      admission.operations.push(work);
+      void work.catch(() => {});
+      admission.started?.();
+      return work;
     },
   };
 });
@@ -71,8 +81,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const release of releases.splice(0)) {
       release();
     }
-    await Promise.allSettled(pending.splice(0));
+    await Promise.allSettled([...pending.splice(0), ...admission.operations.splice(0)]);
     admission.pause = undefined;
+    admission.started = undefined;
     resetGlobalHookRunner();
     resetPluginRuntimeStateForTest();
     closeOpenClawAgentDatabasesForTest();
@@ -159,7 +170,7 @@ function registerHooks() {
   if (!runner) {
     throw new Error("Expected the real registered hook runner");
   }
-  return { runner, logger };
+  return { runner, logger, registry: builder.registry };
 }
 
 const context = {
@@ -285,6 +296,84 @@ describe("standing-intent admitted operations", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("standing intent matching failed"),
     );
+  });
+
+  it("does not spend a fire after the registered prompt hook times out", async () => {
+    const existing = await seed();
+    const { runner } = registerHooks();
+    const held = holdAdmission();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const work = keep(
+        runner.runBeforePromptBuild(
+          { prompt: "launch", messages: [] },
+          { ...context, trigger: "user" },
+        ),
+      );
+      await expectWaiting(work, held.entered);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await work).toBeUndefined();
+
+      held.release();
+      await Promise.allSettled(admission.operations);
+      expect(readStored(existing.id)).toMatchObject({ status: "armed", fire_count: 0 });
+    } finally {
+      held.release();
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips matching with a diagnostic when the host lacks the invocation capability", async () => {
+    const existing = await seed();
+    const { runner, registry, logger } = registerHooks();
+    const handler = registry.typedHooks.find(
+      (hook) => hook.pluginId === "memory-core" && hook.hookName === "before_prompt_build",
+    )?.handler as
+      | ((...args: Parameters<typeof runner.runBeforePromptBuild>) => unknown)
+      | undefined;
+    expect(handler).toBeDefined();
+    expect(
+      await handler?.({ prompt: "launch", messages: [] }, { ...context, trigger: "user" }),
+    ).toBeUndefined();
+    expect(readStored(existing.id)).toMatchObject({ status: "armed", fire_count: 0 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "prompt hook invocation support is required; intent matching skipped",
+      ),
+    );
+  });
+
+  it("preserves a live caller sharing the expired hook's cold database admission", async () => {
+    const existing = await seed();
+    const { runner } = registerHooks();
+    closeOpenClawAgentDatabasesForTest();
+    const started = deferred();
+    admission.started = started.resolve;
+    const held = holdAdmission();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const hookWork = keep(
+        runner.runBeforePromptBuild(
+          { prompt: "launch", messages: [] },
+          { ...context, trigger: "user" },
+        ),
+      );
+      await started.promise;
+      const liveCaller = keep(listStandingIntents({ agentId: "main" }));
+      // Expire the hook before the native cold-open child can deliver its result.
+      vi.advanceTimersByTime(15_000);
+      expect(await hookWork).toBeUndefined();
+      await expectWaiting(liveCaller, held.entered);
+      held.release();
+      await expect(liveCaller).resolves.toMatchObject([
+        { id: existing.id, status: "armed", fireCount: 0 },
+      ]);
+      await Promise.allSettled(admission.operations);
+      expect(readStored(existing.id)).toMatchObject({ status: "armed", fire_count: 0 });
+    } finally {
+      held.release();
+      vi.useRealTimers();
+    }
   });
 
   it.each(["heartbeat", "cron"] as const)(

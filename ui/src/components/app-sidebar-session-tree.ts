@@ -123,6 +123,10 @@ export function projectSessionTree(params: {
       Number.MAX_SAFE_INTEGER,
       (projected.workspaceConflictCount ?? 0) + childWorkspaceConflictCount,
     );
+    // The Gateway flag includes the row's own live or queued subagent run.
+    // Only an idle row proves unloaded descendant work from that flag alone.
+    const hasUnloadedDescendantRun =
+      row.archived !== true && !projected.hasActiveRun && row.hasActiveSubagentRun;
     return {
       ...projected,
       attention,
@@ -131,7 +135,7 @@ export function projectSessionTree(params: {
       loadingChildren: loadingChildKeys.has(row.key),
       containsActiveDescendant,
       workspaceConflictCount: workspaceConflictCount || undefined,
-      runningChildCount: Math.max(runningChildCount, row.hasActiveSubagentRun ? 1 : 0),
+      runningChildCount: Math.max(runningChildCount, hasUnloadedDescendantRun ? 1 : 0),
       failedChildCount,
     };
   };

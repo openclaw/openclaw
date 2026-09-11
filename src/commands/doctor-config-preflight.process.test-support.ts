@@ -4,8 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
+const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
@@ -40,7 +42,7 @@ export function runBuiltRuntime(
   maxBuffer?: number,
 ) {
   return spawnSync(
-    process.execPath,
+    isolatedRuntimeNodeExecPath,
     [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
     {
       cwd: runtimeRoot,
@@ -59,13 +61,17 @@ export function runSourceRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(process.execPath, [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args], {
-    cwd: runtimeRoot,
-    encoding: "utf8",
-    env,
-    timeout,
-    ...(maxBuffer === undefined ? {} : { maxBuffer }),
-  });
+  return spawnSync(
+    isolatedRuntimeNodeExecPath,
+    [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
+    {
+      cwd: runtimeRoot,
+      encoding: "utf8",
+      env,
+      timeout,
+      ...(maxBuffer === undefined ? {} : { maxBuffer }),
+    },
+  );
 }
 
 export function runIsolatedModuleScript(
@@ -74,7 +80,7 @@ export function runIsolatedModuleScript(
   options: { runtimeRoot?: string; timeoutMs?: number } = {},
 ) {
   return execFileAsync(
-    process.execPath,
+    isolatedRuntimeNodeExecPath,
     [
       ...(options.runtimeRoot ? ISOLATED_RUNTIME_NODE_ARGS : []),
       "--import",

@@ -8,14 +8,11 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-import {
-  chatModelUnavailableMessage,
-  resolveChatModelUnavailableReason,
-} from "../../lib/chat/model-select-state.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -32,7 +29,7 @@ import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import { requiresChatModelSetup } from "./chat-model-setup.ts";
+import { chatModelUnavailableBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
@@ -133,10 +130,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const modelUnavailableReason = resolveChatModelUnavailableReason(
+    const modelUnavailableBanner = chatModelUnavailableBanner(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
       state.chatModelCatalog,
+      () => this.context.navigate("model-setup"),
     );
     const modelSetupRequired = requiresChatModelSetup({
       catalog: catalogKey !== null,
@@ -180,12 +178,16 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
-    const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
     const disabledReason =
-      modelUnavailableMessage ??
-      (sessionParticipationBlocked && !suggestionViewer
+      sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : null);
+        : null;
+    const modelRequiredReason =
+      catalogKey || suggestionViewer
+        ? undefined
+        : modelSetupRequired
+          ? t("modelSetup.required.body")
+          : modelUnavailableBanner?.text;
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -331,13 +333,13 @@ export class ChatPane extends ChatPaneLayoutRender {
         sessionDisabledBanner?.kind !== "composer-replacement" &&
         (catalogKey
           ? this.catalogSession?.canContinue === true
-          : !modelSetupRequired &&
-            !disabledReason &&
+          : !disabledReason &&
             !selectedSessionArchived &&
             !restartRecoveryTombstoned &&
             !placementComposer.blocksSend &&
             (!sendHoldReason || initialHistoryUnavailable)),
       submitDisabledReason: initialHistoryUnavailable ? t("chat.thread.loading") : null,
+      modelRequiredReason,
       disabledReason:
         catalogDisabledReason ??
         disabledReason ??
@@ -351,7 +353,8 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? ("info" as const)
           : ("danger" as const),
       disabledReasonBusy: placementComposer.busyMessage !== null,
-      disabledBanner: sessionDisabledBanner ?? placementComposer.disabledBanner,
+      disabledBanner:
+        sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = Boolean(
@@ -460,11 +463,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
       ...composerAvailability,
-      disabledReason:
-        state.chatRunError?.kind === "auth_refresh" &&
-        composerAvailability.disabledReason === modelUnavailableMessage
-          ? null
-          : composerAvailability.disabledReason,
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
@@ -581,7 +579,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: (followUpModeOverride, submissionAction) =>
-        !composerAvailability.canSend
+        !composerAvailability.canSend ||
+        (modelRequiredReason &&
+          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
           ? undefined
           : catalogKey
             ? this.continueCatalogSession(catalogKey)

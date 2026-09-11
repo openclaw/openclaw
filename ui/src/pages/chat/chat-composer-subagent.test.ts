@@ -2,6 +2,7 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
@@ -18,7 +19,10 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 
-it("blocks model setup without disabled-reason text", () => {
+it.each([
+  { draft: "Hello", allowed: false },
+  { draft: "/models", allowed: true },
+])("admits $draft during model setup: $allowed", ({ draft, allowed }) => {
   const { pane, state, context } = createRefreshChatPane(
     createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
   );
@@ -30,13 +34,41 @@ it("blocks model setup without disabled-reason text", () => {
     agents: [{ id: "main" }],
   };
   state.handleSendChat = vi.fn();
+  state.chatMessage = draft;
   pane.render();
 
   expect(pane.chatProps?.modelSetupRequired).toBe(true);
   expect(pane.chatProps?.disabledReason).toBeNull();
-  expect(pane.chatProps?.canSend).toBe(false);
+  expect(pane.chatProps?.canSend).toBe(true);
   void pane.chatProps?.onSend();
-  expect(state.handleSendChat).not.toHaveBeenCalled();
+  expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
+});
+
+it("keeps catalog composition independent of local model credentials", () => {
+  const { pane, state, context } = createRefreshChatPane(
+    createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
+  );
+  state.sessionKey = buildCatalogSessionKey(
+    { catalogId: "fixture", hostId: "gateway:local", threadId: "thread-1" },
+    "main",
+  );
+  context.agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main", model: { primary: "example/model" } }],
+  };
+  state.chatModelCatalog = [
+    {
+      id: "model",
+      name: "Model",
+      provider: "example",
+      available: false,
+      unavailableReason: "missing-auth",
+    },
+  ];
+  pane.render();
+  expect(pane.chatProps?.modelRequiredReason).toBeUndefined();
 });
 
 describe("subagent composer", () => {

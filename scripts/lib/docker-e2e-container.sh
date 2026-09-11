@@ -157,6 +157,11 @@ docker_e2e_docker_cmd() {
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
 
+docker_e2e_cleanup_container_run() {
+  docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
+  rm -f "$2"
+}
+
 docker_e2e_docker_run_cmd() {
   local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
   if [ "${1:-}" = "run" ]; then

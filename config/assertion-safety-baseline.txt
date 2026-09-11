@@ -1127,7 +1127,7 @@ extensions/slack/src/monitor/provider-support.ts	3
 extensions/slack/src/monitor/provider.ts	5
 extensions/slack/src/monitor/reconnect-policy.ts	6
 extensions/slack/src/monitor/relay-source.ts	2
-extensions/slack/src/monitor/slash.ts	11
+extensions/slack/src/monitor/slash.ts	10
 extensions/slack/src/monitor/thread-resolution.ts	1
 extensions/slack/src/monitor/thread.ts	2
 extensions/slack/src/native-data-blocks.ts	1
@@ -1808,7 +1808,7 @@ src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/native-hook-relay-state.ts	1
-src/agents/harness/selection.ts	5
+src/agents/harness/selection.ts	4
 src/agents/harness/support.ts	1
 src/agents/harness/tool-result-middleware.ts	1
 src/agents/identity.ts	8
@@ -1977,7 +1977,7 @@ src/agents/tools/dashboard-tool.ts	2
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
-src/agents/tools/goal-tools.ts	4
+src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
@@ -2471,7 +2471,6 @@ src/commands/system-agent-with-inference.ts	2
 src/commands/tasks-json.ts	2
 src/commands/tasks.ts	2
 src/commands/telemetry-exporter-summary.ts	3
-src/commands/test-runtime-config-helpers.ts	3
 src/config/agent-dirs.ts	1
 src/config/allowed-values.ts	1
 src/config/bundled-channel-config-metadata.generated.ts	1
@@ -3227,7 +3226,7 @@ src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	9
+src/plugin-sdk/provider-tools.ts	8
 src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2

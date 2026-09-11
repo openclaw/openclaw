@@ -3,7 +3,6 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
-import { resolveGatewayService } from "../../daemon/service.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -15,7 +14,6 @@ import {
   createUpdateDoctorPromotionUnavailableStep,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
-import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   verifyPackageUpdateRecovery,
@@ -30,10 +28,6 @@ import {
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
-import {
-  inspectGatewayRestart,
-  waitForGatewayHttpReadiness,
-} from "../daemon-cli/restart-health.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -66,19 +60,20 @@ import {
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import {
-  GatewayServiceUpdateOwnershipError,
-  gatewayServiceCommandUsesRoot,
-} from "./update-command-service-plan.js";
+  resolveUpdatedInstallCommandEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
-  resolveUpdatedGatewayRestartPort,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+import { verifyPreviousGatewayForUpdate } from "./update-command-verification.js";
 
 export async function executeMutableUpdate(
   params: MutableUpdateExecutionParams,
@@ -366,6 +361,37 @@ export async function executeMutableUpdate(
           throw error;
         }
       }
+      if (
+        params.shouldRestart &&
+        opts.run &&
+        preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        const executor = opts.run.executorFence;
+        if (!executor) {
+          throw new UpdatePreMutationError(
+            "target-native-unsupported",
+            "Native candidate admission requires its original update executor.",
+          );
+        }
+        const supported = await isUpdatedInstallGatewayExecutorSupported({
+          root,
+          env: resolveUpdatedInstallCommandEnv({
+            processEnv: env,
+            invocationCwd: params.invocationCwd,
+          }),
+          executor,
+          nodeRunner: params.packageUpdateNodeRunner,
+          signal,
+        });
+        assertUpdateCommandRecovery(opts);
+        if (!supported) {
+          candidateFailureReason = "target-native-unsupported";
+          throw new UpdatePreMutationError(
+            candidateFailureReason,
+            "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+          );
+        }
+      }
       const snapshot = rehearsal
         ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
         : (validatedConfigSnapshot ?? (await readCandidateSource(env)));
@@ -476,35 +502,7 @@ export async function executeMutableUpdate(
       preManagedServiceStop?.running &&
       preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
     ) {
-      const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
-      const [expectedVersion, expectedBuildId] = await Promise.all([
-        readPackageVersion(params.root),
-        readBuiltGatewayBuildId(params.root),
-      ]);
-      const [health, readiness, servesPreviousPackage] = await Promise.all([
-        inspectGatewayRestart({
-          service: resolveGatewayService(),
-          env,
-          port,
-          expectedVersion,
-          expectedBuildId: expectedBuildId ?? undefined,
-        }),
-        waitForGatewayHttpReadiness({
-          config,
-          port,
-          deadlineAt: Date.now() + 3_000,
-          attempts: 1,
-          delayMs: 0,
-        }),
-        gatewayServiceCommandUsesRoot({ root: params.root, env }),
-      ]);
-      previousVerified = Boolean(
-        expectedVersion &&
-        servesPreviousPackage === true &&
-        health.healthy &&
-        health.runtime.status === "running" &&
-        readiness.readyz === 200,
-      );
+      previousVerified = await verifyPreviousGatewayForUpdate({ root: params.root, config, env });
       if (opts.run) {
         recordUpdateRunStep(
           opts.run.runId,

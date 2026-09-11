@@ -129,6 +129,7 @@ export function projectChatTranscript(
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
+    initialTurnId: props.initialTurnId,
     pendingInputs: props.pendingInputs,
     workerSetupPending: ["requested", "provisioning", "syncing", "starting"].includes(
       activeSession?.placement?.state ?? "",

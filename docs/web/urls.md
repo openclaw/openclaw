@@ -295,6 +295,33 @@ Clearing the person filter returns
 to `/activity` while retaining those filters. Normal Gateway authentication
 and session visibility rules apply to every form.
 
+## Terminal URLs
+
+The main terminal page keeps the sidebar and application chrome:
+
+```text
+/terminal
+/terminal/<terminalSessionId>
+/terminal?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+`/terminal` opens the terminal's default restore or picker view.
+`/terminal/<terminalSessionId>` attaches the Gateway terminal session returned by
+`sessions.catalog.startTerminal` or `terminal.open`; encode the ID as one path
+segment. The catalog query resumes the native CLI thread identified by the same
+`catalog`, `host`, and `thread` values used by native catalog links. Encode query
+values with `URLSearchParams`. An explicit terminal session ID takes precedence
+over a catalog query.
+
+Starting a native CLI from New session replaces the draft URL with its terminal
+session URL. Catalog **Open in terminal** actions open the catalog query form.
+Leaving the terminal page preserves its Gateway PTY for reattachment, subject to
+the [terminal session lifecycle](/web/control-ui/panels#operator-terminal).
+
+`/terminal` is the normal-route counterpart of `/focus/terminal`, which removes
+the sidebar and application chrome. Both require the terminal capability and
+operator access. All terminal paths accept the configured Control UI base path.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control
