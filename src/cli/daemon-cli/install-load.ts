@@ -9,7 +9,6 @@ export async function waitForGatewayServiceLoad(staged: GatewayServiceStagedFile
   const id = randomUUID();
   await new Promise<void>((resolve, reject) => {
     const finish = (error?: Error) => {
-      clearTimeout(timer);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       if (error) {
@@ -30,10 +29,7 @@ export async function waitForGatewayServiceLoad(staged: GatewayServiceStagedFile
         finish(new Error("Updater did not seal the service after-image."));
       }
     };
-    const timer = setTimeout(
-      () => finish(new Error("Updater service-load handoff timed out.")),
-      60_000,
-    );
+    // The updater owns the deadline and terminates this child on expiry.
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
     process.send!({ type: "openclaw-service-staged", id, staged }, (error) => {

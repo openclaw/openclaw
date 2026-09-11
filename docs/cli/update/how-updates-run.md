@@ -57,8 +57,10 @@ The baseline package fingerprint is best effort. If its bounded scan times out,
 the update records a warning and continues with the retained package copy.
 Rollback then verifies the restored directory identity, package version, and
 affected launchers, and records that full fingerprint verification was unavailable.
-A timeout alone does not fail the update or rollback; detected changes to the
-retained copy still refuse restoration.
+A baseline scan timeout alone does not fail the update or rollback; detected
+changes to the retained copy still refuse restoration. Once a complete baseline
+fingerprint is available, recovery checks must match it. These checks use the
+caller's per-step allowance without a separate thirty-second scan cap.
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
@@ -144,8 +146,17 @@ TMPDIR=/var/tmp openclaw update --yes
 Subsequent updates use the new updater's measured destination selection.
 
 Schema checks also use private SQLite copies so inspection does not create or
-modify WAL sidecars beside live databases. Each schema inspection has a
-30-second deadline; if compatibility cannot be verified, rollback is refused.
+modify WAL sidecars beside live databases. Inspection budgets include database
+and journal sizes, cold startup, and repeated IO passes. Copy progress renews the
+watchdog, and larger caller allowances are preserved. A stalled worker is stopped
+before its private copies are removed. If compatibility cannot be verified,
+rollback is refused.
+
+Before stopping the previous Gateway, the updater waits for affirmative readiness.
+Its observation window uses the canary's measured startup time with headroom for
+slow hardware, or the explicit per-step timeout. A transient readiness miss does
+not discard the previous generation's rollback eligibility. Native service and
+Gateway boot identities must still match through the final observation.
 
 The canary binds a free loopback port and must report `/startupz` as `started`,
 then `/readyz` as ready within the configured per-step timeout. Plugin-resolution
@@ -272,6 +283,11 @@ If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
 
 ### Restart handoff
+
+Service-manager commands and helper acknowledgements share the activation or
+recovery allowance. Slow inspection or teardown does not impose a separate
+five- or thirty-second command cutoff. Service installation also forwards one
+caller budget through staging, sealing, and load; the parent owns cancellation.
 
 When an agent runs `openclaw update` inside a systemd user service or macOS
 LaunchAgent Gateway, the CLI hands the update to the same managed-service helper

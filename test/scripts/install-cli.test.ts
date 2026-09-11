@@ -522,7 +522,7 @@ describe("install-cli.sh", () => {
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
-  it("bounds stalled curl downloads and propagates timeout failures", () => {
+  it("bounds stalled downloads and propagates timeout failures", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
@@ -534,13 +534,23 @@ describe("install-cli.sh", () => {
       set +e
       download_file "https://example.invalid/node.tar.gz" "/tmp/node.tar.gz"
       printf 'status=%s\n' "$?"
+      wget() {
+        printf 'wget=%s\n' "$*"
+        return 4
+      }
+      DOWNLOADER=wget
+      download_file "https://example.invalid/node.tar.gz" "/tmp/node.tar.gz"
+      printf 'wget-status=%s\n' "$?"
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 300");
     expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).not.toContain("--max-time");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
+    expect(result.stdout).toContain("--timeout=300");
+    expect(result.stdout).toContain("wget-status=4");
   });
 
   it("does not clean an unrelated legacy checkout during the default npm install", () => {

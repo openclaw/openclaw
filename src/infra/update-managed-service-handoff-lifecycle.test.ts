@@ -611,6 +611,7 @@ describe("managed service update handoff", () => {
       await import("./update-managed-service-handoff.js");
     const resultPromise = startManagedServiceUpdateHandoff({
       root: MOCK_INSTALL_ROOT,
+      timeoutMs: 30_000,
       restartDrainTimeoutMs: 300_000,
       parentPid: process.pid,
       execPath:

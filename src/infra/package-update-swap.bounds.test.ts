@@ -8,6 +8,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 afterEach(() => {
   setLoggerOverride(null);
@@ -30,6 +31,62 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each([
+    { phase: "retained", corrupt: false, timeoutMs: undefined, restored: true },
+    { phase: "retained", corrupt: false, timeoutMs: 120_000, restored: true },
+    { phase: "restored", corrupt: false, timeoutMs: 120_000, restored: true },
+    { phase: "retained", corrupt: true, timeoutMs: 120_000, restored: false },
+    { phase: "retained", corrupt: false, timeoutMs: 20_000, restored: false },
+  ])(
+    "uses the caller budget for $phase verification (corrupt=$corrupt, budget=$timeoutMs)",
+    async ({ phase, corrupt, timeoutMs, restored }) => {
+      await withTestDir({ prefix: "openclaw-recovery-budget-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const runtime = path.join(packageRoot, "dist", "index.js");
+        const original = await fs.readFile(runtime, "utf8");
+        const transactions: PackageUpdateTransaction[] = [];
+        const activated = await swapStagedPackageInstall({
+          ...params,
+          timeoutMs,
+          onTransaction: (transaction) => transactions.push(transaction),
+        });
+        expect(activated.status).toBe("committed");
+        expect(activated.step.advisory).toBeUndefined();
+        const transaction = transactions[0];
+        if (!transaction) {
+          throw new Error("Missing retained package transaction");
+        }
+        const retained = path.join(transaction.backupRoot, "dist", "index.js");
+        if (corrupt) {
+          const before = await fs.stat(retained);
+          await fs.writeFile(retained, "changed runtime; unchanged package version");
+          expect((await fs.stat(retained)).ino).toBe(before.ino);
+        }
+        const target = phase === "retained" ? retained : runtime;
+        const now = Date.now.bind(Date);
+        const open = fs.open.bind(fs);
+        let elapsed = 0;
+        vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (elapsed === 0 && String(args[0]) === target) {
+            elapsed = 31_000;
+          }
+          return open(...args);
+        });
+        const result = await transaction.rollback(() => {});
+        expect(elapsed).toBe(31_000);
+        expect(result.exitCode, result.stderrTail ?? "").toBe(restored ? 0 : 1);
+        if (restored) {
+          expect(await fs.readFile(runtime, "utf8")).toBe(original);
+          expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+        } else {
+          expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
+          await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
+        }
+      });
+    },
+  );
+
   it.each(["activation", "rollback", "changed identity", "changed version"] as const)(
     "handles %s after the baseline fingerprint times out",
     async (outcome) => {
@@ -186,7 +243,11 @@ describe("package verification bounds", () => {
       ]);
       expect(new Set(finished.map((record) => record.readerId)).size).toBe(4);
       for (const record of finished) {
-        expect(record).toMatchObject({ outcome: "completed", budgetMs: 30_000, pendingIo: 0 });
+        expect(record).toMatchObject({
+          outcome: "completed",
+          budgetMs: UPDATE_RUNNER_TIMEOUT_MS,
+          pendingIo: 0,
+        });
         expect(record.timeoutObservedAtMonotonicMs).toBeUndefined();
         expect(Number(record.elapsedMs)).toBeGreaterThan(0);
       }

@@ -1,6 +1,7 @@
 // Install Ps1 tests cover install ps1 script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -193,8 +194,8 @@ function Invoke-RestMethod {
     if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
     return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
 }
-function Invoke-WebRequest {
-    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+function Save-InstallerDownload {
+    param([string]$Uri, [string]$OutFile)
     if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
     if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
         $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
@@ -621,10 +622,8 @@ try {
           "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
           "  function Ensure-PortableGitOnUserPath { }",
           "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
-          "  $script:usedBasicParsing = $false",
-          "  function Invoke-WebRequest {",
-          "    param($Uri, $OutFile, [switch]$UseBasicParsing)",
-          "    $script:usedBasicParsing = $UseBasicParsing.IsPresent",
+          "  function Save-InstallerDownload {",
+          "    param($Uri, $OutFile)",
           "    New-Item -ItemType File -Force -Path $OutFile | Out-Null",
           "  }",
           "  function Expand-Archive {",
@@ -635,7 +634,6 @@ try {
           "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
           "  }",
           "  Install-PortableGit",
-          "  if (-not $script:usedBasicParsing) { throw 'MinGit download must use basic parsing' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
           "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
@@ -687,7 +685,7 @@ try {
           "$env:PROCESSOR_ARCHITECTURE = 'ARM64'",
           "function Invoke-RestMethod {",
           "  param([string]$Uri, [object]$Headers, [int]$TimeoutSec)",
-          '  if ($TimeoutSec -ne 30) { throw "TimeoutSec=$TimeoutSec" }',
+          '  if ($TimeoutSec -ne 300) { throw "TimeoutSec=$TimeoutSec" }',
           "  [pscustomobject]@{",
           "    tag_name = 'v2.54.0.windows.1'",
           "    assets = @(",
@@ -719,7 +717,7 @@ try {
           "}",
           "function Invoke-RestMethod {",
           "  param([string]$Uri, [object]$Headers, [int]$OperationTimeoutSeconds)",
-          '  if ($OperationTimeoutSeconds -ne 30) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
+          '  if ($OperationTimeoutSeconds -ne 300) { throw "OperationTimeoutSeconds=$OperationTimeoutSeconds" }',
           "  if ($Uri -eq 'https://nodejs.org/dist/index.json') {",
           "    return @(",
           "      [pscustomobject]@{ version = 'v26.5.0'; files = @('win-arm64-zip', 'win-x64-zip') },",
@@ -1385,6 +1383,77 @@ try {
     expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
   }
 
+  runIfPowerShell(
+    "renews legacy download watchdogs while bytes arrive and aborts stalled bodies",
+    async () => {
+      const server = http.createServer((request, response) => {
+        if (request.url === "/redirect") {
+          response.writeHead(302, { location: "/stream" });
+          response.end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.write("start");
+        if (request.url === "/stall") {
+          const timer = setTimeout(() => response.end("late"), 3000);
+          response.once("close", () => clearTimeout(timer));
+          return;
+        }
+        let chunks = 0;
+        const timer = setInterval(() => {
+          response.write(".");
+          if (++chunks === 4) {
+            response.end();
+          }
+        }, 400);
+        response.once("close", () => clearInterval(timer));
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Download fixture did not bind a TCP port");
+        }
+        const directory = harness.createTempDir("openclaw-installer-network-");
+        const output = join(directory, "download.bin");
+        const scriptPath = join(directory, "download.ps1");
+        writeFileSync(
+          scriptPath,
+          [
+            "$ErrorActionPreference = 'Stop'",
+            "$script:UpdateNetworkTimeoutSeconds = 1",
+            ...["Get-WebRequestTimeoutParameters", "Save-InstallerDownload"].map(
+              (name) => `function ${name} {\n${extractFunctionBody(source, name)}}`,
+            ),
+            "function Invoke-WebRequest { throw 'Legacy downloads must stream directly' }",
+            `$output = ${toPowerShellSingleQuotedLiteral(output)}`,
+            `$base = 'http://127.0.0.1:${address.port}'`,
+            'Save-InstallerDownload -Uri "$base/redirect" -OutFile $output',
+            "if ([IO.File]::ReadAllText($output) -ne 'start....') { throw 'Incomplete slow download' }",
+            "$failed = $false",
+            'try { Save-InstallerDownload -Uri "$base/stall" -OutFile $output } catch { $failed = $true }',
+            "if (-not $failed) { throw 'Stalled download was accepted' }",
+            "$exclusive = [IO.File]::Open($output, 'Open', 'ReadWrite', 'None')",
+            "$exclusive.Dispose()",
+            "Write-Output 'slow-download-complete; stalled-download-aborted; file-released'",
+          ].join("\n"),
+        );
+        const result = await runPowerShellAsync(["-NoLogo", "-NoProfile", "-File", scriptPath]);
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          "slow-download-complete; stalled-download-aborted; file-released",
+        );
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
+
   runIfPowerShell("rejects unknown and positional options before starting the installer", () => {
     const cases = [
       ["-Frobnicate"],
@@ -1790,7 +1859,6 @@ try {
     const depsRootBody = extractFunctionBody(source, "Get-OpenClawDepsRoot");
     const resolveNodeBody = extractFunctionBody(source, "Resolve-PortableNodeDownload");
     const expandNodeBody = extractFunctionBody(source, "Expand-PortableNodeArchive");
-    const timeoutParametersBody = extractFunctionBody(source, "Get-WebRequestTimeoutParameters");
 
     expect(installNodeBody).toContain("Install-PortableNode");
     expect(installNodeBody).toContain("Portable Node.js bootstrap failed");
@@ -1807,11 +1875,9 @@ try {
     expect(userPathBody).toContain(
       '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")',
     );
-    expect(portableNodeBody).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(portableNodeBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
+      "Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip",
     );
-    expect(portableNodeBody).toContain("@downloadTimeouts");
     expect(portableNodeBody).toContain("Expand-PortableNodeArchive");
     expect(portableNodeBody).not.toContain("Expand-Archive");
     expect(portableNodeBody).not.toContain("New-Item -ItemType Directory -Force -Path $tmpExtract");
@@ -1822,14 +1888,11 @@ try {
     expect(expandNodeBody).toContain("System.IO.Compression.ZipFile");
     expect(resolveNodeBody).toContain("https://nodejs.org/dist/index.json");
     expect(resolveNodeBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"',
     );
     expect(resolveNodeBody).toContain("@requestTimeouts");
     expect(resolveNodeBody).toContain("win-$architecture-zip");
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
-    expect(timeoutParametersBody).toContain('ContainsKey("OperationTimeoutSeconds")');
-    expect(timeoutParametersBody).toContain("OperationTimeoutSeconds = 30");
-    expect(timeoutParametersBody).toContain("TimeoutSec = $LegacyTimeoutSec");
   });
 
   it("persists user-local portable Git for future git-backed updates", () => {
@@ -1858,13 +1921,10 @@ try {
     expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITECTURE");
     expect(portableGitDownloadBody).toContain("Get-WindowsPortableArchitecture");
     expect(portableGitDownloadBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30',
+      'Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"',
     );
     expect(portableGitDownloadBody).toContain("@requestTimeouts");
-    expect(portableGitBody).toContain(
-      'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
-    );
-    expect(portableGitBody).toContain("@downloadTimeouts");
+    expect(portableGitBody).toContain("Save-InstallerDownload -Uri $download.Url -OutFile $tmpZip");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
     expect(portableGitBody).toContain(

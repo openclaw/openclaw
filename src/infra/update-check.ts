@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
-import { executeGitCommand, GIT_TIMEOUT_MS } from "./git-exec.js";
+import { executeGitCommand } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
@@ -20,6 +20,7 @@ import {
 import { readBuiltRuntimeCommit } from "./update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import type { UpdateFetchFailure } from "./update-run-record.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -149,7 +150,7 @@ export async function resolveExtendedStablePackage(params: {
     return { status: "failed", reason: "unsupported_git_channel" };
   }
 
-  const timeoutMs = params.timeoutMs ?? 3500;
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const registryTarget = resolveExtendedStableRegistryTarget(params);
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
@@ -278,7 +279,7 @@ async function checkGitUpdateStatus(params: {
   useDetachedDevUpstream?: boolean;
   upstreamFallback?: { currentSha: string; upstreamRef: string };
 }): Promise<GitUpdateStatus> {
-  const timeoutMs = params.timeoutMs ?? (params.fetch ? GIT_TIMEOUT_MS : 6000);
+  const timeoutMs = params.timeoutMs ?? (params.fetch ? UPDATE_NETWORK_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
   const runGit = (...args: string[]) =>
     runUpdateGitCommand(root, args, { timeoutMs, signal: params.signal });
@@ -609,7 +610,7 @@ export async function checkUpdateStatus(params: {
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   params.signal?.throwIfAborted();
-  const timeoutMs = params.timeoutMs ?? 6000;
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
     params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = (registryChannel: UpdateChannel | undefined) =>
@@ -654,7 +655,7 @@ export async function checkUpdateStatus(params: {
   // for branch/tag identity, independently of worktree and remote freshness.
   const identity = isGit
     ? readGitUpdateIdentity(root, {
-        timeoutMs: params.timeoutMs ?? (params.fetchGit ? GIT_TIMEOUT_MS : 6000),
+        timeoutMs: params.timeoutMs ?? (params.fetchGit ? UPDATE_NETWORK_TIMEOUT_MS : 6000),
         signal: params.signal,
       })
     : undefined;

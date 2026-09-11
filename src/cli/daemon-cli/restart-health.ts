@@ -99,8 +99,14 @@ export async function inspectGatewayRestart(params: {
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<GatewayRestartSnapshot> {
   params.signal?.throwIfAborted();
+  const startedAtMs = performance.now();
+  const remainingTimeoutMs = () =>
+    params.timeoutMs === undefined
+      ? undefined
+      : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
   const env = params.env ?? process.env;
   const probeHosts =
     params.probeHosts ??
@@ -125,6 +131,7 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        timeoutMs: remainingTimeoutMs(),
         ...(params.signal ? { signal: params.signal } : {}),
       });
       probeError = reachability.probeError;
@@ -136,7 +143,10 @@ export async function inspectGatewayRestart(params: {
   };
   let runtime: GatewayServiceRuntime = { status: "unknown" };
   try {
-    runtime = await params.service.readRuntime(env);
+    runtime =
+      params.timeoutMs === undefined
+        ? await params.service.readRuntime(env)
+        : await params.service.readRuntime(env, { timeoutMs: remainingTimeoutMs() });
   } catch (err) {
     runtime = { status: "unknown", detail: String(err) };
   }
@@ -332,6 +342,10 @@ export async function waitForGatewayHealthyRestart(params: {
   const settleProbes = Math.max(1, params.settle?.probes ?? 1);
   const settleDurationMs = (settleProbes - 1) * delayMs;
   const standardDeadlineMs = params.timeoutMs ?? attempts * delayMs;
+  const probeTimeoutMs = () =>
+    params.timeoutMs === undefined
+      ? undefined
+      : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
@@ -356,6 +370,7 @@ export async function waitForGatewayHealthyRestart(params: {
     probeContext,
     configuredProbe,
     probeHosts,
+    timeoutMs: probeTimeoutMs(),
     ...(params.signal ? { signal: params.signal } : {}),
   });
 
@@ -496,6 +511,7 @@ export async function waitForGatewayHealthyRestart(params: {
       probeContext,
       configuredProbe,
       probeHosts,
+      timeoutMs: probeTimeoutMs(),
       ...(params.signal ? { signal: params.signal } : {}),
     });
   }

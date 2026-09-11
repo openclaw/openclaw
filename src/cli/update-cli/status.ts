@@ -36,7 +36,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const update = await checkUpdateStatus({
     root,
-    timeoutMs: timeoutMs ?? 3500,
+    timeoutMs,
     fetchGit: true,
     useDetachedDevUpstream: configChannel === "dev",
     includeRegistry: true,

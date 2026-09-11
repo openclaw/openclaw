@@ -1,15 +1,29 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as configFile from "../../config/config.js";
+import * as gatewayService from "../../daemon/service.js";
+import * as gatewayCall from "../../gateway/call.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as portInspection from "../../infra/ports-inspect.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as utils from "../../utils.js";
+import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -119,11 +133,13 @@ vi.mock("./update-command-service.js", async () => {
   const actual = await vi.importActual<typeof import("./update-command-service-maintenance.js")>(
     "./update-command-service-maintenance.js",
   );
+  const { resolveUpdatedGatewayRestartPort } = await import("./update-command-service-plan.js");
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
     shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
+    resolveUpdatedGatewayRestartPort,
   };
 });
 
@@ -275,6 +291,200 @@ describe("mutable update execution", () => {
     },
   );
 
+  it.each([
+    {
+      allowance: "measured startup",
+      timeoutMs: undefined,
+      readyAtMs: 400_000,
+      verified: true,
+      failure: undefined,
+    },
+    {
+      allowance: "explicit allowance",
+      timeoutMs: 450_000,
+      readyAtMs: 400_000,
+      verified: true,
+      failure: undefined,
+    },
+    {
+      allowance: "explicit deadline",
+      timeoutMs: 30_000,
+      readyAtMs: 400_000,
+      verified: false,
+      failure: undefined,
+    },
+    {
+      allowance: "terminal version mismatch",
+      timeoutMs: undefined,
+      readyAtMs: 400_000,
+      verified: false,
+      failure: "version",
+    },
+    {
+      allowance: "replaced executor",
+      timeoutMs: undefined,
+      readyAtMs: 400_000,
+      verified: false,
+      failure: "executor",
+    },
+  ])(
+    "preserves previous Gateway verification through slow readiness ($allowance)",
+    async ({ timeoutMs, readyAtMs, verified, failure }) =>
+      withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
+        mockProcessPlatform("linux");
+        let elapsedMs = 0;
+        const epochMs = Date.now();
+        vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+        vi.spyOn(Date, "now").mockImplementation(() => epochMs + elapsedMs);
+        vi.spyOn(utils, "sleep").mockImplementation(async (delayMs) => {
+          elapsedMs += delayMs;
+        });
+        let readyObservedAtMs: number | undefined;
+        let stoppedAtMs: number | undefined;
+        let replaceExecutor: (() => void) | undefined;
+        const server = createServer((request, response) => {
+          const ready = elapsedMs >= readyAtMs;
+          if (request.url === "/readyz" && ready) {
+            readyObservedAtMs = elapsedMs;
+            replaceExecutor?.();
+          }
+          response.writeHead(request.url === "/readyz" && !ready ? 503 : 200).end();
+        });
+        server.listen(0, "127.0.0.1");
+        await once(server, "listening");
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing synthetic Gateway listener");
+        }
+        try {
+          await fs.mkdir(path.join(root, "dist"));
+          await fs.writeFile(
+            path.join(root, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+          );
+          await fs.writeFile(path.join(root, "dist", "index.js"), "");
+          const context = schemaContext("default");
+          const config = { gateway: { mode: "local" as const, port: address.port } };
+          const configSnapshot = {
+            ...context.configSnapshot,
+            config,
+            sourceConfig: config,
+          };
+          const managedEnv = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
+          vi.spyOn(os, "userInfo").mockReturnValue({
+            uid: 1000,
+            gid: 1000,
+            username: "operator",
+            homedir: root,
+            shell: "/bin/sh",
+          });
+          mocks.captureManagedContext.mockResolvedValue({
+            env: managedEnv,
+            configSnapshot,
+            pluginInstallRecords: {},
+          });
+          vi.spyOn(configFile, "readConfigFileSnapshot").mockResolvedValue(configSnapshot);
+          vi.spyOn(restartProbe, "resolveGatewayRestartProbeContext").mockResolvedValue({
+            config,
+            auth: {},
+          });
+          const service = gatewayService.resolveGatewayService();
+          vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+          vi.spyOn(service, "readRuntime").mockResolvedValue({ status: "running", pid: 8000 });
+          vi.spyOn(service, "readCommand").mockResolvedValue({
+            programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
+          });
+          expect(await gatewayServiceCommandUsesRoot({ root, env: managedEnv })).toBe(true);
+          vi.spyOn(portInspection, "inspectPortUsage").mockImplementation(async (port) => ({
+            port,
+            status: "busy",
+            listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+            hints: [],
+          }));
+          vi.spyOn(gatewayCall, "callGateway").mockImplementation(
+            gatewayHealthResponse({
+              server: {
+                version: failure === "version" ? "0.9.0" : "1.0.0",
+                bootId: "previous-boot",
+              },
+            }),
+          );
+          mocks.validateCanary.mockResolvedValue({
+            status: "ok",
+            phase: "readiness",
+            durationMs: 70_000,
+            logTail: [],
+            steps: [
+              {
+                name: "candidate gateway canary",
+                command: "gateway run",
+                cwd: root,
+                durationMs: 70_000,
+                exitCode: 0,
+              },
+            ],
+          });
+          mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+            if (phase === "prepare") {
+              stoppedAtMs = elapsedMs;
+            }
+            return inspectOrStopService(phase);
+          });
+          mocks.runPackageUpdate.mockImplementation(
+            async (
+              params: Parameters<
+                typeof import("./update-command-package.js").runPackageInstallUpdate
+              >[0],
+            ) => {
+              await params.validateCandidate(root);
+              await params.beforeActivate();
+              return successfulUpdate;
+            },
+          );
+          const params = {
+            ...executionParams("package"),
+            root,
+            timeoutMs,
+            updateStepTimeoutMs: timeoutMs ?? 20 * 60_000,
+          };
+          if (failure === "executor") {
+            replaceExecutor = () => {
+              params.opts.run = { runId: "replacement-run", env: { OPENCLAW_STATE_DIR: root } };
+            };
+          }
+          const execution = await executeMutableUpdate(params);
+          if (failure === "executor") {
+            expect(execution?.result.status).toBe("error");
+            expect(execution?.failure?.detail).toContain("lost its original executor");
+            expect(stoppedAtMs).toBeUndefined();
+            expect(execution?.previousVerified).toBe(false);
+            return;
+          }
+          expect(execution?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe(
+            "ok",
+          );
+          expect(
+            execution?.previousVerified,
+            JSON.stringify({ readyObservedAtMs, stoppedAtMs }),
+          ).toBe(verified);
+          if (verified) {
+            expect(readyObservedAtMs).toBeGreaterThanOrEqual(readyAtMs);
+            expect(stoppedAtMs).toBeGreaterThanOrEqual(readyObservedAtMs!);
+          } else {
+            expect(readyObservedAtMs).toBeUndefined();
+            expect(stoppedAtMs).toBeLessThan(readyAtMs);
+            if (failure === "version") {
+              expect(stoppedAtMs).toBe(0);
+            }
+          }
+        } finally {
+          server.closeAllConnections();
+          const closed = once(server, "close");
+          server.close();
+          await closed;
+        }
+      }),
+  );
   it.each(["package", "staged", "git"] as const)(
     "refuses an unsupported native receiver before activation: %s",
     async (route) =>

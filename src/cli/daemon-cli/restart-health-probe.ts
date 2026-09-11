@@ -57,6 +57,7 @@ export async function waitForGatewayHttpReadiness(params: {
   config?: OpenClawConfig;
   deadlineAt: number;
   delayMs: number;
+  probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
 }): Promise<GatewayHttpReadiness> {
@@ -75,7 +76,7 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/healthz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, 3_000),
+          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -84,7 +85,7 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/readyz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, 3_000),
+          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -249,6 +250,7 @@ export async function confirmGatewayReachable(params: {
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<GatewayReachability> {
   params.signal?.throwIfAborted();
   const result: GatewayReachability = {
@@ -288,7 +290,7 @@ export async function confirmGatewayReachable(params: {
       requireLocalBackendSharedAuth: authNone,
       deviceIdentity: null,
       sharedStateMode: "read-only",
-      timeoutMs: 3_000,
+      timeoutMs: params.timeoutMs ?? 3_000,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;

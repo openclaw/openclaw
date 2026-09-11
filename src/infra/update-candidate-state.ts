@@ -20,10 +20,15 @@ import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-gua
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
+  createPrivateSqliteTempDirectory,
+  resolvePrivateSqliteSnapshotStagingRoot,
+} from "./sqlite-private-directory.js";
+import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStateIdentity,
@@ -347,53 +352,73 @@ export async function readUpdateStateSchemaVersionsInProcess(
   return publishStateDatabaseVersions(files, inspected);
 }
 
-/** Fence schema versions in one child under a fixed inspection deadline. */
+/** Schema fencing owns its child and private copies through progress or cancellation. */
 export async function readUpdateStateSchemaVersions({
   root,
   nodeRunner = process.execPath,
+  timeoutMs,
+  signal,
   ...input
 }: StateInput & {
   // Omit only before activation; null forbids falling back after an uncertain swap.
   root?: string | null;
   nodeRunner?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<UpdateStateSchemaVersion[]> {
   if (root === null) {
     throw new Error("The active installation root is unknown; state inspection is unsafe.");
   }
   const sourceEnv = input.env ?? process.env;
-  const result = await runCommandBuffered(
-    [
-      nodeRunner,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateCandidateState, root }),
-        nodeRunner,
-      ),
-    ],
-    {
-      cwd: os.tmpdir(),
-      input: JSON.stringify({
-        ...input,
-        mode: "versions",
-        env: {
-          HOME: sourceEnv.HOME,
-          OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
-          USERPROFILE: sourceEnv.USERPROFILE,
-          OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
-          PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
-        },
-      }),
-      baseEnv: sourceEnv,
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
+  const files = await collectStateDatabasePaths(input);
+  const { bytes } = await measureUpdateStateFiles(
+    [...files.values()].map(({ spellings }) => spellings[0]),
   );
-  if (result.code !== 0) {
-    throw new Error(
-      `State schema inspection failed (${result.termination}): ${result.stderr.toString("utf8")}`,
+  const directory = await createPrivateSqliteTempDirectory(
+    resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
+    "openclaw-state-inspect-",
+  );
+  try {
+    const result = await withUpdateCandidateIoBudget(
+      { directory, bytes, timeoutMs, signal },
+      (inspectionSignal) =>
+        runCommandBuffered(
+          [
+            nodeRunner,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateCandidateState, root }),
+              nodeRunner,
+            ),
+          ],
+          {
+            cwd: os.tmpdir(),
+            input: JSON.stringify({
+              ...input,
+              mode: "versions",
+              env: {
+                HOME: sourceEnv.HOME,
+                OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
+                USERPROFILE: sourceEnv.USERPROFILE,
+                OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
+                PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
+              },
+            }),
+            baseEnv: { ...sourceEnv, XDG_CACHE_HOME: directory },
+            signal: inspectionSignal,
+            killGraceMs: 500,
+            maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          },
+        ),
     );
+    if (result.code !== 0) {
+      throw new Error(
+        `State schema inspection failed (${result.termination}): ${result.stderr.toString("utf8")}`,
+      );
+    }
+    return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
   }
-  return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
 }
 
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
