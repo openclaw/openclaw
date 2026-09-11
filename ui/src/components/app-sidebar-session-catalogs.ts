@@ -158,7 +158,7 @@ export function projectSidebarSessionCatalogs(
   });
 }
 
-export function visibleCatalogHosts(
+function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
   ownerId?: string | null,
   liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),

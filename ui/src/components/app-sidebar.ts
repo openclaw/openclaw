@@ -35,8 +35,10 @@ import {
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
-import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
-import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import type {
+  CatalogSessionMenuRequest,
+  SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
   SidebarNarrationSyncInput,
@@ -530,8 +532,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private renderSessions() {
     const navigationState = this.getSessionNavigationState();
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
-    const expandedAgentId = this.expandedAgentId();
-    const liveRows = this.catalogLiveRows();
     const catalogs = this.projectedSessionCatalogs;
     const { sections } = this.zonedVisibleSections(visibleSessions);
     if (
@@ -557,11 +557,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           catalogs,
           basePath: this.basePath,
           routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
-          newSessionAgentId: expandedAgentId,
+          newSessionAgentId: this.expandedAgentId(),
           mainKey: this.sessionMainKey(),
           loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
           projectGrouping: this.catalogProjectGrouping,
-          liveRows,
+          liveRows: this.catalogLiveRows(),
           toSidebarSession: navigationState.toSidebarSession,
           catalogOpenTarget: this.catalogOpenTarget,
           terminalAvailable: this.terminalAvailable,
