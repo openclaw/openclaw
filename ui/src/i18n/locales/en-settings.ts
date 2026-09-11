@@ -354,7 +354,6 @@ const enSettings = {
       placeholder: "Enter provider API key",
       replacePlaceholder: "Secret saved. Enter a new key to replace it.",
       set: "Set API key",
-      replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
       removed: "Saved API keys removed.",

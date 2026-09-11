@@ -362,6 +362,19 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("activate")
+    .description("Test a saved sign-in and use it for this agent")
+    .argument("<profileId>", "Saved sign-in id from models auth list")
+    .option("--agent <id>", "Agent id (default: the only configured agent)")
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthActivateCommand } = await import("../commands/models/auth-activate.js");
+        await modelsAuthActivateCommand({ profileId, agent }, defaultRuntime);
+      });
+    });
+
+  auth
     .command("logout")
     .description("Remove a saved auth profile (see `models auth list` for ids)")
     .argument("<profileId>", "Auth profile id (e.g. openai:manual)")

@@ -63,8 +63,10 @@ restart, without caching a verification result. This adds no database schema or
 migration; older runtimes do not enforce the inactive state. Before downgrading,
 remove saved inactive replacements or restore the state from before setup.
 
-Noninteractive setup saves replacement credentials for later activation in Model
-Setup and leaves the current connection unchanged. Reusing an existing credential
+Noninteractive setup saves replacement credentials and prints a
+`openclaw models auth activate <profileId> --agent <id>` command to test and activate
+the saved sign-in. Model Setup offers the same operation. Interactive setup defaults
+to activation after a successful test. Reusing an existing credential
 and first-run noninteractive setup retain their existing behavior.
 
 ## Agent copy portability
