@@ -7,7 +7,8 @@ import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
-import { UPDATE_RUN_TEXT_LIMIT, type UpdateRunRecord } from "./update-run-record.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;

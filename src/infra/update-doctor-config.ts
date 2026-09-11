@@ -3,7 +3,6 @@ import type {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 
 export type UpdateDoctorConfigChange = z.infer<typeof UpdateDoctorConfigChangeSchema>;
 export type UpdateDoctorConfigWriteRefusal = z.infer<typeof UpdateDoctorConfigWriteRefusalSchema>;
@@ -31,7 +30,7 @@ export function getUpdateDoctorConfigFailureReason(refusal?: UpdateDoctorConfigW
 export function createUpdateDoctorPromotionUnavailableStep(
   root: string,
   changes: readonly UpdateDoctorConfigChange[],
-): UpdateStepResult {
+) {
   const keys = [
     ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
   ].toSorted();

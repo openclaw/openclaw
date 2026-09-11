@@ -3,9 +3,6 @@ import type { z } from "zod";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
-export const UPDATE_RUN_TEXT_LIMIT = 1024;
-export const UPDATE_RUN_DIAGNOSTIC_LIMIT = 32;
-
 /** A bounded diagnostic excerpt for a failed update step, never its command log or cwd. */
 export function summarizeUpdateStepFailure(
   step: Pick<UpdateStepResult, "exitCode" | "termination" | "stdoutTail" | "stderrTail">,
