@@ -19,6 +19,8 @@ export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
+  /** Exact admitted requester lifetime; identity alone does not establish live authority. */
+  assertCurrent?: () => void;
 }>;
 
 /** Closure-bound streaming hooks attached only to trusted plugin-owned synthetic clients. */

@@ -17,7 +17,7 @@ type RuntimeModelContext = Parameters<Parameters<AcquiredRuntimeModelContext["ru
 function createAcquiredRuntimeModelContext(
   context: RuntimeModelContext,
 ): AcquiredRuntimeModelContext {
-  return { run: (project) => project(context), release: vi.fn() };
+  return { run: (project) => project(context), [Symbol.asyncDispose]: vi.fn(async () => {}) };
 }
 
 const resolveEffectiveToolInventoryRuntimeModelContextMock = vi.hoisted(() =>

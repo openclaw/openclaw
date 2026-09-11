@@ -9,7 +9,7 @@ import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn<() => AuthProfileStore>(),
-  loadProviderAuthMethod: vi.fn(),
+  withSetupProviderAuthMethod: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -32,7 +32,7 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   loadAuthProfileStoreWithoutExternalProfiles: fixture.loadAuthProfileStore,
 }));
 vi.mock("./setup-inference-credentials.js", () => ({
-  loadProviderAuthMethod: fixture.loadProviderAuthMethod,
+  withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
 }));
 vi.mock("./setup-native-session-catalogs.js", () => ({
   listSetupNativeSessionCatalogs: () => [],
@@ -110,7 +110,7 @@ beforeEach(() => {
       },
     },
   });
-  fixture.loadProviderAuthMethod.mockReset();
+  fixture.withSetupProviderAuthMethod.mockReset();
 });
 
 afterEach(() => {
@@ -160,7 +160,7 @@ describe("setup inference discovery deadline", () => {
         "fixture:saved": { type: "api_key", provider: "fixture", key: "fixture-key" },
       },
     });
-    fixture.loadProviderAuthMethod.mockImplementation(() => {
+    fixture.withSetupProviderAuthMethod.mockImplementation(() => {
       loading.resolve();
       return new Promise(() => {});
     });

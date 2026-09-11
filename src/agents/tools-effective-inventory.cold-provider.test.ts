@@ -432,12 +432,12 @@ describe("cold dynamic-model effective inventory", () => {
             closing = closePreparedModelRuntimeSnapshots();
             expect(fixture.connections[1]!.database.isOpen).toBe(true);
           } else {
-            lease.release();
+            await lease[Symbol.asyncDispose]();
           }
           expect(current?.()).toBe(false);
           expect(signal?.aborted).toBe(true);
           expect(donorCurrent?.()).toBe(true);
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           await expect.poll(() => fixture.connections[1]!.disposals).toBe(1);
           expect(fixture.connections[0]!.disposals).toBe(0);
@@ -445,7 +445,7 @@ describe("cold dynamic-model effective inventory", () => {
             value: 42,
           });
         } finally {
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
         }
       });
@@ -487,7 +487,7 @@ describe("cold dynamic-model effective inventory", () => {
         const providers = resolve();
         expect(providers).toHaveLength(1);
         expect(providers[0]!.isCacheTtlEligible?.({ provider, modelId: pinnedId })).toBe(true);
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
         expect(fixture.connections[1]!.database.isOpen).toBe(true);
         expect(fixture.connections[1]!.disposals).toBe(0);
@@ -499,7 +499,7 @@ describe("cold dynamic-model effective inventory", () => {
         expect(fixture.connections[1]!.disposals).toBe(1);
         expect(fixture.connections[0]!.database.isOpen).toBe(true);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await host.close();
       }
     });
@@ -519,7 +519,7 @@ describe("cold dynamic-model effective inventory", () => {
         expect(fixture.connections).toEqual([]);
         expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     });
   });
@@ -538,7 +538,7 @@ describe("cold dynamic-model effective inventory", () => {
       try {
         expect(fixture.connections).toHaveLength(1);
         const connection = fixture.connections[0]!;
-        first.release();
+        await first[Symbol.asyncDispose]();
         expect(connection.disposals).toBe(0);
         const resolved = await resolveModelAsync(
           provider,
@@ -554,15 +554,15 @@ describe("cold dynamic-model effective inventory", () => {
         );
         expect(resolved.model?.id).toBe(pinnedId);
         expect(connection.database.isOpen).toBe(true);
-        second.release();
+        await second[Symbol.asyncDispose]();
         await expect.poll(() => connection.disposals).toBe(1);
         expect(connection.database.isOpen).toBe(false);
-        first.release();
-        second.release();
+        await first[Symbol.asyncDispose]();
+        await second[Symbol.asyncDispose]();
         expect(connection.disposals).toBe(1);
       } finally {
-        first.release();
-        second.release();
+        await first[Symbol.asyncDispose]();
+        await second[Symbol.asyncDispose]();
       }
     });
   });
@@ -619,19 +619,19 @@ describe("cold dynamic-model effective inventory", () => {
         await expect.poll(() => original.disposals).toBe(1);
         expect(fixture.connections[2]!.database.isOpen).toBe(true);
         expect(fixture.connections[2]!.disposals).toBe(0);
-        replacement.release();
+        await replacement[Symbol.asyncDispose]();
         await expect.poll(() => fixture.connections[2]!.disposals).toBe(1);
         expect(rootConnection.disposals).toBe(0);
         expect(rootConnection.database.isOpen).toBe(true);
       } finally {
         gate.resume.resolve();
-        replacement?.release();
+        await replacement?.[Symbol.asyncDispose]();
         await pendingReplacement?.then(
-          (lease) => lease.release(),
+          (lease) => lease[Symbol.asyncDispose](),
           () => undefined,
         );
         await first.then(
-          (lease) => lease.release(),
+          (lease) => lease[Symbol.asyncDispose](),
           () => undefined,
         );
       }
@@ -666,12 +666,12 @@ describe("cold dynamic-model effective inventory", () => {
         await expect(acquireReadOnlyPreparedModelRuntime(fixture.input)).rejects.toThrow(
           "process lifetime closed",
         );
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closing;
         expect(fixture.connections[0]!.disposals).toBe(1);
         expect(fixture.connections[0]!.database.isOpen).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closing;
       }
     });
@@ -696,17 +696,17 @@ describe("cold dynamic-model effective inventory", () => {
         closing = closePreparedModelRuntimeSnapshots().then(() => {
           closed = true;
         });
-        original.release();
+        await original[Symbol.asyncDispose]();
         await expect.poll(() => fixture.connections[0]!.disposals).toBe(1);
         expect(closed).toBe(false);
         expect(fixture.connections[1]!.database.isOpen).toBe(true);
-        successor.release();
+        await successor[Symbol.asyncDispose]();
         await closing;
         expect(fixture.connections.map(({ disposals }) => disposals)).toEqual([1, 1]);
         expect(fixture.connections.every(({ database }) => !database.isOpen)).toBe(true);
       } finally {
-        original.release();
-        successor?.release();
+        await original[Symbol.asyncDispose]();
+        await successor?.[Symbol.asyncDispose]();
         await closing;
       }
     });
@@ -863,11 +863,11 @@ describe("cold dynamic-model effective inventory", () => {
           expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
           expect(pickerIds(fixture)).toEqual([curatedId]);
         } finally {
-          lease.release();
+          await lease[Symbol.asyncDispose]();
         }
         expect(ownerCount()).toBe(1);
       } finally {
-        catalogLease.release();
+        await catalogLease[Symbol.asyncDispose]();
       }
     });
   });
@@ -905,7 +905,7 @@ describe("cold dynamic-model effective inventory", () => {
           cfg: config,
         });
         expect(acquired.run((context) => context)).toEqual({});
-        acquired.release();
+        await acquired[Symbol.asyncDispose]();
       });
       expect(ambientHook).not.toHaveBeenCalled();
       expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
@@ -926,7 +926,7 @@ describe("cold dynamic-model effective inventory", () => {
       } else {
         const acquired = await resolution;
         expect(acquired.run((context) => context)).toEqual({});
-        acquired.release();
+        await acquired[Symbol.asyncDispose]();
       }
       expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
     });

@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { bindExecutionOwnerLifecycleMetadata } from "../audit/execution-owner-lifecycle-binding-store.js";
@@ -402,13 +403,14 @@ describe("task-registry store runtime", () => {
     expect(cleanLoad).toHaveBeenCalledTimes(1);
   });
 
-  it("uses scoped owner lookups for fresh owner task reads", () => {
+  it("uses scoped owner lookups for fresh owner task reads", async () => {
     const storedTask = createStoredTask();
     const loadSnapshot = vi.fn(() => ({
       tasks: new Map(),
       deliveryStates: new Map(),
     }));
-    const listTasksForOwnerKey = vi.fn(() => [storedTask]);
+    const lookup = createDeferred<TaskRecord[]>();
+    const listTasksForOwnerKey = vi.fn(() => lookup.promise);
     configureTaskRegistryRuntime({
       store: {
         ...createInMemoryTaskRegistryStore(),
@@ -417,11 +419,31 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    const tasks = listFreshTasksForOwnerKey("agent:main:main");
+    const pending = listFreshTasksForOwnerKey("agent:main:main");
+    lookup.resolve([storedTask]);
+    const tasks = await pending;
 
     expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
     expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the current memory snapshot when a delayed owner lookup fails", async () => {
+    const storedTask = createStoredTask();
+    const lookup = createDeferred<TaskRecord[]>();
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore({
+          tasks: new Map([[storedTask.taskId, storedTask]]),
+          deliveryStates: new Map(),
+        }),
+        listTasksForOwnerKey: () => lookup.promise,
+      },
+    });
+    const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
+    updateTaskNotifyPolicyById({ taskId: storedTask.taskId, notifyPolicy: "silent" });
+    lookup.reject(new Error("owner lookup unavailable"));
+    expect(await pending).toMatchObject([{ taskId: storedTask.taskId, notifyPolicy: "silent" }]);
   });
 
   it("does not clone non-blocker details when inspecting restart blockers", () => {
@@ -969,7 +991,7 @@ describe("task-registry store runtime", () => {
           deliveryStatus: "not_applicable",
           notifyPolicy: "silent",
         });
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -993,7 +1015,7 @@ describe("task-registry store runtime", () => {
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow(
           /integrity_check failed.*idx_task_runs_owner_key/iu,
         );
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -1619,7 +1641,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("does not throw or diverge sqlite-direct reads when an upsert persist fails", () => {
+  it("does not throw or diverge sqlite-direct reads when an upsert persist fails", async () => {
     const ownerKey = "agent:main:main";
     // sqlite holds the source-of-truth row. status=running (current). When the
     // upsert throws, sqlite keeps this value (withWriteTransaction ROLLBACK +
@@ -1647,7 +1669,7 @@ describe("task-registry store runtime", () => {
     });
     // sqlite-direct reader (listFreshTasksForOwnerKey -> store.listTasksForOwnerKey).
     // Always returns the sqlite source of truth.
-    const listTasksForOwnerKey = vi.fn((key: string) =>
+    const listTasksForOwnerKey = vi.fn(async (key: string) =>
       [...sqliteState.values()].filter((task) => task.ownerKey === key),
     );
 
@@ -1665,7 +1687,7 @@ describe("task-registry store runtime", () => {
     });
 
     // in-memory loads the same row via loadSnapshot. Start state: both running.
-    const initial = listFreshTasksForOwnerKey(ownerKey);
+    const initial = await listFreshTasksForOwnerKey(ownerKey);
     expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
 
     // Attempt a transition running -> succeeded. updateTask must persist before
@@ -1690,7 +1712,7 @@ describe("task-registry store runtime", () => {
 
     // The sqlite-direct reader (used by media-generation-task-status-shared)
     // also keeps "running", so both read paths agree.
-    const after = listFreshTasksForOwnerKey(ownerKey);
+    const after = await listFreshTasksForOwnerKey(ownerKey);
     const seen = after.find((task) => task.taskId === "task-diverge");
     expect(seen?.status).toBe("running");
   });

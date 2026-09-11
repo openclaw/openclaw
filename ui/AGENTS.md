@@ -76,4 +76,5 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Visual Proof
 
+- For substantial UI design changes, follow the [Control UI E2E skill's UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test) to review states in an HTML gallery and collect feedback per example.
 - Visual proofs never include the Discord invitation card: the mock and E2E harness seed its canonical browser dismissal before rendering. Dedicated invitation behavior tests may opt into a fresh visitor with `communityInviteDismissed: false`, but do not capture invitation screenshots or videos.

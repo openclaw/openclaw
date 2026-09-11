@@ -333,14 +333,12 @@ describe("createCodexDynamicToolBridge", () => {
     expect((contentItem.text as string).length).toBeLessThanOrEqual(800);
   });
 
-  it("bounds aggregated unexpected-property details returned to Codex", async () => {
-    const invalidArguments = Object.fromEntries(
-      Array.from({ length: 20 }, (_, index) => [`unexpected_property_${index}`, true]),
-    );
+  it("bounds oversized unexpected-property details returned to Codex", async () => {
+    const propertyName = `unexpected_property_${"x".repeat(240)}`;
     const { execute, response } = await runSchemaToolCall({
-      arguments: invalidArguments,
-      callId: "call-many-unexpected-fields",
-      name: "bounded_additional_properties_tool",
+      arguments: { [propertyName]: true },
+      callId: "call-oversized-validation-detail",
+      name: "bounded_validation_detail_tool",
       parameters: {
         type: "object",
         properties: {},

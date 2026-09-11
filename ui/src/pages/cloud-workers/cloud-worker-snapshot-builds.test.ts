@@ -520,11 +520,23 @@ describe("Snapshot builds", () => {
     }
   });
 
-  it("dismisses a failed build the Gateway still records and keeps it hidden on refresh", async () => {
+  it("dismisses a failed build before refresh finishes and keeps it hidden after refresh fails", async () => {
     const environments = [buildFixture("failed", "Gateway is only bound to loopback")];
+    const destruction = deferred<Record<string, never>>();
+    const refresh = deferred<{ environments: typeof environments }>();
+    let refreshPending = false;
     const fixture = mountPage(buildMethods, {
       result: { ...snapshotListFixture(), images: [] },
-      response: (method) => (method === "environments.list" ? { environments } : undefined),
+      response: (method) => {
+        if (method === "environments.list") {
+          return refreshPending ? refresh.promise : { environments };
+        }
+        if (method === "environments.destroy") {
+          refreshPending = true;
+          return destruction.promise;
+        }
+        return undefined;
+      },
     });
     try {
       const snapshots = await openSnapshots(fixture);
@@ -533,16 +545,28 @@ describe("Snapshot builds", () => {
       );
       expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("1");
       button(snapshots, "Dismiss").click();
+      await waitForFast(() =>
+        expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
+          environmentId: "build-app",
+        }),
+      );
+      expect(snapshots.textContent).toContain("build-app");
+      expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("1");
+      destruction.resolve({});
       await waitForFast(() => expect(snapshots.textContent).toContain("Failed build dismissed"));
       expect(vi.mocked(showConfirmDialog)).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Dismiss failed build", details: "build-app" }),
       );
-      expect(fixture.request).toHaveBeenCalledWith("environments.destroy", {
-        environmentId: "build-app",
-      });
+      expect(snapshots.textContent).not.toContain("build-app");
+      expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("0");
+      refresh.reject(new Error("Build inventory is unavailable"));
+      await waitForFast(() =>
+        expect(snapshots.textContent).toContain("Build inventory is unavailable"),
+      );
       expect(snapshots.textContent).not.toContain("build-app");
       expect(snapshots.querySelectorAll(".settings-summary dd")[3]?.textContent).toBe("0");
       // The Gateway keeps terminal build records until retention; the row must stay cleared.
+      refreshPending = false;
       const listed = fixture.request.mock.calls.filter(
         ([method]) => method === "environments.list",
       ).length;
@@ -554,6 +578,8 @@ describe("Snapshot builds", () => {
       );
       expect(snapshots.textContent).not.toContain("build-app");
     } finally {
+      destruction.resolve({});
+      refresh.resolve({ environments });
       fixture.dispose();
     }
   });

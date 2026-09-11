@@ -5,8 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
@@ -55,11 +53,6 @@ import {
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { PluginLogger } from "./types.js";
-
-export function createPluginLoaderLogger(): PluginLogger {
-  return createSubsystemLogger("plugins");
-}
 
 export function detailPluginStartupTrace(
   startupTrace: PluginLoadOptions["startupTrace"] | undefined,
@@ -152,7 +145,7 @@ function isAuthorizedDreamingSidecarPlugin(params: {
   return params.sidecar?.engineId === params.pluginId;
 }
 
-function matchesScopedPluginOrDreamingSidecar(params: {
+export function matchesScopedPluginOrDreamingSidecar(params: {
   onlyPluginIdSet: ReadonlySet<string> | null;
   pluginId: string;
   sidecar: AuthorizedDreamingSidecar | null;
@@ -383,9 +376,7 @@ export function preparePluginLoadRecord(params: {
       enabled: false,
       activationState,
     });
-    duplicate.status = "disabled";
-    duplicate.error = `overridden by ${existingOrigin} plugin`;
-    markPluginActivationDisabled(duplicate, duplicate.error);
+    markPluginActivationDisabled(duplicate, `overridden by ${existingOrigin} plugin`);
     params.registry.plugins.push(duplicate);
     return null;
   }
@@ -444,8 +435,10 @@ export function activatePluginRegistry(
   cacheKey: string | null,
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
+  previousRegistry?: PluginRegistry,
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
+  const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
   const previousHookRegistry = getGlobalPluginRegistry();
   let stagedVersion: number | undefined;
   const isCurrentStage = () =>
@@ -465,13 +458,13 @@ export function activatePluginRegistry(
     }
     initializeGlobalHookRunner(registry);
     activateContextEngineRegistrations(registry);
-    commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+    commitStagedPluginRegistry(retainedRegistry, registry);
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
   } catch (error) {
     if (isCurrentStage()) {
-      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot);
+      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
       if (
         getActivePluginRegistry() === activeSnapshot.activeRegistry &&
         getActivePluginRegistryVersion() === rollbackVersion
@@ -485,8 +478,4 @@ export function activatePluginRegistry(
     }
     throw error;
   }
-}
-
-export function safeRealpathOrResolve(value: string): string {
-  return resolveRealpathOrAbsolute(value);
 }

@@ -99,7 +99,13 @@ async function fileExists(file: string): Promise<boolean> {
 }
 
 /** Every raw spelling discovered for one database, grouped by projection identity. */
-type StateDatabaseDiscovery = { spellings: [string, ...string[]] };
+const StateDatabaseDiscoverySchema = z.object({
+  spellings: z.tuple([z.string()], z.string()),
+});
+type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
+export const UpdateCandidateStateInventorySchema = z
+  .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
+  .transform((entries) => new Map(entries));
 
 function queueStateDatabaseSpelling(
   files: Map<string, StateDatabaseDiscovery>,
@@ -175,7 +181,7 @@ async function withStateDatabaseSnapshot<T>(
   return outcome.value;
 }
 
-async function collectStateDatabasePaths(
+export async function collectStateDatabasePaths(
   input: StateInput,
 ): Promise<Map<string, StateDatabaseDiscovery>> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
@@ -240,6 +246,25 @@ function publishStateDatabaseVersions(
     }
   }
   return versions;
+}
+
+/** Read registrations from a private shared copy before budgeting the complete snapshot set. */
+export async function readUpdateCandidateStateInventoryInProcess(
+  input: StateInput,
+): Promise<Map<string, StateDatabaseDiscovery>> {
+  const files = await collectStateDatabasePaths(input);
+  const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+  if (await fileExists(shared)) {
+    await withStateDatabaseSnapshot(shared, (location) => {
+      const db = openNodeSqliteDatabase(location, { readOnly: true });
+      try {
+        collectRegisteredPaths(db, shared, files);
+      } finally {
+        db.close();
+      }
+    });
+  }
+  return files;
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */

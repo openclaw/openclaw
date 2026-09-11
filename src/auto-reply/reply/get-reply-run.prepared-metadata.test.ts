@@ -50,7 +50,7 @@ describe("runPreparedReply prepared metadata", () => {
       pluginMetadataSnapshot: metadataSnapshot,
       pluginRegistry,
     };
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     const selectedGeneration = { ...pluginGeneration, pluginRegistry: { selected: true } };
     mocks.prepareContext.mockResolvedValue({
       kind: "run",
@@ -65,7 +65,7 @@ describe("runPreparedReply prepared metadata", () => {
         pluginRegistry: selectedGeneration.pluginRegistry,
         workspaceDir,
       },
-      release,
+      [Symbol.asyncDispose]: release,
       pluginGeneration: selectedGeneration,
     }));
     let admissionSnapshot: unknown;

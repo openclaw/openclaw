@@ -50,6 +50,7 @@ describe("Web Awesome control ownership", () => {
       "components/composer-menu.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
+      "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
       "pages/new-session/place-browser.ts",

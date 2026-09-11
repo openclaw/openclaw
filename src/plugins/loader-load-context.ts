@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,14 +22,6 @@ import type {
   PluginLoadOptions,
   PluginRuntimeSubagentMode,
 } from "./loader-types.js";
-import {
-  parsePluginCacheJson,
-  pluginCacheExistsSync,
-  pluginCacheRealpathSync,
-  pluginCacheStatSync,
-  readPluginCacheFile,
-} from "./plugin-cache-files.js";
-import type { BundledPackageCacheIdentity } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
 import {
   fingerprintPluginDiscoveryContext,
@@ -41,41 +31,10 @@ import {
   resolvePluginRuntimeArtifactPreference,
   type PluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
-import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { normalizePluginIdScope } from "./plugin-scope.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
-
-function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
-  if (!stockRoot) {
-    return undefined;
-  }
-  const resolved = path.resolve(stockRoot);
-  const parent = path.dirname(resolved);
-  if (
-    path.basename(resolved) === "extensions" &&
-    (path.basename(parent) === "dist" || path.basename(parent) === "dist-runtime")
-  ) {
-    return path.dirname(parent);
-  }
-  const sourcePackageRoot = parent;
-  return pluginCacheExistsSync(path.join(sourcePackageRoot, "package.json"))
-    ? sourcePackageRoot
-    : undefined;
-}
-
-function readPackageVersionForCache(packageJsonPath: string): string {
-  const file = readPluginCacheFile({
-    rootDir: path.dirname(packageJsonPath),
-    relativePath: path.basename(packageJsonPath),
-    rejectHardlinks: false,
-  });
-  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
-  if (!parsed?.ok || !isRecord(parsed.value)) {
-    return "unknown";
-  }
-  const version = parsed.value.version;
-  return typeof version === "string" && version.trim() ? version.trim() : "unknown";
-}
 
 const runtimeBindingCacheIds = new WeakMap<object, number>();
 let nextRuntimeBindingCacheId = 1;
@@ -102,35 +61,6 @@ function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string 
     nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
     subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
   });
-}
-
-function resolveBundledPackageCacheIdentity(
-  stockRoot?: string,
-): BundledPackageCacheIdentity | undefined {
-  if (!stockRoot) {
-    return undefined;
-  }
-  const bundledPackages = getPluginCache().sdk.bundledPackages;
-  const stockRootKey = path.resolve(stockRoot);
-  if (bundledPackages.has(stockRootKey)) {
-    return bundledPackages.get(stockRootKey);
-  }
-  const packageRoot = resolveBundledPackageRootForCache(stockRoot);
-  if (!packageRoot) {
-    bundledPackages.set(stockRootKey, undefined);
-    return undefined;
-  }
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  const stat = pluginCacheStatSync(packageJsonPath);
-  const identity: BundledPackageCacheIdentity = {
-    packageJson: pluginCacheRealpathSync(packageJsonPath) ?? path.resolve(packageJsonPath),
-    packageRoot: pluginCacheRealpathSync(packageRoot) ?? path.resolve(packageRoot),
-    packageVersion: stat ? readPackageVersionForCache(packageJsonPath) : "missing",
-    size: stat?.size ?? -1,
-    mtimeMs: stat?.mtimeMs ?? -1,
-  };
-  bundledPackages.set(stockRootKey, identity);
-  return identity;
 }
 
 function buildActivationMetadataHash(params: {
@@ -198,6 +128,7 @@ function buildCacheKeys(params: {
   coreGatewayMethodNames?: string[];
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
+  cliMetadata: boolean;
 }) {
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
@@ -205,7 +136,6 @@ function buildCacheKeys(params: {
     env: params.env,
   });
   const { roots, loadPaths } = discoveryContext;
-  const bundledPackage = resolveBundledPackageCacheIdentity(roots.stock);
   const installs = Object.fromEntries(
     Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
       pluginId,
@@ -222,35 +152,19 @@ function buildCacheKeys(params: {
       },
     ]),
   );
-  const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
-  const setupOnlyModeKey =
-    params.forceSetupOnlyChannelPlugins === true ? "force-setup" : "normal-setup";
-  const rawConfigEnvMode =
-    params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
-  const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
-  const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
-  const activationMode = params.activate === false ? "snapshot" : "active";
-  // Freeze request facts before discovery or plugin registration can mutate caller inputs.
-  const prefix = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
-    {
-      bundledPackage,
-      devSourceRoot: params.devSourceRoot ?? "",
-      discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
+  const cacheIdentity = {
+    roots,
+    devSourceRoot: params.devSourceRoot ?? "",
+    discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
+    plugins: {
       ...params.plugins,
-      entries: Object.entries(params.plugins.entries).map(([id, entry]) => [id, entry.enabled]),
-      registrationConfigKey: params.registrationConfigKey,
-      installs,
       loadPaths,
+      entries: Object.entries(params.plugins.entries).map(([id, entry]) => [id, entry.enabled]),
     },
-  ).slice(0, -1)}`;
-  const suffix = `${JSON.stringify({
-    activationMetadataKey: params.activationMetadataKey ?? "",
-    capabilityCatalogIdentity: params.capabilityCatalogIdentity,
-    allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
-  }).slice(
-    1,
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
-  const discoveryFields = JSON.stringify({
+    registrationConfigKey: params.registrationConfigKey,
+    installs,
+    // Supplied candidates own physical source selection even when ids/config match.
+    // Keep the selection facts in the loader key instead of a second hook cache.
     discoverySources: params.discovery?.candidates.map((candidate) => [
       candidate.effectivePluginId ?? candidate.idHint,
       candidate.origin,
@@ -261,26 +175,45 @@ function buildCacheKeys(params: {
       candidate.configSelected,
       candidate.packageManifest?.build?.bundledDist,
     ]),
-  }).slice(1, -1);
-  const resolveManifestCacheKey = (manifestRegistry: PluginLoadOptions["manifestRegistry"]) => {
-    const manifestFields = JSON.stringify({
-      manifestSources: manifestRegistry?.plugins.map((plugin) => [
-        plugin.id,
-        plugin.origin,
-        plugin.rootDir,
-        plugin.source,
-        plugin.setupSource,
-        plugin.providerDiscoverySource,
-        plugin.capabilityCatalogSource,
-        plugin.sourcePreferred,
-        plugin.packageManifest?.build?.bundledDist,
-      ]),
-    }).slice(1, -1);
-    const sourceFields = [manifestFields, discoveryFields].filter(Boolean).join(",");
-    // Keep the existing key encoding; only the discovered manifest projection can differ.
-    const identity = `${prefix},${sourceFields ? `${sourceFields},` : ""}${suffix}`;
-    return createHash("sha256").update(identity).digest("hex");
+    activationMetadataKey: params.activationMetadataKey ?? "",
+    capabilityCatalogIdentity: params.capabilityCatalogIdentity,
+    allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
+    onlyPluginIds: params.onlyPluginIds,
+    includeSetupOnlyChannelPlugins: params.includeSetupOnlyChannelPlugins === true,
+    forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins === true,
+    channelPluginLoadIntent: params.channelPluginLoadIntent,
+    artifactPreference: params.artifactPreference,
+    resolveRawConfigEnvVars: params.resolveRawConfigEnvVars === true,
+    loadModules: params.loadModules !== false,
+    toolDiscovery: params.toolDiscovery === true,
+    runtimeSubagentMode: params.runtimeSubagentMode ?? "default",
+    runtimeBindingIdentity: params.runtimeBindingIdentity ?? "{}",
+    pluginSdkResolution: params.pluginSdkResolution ?? "auto",
+    coreGatewayMethodNames: params.coreGatewayMethodNames ?? [],
+    activate: params.activate !== false,
+    cliMetadata: params.cliMetadata,
   };
+  // Capture request facts once; discovered manifests may replace only the source projection.
+  const requestIdentity = JSON.stringify(cacheIdentity);
+  const resolveManifestCacheKey = (manifestRegistry: PluginLoadOptions["manifestRegistry"]) =>
+    createHash("sha256")
+      .update(requestIdentity)
+      .update(
+        JSON.stringify(
+          manifestRegistry?.plugins.map((plugin) => [
+            plugin.id,
+            plugin.origin,
+            plugin.rootDir,
+            plugin.source,
+            plugin.setupSource,
+            plugin.providerDiscoverySource,
+            plugin.capabilityCatalogSource,
+            plugin.sourcePreferred,
+            plugin.packageManifest?.build?.bundledDist,
+          ]),
+        ) ?? "",
+      )
+      .digest("hex");
   return { cacheKey: resolveManifestCacheKey(params.manifestRegistry), resolveManifestCacheKey };
 }
 
@@ -336,6 +269,7 @@ function mergeTrustPluginConfigFromActivationSource(params: {
 }
 
 export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
+  const cacheState = getPluginLoaderCacheState();
   const shouldResolveRawConfigEnvVars = options.resolveRawConfigEnvVars === true;
   const baseEnv = options.env ?? process.env;
   const rawConfig = options.config ?? {};
@@ -451,9 +385,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
-    activate: options.activate,
+    activate: options.mode === "cli-metadata" ? false : options.activate,
+    cliMetadata: options.mode === "cli-metadata",
   });
   return {
+    cacheState,
     env,
     cfg,
     registrationConfigKey,
@@ -467,7 +403,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
-    shouldActivate: options.activate !== false,
+    shouldActivate: options.mode !== "cli-metadata" && options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,

@@ -5991,9 +5991,7 @@ setImmediate(() => {
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
-      // Same serial Chromium workload as checks-ui-e2e: hosted attempt 1 made it
-      // the run's slowest job (205s mean vs a 150-190s plateau).
-      "checks-ui-e2e-real-gateway": "blacksmith-16vcpu-ubuntu-2404",
+      "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-32vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
@@ -8614,6 +8612,60 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(runStep.run).not.toMatch(/\bsleep\b/u);
     expect(runStep.run).not.toMatch(/\bretry\b/iu);
+  });
+
+  it("retains Android test XML after failures without collecting caches or canceled jobs", () => {
+    const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const runIndex = steps.findIndex((step) => step.name === "Run Android ${{ matrix.task }}");
+    const uploadIndex = steps.findIndex((step) => step.name === "Upload Android test reports");
+    const upload = expectDefined(steps[uploadIndex], "Android test reports");
+    expect(uploadIndex).toBeGreaterThan(runIndex);
+    // A status function prevents Actions' implicit success() from hiding failed-test evidence.
+    expect(upload.if).toMatch(/\b(?:always|cancelled|failure|success)\(\)/u);
+    for (const [task, failed, cancelled, expected] of [
+      ["test-play", false, false, true],
+      ["test-play", true, false, true],
+      ["test-play-compat", true, false, true],
+      ["test-third-party", true, false, true],
+      ["test-wear", false, false, true],
+      ["test-wear", true, true, false],
+      ["test-play", false, true, false],
+      ["build-play", false, false, false],
+      ["build-wear", true, false, false],
+      ["ktlint", false, false, false],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(upload.if, {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { task },
+          failed,
+          cancelled,
+        }),
+        `${task}: failed=${failed}, cancelled=${cancelled}`,
+      ).toBe(expected);
+    }
+    const root = tempDirs.make("openclaw-android-test-reports-");
+    const reports = [
+      "apps/android/app/build/test-results/testPlayDebugUnitTest/TEST-Play.xml",
+      "apps/android/app/build/test-results/testThirdPartyDebugUnitTest/TEST-ThirdParty.xml",
+      "apps/android/wear/build/test-results/testDebugUnitTest/TEST-Wear.xml",
+      "apps/android/wear-shared/build/test-results/testDebugUnitTest/TEST-Shared.xml",
+    ];
+    const unrelated = [
+      "apps/android/app/build/test-results/testPlayDebugUnitTest/binary/results.bin",
+      "apps/android/app/build/reports/lint-results-playDebug.xml",
+      "apps/android/app/build/outputs/apk/play/debug/app.apk",
+      "apps/android/benchmark/build/test-results/testDebugUnitTest/TEST-Benchmark.xml",
+      ".gradle/caches/TEST-cached.xml",
+    ];
+    for (const file of [...reports, ...unrelated]) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), "synthetic report fixture");
+    }
+    const patterns = String(upload.with?.path).trim().split("\n");
+    expect(globSync(patterns, { cwd: root }).toSorted()).toEqual(reports.toSorted());
   });
 
   it("never keys a Blacksmith sticky disk by unbounded run dimensions", () => {
@@ -13791,7 +13843,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         name: "checks-ui-e2e-real-gateway",
         setup: realGatewaySetup,
         matrix: {},
-        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+        blacksmithRunner: "blacksmith-32vcpu-ubuntu-2404",
       },
     ] as const;
     const routingScenarios = [

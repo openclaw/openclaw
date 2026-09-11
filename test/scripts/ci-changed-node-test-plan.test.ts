@@ -1256,6 +1256,9 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each([
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    "src/plugins/plugin-module-generation.sdk.test.ts",
+    "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/cli/update-cli/update-command-migrated.test.ts",

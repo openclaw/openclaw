@@ -9,15 +9,13 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createProfiler,
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  recordPluginModuleRoot,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import type {
@@ -347,7 +345,6 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     });
     if (opened.ok) {
       fs.closeSync(opened.fd);
-      getPluginCacheSource(opened.path).boundaryRoot = candidate.boundaryRoot;
       resolvedModulePaths.set(cacheKey, { path: opened.path });
       return opened.path;
     }
@@ -389,13 +386,13 @@ function getSourceModuleLoader(
   options: BundledEntryModuleLoadOptions,
   transformOpenClawDependencies = false,
 ) {
-  return getCachedPluginSourceModuleLoader({
+  return getCachedPluginModuleLoader({
     modulePath,
-    rootDir: getPluginCacheSource(modulePath).boundaryRoot,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
     transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
+    tryNative: false,
   });
 }
 
@@ -415,15 +412,21 @@ function loadBundledEntryModuleSync(
   options: BundledEntryModuleLoadOptions = {},
 ): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  const captured = instance?.hasModuleSource(modulePath);
+  if (captured === false) {
+    throw new Error(
+      `Bundled companion is outside the plugin's captured module graph: ${modulePath}`,
+    );
+  }
+  if (instance && captured) {
+    return instance.loadModule(modulePath);
+  }
   const source = getPluginCacheSource(modulePath);
   const cached = source.variants.get("bundled-entry")?.exports;
   if (cached) {
     return cached.value;
   }
-  recordPluginModuleRoot(
-    modulePath,
-    source.boundaryRoot ?? resolveEntryBoundaryRoot(importMetaUrl),
-  );
   let loaded: unknown;
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;

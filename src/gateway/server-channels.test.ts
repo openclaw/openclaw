@@ -28,6 +28,7 @@ import {
 } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginRegistry,
@@ -1333,6 +1334,52 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["listAccountIds", "resolveAccount"] as const)(
+    "stops managed channel accounts with a %s getter during replacement",
+    async (accessor) => {
+      const instance = new PluginInstance("discord");
+      const account = { enabled: true, configured: true };
+      const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
+      const plugin = createTestPlugin({
+        account,
+        listAccountIds: () => [DEFAULT_ACCOUNT_ID, "idle"],
+        startAccount: async ({ abortSignal }) =>
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+        stopAccount,
+      });
+      const config = plugin.config;
+      const method = config[accessor];
+      Object.defineProperty(config, accessor, {
+        get() {
+          expect(this).toBe(config);
+          return function (this: typeof config, ...args: unknown[]) {
+            expect(this).toBe(config);
+            return Reflect.apply(method, this, args);
+          };
+        },
+      });
+      installTestRegistry(instance.wrap(plugin));
+      const manager = createManager();
+      try {
+        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+        await flushMicrotasks();
+        // Gateway replacement closes normal calls before asking the channel owner to stop.
+        instance.quiesce();
+        await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
+        expect(stopAccount.mock.calls.map(([context]) => context.accountId).toSorted()).toEqual(
+          [DEFAULT_ACCOUNT_ID, "idle"].toSorted(),
+        );
+        expect(stopAccount.mock.calls.every(([context]) => context.account === account)).toBe(true);
+      } finally {
+        instance.resume();
+        await manager.stopChannel("discord");
+        await instance.dispose();
+      }
+    },
+  );
 
   it("does not enumerate configured accounts when stopping a never-started channel", async () => {
     const listAccountIds = vi.fn(() => [DEFAULT_ACCOUNT_ID]);

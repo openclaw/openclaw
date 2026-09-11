@@ -1,3 +1,4 @@
+import type { PluginInstanceAdmission } from "./plugin-instance.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 // Stores plugin runtime registry state for the current process lifecycle.
 import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
@@ -18,6 +19,7 @@ export type RegistryState = {
   registrationContext?: {
     registry: PluginRegistry;
     pluginId: string;
+    instance?: PluginInstanceAdmission;
     registerMemoryCapability?: MemoryCapabilityRegistrar;
   };
   commandRegistryClearTail?: Promise<void>;

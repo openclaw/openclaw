@@ -139,7 +139,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.options.reserveViewport === false) {
+    if (this.options.reserveViewport === false || this.isFullscreen()) {
       return;
     }
     // Embedded docks live inside a parent layout that already owns their geometry.
@@ -200,7 +200,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   private clearReservation(): void {
-    if (this.options.reserveViewport === false) {
+    if (this.options.reserveViewport === false || this.isFullscreen()) {
       return;
     }
     const root = document.documentElement.style;

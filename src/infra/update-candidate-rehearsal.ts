@@ -1,20 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { runCommandBuffered } from "../process/exec.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
-import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
+import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -129,134 +124,94 @@ export async function prepareUpdateCandidateRehearsal(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<UpdateCandidateRehearsal> {
-  const deadline = Date.now() + (params.timeoutMs ?? 300_000);
-  const remaining = () => {
-    params.signal?.throwIfAborted();
-    const milliseconds = deadline - Date.now();
-    if (milliseconds <= 0) {
-      throw new Error("Update snapshot deadline exceeded");
-    }
-    return milliseconds;
-  };
-  const tempDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-canary-")),
-  );
   const sourceEnv = params.env ?? process.env;
+  const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const copiedAgentDir = (directory: string | undefined) =>
+      directory?.trim()
+        ? resolveUpdateCandidateStatePath(
+            path.resolve(params.stateDir),
+            tempDir,
+            resolveUserPath(directory, sourceEnv),
+          )
+        : undefined;
+    const env: NodeJS.ProcessEnv = {
+      ...sourceEnv,
+      HOME: tempDir,
+      USERPROFILE: tempDir,
+      TMPDIR: tempDir,
+      TMP: tempDir,
+      TEMP: tempDir,
+      XDG_CONFIG_HOME: path.join(tempDir, "config"),
+      XDG_CACHE_HOME: path.join(tempDir, "cache"),
+      XDG_DATA_HOME: path.join(tempDir, "data"),
+      XDG_STATE_HOME: path.join(tempDir, "state"),
+      OPENCLAW_HOME: tempDir,
+      OPENCLAW_STATE_DIR: tempDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
+      PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      OPENCLAW_NO_AUTO_UPDATE: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_GATEWAY_SERVICE_PID: undefined,
+      OPENCLAW_GATEWAY_PORT: undefined,
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      ...buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+        deferConfiguredPluginInstallRepair: true,
+      }),
+    };
+    // These selectors name the serving owner's service or files outside copied
+    // state. Rehearsal must never inherit its update continuation authority.
+    for (const key of [
+      ...SUPERVISOR_HINT_ENV_VARS,
+      CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+      UPDATE_RUN_ID_ENV,
+      "OPENCLAW_UPDATE_RUN_HANDOFF",
+      POST_CORE_UPDATE_ENV,
+      POST_CORE_UPDATE_CHANNEL_ENV,
+      POST_CORE_UPDATE_RESULT_PATH_ENV,
+      POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
+      POST_CORE_UPDATE_STARTED_AT_ENV,
+      POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+      POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+    ]) {
+      delete env[key];
+    }
+    return env;
+  };
+  const { stateDir: tempDir, pluginPaths } = await prepareUpdateCandidateStateSnapshot({
+    ...params,
+    env: sourceEnv,
+    workerEnv,
+  });
+  const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const copiedAgentDir = (directory: string | undefined) =>
-    directory?.trim()
-      ? resolveUpdateCandidateStatePath(
-          path.resolve(params.stateDir),
-          tempDir,
-          resolveUserPath(directory, sourceEnv),
-        )
-      : undefined;
-  const env: NodeJS.ProcessEnv = {
-    ...sourceEnv,
-    HOME: tempDir,
-    USERPROFILE: tempDir,
-    TMPDIR: tempDir,
-    TMP: tempDir,
-    TEMP: tempDir,
-    XDG_CONFIG_HOME: path.join(tempDir, "config"),
-    XDG_CACHE_HOME: path.join(tempDir, "cache"),
-    XDG_DATA_HOME: path.join(tempDir, "data"),
-    XDG_STATE_HOME: path.join(tempDir, "state"),
-    OPENCLAW_HOME: tempDir,
-    OPENCLAW_STATE_DIR: tempDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    OPENCLAW_AGENT_DIR: copiedAgentDir(sourceEnv.OPENCLAW_AGENT_DIR),
-    PI_CODING_AGENT_DIR: copiedAgentDir(sourceEnv.PI_CODING_AGENT_DIR),
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    OPENCLAW_SKIP_CHANNELS: "1",
-    OPENCLAW_SKIP_PROVIDERS: "1",
-    OPENCLAW_SKIP_CRON: "1",
-    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-    OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_GATEWAY_SERVICE_PID: undefined,
-    OPENCLAW_GATEWAY_PORT: undefined,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-    OPENCLAW_GATEWAY_TOKEN: undefined,
-    OPENCLAW_GATEWAY_PASSWORD: undefined,
-    OPENCLAW_PROFILE: undefined,
-    OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined,
-    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-    ...buildUpdateDoctorEnv({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-      serviceRepairPolicy: "external",
-      deferConfiguredPluginInstallRepair: true,
-    }),
-  };
-  // These selectors name the serving owner's service or files outside copied
-  // state. Rehearsal must never inherit its update continuation authority.
-  for (const key of [
-    ...SUPERVISOR_HINT_ENV_VARS,
-    CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
-    UPDATE_RUN_ID_ENV,
-    "OPENCLAW_UPDATE_RUN_HANDOFF",
-    POST_CORE_UPDATE_ENV,
-    POST_CORE_UPDATE_CHANNEL_ENV,
-    POST_CORE_UPDATE_RESULT_PATH_ENV,
-    POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
-    POST_CORE_UPDATE_STARTED_AT_ENV,
-    POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
-    POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
-  ]) {
-    delete env[key];
-  }
   try {
-    const snapshot = await runCommandBuffered(
-      [
-        params.nodeRunner ?? process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-          params.nodeRunner,
-        ),
-      ],
-      {
-        input: JSON.stringify({
-          mode: "snapshot",
-          stateDir: params.stateDir,
-          config: params.config,
-          targetStateDir: tempDir,
-          candidateRoot: params.candidateRoot,
-          env: {
-            HOME: sourceEnv.HOME,
-            OPENCLAW_HOME: sourceEnv.OPENCLAW_HOME,
-            USERPROFILE: sourceEnv.USERPROFILE,
-            OPENCLAW_AGENT_DIR: sourceEnv.OPENCLAW_AGENT_DIR,
-            PI_CODING_AGENT_DIR: sourceEnv.PI_CODING_AGENT_DIR,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: sourceEnv.OPENCLAW_BUNDLED_PLUGINS_DIR,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: sourceEnv.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
-          },
-        }),
-        baseEnv: env,
-        timeoutMs: remaining(),
-        signal: params.signal,
-        killGraceMs: 500,
-        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-      },
-    );
-    if (snapshot.code !== 0) {
-      throw new Error(
-        `Update state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
-      );
-    }
-    const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
-      JSON.parse(snapshot.stdout.toString("utf8")),
-    );
+    params.signal?.throwIfAborted();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
-      signal: AbortSignal.timeout(remaining()),
+      signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 300_000),
     });
     const serialized = JSON.stringify(
       isolatedConfig(

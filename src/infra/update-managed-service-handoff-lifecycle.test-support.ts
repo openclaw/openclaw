@@ -140,6 +140,49 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(sentinel).toBeNull();
   });
 
+  itUnix("accepts a failed unit that retained the parked generation after activation", async () => {
+    // A Gateway main process that exits non-zero during KillMode=mixed stop settles
+    // the unit into ActiveState=failed with the parked identity retained; the exact
+    // parked unit is still verified, so activation must proceed.
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+      updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
+    });
+
+    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
+    expect(state).toMatchObject({ parked: true, postExitShows: 1, stopCompleted: true });
+    expect(sentinel).toBeNull();
+  });
+
+  itUnix("restores a failed unit that retained the parked generation", async () => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      cancelAfterPark: true,
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+    });
+    const verbs = commands.map((command) =>
+      command.split(" ").find((part) => ["show", "stop", "reset-failed", "start"].includes(part)),
+    );
+
+    expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
+    expect(state).toMatchObject({ parked: true, restored: true });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: {
+          reason: "managed-service-handoff-cancelled",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+          ]),
+        },
+      },
+    });
+  });
+
   itUnix.each([
     [
       "an inactive replacement generation",
@@ -161,7 +204,15 @@ export function registerManagedSystemdHandoffConvergenceTests(
     ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
     ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
-    ["a failed service", { activeState: "failed", mainPid: "none" }],
+    [
+      "a failed service with a replacement generation",
+      {
+        activeState: "failed",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
     ["an inactive service retaining a main PID", { activeState: "inactive", mainPid: "parent" }],
     ["a replaced service unit", { activeState: "inactive", id: "replacement.service" }],
     ["an unloaded service unit", { activeState: "inactive", loadState: "not-found" }],

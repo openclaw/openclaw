@@ -8,15 +8,23 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   removeAuthProfilesAcrossOwnerStores,
 } from "../../agents/auth-profiles.js";
-import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth-provider-config.js";
+import {
+  resolveProviderConfigSecretInput,
+  resolveProviderEntryApiKeyProfileReference,
+} from "../../agents/model-auth-provider-config.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   configReferencesAuthProfile,
   removeAuthProfileConfig,
 } from "../../plugins/provider-auth-helpers.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
@@ -114,6 +122,7 @@ function restoreSurvivingProfileOrder(params: {
 
 function removeCredentialConfigReferences(params: {
   current: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
   profileIds: readonly string[];
   store: AuthProfileStore;
   apiKeyProvider?: string;
@@ -131,7 +140,8 @@ function removeCredentialConfigReferences(params: {
     if (
       resolveProviderIdForAuth(provider, { config: next }) === owner &&
       resolveProviderEntryApiKeyProfileReference({
-        cfg: next,
+        cfg: params.runtimeConfig,
+        sourceConfig: params.runtimeConfig,
         provider,
         store: params.store,
       }).kind === "literal"
@@ -150,8 +160,38 @@ export async function removeModelAuthCredentials(params: {
   profileIds: readonly string[];
   apiKeyProvider?: string;
   provider?: string;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const apiKeyProvider = params.apiKeyProvider;
+  const keyBindings = (cfg: OpenClawConfig, sourceConfig?: OpenClawConfig) => {
+    const owner =
+      apiKeyProvider === undefined
+        ? undefined
+        : resolveProviderIdForAuth(apiKeyProvider, { config: cfg });
+    return {
+      owner,
+      bindings: Object.fromEntries(
+        Object.entries(cfg.models?.providers ?? {})
+          .filter(
+            ([provider, entry]) =>
+              entry.apiKey !== undefined &&
+              resolveProviderIdForAuth(provider, { config: cfg }) === owner,
+          )
+          .map(([provider]) => {
+            const { providerConfig, ref } = resolveProviderConfigSecretInput(
+              cfg,
+              provider,
+              sourceConfig,
+            );
+            return [provider, ref ?? providerConfig?.apiKey];
+          }),
+      ),
+    };
+  };
+  const expectedBindings = apiKeyProvider === undefined ? undefined : keyBindings(params.cfg);
+  const application = createRuntimeConfigWriteApplication(
+    captureGatewayRootWorkAdmissionContinuationScope()?.run,
+  );
+  let configChanged = false;
   let cleanup:
     | {
         before: OpenClawConfig;
@@ -160,35 +200,50 @@ export async function removeModelAuthCredentials(params: {
       }
     | undefined;
   const beforeRemove = async (profileIds: readonly string[]) => {
-    await updateConfig((current) => {
-      const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-        allowKeychainPrompt: false,
-      });
-      if (
-        apiKeyProvider !== undefined &&
-        profileIds.some((id) => {
-          const credential = store.profiles[id];
-          return (
-            credential?.type !== "api_key" ||
-            Boolean(credential.keyRef) ||
-            resolveProviderIdForAuth(credential.provider, {
-              config: current,
-              storedCredential: true,
-            }) !== resolveProviderIdForAuth(apiKeyProvider, { config: current })
+    await updateConfig(
+      (current, { runtimeConfig }) => {
+        if (
+          expectedBindings &&
+          !isDeepStrictEqual(keyBindings(runtimeConfig, runtimeConfig), expectedBindings)
+        ) {
+          throw new Error(
+            "The key changed while removing it. Nothing was removed. Reload Models and retry removal.",
           );
-        })
-      ) {
-        throw new Error("The selected API key changed. Reload Models and retry removal.");
-      }
-      const next = removeCredentialConfigReferences({
-        current,
-        profileIds,
-        store,
-        ...(apiKeyProvider !== undefined ? { apiKeyProvider } : {}),
-      });
-      cleanup = { before: current, after: next, profileIds };
-      return next;
-    });
+        }
+        const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+          allowKeychainPrompt: false,
+        });
+        if (
+          apiKeyProvider !== undefined &&
+          profileIds.some((id) => {
+            const credential = store.profiles[id];
+            return (
+              credential?.type !== "api_key" ||
+              Boolean(credential.keyRef) ||
+              resolveProviderIdForAuth(credential.provider, {
+                config: current,
+                storedCredential: true,
+              }) !== resolveProviderIdForAuth(apiKeyProvider, { config: current })
+            );
+          })
+        ) {
+          throw new Error("The selected API key changed. Reload Models and retry removal.");
+        }
+        const next = removeCredentialConfigReferences({
+          current,
+          runtimeConfig,
+          profileIds,
+          store,
+          ...(apiKeyProvider !== undefined ? { apiKeyProvider } : {}),
+        });
+        cleanup = { before: current, after: next, profileIds };
+        configChanged = !isDeepStrictEqual(current, next);
+        return next;
+      },
+      undefined,
+      undefined,
+      attachRuntimeConfigWriteApplication({}, application),
+    );
   };
   const restoreIncompleteRemoval = async (
     survivingProfiles: ReadonlyMap<string, AuthProfileCredential>,
@@ -233,6 +288,10 @@ export async function removeModelAuthCredentials(params: {
   if (!removed) {
     throw new Error("Saved credentials could not be removed. Wait a moment and retry.");
   }
+  if (configChanged && !(application.claimed && (await application.result) === "applied")) {
+    return "Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it.";
+  }
+  return undefined;
 }
 
 /** Removes a saved auth profile from the agent auth store and from config. */
@@ -280,12 +339,15 @@ export async function modelsAuthLogoutCommand(
   // store, and a failed config write after the credential is gone would leave a
   // dangling reference that logout can no longer repair (the profile lookup
   // above would then fail). This order makes a partial failure retryable.
-  await removeModelAuthCredentials({ cfg, agentDir, profileIds: [profileId] });
+  const warning = await removeModelAuthCredentials({ cfg, agentDir, profileIds: [profileId] });
   if (configReferencesAuthProfile(cfg, profileId)) {
     logConfigUpdated(runtime);
   }
 
   await refreshRunningGatewayAuthState(agentId, "logout", runtime);
+  if (warning) {
+    runtime.error(warning);
+  }
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Removed auth profile: ${description}`);

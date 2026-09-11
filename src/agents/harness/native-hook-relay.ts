@@ -4,10 +4,8 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
   clearNativeHookRelayBridgesForTests,
@@ -15,6 +13,7 @@ import {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
   registerNativeHookRelayBridge,
+  retainNativeHookRelayOperation,
   renewNativeHookRelayBridgeRecord,
   unregisterNativeHookRelayBridge,
   isRetryableNativeHookRelayBridgeLookupError,
@@ -65,7 +64,11 @@ import {
   readNonEmptyString,
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
-import { drainNativeHookRelayWork } from "./native-hook-relay-work.js";
+import {
+  assertNativeHookRelayForegroundCurrent,
+  drainNativeHookRelayWork,
+  prepareNativeHookRelayMcpPolicy,
+} from "./native-hook-relay-work.js";
 export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 export type {
@@ -82,6 +85,7 @@ const { relays, relayBridges, invocations } = nativeHookRelayState;
 type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
+  policyReady: Promise<void>;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   removeAbortListener?: () => void;
@@ -182,16 +186,22 @@ function registerNativeHookRelayInternal(
   }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const stateDbPath = resolveOpenClawStateSqlitePath();
+  let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
+  const policy = prepareNativeHookRelayMcpPolicy(
+    params,
+    stateDbPath,
+    () => partialRegistration !== undefined && relays.get(relayId) === partialRegistration,
+  );
   const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
     deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
     deferOnUnregister: true,
   });
-  let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
   try {
     const retained =
       params.runBeforeToolCall && retention
         ? retainBeforeToolCallForNativeHookRelay(params.runBeforeToolCall)
         : undefined;
+    let deferMcpToolApprovals: boolean | undefined;
     const registration = {
       relayId,
       provider: params.provider,
@@ -203,18 +213,9 @@ function registerNativeHookRelayInternal(
       sessionId: params.sessionId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.config ? { config: params.config } : {}),
-      deferMcpToolApprovals:
-        params.autoApproveMcpTools === true ||
-        // Native hook names lose raw identity; let Codex apply the prepared per-tool config.
-        (params.agentId ? loadMcpToolGrants(params.agentId).length > 0 : false) ||
-        Object.keys({ ...params.projectedMcpServers, ...params.config?.mcp?.servers }).some(
-          (serverName) =>
-            resolveProjectedMcpCodexToolApprovalMode(
-              serverName,
-              params.config?.mcp?.servers?.[serverName] ?? {},
-              params.projectedMcpServers?.[serverName],
-            ) !== undefined,
-        ),
+      get deferMcpToolApprovals() {
+        return deferMcpToolApprovals;
+      },
       runId: params.runId,
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.requester ? { requester: params.requester } : {}),
@@ -231,9 +232,14 @@ function registerNativeHookRelayInternal(
     } as ActiveNativeHookRelayRegistration;
     partialRegistration = registration;
     relays.set(relayId, registration);
+    const policyReady = policy.then((prepared) => {
+      deferMcpToolApprovals = prepared;
+    });
+    retainNativeHookRelayOperation(relayId, policyReady);
     setRelayLifetime(registration, {
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
+      policyReady,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
     });
@@ -250,10 +256,16 @@ function registerNativeHookRelayInternal(
     const bridge = registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);
     scheduleNativeHookRelayExpiry(relayId, registration);
     let pendingRenewal = Promise.resolve();
+    const ready = Promise.all([bridge.ready, policyReady]).then(() => undefined);
+    // Component owners report failure even when a public synchronous caller never awaits readiness.
+    void ready.catch(() => undefined);
     const handle: OwnedNativeHookRelayRegistrationHandle = {
       ...registration,
       ...buildNativeHookRelayCommandPlan({ ...params, relayId, generation }),
-      ready: bridge.ready,
+      get deferMcpToolApprovals() {
+        return deferMcpToolApprovals;
+      },
+      ready,
       prepareInvocation: async () => {
         const lifetime = readRelayLifetime(registration);
         if (!lifetime) {
@@ -261,12 +273,13 @@ function registerNativeHookRelayInternal(
         }
         const foregroundToken = lifetime.foregroundToken;
         assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
-        // A failed direct locator can still use the CLI's Gateway route. Keep
-        // its strict result on ready and revalidate admission after it settles.
+        await policyReady;
+        // Only direct transport failure may use the existing Gateway route.
         await bridge.ready.catch(() => undefined);
         assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
       },
-      drain: () => drainNativeHookRelayWork({ bridge, readRenewal: () => pendingRenewal }),
+      drain: () =>
+        drainNativeHookRelayWork({ policyReady, bridge, readRenewal: () => pendingRenewal }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {
@@ -418,6 +431,11 @@ async function resolveNativeHookRelayInvocationBinding(
   if (!lifetime) {
     throw new Error("native hook relay registration is inactive");
   }
+  // Gateway fallback shares policy readiness without depending on HTTP locator publication.
+  await lifetime.policyReady;
+  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+    throw new Error("native hook relay registration is inactive");
+  }
   const claim = lifetime.retention?.readClaim(rawPayload);
   if (claim && event === "pre_tool_use" && lifetime.retained && lifetime.retention) {
     const retained = lifetime.retained;
@@ -461,21 +479,6 @@ async function resolveNativeHookRelayInvocationBinding(
   const assertActive = () =>
     assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
   return { ...registration, assertActive };
-}
-
-function assertNativeHookRelayForegroundCurrent(
-  registration: ActiveNativeHookRelayRegistration,
-  lifetime: RelayLifetime,
-  foregroundToken: symbol,
-): void {
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
-    throw new Error("native hook relay registration is inactive");
-  }
-  registration.signal?.throwIfAborted();
-  registration.assertActive?.();
-  if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
-    throw new Error("native hook relay foreground invocation not allowed");
-  }
 }
 
 function normalizeRelayKey(

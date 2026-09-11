@@ -1290,6 +1290,7 @@ vi.mock("./doctor/shared/preview-warnings.js", async () => {
 vi.mock("./doctor-config-preflight.js", async () => {
   const fsLocal = await import("node:fs/promises");
   const pathLocal = await import("node:path");
+  const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const {
     collectRelevantDoctorPluginIds,
     listPluginDoctorLegacyConfigRules,
@@ -1317,12 +1318,12 @@ vi.mock("./doctor-config-preflight.js", async () => {
           : {};
       let injectedEffectiveConfig = injected?.config ? structuredClone(injected.config) : parsed;
       let exists = injected?.exists ?? false;
+      let raw: string | null = exists ? JSON.stringify(parsed) : null;
       if (!injected) {
         try {
-          parsed = JSON.parse(await fsLocal.readFile(configPath, "utf-8")) as Record<
-            string,
-            unknown
-          >;
+          const contents = await fsLocal.readFile(configPath, "utf-8");
+          parsed = JSON.parse(contents) as Record<string, unknown>;
+          raw = contents;
           exists = true;
           injectedEffectiveConfig = parsed;
         } catch {
@@ -1338,6 +1339,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
           snapshot: {
             exists,
             path: configPath,
+            raw,
+            hash: hashConfigRaw(raw),
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
             ...(injected?.includeProvenance
@@ -1365,6 +1368,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
         snapshot: {
           exists,
           path: configPath,
+          raw,
+          hash: hashConfigRaw(raw),
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           ...(injected?.includeProvenance ? { includeProvenance: injected.includeProvenance } : {}),

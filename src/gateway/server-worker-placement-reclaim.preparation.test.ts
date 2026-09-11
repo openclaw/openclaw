@@ -22,6 +22,7 @@ import { coordinateWorkerPlacementDispatch } from "./worker-environments/placeme
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
@@ -748,9 +749,17 @@ it.each(
   },
 );
 
-it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observer"] as const)(
-  "Stop retains captured dispatch authority across cancellation loading (%s)",
-  async (advance) => {
+it.each([
+  ...(["syncing", "completed", "failed", "replacement", "incarnation", "observer"] as const).map(
+    (advance) => ({ advance, action: "stop" as const }),
+  ),
+  ...(["syncing", "failed", "replacement"] as const).map((advance) => ({
+    advance,
+    action: "archive" as const,
+  })),
+])(
+  "$action retains captured dispatch authority across cancellation loading ($advance)",
+  async ({ advance, action }) => {
     const {
       placements,
       entry,
@@ -790,18 +799,32 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
           placement.generation += 100;
         }
       })
-      .then(
-        (result) => result,
-        (error: unknown) => error,
-      );
+      .catch((error: unknown) => error);
     await provisioning.promise;
     armCancellation();
-    const stopping = coordinated.reclaim(REQUEST).then(
-      (result) => result,
-      (error: unknown) => error,
-    );
+    const stopping = Promise.resolve()
+      .then(async () => {
+        if (action === "archive") {
+          return await prepareSessionWorkerPlacementStop({
+            ...REQUEST,
+            action,
+            context: {
+              workerSessionPlacementService: placements,
+              workerPlacementDispatchService: coordinated,
+              workerEnvironmentService: harness.environments,
+            },
+          }).stop();
+        }
+        return await coordinated.reclaim(REQUEST);
+      })
+      .catch((error: unknown) => error);
     try {
-      await loading.promise;
+      await Promise.race([
+        loading.promise,
+        stopping.then((result) => {
+          throw result;
+        }),
+      ]);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
       expect(dispatchSignal?.aborted).toBe(false);
       provisioned.resolve();
@@ -843,7 +866,10 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
         expect(cancellationStarted).not.toHaveBeenCalled();
         expect(harness.environments.destroy).not.toHaveBeenCalled();
       } else {
-        expect(result).toMatchObject({
+        if (action === "archive") {
+          expect(result).toBeUndefined();
+        }
+        expect(action === "archive" ? placements.get(REQUEST.sessionId) : result).toMatchObject({
           state: advance === "completed" || advance === "observer" ? "reclaimed" : "local",
         });
         expect(cancellationStarted).toHaveBeenCalled();

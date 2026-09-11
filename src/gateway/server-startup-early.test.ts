@@ -3,7 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
-import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
@@ -190,11 +190,16 @@ describe("startGatewayEarlyRuntime", () => {
       const startup = startGatewayEarlyRuntime(
         earlyRuntimeInput({ minimalTestGateway: false, swapDiscovery }),
       ).catch(async (error: unknown) => {
-        await runGatewayShutdownSteps({
-          steps: [
-            { name: "discovery resident", run: async () => await swapDiscovery(null)?.stop() },
-            { name: "gateway close", run: async () => await swapDiscovery(null)?.stop() },
-          ],
+        await runGatewayCloseSteps({
+          owner: {
+            connectionWork: { drain: async () => {} },
+            stopConnectionDependentSidecars: () => {},
+            stopRegisteredGatewayLifetimeSidecars: async () => await swapDiscovery(null)?.stop(),
+            stopRegisteredPostReadySidecars: () => {},
+            runClosePrelude: () => {},
+            sealAndJoinRegisteredSidecarStops: () => {},
+          },
+          close: async () => await swapDiscovery(null)?.stop(),
           onError: onCleanupError,
         });
         throw error;

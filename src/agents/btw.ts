@@ -720,7 +720,7 @@ async function withBtwPreparedRuntime(
 ): Promise<ReplyPayload | undefined> {
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
-    onAcquired(lease);
+    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
     return withPluginRuntimeGenerationScope(lease.snapshot, () => {
       captureWorkContext();
       return run(lease.snapshot);

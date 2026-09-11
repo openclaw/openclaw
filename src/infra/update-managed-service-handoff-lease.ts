@@ -29,7 +29,10 @@ import {
   type ManagedHandoffLeaseAction,
   type ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
-import { hasManagedHandoffSchemaObject } from "./update-managed-service-handoff-source-inspection.js";
+import {
+  hasManagedHandoffSchemaObject,
+  isManagedHandoffSchemaEmpty,
+} from "./update-managed-service-handoff-source-inspection.js";
 
 const text = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -247,6 +250,9 @@ export function createManagedHandoffLeaseStore(
         return { kind: "absent" };
       }
       return withDatabase(false, (db) => {
+        if (!options.existingIdentity && isManagedHandoffSchemaEmpty(db)) {
+          return { kind: "absent" };
+        }
         const value = row(db, root);
         return value ? { kind: "current", lease: handle(root, value) } : { kind: "absent" };
       });

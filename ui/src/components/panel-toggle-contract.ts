@@ -1,8 +1,4 @@
-import type {
-  SessionsCatalogStartTerminalParams,
-  SessionsCatalogStartTerminalResult,
-  UiCommandParams,
-} from "@openclaw/gateway-protocol";
+import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -27,16 +23,6 @@ export type TerminalPanelToggleDetail = {
   open?: boolean;
   terminalSessionId?: string;
   agentOwned?: boolean;
-  catalog?: {
-    catalogId: string;
-    hostId: string;
-    threadId: string;
-  };
-  catalogStart?: {
-    params: SessionsCatalogStartTerminalParams;
-    isCurrent: () => boolean;
-    respondWith: (result: Promise<SessionsCatalogStartTerminalResult>) => void;
-  };
 };
 
 export type BrowserPanelToggleDetail = {
