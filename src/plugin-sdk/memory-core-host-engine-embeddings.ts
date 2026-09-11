@@ -14,6 +14,12 @@ export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never
 }
 
 export {
+  createEmbeddingStallTimeoutError,
+  EMBEDDING_STALL_TIMEOUT_ERROR_NAME,
+  isEmbeddingStallTimeoutError,
+} from "../../packages/memory-host-sdk/src/host/embedding-stall-timeout.js";
+
+export {
   applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
   buildCaseInsensitiveExtensionGlob,

@@ -1,3 +1,4 @@
+import { createEmbeddingStallTimeoutError } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 // Memory Core tests cover manager embedding policy plugin behavior.
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
@@ -128,6 +129,44 @@ describe("memory embedding policy", () => {
     expect(run).toHaveBeenCalledTimes(3);
     expectDelayBetween(waits[0], 4000, 6000);
     expectDelayBetween(waits[1], 800, 1200);
+  });
+
+  it("does not retry provider stall timeouts marked by the embedding host contract", async () => {
+    const run = vi.fn(async () => {
+      throw createEmbeddingStallTimeoutError(
+        "openai-compatible embeddings request timed out after 10s",
+      );
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        profile: "index",
+        run,
+        waitForRetry,
+      }),
+    ).rejects.toThrow("request timed out after 10s");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it("still retries the same timeout text when it is not stall-marker typed", async () => {
+    const run = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("openai-compatible embeddings request timed out after 10s"))
+      .mockResolvedValueOnce("ok");
+    const waitForRetry = vi.fn(async () => {});
+
+    const result = await runMemoryEmbeddingRetryLoop({
+      profile: "index",
+      run,
+      waitForRetry,
+    });
+
+    expect(result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(waitForRetry).toHaveBeenCalledOnce();
   });
 
   it("uses the bounded long retry budget for a bare 429", async () => {

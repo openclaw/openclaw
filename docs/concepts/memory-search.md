@@ -223,6 +223,13 @@ incognito exclusions still apply.
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
 
+**Remote embeddings time out on slow queries?** Query-lane calls to
+openai-compatible providers carry a 10-second stall deadline that surfaces a
+precise timeout instead of the generic search deadline. If your provider is
+healthy but slower, set `models.providers.<id>.stallTimeoutSeconds` to raise
+it. Document-indexing batches are not affected; they use the embedding batch
+budget.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 

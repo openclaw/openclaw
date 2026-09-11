@@ -66,6 +66,24 @@ describe("ModelsConfigSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts stallTimeoutSeconds on a model provider (#136405)", () => {
+    // The field is consumed at runtime by the openai-compatible embedding
+    // provider's query-lane stall deadline and is present in ModelProviderConfig,
+    // but was missing from the strict Zod schema, so a real config carrying the
+    // documented recovery setting was rejected with "Unrecognized key(s)".
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "slow-embeddings": {
+          baseUrl: "http://127.0.0.1:11434/v1",
+          stallTimeoutSeconds: 15,
+          models: [],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts google-vertex as a model API from MODEL_APIS", () => {
     const result = ModelsConfigSchema.safeParse({
       providers: {

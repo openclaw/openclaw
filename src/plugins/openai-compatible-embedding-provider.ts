@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createEmbeddingStallTimeoutError } from "../../packages/memory-host-sdk/src/host/embedding-stall-timeout.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import {
@@ -35,6 +36,11 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
+// Query-lane stall deadline. It fires before the 15s Memory Core recall lane
+// so a hung provider surfaces a precise, actionable error instead of the
+// generic search deadline; the search clock pauses around local service
+// readiness, and this deadline starts only for the HTTP call itself (#136405).
+const DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS = 10_000;
 
 /** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
@@ -48,6 +54,7 @@ type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  stallTimeoutMs?: number;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
@@ -57,6 +64,7 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  stallTimeoutSeconds?: number;
   localService?: ModelProviderLocalServiceConfig;
 };
 
@@ -116,6 +124,18 @@ function normalizeDimensions(value: number | undefined): number | undefined {
 function normalizeOptionalInputType(value: string | undefined): string | undefined {
   const inputType = value?.trim();
   return inputType ? inputType : undefined;
+}
+
+function normalizeStallTimeoutMs(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      "openai-compatible embeddings: stallTimeoutSeconds must be a positive number of seconds.",
+    );
+  }
+  return Math.round(value * 1000);
 }
 
 function resolveRequestInputType(
@@ -341,22 +361,50 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
-  const localServiceLease =
-    client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(
-          {
-            ...client.localServiceTarget,
-            ...(deadlineControl
-              ? {
-                  onReadinessWait: (waiting: boolean) =>
-                    deadlineControl.report(waiting ? "pause" : "resume"),
-                }
-              : {}),
-          },
-          params.signal,
-        )
-      : undefined;
+  // Query-lane calls and unlabeled single-input calls (memory status probes,
+  // single-document recall) get the stall deadline; labeled document
+  // batches — including single-element ones — are indexing traffic and keep
+  // the caller's own batch bound. stallTimeoutSeconds replaces the query-lane
+  // default for slow providers; document batches keep the Memory Core batch
+  // budget regardless (#136405).
+  const boundedLane =
+    params.inputType === "query" || (params.inputType === undefined && input.length === 1);
+  const perCallTimeoutMs = boundedLane
+    ? (client.stallTimeoutMs ?? DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS)
+    : undefined;
+  const timeoutSecondsLabel =
+    perCallTimeoutMs === undefined ? undefined : Math.round(perCallTimeoutMs / 1000);
+  // Readiness keeps its own budget: the search clock pauses through
+  // onReadinessWait and the stall deadline must not tick while a local service
+  // boots, so it starts only for the HTTP call. Acquisition runs on the
+  // caller's signal alone and its failures flow through the shared catch
+  // (#136405).
+  let timeoutSignal: AbortSignal | undefined;
+  let localServiceLease:
+    | Awaited<ReturnType<NonNullable<OpenAICompatibleEmbeddingClient["acquireLocalService"]>>>
+    | undefined;
   try {
+    if (client.localServiceTarget && client.acquireLocalService) {
+      localServiceLease = await client.acquireLocalService(
+        {
+          ...client.localServiceTarget,
+          ...(deadlineControl
+            ? {
+                onReadinessWait: (waiting: boolean) =>
+                  deadlineControl.report(waiting ? "pause" : "resume"),
+              }
+            : {}),
+        },
+        params.signal,
+      );
+    }
+    timeoutSignal =
+      perCallTimeoutMs === undefined ? undefined : AbortSignal.timeout(perCallTimeoutMs);
+    const signal = params.signal
+      ? timeoutSignal
+        ? AbortSignal.any([params.signal, timeoutSignal])
+        : params.signal
+      : timeoutSignal;
     return await withRemoteHttpResponse({
       url: client.endpointUrl,
       init: {
@@ -364,7 +412,7 @@ async function postEmbeddingRequest(params: {
         headers: client.headers,
         body: JSON.stringify(body),
       },
-      signal: params.signal,
+      signal,
       ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
       onResponse: async (response) => {
@@ -382,6 +430,16 @@ async function postEmbeddingRequest(params: {
         );
       },
     });
+  } catch (error) {
+    if (timeoutSignal?.aborted && !params.signal?.aborted) {
+      // Marked so retry owners surface this directly instead of burning the
+      // caller's remaining budget on a retry that hangs the same way.
+      throw createEmbeddingStallTimeoutError(
+        `openai-compatible embeddings request timed out after ${timeoutSecondsLabel}s`,
+        { cause: error },
+      );
+    }
+    throw error;
   } finally {
     localServiceLease?.release();
   }
@@ -409,6 +467,12 @@ async function createOpenAICompatibleEmbeddingClient(
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
+  // The provider's stall deadline applies only when the provider owns the
+  // destination; a memory.search.remote.baseUrl override points requests at a
+  // different endpoint, so that endpoint keeps the default deadline (#136405).
+  const stallTimeoutMs = normalizeStallTimeoutMs(
+    providerOwnsDestination ? configuredProvider?.stallTimeoutSeconds : undefined,
+  );
   const headers = buildHeaders({
     apiKey: resolveRemoteApiKey(options.remote?.apiKey),
     provider: providerOwnsDestination ? configuredProvider?.headers : undefined,
@@ -445,6 +509,7 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }
       : {}),
+    ...(stallTimeoutMs !== undefined ? { stallTimeoutMs } : {}),
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),

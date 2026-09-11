@@ -631,7 +631,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         });
       }
       try {
-        await this.embedBatchWithRetry(["ping"]);
+        // Query-lane ping: the diagnostic probe is an availability query, not
+        // indexing traffic, so the provider-side stall deadline bounds it and
+        // `memory status --deep` fails fast with the precise timeout instead
+        // of hanging for the batch budget (#136405).
+        await this.embedBatchWithRetry(["ping"], undefined, undefined, { inputType: "query" });
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
         const message = formatErrorMessage(err);

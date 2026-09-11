@@ -99,6 +99,41 @@ describe("memory index", () => {
     });
   });
 
+  it("threads the probe query lane through the bounded batch wrapper (#136405)", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+
+    const managerWithProvider = manager as unknown as {
+      provider: {
+        embedBatch: (
+          texts: string[],
+          callOptions?: { signal?: AbortSignal; inputType?: string },
+        ) => Promise<number[][]>;
+      };
+      embedBatchWithRetry: (
+        inputs: string[],
+        generation?: unknown,
+        cacheCandidates?: unknown,
+        opts?: { inputType?: "query" | "document" },
+      ) => Promise<number[][]>;
+    };
+    const embedBatch = vi.fn(
+      async (texts: string[], _callOptions?: { signal?: AbortSignal; inputType?: string }) =>
+        texts.map(() => [1, 0]),
+    );
+    managerWithProvider.provider = { embedBatch };
+
+    // The diagnostic probe rides the query lane so the provider-side stall
+    // deadline bounds it; indexing batches keep the document lane (#136405).
+    await managerWithProvider.embedBatchWithRetry(["ping"], undefined, undefined, {
+      inputType: "query",
+    });
+    expect(embedBatch.mock.calls[0]?.[1]?.inputType).toBe("query");
+
+    await managerWithProvider.embedBatchWithRetry(["doc"]);
+    expect(embedBatch.mock.calls[1]?.[1]?.inputType).toBe("document");
+  });
+
   it("waits for degraded provider shutdown before fallback initialization", async () => {
     const cfg = createCfg({ fallback: "fallback-provider" });
     const manager = await getPersistentManager(cfg);

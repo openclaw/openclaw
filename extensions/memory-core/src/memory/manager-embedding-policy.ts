@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
+  isEmbeddingStallTimeoutError,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -149,9 +150,12 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
     retryAfterMaxDelayMs: profile.rateLimit.maxDelayMs,
     jitter: 0.2,
     // Caller cancellation wins even when its timeout resembles a retryable
-    // provider error; otherwise abandoned searches start another request.
+    // provider error; otherwise abandoned searches start another request. A
+    // fired provider stall deadline also stops the loop: it already bounded a
+    // full attempt, and retrying only burns the caller's budget while burying
+    // the precise error under the generic outer deadline (#136405).
     shouldRetry: (err, attempt) => {
-      if (params.signal?.aborted) {
+      if (params.signal?.aborted || isEmbeddingStallTimeoutError(err)) {
         return false;
       }
       const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);

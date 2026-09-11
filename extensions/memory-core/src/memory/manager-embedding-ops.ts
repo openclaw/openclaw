@@ -560,6 +560,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     inputs: Array<string | EmbeddingInput>,
     generation?: MemorySemanticProviderGeneration,
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
+    opts?: { inputType?: "query" | "document" },
   ): Promise<number[][]> {
     if (inputs.length === 0) {
       return [];
@@ -574,6 +575,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       input,
       cacheCandidate: cacheCandidates?.[index],
     }));
+    // Diagnostics probe with the query lane so the provider-side stall deadline
+    // bounds the ping; real indexing batches keep the document lane and their
+    // own batch budget (#136405).
+    const inputType = opts?.inputType ?? "document";
     try {
       return await this.withProviderUse(
         provider,
@@ -598,7 +603,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 run: async (signal) =>
                   await provider.embedBatch(
                     batchItems.map((item) => item.input),
-                    { signal, inputType: "document" },
+                    { signal, inputType },
                   ),
               });
               if (!structured) {

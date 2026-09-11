@@ -475,6 +475,7 @@ const ModelProviderSchema = z
     api: ModelApiSchema.optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    stallTimeoutSeconds: z.number().int().positive().optional(),
     region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),

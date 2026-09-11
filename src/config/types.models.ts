@@ -181,6 +181,8 @@ export type ModelProviderConfig = {
   maxTokens?: number;
   /** Provider request timeout in seconds. */
   timeoutSeconds?: number;
+  /** Embedding stall deadline override in seconds for the openai-compatible embedding provider's query lane (default 10). */
+  stallTimeoutSeconds?: number;
   /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
   region?: string;
   injectNumCtxForOpenAICompat?: boolean;
