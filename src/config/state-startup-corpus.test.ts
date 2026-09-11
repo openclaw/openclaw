@@ -145,7 +145,8 @@ describe("prior-release state startup corpus", () => {
     expect(releases).toEqual(expect.arrayContaining(["2026.9.2", "2026.9.3-95f3ed9"]));
   });
 
-  it.each(cases)(
+  // These released snapshots retain POSIX cron partition keys, not Windows-native paths.
+  it.skipIf(process.platform === "win32").each(cases)(
     "%s × %s preserves state through Doctor and Gateway startup",
     async (release, configName) => {
       const { home, stateDir, configPath, fixture } = prepareState(release, configName);

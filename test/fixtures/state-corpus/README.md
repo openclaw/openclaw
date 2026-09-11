@@ -37,6 +37,9 @@ A plain read-only open can create `-wal` and `-shm` sidecars beside a fixture.
 Cron's released storage partition uses an absolute logical path. The generator
 records that selection through `writeConfigMachineState("cron.store", ...)`,
 so copying the fixture retains the selected partition without rewriting rows.
+The state matrix skips Windows because these snapshots retain POSIX partition
+keys; the required-fixture inventory check still runs on every platform.
+Windows upgrade coverage requires state generated on Windows.
 Both releases already use SQLite sessions. These snapshots cover real released
 schemas, Doctor state migration, and credential preservation; they do
 not claim coverage of pre-SQLite JSON transcript imports.
