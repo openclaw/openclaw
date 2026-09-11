@@ -344,11 +344,13 @@ export async function updateNpmInstalledPlugins(params: {
     if (!params.dryRun && record.source === "npm" && currentVersion) {
       changed = (await repairRegisteredOpenClawHostLink({ pluginId, record, logger })) || changed;
     }
-    // Payload validation is filesystem work needed only to preserve state after metadata failures.
-    // Every failure path below ends this plugin iteration, so the result cannot be reused.
+    // Payload validation is filesystem work needed only to preserve state after a
+    // rejected candidate whose previous install survived. Every failure path below
+    // ends this plugin iteration, so the result cannot be reused.
     const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
       if (
-        code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
+        (code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
+          code !== PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE) ||
         !params.disableOnFailure ||
         params.dryRun ||
         currentVersion === undefined
@@ -511,7 +513,20 @@ export async function updateNpmInstalledPlugins(params: {
         });
         continue;
       }
-      recordFailure(pluginId, attempt.message);
+      // Preserve the prior install only when the installer confirms the failure
+      // was non-destructive (staged validation threw before the candidate was
+      // published, so the prior install was never replaced). The installer's
+      // staging mechanism (installPackageDir) stages to a temporary directory and
+      // only swaps the target after validation succeeds, so staging failures leave
+      // the prior install untouched. Unclassified exceptions keep the fail-closed
+      // disable default.
+      const stagedArtifactCode = attempt.nonDestructive
+        ? PLUGIN_INSTALL_ERROR_CODE.STAGED_ARTIFACT_FAILURE
+        : undefined;
+      recordFailure(pluginId, attempt.message, {
+        code: stagedArtifactCode,
+        installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(stagedArtifactCode),
+      });
       continue;
     }
 

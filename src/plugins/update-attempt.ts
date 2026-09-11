@@ -13,6 +13,7 @@ import {
 } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import { StagedArtifactFailureError } from "./staged-artifact-failure-error.js";
 import {
   formatBetaChannelFallbackOutcomeSuffix,
   resolveExactNpmSpecVersion,
@@ -234,7 +235,7 @@ type PluginUpdateAttemptState = {
 };
 
 type PluginUpdateAttemptResult =
-  | { kind: "exception"; message: string; error: unknown }
+  | { kind: "exception"; message: string; error: unknown; nonDestructive: boolean }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
 
 function isPluginUpdateUnchanged(
@@ -483,6 +484,7 @@ export async function runPluginUpdateAttempt(params: {
       kind: "exception",
       message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
       error,
+      nonDestructive: error instanceof StagedArtifactFailureError,
     };
   }
 

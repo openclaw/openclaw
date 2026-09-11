@@ -72,6 +72,7 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import { classifyStagedArtifactFailure } from "./staged-artifact-failure-error.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -599,7 +600,11 @@ export async function installPluginFromManagedNpmRoot(
     ),
   );
   if (staged.failure) {
-    throw staged.failure.cause;
+    // The staging mechanism cleaned its stage directory without touching the
+    // target, so the prior install survives. Classify at the staging owner so
+    // the updater can distinguish this non-destructive case from other
+    // exceptions; typed lifecycle errors pass through unwrapped.
+    classifyStagedArtifactFailure(staged.failure.cause);
   }
   if (!published.ok) {
     return published;

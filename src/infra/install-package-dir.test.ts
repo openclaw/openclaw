@@ -218,6 +218,40 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("keeps the existing install in place when afterInstall validation throws", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      afterInstall: async () => {
+        throw new Error("staged manifest invalid");
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "post-install validation failed: Error: staged manifest invalid",
+    });
+    // The prior install must be untouched — no backup was created and the
+    // original marker file is still present.
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
+    ).resolves.toHaveLength(0);
+  });
+
   it("checks update authority before displacing the existing install", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");

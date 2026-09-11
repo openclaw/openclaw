@@ -11,6 +11,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
+import { StagedArtifactFailureError } from "./staged-artifact-failure-error.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
@@ -110,6 +112,7 @@ vi.mock("./install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_METADATA_FAILURE: "npm_metadata_failure",
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+    STAGED_ARTIFACT_FAILURE: "staged_artifact_failure",
   },
 }));
 
@@ -414,11 +417,13 @@ function createInstalledPackageDir(params: {
   } else {
     tempDirs.push(dir);
   }
+  const packageName = params.name ?? "test-plugin";
+  const pluginId = packageName.startsWith("@") ? packageName.split("/").pop()! : packageName;
   fs.writeFileSync(
     path.join(dir, "package.json"),
     JSON.stringify(
       {
-        name: params.name ?? "test-plugin",
+        name: packageName,
         version: params.version,
         ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
         ...(params.runnable ? { openclaw: { extensions: ["./index.js"] } } : {}),
@@ -429,6 +434,17 @@ function createInstalledPackageDir(params: {
   );
   if (params.runnable) {
     fs.writeFileSync(path.join(dir, "index.js"), "export default function register() {}\n");
+    // A runnable native plugin requires a valid openclaw.plugin.json; entry-file
+    // presence alone does not establish a loadable plugin.
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        name: pluginId,
+        version: params.version,
+        configSchema: { type: "object" },
+      }),
+    );
   }
   return dir;
 }
@@ -2889,6 +2905,198 @@ describe("updateNpmInstalledPlugins", () => {
         status: "skipped",
         message,
       },
+    ]);
+  });
+
+  const stagedArtifactError = () =>
+    new StagedArtifactFailureError(new Error("Plugin artifact has no valid plugin manifest"));
+
+  const stagedFailureConfig = (installPath: string): OpenClawConfig => ({
+    plugins: {
+      allow: ["lossless-claw", "keep"],
+      deny: ["lossless-claw", "blocked"],
+      slots: { memory: "lossless-claw", contextEngine: "lossless-claw" },
+      entries: { "lossless-claw": { enabled: true, config: { preserved: true } } },
+      installs: {
+        "lossless-claw": {
+          source: "npm",
+          spec: "@martian-engineering/lossless-claw@^0.9.0",
+          installPath,
+          resolvedName: "@martian-engineering/lossless-claw",
+          resolvedVersion: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
+      },
+    },
+  });
+
+  const runStagedFailureUpdate = (installPath: string) => {
+    mockNpmViewMetadata({ name: "@martian-engineering/lossless-claw", version: "0.10.0" });
+    installPluginFromNpmSpecMock.mockRejectedValue(stagedArtifactError());
+    return updateNpmInstalledPlugins({
+      config: stagedFailureConfig(installPath),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn: vi.fn() },
+    });
+  };
+
+  const disabledMessage = (inner: string) =>
+    `Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it. Failed to update lossless-claw: ${inner}`;
+
+  it("preserves healthy plugin state when staged-artifact validation throws before replacement", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    mockNpmViewMetadata({ name: "@martian-engineering/lossless-claw", version: "0.10.0" });
+    installPluginFromNpmSpecMock.mockRejectedValue(stagedArtifactError());
+
+    const result = await updateNpmInstalledPlugins({
+      config: stagedFailureConfig(installPath),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: true,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
+    expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "lossless-claw",
+      contextEngine: "lossless-claw",
+    });
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "error",
+        message:
+          "Failed to update lossless-claw: StagedArtifactFailureError: Error: Plugin artifact has no valid plugin manifest",
+      },
+    ]);
+  });
+
+  it("disables a corrupt installed payload when staged-artifact validation throws", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    fs.rmSync(path.join(installPath, "index.js"));
+    const result = await runStagedFailureUpdate(installPath);
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.slots).toBeUndefined();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "skipped",
+        message: disabledMessage(
+          "StagedArtifactFailureError: Error: Plugin artifact has no valid plugin manifest",
+        ),
+      },
+    ]);
+  });
+
+  it("disables on unclassified exceptions and non-npm sources even when prior payload is runnable", async () => {
+    // npm with unclassified exception
+    const npmInstallPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    mockNpmViewMetadata({ name: "@martian-engineering/lossless-claw", version: "0.10.0" });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("unexpected EACCES"));
+
+    const npmResult = await updateNpmInstalledPlugins({
+      config: stagedFailureConfig(npmInstallPath),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn: vi.fn() },
+    });
+    expect(npmResult.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+
+    // git source — never preserved regardless of error type
+    const gitInstallPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    installPluginFromGitSpecMock.mockRejectedValue(
+      new Error("git clone failed: authentication required"),
+    );
+
+    const gitResult = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { "lossless-claw": { enabled: true, config: { preserved: true } } },
+          installs: {
+            "lossless-claw": {
+              source: "git" as const,
+              spec: "git:github.com/acme/lossless-claw@main",
+              installPath: gitInstallPath,
+              gitCommit: "abc123",
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn: vi.fn() },
+    });
+    expect(gitResult.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+  });
+
+  it("preserves a typed capability-consent error instead of disabling the plugin", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    mockNpmViewMetadata({ name: "@martian-engineering/lossless-claw", version: "0.10.0" });
+    installPluginFromNpmSpecMock.mockRejectedValue(
+      new ManagedPluginLifecycleError("capability consent required for widened surface", {
+        capabilityConsent: { pluginId: "lossless-claw", reviewToken: "abc123" },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: stagedFailureConfig(installPath),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: true,
+      config: { preserved: true },
+    });
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        pluginId: "lossless-claw",
+        status: "error",
+        code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      }),
     ]);
   });
 
