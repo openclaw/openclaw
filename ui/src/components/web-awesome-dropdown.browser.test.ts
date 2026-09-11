@@ -76,12 +76,13 @@ async function reopen(f: Fixture) {
 }
 
 async function closed(f: Fixture) {
-  await expect.poll(() => f.popup.active).toBe(false);
+  // A canceled opening starts with an inactive popup before its close settles.
+  await expect
+    .poll(() => f.events.filter((event) => event.type === "wa-after-hide"))
+    .toEqual([{ type: "wa-after-hide", open: false, connected: true }]);
+  expect(f.popup.active).toBe(false);
   expect(f.dropdown.open).toBe(false);
   expect(f.menu.getAnimations()).toHaveLength(0);
-  expect(f.events.filter((event) => event.type === "wa-after-hide")).toEqual([
-    { type: "wa-after-hide", open: false, connected: true },
-  ]);
 }
 
 function observeNativeOcclusion(native = true) {
