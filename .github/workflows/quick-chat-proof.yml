@@ -1,0 +1,73 @@
+name: Quick Chat targeted proof
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact source commit to exercise
+        required: true
+        type: string
+  push:
+    branches: [fix/macos-quick-chat-catalog]
+    paths: [.github/workflows/quick-chat-proof.yml]
+permissions:
+  contents: read
+concurrency:
+  group: quick-chat-targeted-proof
+  cancel-in-progress: false
+jobs:
+  proof:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: blacksmith-12vcpu-macos-26
+    timeout-minutes: 60
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: proof-source
+          persist-credentials: false
+      - name: Record inputs and overlay presentation test
+        run: |
+          mkdir -p "$RUNNER_TEMP/quick-chat-proof"
+          git rev-parse HEAD > "$RUNNER_TEMP/quick-chat-proof/source.txt"
+          git -C proof-source rev-parse HEAD > "$RUNNER_TEMP/quick-chat-proof/harness.txt"
+          cp proof-source/apps/macos/Tests/OpenClawIPCTests/QuickChatPresentationTests.swift apps/macos/Tests/OpenClawIPCTests/
+      - name: Verify Xcode
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [ -d "$xcode_app/Contents/Developer" ]; then
+              sudo xcode-select -s "$xcode_app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Prepare package resources
+        run: node scripts/prepare-apple-mermaid.mjs
+      - name: Build app and native tests
+        run: |
+          set -o pipefail
+          swift build --package-path apps/macos --build-system native --build-tests -j 4 2>&1 | tee "$RUNNER_TEMP/quick-chat-proof/build.log"
+      - name: Exercise Quick Chat and its window sibling
+        run: |
+          set -o pipefail
+          node scripts/test-macos-native.mts named --package-path apps/macos --build-system native --skip-build --filter 'QuickChat|TalkOverlayTests' 2>&1 | tee "$RUNNER_TEMP/quick-chat-proof/tests.log"
+      - name: Retain proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: quick-chat-proof-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/quick-chat-proof
+            quick-chat-proof
+            apps/macos/quick-chat-proof
+          retention-days: 14
