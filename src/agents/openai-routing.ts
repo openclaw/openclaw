@@ -5,7 +5,10 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../plugin-sdk/provider-model-types.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -47,6 +50,7 @@ export function resolveOpenAIImplicitAgentRuntime(
     config?: OpenClawConfig;
     env?: Readonly<Record<string, string | undefined>>;
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
   } & AgentRuntimePolicyScope,
 ): "codex" | "openclaw" | null {
   if (!isOpenAIProvider(params.provider)) {
@@ -71,7 +75,9 @@ export function resolveOpenAIImplicitAgentRuntime(
     baseUrl: params.baseUrl,
     config: params.config,
     env: params.env,
+    agentId,
     requestTransportOverrides,
+    routeIntent: params.routeIntent,
   });
   if (!resolution) {
     // Endpoint and adapter ownership stays in the provider artifact. Without

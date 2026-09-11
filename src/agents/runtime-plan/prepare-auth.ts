@@ -5,7 +5,10 @@
  */
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
+import type {
+  ProviderResolveModelRoutesContext,
+  ProviderRouteOverridePresence,
+} from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
@@ -18,13 +21,13 @@ import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/sele
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
-import { resolveProviderConfigSecretInput } from "../model-auth-provider-config.js";
-import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import {
   hasUsableCustomProviderApiKey,
+  resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
   shouldPreferExplicitConfigApiKeyAuth,
-} from "../model-auth.js";
+} from "../model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "../openai-model-routes.js";
 import {
   buildProviderModelAuthDirectSource,
@@ -33,7 +36,10 @@ import {
   type ProviderModelAuthDirectSource,
   type ProviderModelAuthProfileSource,
 } from "../provider-model-auth-source-plan.js";
-import { selectProviderModelAuthSources } from "../provider-model-route-auth.js";
+import {
+  selectProviderModelAuthSources,
+  resolveProviderModelRouteAuthRequirement,
+} from "../provider-model-route-auth.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -44,6 +50,8 @@ type PrepareAgentRuntimeAuthPlanParams = {
   modelBaseUrl?: unknown;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
+  agentId?: string;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -440,6 +448,7 @@ export function prepareAgentRuntimeAuth(
       ? { preferredProfileId: userPinnedProfileId ?? providerPreferredProfileId }
       : {}),
     explicitOrder: automaticOrderResolution.hasExplicitOrder,
+    preserveProfilePriority: Boolean(userPinnedProfileId),
     ...(fallbackDirectSource ? { fallback: fallbackDirectSource } : {}),
     allowCooldown: params.allowTransientCooldownProbe,
   });
@@ -449,6 +458,14 @@ export function prepareAgentRuntimeAuth(
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
     config: params.config,
+    agentId: params.agentId,
+    routeIntent: params.routeIntent,
+    pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+      sourcePlan.kind === "required"
+        ? sourcePlan.source.mode
+        : sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId)
+            ?.mode,
+    ),
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   });

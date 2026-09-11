@@ -24,6 +24,41 @@ function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSe
 }
 
 describe("resolveSimpleCompletionSelectionForAgent", () => {
+  it("resolves explicit aliases in the selected agent scope", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "worker",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "main",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  });
+
   it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
     const cfg: OpenClawConfig = {
       agents: {

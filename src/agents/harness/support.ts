@@ -10,12 +10,14 @@ import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderModelRouteRuntimePolicy,
+  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import {
   resolveAgentRuntimePolicyAgentId,
+  resolveModelRouteIntent,
   type AgentRuntimePolicyScope,
 } from "../model-runtime-policy.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
@@ -176,6 +178,12 @@ export function buildAgentHarnessSupportContext(
           modelId: params.modelId,
           modelProvider: modelProviderFacts,
           config: params.config,
+          routeIntent: resolveModelRouteIntent({
+            config: params.config,
+            provider: params.provider,
+            modelId: params.modelId,
+            agentId,
+          }),
         });
   const modelProvider =
     modelProviderFacts || routeRuntimeContract.owned
@@ -204,6 +212,7 @@ function resolveHarnessRouteRuntimePolicy(params: {
   modelId?: string;
   modelProvider?: AgentHarnessSupportContext["modelProvider"];
   config?: OpenClawConfig;
+  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
 }): { owned: boolean; policy?: ProviderModelRouteRuntimePolicy } {
   const resolution = resolveProviderModelRoutes({
     provider: params.provider,
@@ -211,6 +220,7 @@ function resolveHarnessRouteRuntimePolicy(params: {
     api: params.modelProvider?.api as ModelApi | undefined,
     baseUrl: params.modelProvider?.baseUrl,
     config: params.config,
+    routeIntent: params.routeIntent,
     requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
   });
   if (!resolution) {

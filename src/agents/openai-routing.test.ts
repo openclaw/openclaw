@@ -121,7 +121,7 @@ describe("OpenAI runtime routing policy", () => {
         },
         env: {},
       }),
-    ).toBe("openclaw");
+    ).toBe("codex");
     expect(
       resolveOpenAIImplicitAgentRuntime({
         provider: "openai",

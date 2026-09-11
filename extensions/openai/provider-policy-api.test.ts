@@ -254,10 +254,67 @@ describe("OpenAI provider policy artifact", () => {
 
     expect(levels).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
   });
+  it.each([undefined, { runtimeId: "codex", source: "inherited" } as const])(
+    "keeps subscription eligible with a legacy official Completions adapter (%j)",
+    (routeIntent) => {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+          configuredProvider: {
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          routeIntent,
+        }),
+      ).toMatchObject({
+        kind: "routes",
+        preferredAuthRequirement: "subscription",
+        routes: [
+          { api: "openai-completions", authRequirement: "api-key" },
+          { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    { authRequirement: "api-key", source: "explicit" },
+    { authRequirement: "api-key", source: "inherited" },
+  ] as const)("honors the prepared API route intent %j", (routeIntent) => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        configuredProvider: { api: "openai-completions" },
+        routeIntent,
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-completions", authRequirement: "api-key" }],
+    });
+  });
+
+  it("keeps subscription eligible for an OpenClaw runtime pin with no API credential", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        configuredProvider: { api: "openai-completions" },
+        routeIntent: { runtimeId: "openclaw", source: "explicit" },
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      preferredAuthRequirement: "api-key",
+      routes: [{ authRequirement: "api-key" }, { authRequirement: "subscription" }],
+    });
+  });
+
   it("orders Platform before ChatGPT for unconfigured routable models", () => {
     const expected = {
       kind: "routes",
       defaultRuntimeId: "codex",
+      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-responses",
@@ -765,7 +822,7 @@ describe("OpenAI provider policy artifact", () => {
     });
   });
 
-  it("inherits a provider adapter when the model overrides only its official base URL", () => {
+  it("retains the provider adapter for API-key callers when the model overrides its official URL", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
@@ -775,7 +832,8 @@ describe("OpenAI provider policy artifact", () => {
       }),
     ).toEqual({
       kind: "routes",
-      defaultRuntimeId: "openclaw",
+      defaultRuntimeId: "codex",
+      preferredAuthRequirement: "subscription",
       routes: [
         {
           api: "openai-completions",
@@ -783,6 +841,13 @@ describe("OpenAI provider policy artifact", () => {
           authRequirement: "api-key",
           requestTransportOverrides: "none",
           runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
       ],
     });
@@ -923,7 +988,7 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
-  it("preserves explicit official completions and keeps them on OpenClaw", () => {
+  it("keeps explicit API route intent on official Completions", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
@@ -932,6 +997,7 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-completions",
           baseUrl: "https://api.openai.com/v1",
         },
+        routeIntent: { authRequirement: "api-key", source: "explicit" },
       }),
     ).toEqual({
       kind: "routes",

@@ -127,6 +127,95 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it.each([
+    {
+      pinnedProfile: "openai:platform",
+      primaryProfile: undefined,
+      requirement: "api-key",
+      attempts: ["openai:platform", "openai:chatgpt"],
+    },
+    {
+      pinnedProfile: "openai:chatgpt",
+      primaryProfile: "openai:platform",
+      requirement: "subscription",
+      attempts: ["openai:chatgpt"],
+    },
+  ])(
+    "keeps $pinnedProfile ahead of inherited and automatic billing preferences",
+    ({ pinnedProfile, primaryProfile, requirement, attempts }) => {
+      const prepared = prepareAgentRuntimeAuth({
+        ...openAIPlatformAuthFixture(),
+        env: {},
+        sessionAuthProfileId: pinnedProfile,
+        sessionAuthProfileSource: "user",
+        config: primaryProfile
+          ? {
+              agents: { defaults: { model: `openai/gpt-5.4@${primaryProfile}` } },
+              auth: { profiles: { "openai:platform": { provider: "openai", mode: "api_key" } } },
+            }
+          : undefined,
+        authProfileStore: authStore({
+          "openai:platform": openAIApiKeyProfile("fixture-key"),
+          "openai:chatgpt": openAIOAuthProfile(
+            "fixture-access",
+            "fixture-refresh",
+            Date.now() + 60_000,
+          ),
+        }),
+      });
+      expect(prepared.plan).toMatchObject({
+        forwardedAuthProfileId: pinnedProfile,
+        modelRoute: { authRequirement: requirement },
+      });
+      expect(prepared.attempts.map((attempt) => attempt.profileId)).toEqual(attempts);
+    },
+  );
+
+  it("keeps auxiliary models on the default model's subscription route", () => {
+    const model = "openai/gpt-5.4-mini";
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          heartbeat: { model },
+          subagents: { model },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "openai",
+      modelId: model.slice("openai/".length),
+      config,
+      env: {},
+      authProfileStore: authStore({
+        "openai:default": openAIApiKeyProfile("fixture-api-key"),
+        "openai:chatgpt-default": openAIOAuthProfile(
+          "fixture-access",
+          "fixture-refresh",
+          Date.now() + 60_000,
+        ),
+      }),
+    });
+    expect(plan).toMatchObject({
+      forwardedAuthProfileId: "openai:chatgpt-default",
+      modelRoute: {
+        authRequirement: "subscription",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    });
+  });
+
   it("keeps a materialized model endpoint on its own credential provider", () => {
     const config: OpenClawConfig = {
       models: {

@@ -420,6 +420,7 @@ export function createModelAuthAvailabilityResolver(
   }
   const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
     config: params.cfg,
+    agentId: params.agentId,
     env,
   });
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
@@ -1094,7 +1095,14 @@ export function createModelAuthAvailabilityResolver(
     if (invalidProfilePin(provider, ref)) {
       return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
-    const routeResolution = resolveRoutes(ref);
+    const routeResolution = resolveRoutes({
+      ...ref,
+      pinnedAuthRequirement: resolveProviderModelRouteAuthRequirement(
+        ref.requiredProfileId || ref.pinnedProfileId
+          ? profileMode(ref.requiredProfileId ?? ref.pinnedProfileId ?? "")
+          : resolveConfiguredOpenAIAuthMode(params.cfg),
+      ),
+    });
     if (!routeResolution) {
       // Provider policy owns route validation. Null preserves the legacy fallback
       // signal without rebuilding a partial OpenAI policy in core.
@@ -1173,32 +1181,6 @@ export function createModelAuthAvailabilityResolver(
               }),
           )
         : undefined;
-    if (materialized) {
-      const selectedRoute = routeResolution.routes.find(
-        (route) =>
-          route.runtimePolicy?.compatibleIds.some(
-            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
-          ) === true &&
-          route.api.toLowerCase() === materialized.modelApi &&
-          route.requestTransportOverrides === materialized.requestTransportOverrides &&
-          modelMatchesProviderModelRoute({
-            provider,
-            api: materialized.modelApi,
-            baseUrl: materialized.modelBaseUrl,
-            route,
-          }),
-      );
-      if (selectedRoute) {
-        return {
-          availability: true,
-          routeResolution,
-          selectedRoute,
-          selectedAuthMode: materialized.authMode,
-          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
-          evidence: "runtime",
-        };
-      }
-    }
     const selectedConfiguredMode = awsSdkTerminal
       ? "aws-sdk"
       : bindingProfileId
@@ -1263,6 +1245,7 @@ export function createModelAuthAvailabilityResolver(
       ),
       preferredProfileId: ref.pinnedProfileId ?? ref.preferredProfileId,
       explicitOrder: orderResolution.hasExplicitOrder,
+      preserveProfilePriority: Boolean(ref.pinnedProfileId),
       ...(policy.hasDirectFallback ? { fallback: policy.direct } : {}),
     });
     const syntheticCodexOwnsAuth =
@@ -1291,6 +1274,40 @@ export function createModelAuthAvailabilityResolver(
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
+    // Past route success proves readiness; the current selector still owns billing preference.
+    const preferredSelection =
+      routeAuthDecision.kind === "selected" &&
+      routeAuthDecision.selection.kind === "selected" &&
+      routeAuthDecision.selection.route.authRequirement ===
+        routeResolution.preferredAuthRequirement &&
+      routeAuthDecision.selection.route.authRequirement !==
+        resolveProviderModelRouteAuthRequirement(materialized?.authMode);
+    if (materialized && !preferredSelection) {
+      const selectedRoute = routeResolution.routes.find(
+        (route) =>
+          route.runtimePolicy?.compatibleIds.some(
+            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
+          ) === true &&
+          route.api.toLowerCase() === materialized.modelApi &&
+          route.requestTransportOverrides === materialized.requestTransportOverrides &&
+          modelMatchesProviderModelRoute({
+            provider,
+            api: materialized.modelApi,
+            baseUrl: materialized.modelBaseUrl,
+            route,
+          }),
+      );
+      if (selectedRoute) {
+        return {
+          availability: true,
+          routeResolution,
+          selectedRoute,
+          selectedAuthMode: materialized.authMode,
+          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
+          evidence: "runtime",
+        };
+      }
+    }
     if (
       routeAuthDecision.kind === "deferred" &&
       syntheticCodexOwnsAuth &&
