@@ -6411,19 +6411,33 @@ describe("update-cli", () => {
     },
   );
 
-  it("refuses a package update when exact target metadata lookup fails", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-schema-metadata-failure"));
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ version: null, nodeEngine: null, error: "registry timeout" }),
-    );
+  it.each([false, true])(
+    "refuses exact target metadata lookup failure (current=%s)",
+    async (current) => {
+      const root = await mockPackageInstallAtCaseDir("openclaw-schema-metadata-failure");
+      if (current) {
+        await writeOpenClawPackageFixture(root, "9999.0.0");
+        readPackageVersion.mockResolvedValue("9999.0.0");
+      }
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ version: null, nodeEngine: null, error: "registry timeout" }),
+      );
 
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      await withEnvAsync(
+        { OPENCLAW_UPDATE_PACKAGE_SPEC: current ? "openclaw@9999.0.1" : undefined },
+        async () => {
+          await expect(
+            updateCommand({ yes: true, ...(current ? { tag: "9999.0.0" } : {}) }),
+          ).rejects.toEqual(new ExitError(1));
+        },
+      );
 
-    expectNoSideEffects(databasePreflightMocks.preflightOpenClawDatabaseSchemas, serviceStop);
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(getLogOutput()).toContain("could not inspect exact package target openclaw@9999.0.0");
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
+      expectNoSideEffects(databasePreflightMocks.preflightOpenClawDatabaseSchemas, serviceStop);
+      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+      expect(getLogOutput()).toContain("could not inspect exact package target openclaw@9999.0.0");
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("continues a package update when target schemas are compatible", async () => {
     await mockPackageInstallAtCaseDir("openclaw-schema-compatible");

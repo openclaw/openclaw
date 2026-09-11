@@ -380,7 +380,7 @@ async function updateCommandInternal(
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-    if (targetVersion && !packageAlreadyCurrent) {
+    if (targetVersion) {
       const targetMetadata = await fetchNpmPackageTargetStatus({
         target: targetVersion,
         spec: resolveGlobalInstallSpec({
@@ -400,10 +400,12 @@ async function updateCommandInternal(
         );
         return;
       }
-      packageTargetSchemaVersions = targetMetadata.schemaVersions;
-      // Runtime and schema checks must use the same exact package that will be
-      // installed; rereading a mutable dist-tag can inspect a different release.
-      packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
+      if (!packageAlreadyCurrent) {
+        packageTargetSchemaVersions = targetMetadata.schemaVersions;
+        // Runtime and schema checks must use the same exact package that will be
+        // installed; rereading a mutable dist-tag can inspect a different release.
+        packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
+      }
       // Always install the exact inspected version: a dist-tag can move between
       // this lookup and the install, and an uninspected version would bypass
       // the schema and runtime decisions made here. Missing schema metadata
