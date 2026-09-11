@@ -74,6 +74,13 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
+Full canonical `main` pushes run the operator config and prior-release state
+startup corpora once through the Node `runtime-config` owner. Other runs that
+select baseline-ratchets retain its explicit **Check startup corpus** step:
+pull requests may select only changed tests, and release-gate dispatches
+also validate a separate merge tree. Both state repair passes and the static
+baseline ratchets remain unchanged.
+
 Ordinary pull requests that change only independent Control UI unit-test entries
 keep all three UI unit rows, performance checks, and existing type/lint gates,
 without repeating dedicated UI E2E jobs. Browser and Node test entries, shared

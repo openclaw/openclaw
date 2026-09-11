@@ -3066,7 +3066,6 @@ jobs:
               pnpm check:assertion-safety --base "$base_ref"
               pnpm config:docs:check
               pnpm plugins:inventory:check
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
@@ -3084,6 +3083,12 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Check startup corpus
+        # Full main Node coverage owns these files on the same checkout. PRs may
+        # select only changed tests; release gates also validate a separate merge tree.
+        if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true')
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts src/config/config-startup-corpus.test.ts src/config/state-startup-corpus.test.ts
 
   qa-smoke-ci-profile:
     permissions:
