@@ -296,9 +296,14 @@ describe("qa scenario catalog channel contracts", () => {
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const matrixProgress = requireFlowScenario(
+      readQaScenarioById("matrix-room-tool-progress-mention-safety"),
+    );
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.suiteIsolation).toBe("isolated");
+    expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
   it("uses public parent history and durable task records before accepting fanout", () => {
