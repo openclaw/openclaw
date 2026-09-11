@@ -116,6 +116,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private ready = false;
+  private providerReady = false;
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private transport: OpenAIQuicksilverGatewayTransport | undefined;
@@ -208,6 +209,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw connectAbortError(connectSignal);
       }
       this.connected = true;
+      this.notifyReady();
+      if (this.closed || connectSignal.aborted) {
+        throw connectAbortError(connectSignal);
+      }
       if (!this.timer) {
         this.scheduleExpiry(QUICKSILVER_SESSION_TTL_MS);
       }
@@ -264,6 +269,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       });
     const peerPromise = createPeer(
       {
+        onReady: () => {
+          this.providerReady = true;
+          this.notifyReady();
+        },
         onAudio: (audio) => this.config.onAudio(audio),
         onError: (error) => this.fail(error),
         onMediaError: () => this.config.logger.debug?.("GPT-Live WebRTC media packet dropped"),
@@ -312,9 +321,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (call.kind !== "gpt-live") {
       throw new Error("GPT-Live gateway relay unexpectedly used the GA realtime call shape");
     }
-    await waitForConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
     const connected = await this.connectSocket(auth, requestIds, call.sidebandUrl, connectSignal);
+    // Applying the answer can start media and emit the only session.started event.
+    // Own the sideband first so startup events cannot fall between transports.
     this.adoptConnectedSocket(connected);
+    connectSignal.throwIfAborted();
+    await waitForConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
   }
 
   private async connectSocket(
@@ -350,15 +362,15 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connected: Awaited<ReturnType<typeof connectOpenAIQuicksilverSideband>>,
   ): void {
     const terminalEvent = connected.detachBuffer();
-    for (const frame of connected.bufferedFrames) {
-      this.handleSidebandFrame(frame.data, frame.isBinary);
-    }
     if (terminalEvent?.kind === "error") {
       throw terminalEvent.error;
     }
     if (terminalEvent?.kind === "close") {
       const reason = normalizeSidebandCloseReason(terminalEvent.reason);
       throw new Error(describeSidebandClose(terminalEvent.code, reason));
+    }
+    for (const frame of connected.bufferedFrames) {
+      this.handleSidebandFrame(frame.data, frame.isBinary);
     }
   }
 
@@ -384,12 +396,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
               Math.min(QUICKSILVER_SESSION_TTL_MS, Math.max(0, expiresAt * 1000 - Date.now())),
             );
           }
-          if (!this.ready) {
-            this.connected = true;
-            this.ready = true;
-            this.flushPendingDirectAudio();
-            this.config.onReady?.();
-          }
+          this.providerReady = true;
+          this.notifyReady();
           params?.onSessionStarted?.();
         },
         onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
@@ -405,6 +413,15 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       },
       this.runtime.formatErrorMessage,
     );
+  }
+
+  private notifyReady(): void {
+    if (!this.providerReady || !this.connected || this.closed || this.ready) {
+      return;
+    }
+    this.ready = true;
+    this.flushPendingDirectAudio();
+    this.config.onReady?.();
   }
 
   private flushPendingDirectAudio(): void {
@@ -504,6 +521,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
     this.ready = false;
+    this.providerReady = false;
     this.transport = undefined;
     this.pendingAudio.clear();
     if (disposition === "detach") {
