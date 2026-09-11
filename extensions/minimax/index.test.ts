@@ -92,7 +92,7 @@ describe("minimax provider hooks", () => {
     const expectedBaseUrl = baseUrl?.trim() || `${host ?? "https://api.minimax.io"}/anthropic`;
     const expectedEndpoint = `${expectedBaseUrl.replace(/\/+$/, "")}/v1/models`;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
-      String(input) === expectedEndpoint
+      input === expectedEndpoint
         ? Response.json({ data: [{ id: "MiniMax-M3" }] })
         : new Response(null, { status: 401 }),
     );
@@ -125,7 +125,7 @@ describe("minimax provider hooks", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(expectedEndpoint);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedEndpoint);
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("x-api-key")).toBe("selected-api-key");
     expect(headers.get("authorization")).toBeNull();
