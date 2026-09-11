@@ -8,6 +8,7 @@ import {
   listQueuedChatTurnsForSession,
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
+  setQueuedChatTurnFollowupRunId,
   type QueuedChatTurnMap,
 } from "./chat-queued-turns.js";
 
@@ -329,4 +330,27 @@ describe("chat-queued-turns", () => {
       expect(map.size).toBe(0);
     },
   );
+
+  it("sets the followupRunId on a queued turn entry", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    expect(registerTurn(map, "run-a", controller, "sess-a")).toBe(true);
+
+    expect(setQueuedChatTurnFollowupRunId(map, "run-a", controller, "followup-1")).toBe(true);
+    expect(map.get("run-a")?.followupRunId).toBe("followup-1");
+
+    expect(completeQueuedChatTurn(map, "run-a", controller)).toBe(true);
+    expect(map.get("run-a")).toBeUndefined();
+  });
+
+  it("refuses to set followupRunId with a mismatched controller", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    expect(registerTurn(map, "run-a", controller, "sess-a")).toBe(true);
+
+    expect(setQueuedChatTurnFollowupRunId(map, "run-a", new AbortController(), "followup-1")).toBe(
+      false,
+    );
+    expect(map.get("run-a")?.followupRunId).toBeUndefined();
+  });
 });

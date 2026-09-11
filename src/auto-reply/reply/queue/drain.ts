@@ -1328,6 +1328,13 @@ async function runSyntheticOverflowSummary(params: {
                 }
               }
             },
+            // Forward the follow-up run ID allocation to each source's own
+            // lifecycle so their queue entries receive the correlation ID.
+            onFollowupRunIdAllocated: (runId: string) => {
+              for (const source of params.sources) {
+                source.turnAdoptionLifecycle?.onFollowupRunIdAllocated?.(runId);
+              }
+            },
           },
         }
       : {}),
@@ -1647,6 +1654,13 @@ export function scheduleFollowupDrain(
                         onSettled: () => {
                           if (admitted) {
                             completeGroup();
+                          }
+                        },
+                        // Forward the follow-up run ID allocation to each source's
+                        // own lifecycle so their queue entries receive the correlation ID.
+                        onFollowupRunIdAllocated: (runId: string) => {
+                          for (const item of activeGroupItems) {
+                            item.turnAdoptionLifecycle?.onFollowupRunIdAllocated?.(runId);
                           }
                         },
                       },

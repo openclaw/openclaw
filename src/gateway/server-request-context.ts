@@ -67,6 +67,7 @@ type GatewayRequestContextRuntime = Pick<
   | "agentRunSeq"
   | "chatAbortControllers"
   | "chatQueuedTurns"
+  | "retiredFollowupRunIds"
   | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
@@ -491,6 +492,7 @@ export function createGatewayRequestContext(
     agentRunSeq: runtime.agentRunSeq,
     chatAbortControllers: runtime.chatAbortControllers,
     chatQueuedTurns: runtime.chatQueuedTurns,
+    retiredFollowupRunIds: runtime.retiredFollowupRunIds,
     chatRunState: runtime.chatRunState,
     addChatRun: runtime.addChatRun,
     removeChatRun: runtime.removeChatRun,

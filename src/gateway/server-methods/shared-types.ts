@@ -259,6 +259,10 @@ type GatewayKernelContext = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   /** Cancel identities for turns waiting in the followup/collect queue. */
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
+  /** Preserved follow-up run IDs after queue settlement, keyed by original run ID.
+   * Used by waitForTurn to return followupRunId in terminal responses even after
+   * the queued entry is deleted, so clients can correlate fast-completing follow-ups. */
+  retiredFollowupRunIds: Map<string, string>;
   chatRunState: ChatRunState;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (

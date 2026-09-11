@@ -42,6 +42,7 @@ export type AgentTurnContext = Pick<
   | "cancelRunBoundApprovals"
   | "chatAbortControllers"
   | "chatQueuedTurns"
+  | "retiredFollowupRunIds"
   | "chatRunState"
   | "dedupe"
   | "deps"

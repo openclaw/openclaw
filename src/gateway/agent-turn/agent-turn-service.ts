@@ -628,19 +628,46 @@ export function createAgentTurnService(
         : 30_000;
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
-    const queuedResult = () =>
-      context.chatQueuedTurns.has(runId)
-        ? {
-            runId,
-            status: "pending" as const,
-            timeoutPhase: "queue" as const,
-            providerStarted: false,
-          }
-        : undefined;
+    const getRetiredFollowupRunId = () => {
+      const raw = context.retiredFollowupRunIds.get(runId);
+      if (!raw) {
+        return undefined;
+      }
+      // New entries carry an inline TTL as "followupRunId|expiresAtMs".
+      // Legacy/plain entries are returned as-is for backward compatibility.
+      const sep = raw.lastIndexOf("|");
+      if (sep === -1) {
+        return raw;
+      }
+      const followupRunId = raw.slice(0, sep);
+      const expiresAtMs = Number(raw.slice(sep + 1));
+      if (Number.isFinite(expiresAtMs) && Date.now() >= expiresAtMs) {
+        return undefined;
+      }
+      return followupRunId || undefined;
+    };
+    const queuedResult = () => {
+      const entry = context.chatQueuedTurns.get(runId);
+      if (!entry) {
+        // Queue entry was deleted by settlement. Do NOT short-circuit to
+        // pending here — the agent may have already terminated. Fall through
+        // to waitForAgentJob so the terminal status is preserved. The retired
+        // follow-up runId (if any) is re-attached after the agent snapshot.
+        return undefined;
+      }
+      return {
+        runId,
+        status: "pending" as const,
+        timeoutPhase: "queue" as const,
+        providerStarted: false,
+        ...(entry.followupRunId ? { followupRunId: entry.followupRunId } : {}),
+      };
+    };
     const queuedBeforeWait = queuedResult();
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
+    const retiredFollowupRunId = getRetiredFollowupRunId();
     const snapshot = await waitForAgentJob({
       runId,
       timeoutMs,
@@ -654,6 +681,7 @@ export function createAgentTurnService(
       return {
         runId,
         status: "timeout" as const,
+        ...(retiredFollowupRunId ? { followupRunId: retiredFollowupRunId } : {}),
       };
     }
     return {
@@ -671,6 +699,7 @@ export function createAgentTurnService(
       ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
       terminalReceipt: snapshot.terminalReceipt,
       terminalReply: snapshot.terminalReply,
+      ...(retiredFollowupRunId ? { followupRunId: retiredFollowupRunId } : {}),
     };
   };
 

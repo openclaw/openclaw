@@ -35,6 +35,7 @@ function invoke(method: keyof typeof suspendHandlers, params: unknown) {
         logGateway: { warn },
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
       },
     } as unknown as Parameters<typeof handler>[0]),
   ).then(() => ({ respond, pauseScheduling, resumeScheduling }));

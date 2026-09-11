@@ -11,6 +11,9 @@ import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
   activeKind?: "agent" | "chat",
+  opts?: {
+    retiredFollowupRunIds?: Map<string, string>;
+  },
 ) {
   const respond = vi.fn();
   const handler = expectDefined(
@@ -26,6 +29,7 @@ function waitThroughGateway(
           ? new Map([[params.runId, { kind: activeKind }]])
           : new Map(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: opts?.retiredFollowupRunIds ?? new Map(),
       },
     } as unknown as Parameters<typeof handler>[0]),
   );
@@ -377,4 +381,72 @@ describe("agent.wait gateway dedupe observations", () => {
       expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
     },
   );
+
+  it("returns retired follow-up runId in terminal response after queue settlement", async () => {
+    // When a queued follow-up has settled (entry deleted from chatQueuedTurns),
+    // the follow-up runId is preserved in retiredFollowupRunIds so the
+    // terminal agent.wait response can still carry it for client-side
+    // correlation (fast-completion race). The status reflects the agent's
+    // actual terminal outcome (timeout here since no agent run exists), NOT
+    // a stale pending — the queue entry is gone and must not be reported as
+    // still pending.
+    const runId = "run-retired-followup-pending";
+    const followupRunId = "run-followup-retired";
+    const retiredFollowupRunIds = new Map([[runId, followupRunId]]);
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, undefined, {
+      retiredFollowupRunIds,
+    });
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "timeout",
+        followupRunId,
+      }),
+    );
+  });
+
+  it("returns retired follow-up runId with inline TTL before expiry", async () => {
+    // New entries carry an inline TTL as "followupRunId|expiresAtMs". The
+    // follow-up runId must be returned while the entry is still valid.
+    const runId = "run-retired-followup-ttl";
+    const followupRunId = "run-followup-ttl";
+    const expiresAtMs = Date.now() + 60_000;
+    const retiredFollowupRunIds = new Map([[runId, `${followupRunId}|${expiresAtMs}`]]);
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, undefined, {
+      retiredFollowupRunIds,
+    });
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "timeout",
+        followupRunId,
+      }),
+    );
+  });
+
+  it("drops expired retired follow-up runId entries", async () => {
+    // Entries whose inline TTL has passed must not be returned, so a stale
+    // mapping cannot leak a phantom follow-up identity into a terminal
+    // response.
+    const runId = "run-retired-followup-expired";
+    const followupRunId = "run-followup-expired";
+    const expiredAtMs = Date.now() - 1_000;
+    const retiredFollowupRunIds = new Map([[runId, `${followupRunId}|${expiredAtMs}`]]);
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, undefined, {
+      retiredFollowupRunIds,
+    });
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "timeout",
+      }),
+    );
+    expect(waiter.respond.mock.calls[0]?.[1]).not.toHaveProperty("followupRunId");
+  });
 });

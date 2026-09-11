@@ -20,6 +20,8 @@ export type QueuedChatTurnEntry = {
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /** RunId of the follow-up turn that was admitted from this queue entry. */
+  followupRunId?: string;
 };
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
@@ -119,6 +121,106 @@ export function completeQueuedChatTurn(
   return entry?.controller === controller
     ? deleteQueuedChatTurnEntry(chatQueuedTurns, key, entry)
     : false;
+}
+
+/** Default TTL for retired follow-up runId mappings (5 minutes). */
+export const RETIRED_FOLLOWUP_RUNID_TTL_MS = 5 * 60 * 1000;
+/** Hard cap on the retired follow-up runId map size to bound process memory. */
+const RETIRED_FOLLOWUP_RUNID_MAX_SIZE = 4096;
+
+/**
+ * Retire a completed queued turn's follow-up runId so that subsequent
+ * `agent.wait` terminal responses can still return it for client-side
+ * correlation, even though the queue entry has been deleted.
+ *
+ * This handles the fast-completion race: if the follow-up completes between
+ * identity polls, `completeQueuedChatTurn` deletes the entry before the
+ * client discovers the ID. By preserving the mapping here, `waitForTurn`
+ * includes `followupRunId` in the terminal snapshot response.
+ *
+ * Entries carry a TTL so the map cannot grow without bound across the
+ * Gateway's lifetime; `pruneRetiredFollowupRunIds` is wired into the
+ * periodic dedupe cleanup interval.
+ */
+export function retireFollowupRunId(
+  retiredFollowupRunIds: Map<string, string>,
+  runId: string,
+  followupRunId: string | undefined,
+): void {
+  const key = resolveExactRunId(runId);
+  if (!key || !followupRunId) {
+    return;
+  }
+  retiredFollowupRunIds.set(key, followupRunId);
+}
+
+/**
+ * Remove expired entries from the retired follow-up runId map. Entries older
+ * than their inline `expiresAtMs` (or the whole map above `maxSize`) are
+ * dropped so the map cannot accumulate stale identity mappings across the
+ * Gateway lifetime. `ttlMs` is the historical TTL used when encoding
+ * expiries; retained for call-site compatibility but expiry is inline.
+ */
+export function pruneRetiredFollowupRunIds(
+  retiredFollowupRunIds: Map<string, string>,
+  nowMs: number,
+  _ttlMs = RETIRED_FOLLOWUP_RUNID_TTL_MS,
+  maxSize = RETIRED_FOLLOWUP_RUNID_MAX_SIZE,
+): void {
+  if (retiredFollowupRunIds.size === 0) {
+    return;
+  }
+  // Entries are stored as "followupRunId|expiresAtMs" to carry the TTL inline.
+  const expired: string[] = [];
+  for (const [key, value] of retiredFollowupRunIds) {
+    const sep = value.lastIndexOf("|");
+    if (sep === -1) {
+      // Legacy/stale entry without a recorded expiry — drop it.
+      expired.push(key);
+      continue;
+    }
+    const expiresAtMs = Number(value.slice(sep + 1));
+    if (Number.isFinite(expiresAtMs) && nowMs >= expiresAtMs) {
+      expired.push(key);
+    }
+  }
+  for (const key of expired) {
+    retiredFollowupRunIds.delete(key);
+  }
+  if (retiredFollowupRunIds.size > maxSize) {
+    const excess = retiredFollowupRunIds.size - maxSize;
+    let removed = 0;
+    for (const key of retiredFollowupRunIds.keys()) {
+      if (removed >= excess) {
+        break;
+      }
+      retiredFollowupRunIds.delete(key);
+      removed += 1;
+    }
+  }
+}
+
+/**
+ * Records the follow-up runId that was allocated for a queued turn, so that
+ * subsequent `agent.wait` responses can return the expected follow-up identity
+ * for secure client-side correlation.
+ */
+export function setQueuedChatTurnFollowupRunId(
+  chatQueuedTurns: QueuedChatTurnMap,
+  runId: string,
+  controller: AbortController,
+  followupRunId: string,
+): boolean {
+  const key = resolveExactRunId(runId);
+  if (!key) {
+    return false;
+  }
+  const entry = chatQueuedTurns.get(key);
+  if (!entry || entry.controller !== controller) {
+    return false;
+  }
+  entry.followupRunId = followupRunId;
+  return true;
 }
 
 /**

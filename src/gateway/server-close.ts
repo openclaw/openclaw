@@ -276,6 +276,7 @@ export type GatewayCloseParams = {
     totalTimeoutMs?: number;
   }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
   chatRunState: ChatRunState;
+  retiredFollowupRunIds: Map<string, string>;
 };
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {

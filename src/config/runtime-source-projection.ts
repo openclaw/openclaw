@@ -13,7 +13,9 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   if (config === runtimeConfigSnapshot) {
     return runtimeConfigSourceSnapshot;
   }
+  // SAFETY: runtime snapshots are opaque config objects; record view is intentional for key-wise diffing.
   const runtime = runtimeConfigSnapshot as Record<string, unknown>;
+  // SAFETY: candidate is the incoming config being projected; record view is for structural comparison.
   const candidate = config as Record<string, unknown>;
   for (const key of Object.keys(runtime)) {
     if (!Object.hasOwn(candidate, key)) {
@@ -33,7 +35,7 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
     runtimeConfigSourceSnapshot,
     runtimeConfigSnapshot,
     config,
-  ) as OpenClawConfig;
+  ) as OpenClawConfig; // SAFETY: projection restores source-typed shape; cast recovers OpenClawConfig
 }
 
 /** Projects partial legacy inputs without persisting deleted runtime-only parents. */
@@ -50,5 +52,5 @@ export function projectLegacyRuntimeConfigWrite(
     projectRuntimeChangesOntoSource(sourceSnapshot, runtimeSnapshot, config, {
       pruneUnauthoredDeletions: true,
     }),
-  ) ?? {}) as OpenClawConfig;
+  ) ?? {}) as OpenClawConfig; // SAFETY: projection returns source-shaped record; cast restores OpenClawConfig after optional unwrap
 }

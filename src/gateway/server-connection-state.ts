@@ -75,6 +75,7 @@ export function createGatewayConnectionState(params: {
   const removeChatRun = chatRunRegistry.remove;
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
+  const retiredFollowupRunIds = new Map<string, string>();
   const toolEventRecipients = chatRunState.toolEventRecipients;
 
   return {
@@ -90,6 +91,7 @@ export function createGatewayConnectionState(params: {
     removeChatRun,
     chatAbortControllers,
     chatQueuedTurns,
+    retiredFollowupRunIds,
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,

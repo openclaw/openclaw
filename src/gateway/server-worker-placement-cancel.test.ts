@@ -77,6 +77,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       chatRunState,
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       agentRunSeq: new Map(),
       getRuntimeConfig: () => ({}),
       removeChatRun: vi.fn(),

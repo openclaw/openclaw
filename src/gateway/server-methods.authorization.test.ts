@@ -476,6 +476,7 @@ describe("sessions.patchMany orchestration", () => {
       getSessionEventSubscriberConnIds: () => new Set(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       dedupe: new Map(),
       ...overrides,
     }) as never;

@@ -65,6 +65,7 @@ function createRequestContext(overrides: Record<string, unknown> = {}): GatewayR
   return {
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
+    retiredFollowupRunIds: new Map(),
     chatRunState: { runs: new Map() },
     dedupe: new Map(),
     broadcastToConnIds: vi.fn(),

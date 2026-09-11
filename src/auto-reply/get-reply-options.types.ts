@@ -100,6 +100,11 @@ export type TurnAdoptionLifecycle = {
   onSettled?: () => void;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
+  /**
+   * Called when the follow-up turn's runId is allocated, so the gateway can
+   * record it on the queued turn entry for `agent.wait` correlation.
+   */
+  onFollowupRunIdAllocated?: (runId: string) => void;
   /** Stable cancellation owner for collect-mode batches. */
   ownerKey?: string;
   abortSignal?: AbortSignal;

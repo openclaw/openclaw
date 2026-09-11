@@ -33,7 +33,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
-import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
+import { pruneRetiredFollowupRunIds, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
 import {
@@ -94,6 +94,7 @@ export function startGatewayMaintenanceTimers(params: {
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
+  retiredFollowupRunIds: Map<string, string>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;
   removeChatRun: (
@@ -351,6 +352,7 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
+    pruneRetiredFollowupRunIds(params.retiredFollowupRunIds, now);
 
     for (const [runId, entry] of params.chatAbortControllers) {
       // A stamped terminal observation whose async projection clear never ran

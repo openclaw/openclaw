@@ -290,8 +290,10 @@ export async function admitFollowupTurn(params: {
         : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
     // Preallocate the one lifecycle identity passed as opts.runId; canonical
     // execution owns registration and cleanup under this same id.
+    const followupRunId = crypto.randomUUID();
+    queued.turnAdoptionLifecycle?.onFollowupRunIdAllocated?.(followupRunId);
     const turn: AdmittedFollowupTurn = {
-      runId: crypto.randomUUID(),
+      runId: followupRunId,
       queued: { ...queued, currentInboundContext },
       operation,
       config,

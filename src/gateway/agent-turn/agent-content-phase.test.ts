@@ -58,6 +58,7 @@ it.each(["main", "work"])(
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       deps: {},
