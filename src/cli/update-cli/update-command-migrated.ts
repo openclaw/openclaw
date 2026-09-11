@@ -12,7 +12,7 @@ import {
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
-import { finishUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { retireCommandProcessJobForHandoff } from "../../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -221,14 +221,10 @@ async function recoverMigratedUpdateInParent(
       ? Math.max(0, rollback.verifiedAtMs - stoppedAtMs)
       : undefined;
   assertCurrent();
-  if (run && rollback.rolledBack) {
-    finishUpdateRun(
-      run.runId,
-      { status: "rolled-back", reason: finalResult.reason, after: finalResult.after, downtimeMs },
-      { env: run.env },
-    );
-  }
-  const completed = completeUpdateCommandRun(finalResult, run, downtimeMs);
+  const completed = completeUpdateCommandRun(finalResult, run, {
+    rolledBack: rollback.rolledBack,
+    downtimeMs,
+  });
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
     result: completed,

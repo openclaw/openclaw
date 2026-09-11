@@ -513,7 +513,7 @@ it.each([false, true])(
       );
     const child = delegated
       ? await withUpdateCommandExecutor(created.runId, async (executor) =>
-          withUpdateCommandExecutorChild(await executor.enter(root), retire),
+          withUpdateCommandExecutorChild(await executor.enter(root), root, retire),
         )
       : await retire();
     expect(child.code, child.stderr).toBe(0);

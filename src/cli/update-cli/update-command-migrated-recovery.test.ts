@@ -30,6 +30,7 @@ vi.mock("../../process/exec.js", () => ({ runUtf8CommandWithTimeout: vi.fn() }))
 vi.mock("./update-command-executor.js", () => ({
   withUpdateCommandExecutorChild: async (
     _fence: UpdateRecoveryFence,
+    _root: string,
     operation: () => Promise<unknown>,
   ) => {
     state.childActive = true;
@@ -55,11 +56,13 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
   suspendScheduledTaskAutoStartForUpdate: vi.fn(),
 }));
 vi.mock("../../infra/update-run-ledger.js", () => ({
-  finishUpdateRun: vi.fn(() => state.events.push("terminal")),
   recordUpdateRunStep: vi.fn(() => state.events.push("step")),
 }));
 vi.mock("./update-command-run.js", () => ({
-  completeUpdateCommandRun: vi.fn((result: FinishUpdateParams["result"]) => result),
+  completeUpdateCommandRun: vi.fn((result: FinishUpdateParams["result"]) => {
+    state.events.push("terminal");
+    return result;
+  }),
 }));
 vi.mock("./progress.js", () => ({ printResult: vi.fn() }));
 vi.mock("./update-command-result.js", async (importOriginal) => ({

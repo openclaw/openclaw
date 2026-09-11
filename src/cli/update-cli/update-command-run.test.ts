@@ -95,7 +95,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("persists fingerprint warnings before closing a rolled-back run", () => {
+it("persists fingerprint warnings before closing a rolled-back run", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-fingerprint-warning-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const warnings = [
@@ -103,7 +103,7 @@ it("persists fingerprint warnings before closing a rolled-back run", () => {
     "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
   ];
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  const result = publishUpdateCommandTerminalResult(
+  const result = await publishUpdateCommandTerminalResult(
     { opts: { json: true, run }, ownedManagedUpdateEnv: env },
     {
       status: "error",
@@ -582,6 +582,7 @@ it.each([
   vi.stubEnv("OPENCLAW_PROFILE", "caller");
   vi.stubEnv("OPENCLAW_STATE_DIR", callerState);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerState, "openclaw.json"));
+  vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
   const serviceEnv = {
     ...process.env,
     OPENCLAW_PROFILE: "service",
