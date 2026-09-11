@@ -584,6 +584,8 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
+    - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
+    - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way. A catalog refresh failure is reported separately from saving the credential.
     - **`/stop`** targets the active chat session to abort the current run.
 
   </Accordion>

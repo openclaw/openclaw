@@ -335,6 +335,10 @@ The CLI reports saved model access separately from confirmed Gateway application
 
 Without `--set-default`, login preserves the current default, including an unset default, and keeps unrelated configuration edits made while login is running. If credentials are saved but provider settings cannot be applied, the error reports the saved credentials separately. Auth changes request a refresh from the running local Gateway; a refresh failure does not undo the saved change, and the command reports how to apply it.
 
+With an older Gateway, the CLI tries its legacy auth-status refresh. This cannot
+confirm that the saved change is active; follow the restart guidance. This
+fallback applies to auth changes, not to `models list`.
+
 For the shared-main agent, `--force` clears the provider's shared credentials and main-agent local overrides, including their order and health state. For another agent it clears only that agent's local profiles, leaving shared credentials unchanged. A busy auth store stops the command before login starts; close other OpenClaw commands using the same state directory and retry. SQLite lock diagnostics can name either the shared state database or an agent database, so checking only the legacy auth file for open handles does not rule out contention.
 
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Provider key references are cleared before the credential is removed. Model defaults and connection settings stay unchanged. Logout refuses when the profile is not in the store.

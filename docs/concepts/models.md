@@ -85,50 +85,36 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening a model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
-Ordinary `models.list` and `/models` browsing use the Gateway's published
-configured or completed catalog. They do not start provider discovery, including
-after a restart. If the owner is not yet published, the request reports that the
-catalog is not ready. Retry after startup or an in-progress refresh finishes.
-Use an explicit Refresh action or `openclaw models list --refresh` to acquire
-provider inventory. Model selection, subagent capability checks, and hook-model
-validation also use the published inventory. Missing capability facts do not
-start another provider discovery. Without a published owner, turn-path thinking
-and input checks leave catalog facts absent instead of loading provider plugins.
-Native runtime observations keep their separate owner and authentication requirements.
-
-Internal catalog loads default to passive reads. Without a published owner they
-use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy
-`loadModelCatalog` keep their writable default for compatibility and can acquire
-provider inventory. Pass `readOnly: true` for a passive SDK read. Explicit full
-refreshes keep inventory acquisition. Explicit read-only requests keep their
-narrower refresh scope.
+The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
+and native apps. Ordinary CLI and chat browsing do not start provider discovery,
+including after a restart. Use **Refresh** in Models or
+`openclaw models list --refresh` to discover provider models. The Models page also
+requests discovery the first time you open a default-model picker for its current
+page data; later opens read the published catalog. If the catalog is not ready,
+retry after Gateway startup or the current refresh finishes.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
 native login.
 
-Once the Gateway has discovered a provider inventory, model-selection hot reloads
-retain it without running discovery again. Aliases, policy, and runtime capabilities
-use the new configuration. A successful catalog refresh replaces that inventory,
-including a successful empty account list. Metadata alone cannot refill that list.
-Explicitly configured models and independent native runtime catalogs remain.
-When a provider reports failed discovery, the Gateway retains its last compatible
-inventory and reports the failed outcome while healthy providers update. Without
-compatible inventory, the Gateway publishes the provider's prepared starter rows
-with the failed outcome, even when strict discovery returns no rows.
-They cannot widen a retained successful list, including an empty list. Changes to
-provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
+If discovery fails, OpenClaw reports the failure and keeps the last compatible
+model list. Without one, it shows prepared starter models with the failure.
+Other providers can still update. A successful empty response clears that
+provider's discovered models; it does not restore old choices. Explicitly
+configured models and independent native runtime catalogs remain.
+
+Changes to aliases or model restrictions reuse compatible inventory. Changes to
+the provider, plugin, credentials, environment, or workspace can invalidate it.
 
 Automations and command-palette model search show a warning when a provider refresh
 fails, while keeping the models returned by the Gateway. Open Models to retry the
 refresh. A successful empty result clears the discovered choices and warning.
 
 A successful provider result takes precedence over retained rows, even when
-another credential reports failure. Catalog results describe one provider's model
-list. OpenClaw does not guess which old models belonged to each credential.
+another credential reports failure.
 
 Full mechanics: [Model failover](/concepts/model-failover).
 
@@ -223,6 +209,10 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 </Accordion>
 
 ## Choose a model for a session
+
+In the Control UI chat model menu, search by model or provider name. Use the
+arrow keys to move through results and Enter to select one. Escape clears the
+search. Typing alone does not change the selected model.
 
 Gateway `sessions.create` and `sessions.patch` resolve model aliases and
 `modelPolicy.allow` in the target session's agent scope. An explicit per-agent

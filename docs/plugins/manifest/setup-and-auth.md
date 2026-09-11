@@ -85,11 +85,33 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 When `appGuidedDiscovery` is true, the matching provider auth method must expose
 `appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
 read-only: no login, model pull, download, or config write. Preparation rechecks
-the exact selected model and returns a config proposal; OpenClaw live-tests that
-proposal in isolation and commits it only after success. A provider can also
+the exact selected model and returns a config proposal. OpenClaw saves any
+returned credential, runs one confirmation turn without tools, and activates
+the proposal only after success. Failed activation retains the saved credential
+for retry; a replacement remains inactive until the user accepts activation.
+A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability probe is also read-only.
+
+### Login choices
+
+**Connect** in Models requires `credentialOnly: true` plus `appGuidedAuth` or
+`appGuidedSecret`. Choices marked `appGuidedDiscovery`, `manual-only`, or outside
+text-inference onboarding do not become credential-only actions. Descriptor-only
+`setup.providers[].authMethods` entries do not create executable login choices.
+
+Bare `/login` groups visible browser and device-code choices into provider
+buttons without starting sign-in. A provider with several methods opens a second
+choice. Channels without command buttons show commands to copy. Core builds
+this menu from the manifest; channels do not keep separate provider lists.
+
+`channelLogin` opts a credential-only browser or device-code method into private
+chat. Use `{}` when no alias is needed. The method must complete without asking
+chat for a secret, endpoint, or other free-text input. Methods that need such
+input hand off to the matching Control UI login or setup flow. The host owns any
+model-access consent after saving credentials; the plugin cannot grant it through
+its configuration patch.
 
 Browser-based `channelLogin` methods use `ctx.oauth.authorize` when the host
 supplies it. Pass the provider-generated `state`, a `timeoutMs` deadline, and
