@@ -1,7 +1,7 @@
 // Completion predicates read recorded facts, not rendered placeholder wording.
 import { describe, expect, it, vi } from "vitest";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
-import { hasMessagingToolDeliveryToSource } from "./subagent-announce-completion-delivery.js";
+import { resolveMessagingToolDeliveryEvidence } from "./subagent-announce-completion-delivery.js";
 
 const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
 
@@ -38,7 +38,7 @@ describe("hasFailedSubagentNoOutputCompletion", () => {
   });
 });
 
-describe("hasMessagingToolDeliveryToSource", () => {
+describe("resolveMessagingToolDeliveryEvidence", () => {
   const deliveryTarget = {
     channel: "slack",
     accountId: "secondary",
@@ -63,11 +63,14 @@ describe("hasMessagingToolDeliveryToSource", () => {
     const resolveEquivalentTarget = vi.fn().mockResolvedValue("user:U000000001");
 
     await expect(
-      hasMessagingToolDeliveryToSource(result, deliveryTarget, {
-        requireFinalReply: true,
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result,
+        deliveryTarget,
         resolveEquivalentTarget,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toMatchObject({ hasFinalMessagingToolDelivery: true });
     expect(resolveEquivalentTarget).toHaveBeenCalledOnce();
   });
 
@@ -76,11 +79,17 @@ describe("hasMessagingToolDeliveryToSource", () => {
     ["failed recipient lookup", undefined],
   ] as const)("does not credit %s", async (_label, equivalentTarget) => {
     await expect(
-      hasMessagingToolDeliveryToSource(result, deliveryTarget, {
-        requireFinalReply: true,
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result,
+        deliveryTarget,
         resolveEquivalentTarget: async () => equivalentTarget,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toMatchObject({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: false,
+    });
   });
 
   it("does not resolve an omitted target account against a non-default source", async () => {
@@ -91,11 +100,17 @@ describe("hasMessagingToolDeliveryToSource", () => {
     };
 
     await expect(
-      hasMessagingToolDeliveryToSource(omittedAccountResult, deliveryTarget, {
-        requireFinalReply: true,
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result: omittedAccountResult,
+        deliveryTarget,
         resolveEquivalentTarget,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toMatchObject({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: false,
+    });
     expect(resolveEquivalentTarget).not.toHaveBeenCalled();
   });
 
@@ -108,36 +123,52 @@ describe("hasMessagingToolDeliveryToSource", () => {
     };
 
     await expect(
-      hasMessagingToolDeliveryToSource(wrongThreadResult, deliveryTarget, {
-        requireFinalReply: true,
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result: wrongThreadResult,
+        deliveryTarget,
         resolveEquivalentTarget: async () => "user:U000000001",
       }),
-    ).resolves.toBe(false);
+    ).resolves.toMatchObject({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: false,
+    });
   });
 
   it("passes caller cancellation to provider-native recipient resolution", async () => {
     const controller = new AbortController();
     const resolveEquivalentTarget = vi.fn(
       async (_target: unknown, _deliveryTarget: unknown, signal?: AbortSignal) => {
+        if (signal?.aborted) {
+          return undefined;
+        }
         await new Promise<void>((resolve) => {
           signal?.addEventListener("abort", () => resolve(), { once: true });
         });
         return undefined;
       },
     );
-    const pending = hasMessagingToolDeliveryToSource(result, deliveryTarget, {
-      requireFinalReply: true,
+    const pending = resolveMessagingToolDeliveryEvidence({
+      cfg: {} as never,
+      requesterSessionKey: "test-requester",
+      result,
+      deliveryTarget,
       signal: controller.signal,
       resolveEquivalentTarget,
     });
 
     controller.abort();
 
-    await expect(pending).resolves.toBe(false);
+    await expect(pending).resolves.toMatchObject({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: false,
+    });
     expect(resolveEquivalentTarget).toHaveBeenCalledWith(
       result.messagingToolSentTargets[0],
       deliveryTarget,
-      controller.signal,
+      expect.any(AbortSignal),
     );
+    expect(resolveEquivalentTarget.mock.calls[0]?.[2]?.aborted).toBe(true);
   });
 });

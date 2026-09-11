@@ -34,7 +34,7 @@ const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
 const MAX_MESSAGING_TOOL_DELIVERY_VERIFICATION_TIMEOUT_MS = 10_000;
 
-export async function resolveEquivalentMessagingToolTarget(
+async function resolveEquivalentMessagingToolTarget(
   params: {
     cfg: OpenClawConfig;
     requesterSessionKey: string;
@@ -242,7 +242,7 @@ export async function deliverCompletionDirect(params: {
   }
 }
 
-export type MessagingToolDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[0];
+type MessagingToolDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[0];
 export type SourceDeliveryTarget = Parameters<typeof sourceDeliveryTargetsMatch>[1];
 
 type MessagingToolDeliveryMatchOptions = {
@@ -263,7 +263,7 @@ export type MessagingToolDeliveryResult = {
   messagingToolSourceReplyPayloads?: unknown;
 };
 
-export async function hasMessagingToolDeliveryToSource(
+async function hasMessagingToolDeliveryToSource(
   result: MessagingToolDeliveryResult,
   deliveryTarget: SourceDeliveryTarget,
   options?: MessagingToolDeliveryMatchOptions,
@@ -356,6 +356,7 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
   deliveryTarget: SourceDeliveryTarget;
   signal?: AbortSignal;
   timeoutMs?: number;
+  resolveEquivalentTarget?: MessagingToolDeliveryMatchOptions["resolveEquivalentTarget"];
 }): Promise<{ hasFinalMessagingToolDelivery: boolean; hasMessagingToolDelivery: boolean }> {
   const verificationTimeoutMs = Math.min(
     Math.max(params.timeoutMs ?? MAX_MESSAGING_TOOL_DELIVERY_VERIFICATION_TIMEOUT_MS, 1),
@@ -371,22 +372,24 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
     ? AbortSignal.any([params.signal, verificationDeadline.signal])
     : verificationDeadline.signal;
   try {
-    const resolveEquivalentTarget = (
-      target: MessagingToolDeliveryTarget,
-      deliveryTarget: SourceDeliveryTarget,
-      callbackSignal?: AbortSignal,
-    ) =>
-      resolveEquivalentMessagingToolTarget(
-        {
-          cfg: params.cfg,
-          requesterSessionKey: params.requesterSessionKey,
-          requesterAgentId: params.requesterAgentId,
-          signal: callbackSignal ?? signal,
-        },
-        target,
-        deliveryTarget,
-      );
-    const matchOptions = { resolveEquivalentTarget, signal };
+    const equivalentTargetResolver =
+      params.resolveEquivalentTarget ??
+      ((
+        target: MessagingToolDeliveryTarget,
+        deliveryTarget: SourceDeliveryTarget,
+        callbackSignal?: AbortSignal,
+      ) =>
+        resolveEquivalentMessagingToolTarget(
+          {
+            cfg: params.cfg,
+            requesterSessionKey: params.requesterSessionKey,
+            requesterAgentId: params.requesterAgentId,
+            signal: callbackSignal ?? signal,
+          },
+          target,
+          deliveryTarget,
+        ));
+    const matchOptions = { resolveEquivalentTarget: equivalentTargetResolver, signal };
     const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
       params.result,
       params.deliveryTarget,
