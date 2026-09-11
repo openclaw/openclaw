@@ -846,7 +846,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(hovercard()).toBeNull();
   });
 
-  it("moves keyboard focus through the card's links and hands it back at the edges", async () => {
+  it.each([false, true])("hands focus back at Tab edges (shiftKey=%s)", async (shiftKey) => {
     const { anchor } = createIssueLink();
 
     anchor.focus();
@@ -866,11 +866,11 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(insideTab.defaultPrevented).toBe(false);
     expect(hovercard()).not.toBeNull();
 
-    // Leaving the last link returns focus to the trigger with the card closed,
+    // Leaving either outer edge returns focus to the trigger with the card closed,
     // and that returned focus must not immediately reopen what was dismissed.
-    const last = cardLinks().at(-1);
-    last?.focus();
-    last?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+    const edge = shiftKey ? cardLinks()[0] : cardLinks().at(-1);
+    edge?.focus();
+    edge?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey }));
     expect(hovercard()).toBeNull();
     expect(document.activeElement).toBe(anchor);
     await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS * 2);
