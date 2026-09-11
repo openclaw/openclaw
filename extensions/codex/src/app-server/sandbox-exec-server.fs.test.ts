@@ -87,6 +87,27 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         signal?: AbortSignal;
       }) => undefined,
     );
+    const copyFile = vi.fn(
+      async (_params: {
+        sourcePath: string;
+        destinationPath: string;
+        cwd?: string;
+        mkdir?: boolean;
+        signal?: AbortSignal;
+      }) => undefined,
+    );
+    const mkdirp = vi.fn(
+      async (_params: { filePath: string; cwd?: string; signal?: AbortSignal }) => undefined,
+    );
+    const remove = vi.fn(
+      async (_params: {
+        filePath: string;
+        cwd?: string;
+        recursive?: boolean;
+        force?: boolean;
+        signal?: AbortSignal;
+      }) => undefined,
+    );
     // Deliberately model the interface shipped before canonical mutation pins:
     // no resolvePinnedMutationTarget method and no pinnedPath parameters.
     const legacyBridge = {
@@ -95,16 +116,10 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         containerPath: filePath,
       }),
       readFile: async () => Buffer.alloc(0),
+      copyFile,
       writeFile,
-      mkdirp: async (_params: { filePath: string; cwd?: string; signal?: AbortSignal }) =>
-        undefined,
-      remove: async (_params: {
-        filePath: string;
-        cwd?: string;
-        recursive?: boolean;
-        force?: boolean;
-        signal?: AbortSignal;
-      }) => undefined,
+      mkdirp,
+      remove,
       rename: async () => undefined,
       stat: async ({ filePath }: { filePath: string; cwd?: string; signal?: AbortSignal }) => ({
         type: /\.[^/]+$/u.test(filePath) ? ("file" as const) : ("directory" as const),
@@ -130,6 +145,39 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       filePath: "/workspace/legacy.txt",
       data: Buffer.from("compatible"),
       mkdir: false,
+    });
+
+    await expect(
+      rpc(socket, "fs/createDirectory", {
+        path: "file:///workspace/legacy-dir",
+        recursive: true,
+      }),
+    ).resolves.toEqual({});
+    expect(mkdirp).toHaveBeenCalledWith({ filePath: "/workspace/legacy-dir" });
+
+    await expect(
+      rpc(socket, "fs/copy", {
+        sourcePath: "file:///workspace/source.txt",
+        destinationPath: "file:///workspace/copied.txt",
+      }),
+    ).resolves.toEqual({});
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source.txt",
+      destinationPath: "/workspace/copied.txt",
+      mkdir: true,
+    });
+
+    await expect(
+      rpc(socket, "fs/remove", {
+        path: "file:///workspace/legacy.txt",
+        recursive: false,
+        force: false,
+      }),
+    ).resolves.toEqual({});
+    expect(remove).toHaveBeenCalledWith({
+      filePath: "/workspace/legacy.txt",
+      recursive: false,
+      force: false,
     });
     socket.close();
   });
