@@ -4889,6 +4889,12 @@ jobs:
             ${{ steps.health-render.outputs.artifact-path }}/stale-socket.png
             ${{ steps.health-render.outputs.artifact-path }}/disabled.png
             ${{ steps.health-render.outputs.artifact-path }}/probe-permission.png
+            ${{ steps.health-render.outputs.artifact-path }}/debug-remote-healthy.png
+            ${{ steps.health-render.outputs.artifact-path }}/debug-remote-healthy-health.txt
+            ${{ steps.health-render.outputs.artifact-path }}/debug-remote-failure.png
+            ${{ steps.health-render.outputs.artifact-path }}/debug-remote-failure-health.txt
+            ${{ steps.health-render.outputs.artifact-path }}/debug-local-stopped.png
+            ${{ steps.health-render.outputs.artifact-path }}/debug-local-stopped-health.txt
           if-no-files-found: error
           retention-days: 7
 

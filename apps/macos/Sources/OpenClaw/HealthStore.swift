@@ -329,7 +329,15 @@ final class HealthStore {
         if let error = self.lastError, !error.isEmpty {
             return (.degraded(error), "Health check failed: \(error)")
         }
-        guard let snap = self.snapshot, let link = self.resolveHealthChannel(snap) else {
+        guard let snap = self.snapshot else {
+            return (.unknown, "Health check pending")
+        }
+        guard let link = self.resolveHealthChannel(snap) else {
+            if snap.ok == true { return (.ok, String(localized: "Gateway healthy")) }
+            if snap.ok == false {
+                let failure = self.describeFailure(from: snap, fallback: nil)
+                return (.degraded(failure), "Health check failed: \(failure)")
+            }
             return (.unknown, "Health check pending")
         }
         let label = snap.channelLabels?[link.id] ?? link.id.capitalized

@@ -61,29 +61,76 @@ struct HealthStoreStateTests {
                 "iMessage degraded · \(Self.permissionProbeError) (status unknown)"),
         ] {
             try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
-                let hosting = NSHostingView(rootView: ConnectionSettingsView(state: state, isActive: false)
-                    // Capture the view's light canvas, not transparent text over the window's excluded background.
-                        .background(.white)
-                        .environment(tailscale)
-                        .environment(\.locale, Locale(identifier: "en_US"))
-                        .environment(\.colorScheme, .light))
-                hosting.appearance = NSAppearance(named: .aqua)
-                hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
-                let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentView = hosting
-                defer {
-                    window.contentView = nil
-                    window.close()
-                }
-                hosting.layoutSubtreeIfNeeded()
-                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-                let png = try #require(bitmap.representation(using: .png, properties: [:]))
-                try png.write(to: output.appendingPathComponent("\(name).png"))
+                try Self.render(
+                    ConnectionSettingsView(state: state, isActive: false).environment(tailscale),
+                    to: output.appendingPathComponent("\(name).png"))
                 #expect(store.summaryLine == expected)
             }
         }
+        try Self.renderDebugSettings(to: output)
+    }
+
+    @MainActor private static func renderDebugSettings(to output: URL) throws {
+        // This process owns a fresh, sandboxed profile. Never capture a generated authentication key.
+        let defaults = AppDefaults.standard
+        let previousKey = defaults.object(forKey: deepLinkKeyKey)
+        defaults.set("synthetic-render-key-not-a-credential", forKey: deepLinkKeyKey)
+        defer {
+            if let previousKey {
+                defaults.set(previousKey, forKey: deepLinkKeyKey)
+            } else {
+                defaults.removeObject(forKey: deepLinkKeyKey)
+            }
+        }
+        try #require(DeepLinkHandler.currentKey() == "synthetic-render-key-not-a-credential")
+        try #require(GatewayProcessManager.shared.status == .stopped)
+
+        for (name, mode, connection, healthError) in [
+            (
+                "debug-remote-healthy", AppState.ConnectionMode.remote,
+                ControlChannel.ConnectionState.connected, nil as String?),
+            (
+                "debug-remote-failure", .remote,
+                .degraded("Connection refused"), "Connection refused"),
+            ("debug-local-stopped", .local, .disconnected, nil),
+        ] {
+            let state = AppState(preview: true)
+            state.connectionMode = mode
+            state.isPaused = true
+            try Self.withSnapshot([:], order: [], lastError: healthError) { store in
+                // Assert the inputs, leaving the same capture usable against the original implementation.
+                // The regression tests below assert the corrected presentation independently.
+                try #require(store.snapshot?.ok == true)
+                try #require(store.snapshot?.channels.isEmpty == true)
+                try #require(store.lastError == healthError)
+                try Self.render(
+                    DebugSettings(state: state, connectionState: { connection }),
+                    to: output.appendingPathComponent("\(name).png"))
+                try Data(store.summaryLine.utf8).write(to: output.appendingPathComponent("\(name)-health.txt"))
+            }
+        }
+    }
+
+    @MainActor private static func render(_ view: some View, to output: URL) throws {
+        let hosting = NSHostingView(rootView: view
+            // Capture the view's light canvas, not transparent text over the window's excluded background.
+                .background(.white)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: output)
     }
 
     private static func requireNetworkDenied() throws {
@@ -104,6 +151,46 @@ struct HealthStoreStateTests {
             }
         }
         try #require(result == -1 && (errno == EPERM || errno == EACCES))
+    }
+
+    @Test @MainActor func `health remains pending before the first snapshot`() {
+        let store = HealthStore.shared
+        let previousSnapshot = store.snapshot
+        let previousError = store.lastError
+        defer { store.__setSnapshotForTest(previousSnapshot, lastError: previousError) }
+
+        store.__setSnapshotForTest(nil)
+        #expect(store.state == .unknown)
+        #expect(store.summaryLine == "Health check pending")
+    }
+
+    @Test(arguments: [[], ["telegram"]])
+    @MainActor func `successful health without channels reports healthy`(order: [String]) throws {
+        try Self.withSnapshot([:], order: order) { store in
+            #expect(store.state == .ok)
+            #expect(store.summaryLine == "Gateway healthy")
+        }
+    }
+
+    @Test @MainActor func `failed health without channels reports degraded`() throws {
+        try Self.withSnapshot([:], order: [], ok: false) { store in
+            #expect(store.state == .degraded("health probe failed"))
+            #expect(store.summaryLine == "Health check failed: health probe failed")
+        }
+    }
+
+    @Test @MainActor func `health without channels or overall status remains unknown`() throws {
+        try Self.withSnapshot([:], order: [], ok: nil) { store in
+            #expect(store.state == .unknown)
+            #expect(store.summaryLine == "Health check pending")
+        }
+    }
+
+    @Test @MainActor func `health error overrides a successful snapshot without channels`() throws {
+        try Self.withSnapshot([:], order: [], lastError: "Connection closed") { store in
+            #expect(store.state == .degraded("Connection closed"))
+            #expect(store.summaryLine == "Health check failed: Connection closed")
+        }
     }
 
     @Test @MainActor func `current channel lifecycle reports healthy`() throws {
@@ -391,6 +478,8 @@ struct HealthStoreStateTests {
     @MainActor private static func withSnapshot(
         _ channels: [String: [String: Any]],
         order: [String] = ["telegram"],
+        ok: Bool? = true,
+        lastError: String? = nil,
         body: @MainActor (HealthStore) throws -> Void) throws
     {
         let accounts = channels.mapValues { fields in
@@ -399,8 +488,7 @@ struct HealthStoreStateTests {
             return account
         }
         // Fixed Gateway response time keeps grace and expired lifecycle fixtures deterministic.
-        let fixture: [String: Any] = [
-            "ok": true,
+        var fixture: [String: Any] = [
             "ts": 1_772_798_400_000,
             "durationMs": 2,
             "channels": accounts,
@@ -412,6 +500,7 @@ struct HealthStoreStateTests {
             "heartbeatSeconds": 60,
             "sessions": ["path": "/tmp/sessions.json", "count": 0, "recent": []],
         ]
+        if let ok { fixture["ok"] = ok }
         let data = try JSONSerialization.data(withJSONObject: fixture)
         let snap = try #require(decodeHealthSnapshot(from: data))
         let store = HealthStore.shared
@@ -419,7 +508,7 @@ struct HealthStoreStateTests {
         let previousError = store.lastError
         defer { store.__setSnapshotForTest(previousSnapshot, lastError: previousError) }
 
-        store.__setSnapshotForTest(snap, lastError: nil)
+        store.__setSnapshotForTest(snap, lastError: lastError)
         try body(store)
     }
 }
