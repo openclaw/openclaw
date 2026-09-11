@@ -7416,7 +7416,47 @@ describe("update-cli", () => {
         .run(saved.runId);
       const config = await fs.readFile(resolveConfigPath(), "utf8");
 
-      await updateCommand({ yes: true, json: true });
+      if (installKind === "package") {
+        await writeJsonFixture(path.join(root, "package.json"), {
+          name: "openclaw",
+          version: "2026.9.3",
+          engines: { node: ">=22.19.0" },
+          openclaw: { schemaVersions: { state: 17, agent: 11 } },
+        });
+        vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+          packageTargetStatus({
+            version: "2026.9.3",
+            nodeEngine: ">=99.0.0",
+            schemaVersions: { state: 16, agent: 11 },
+          }),
+        );
+        nodeVersionSatisfiesEngine.mockImplementation(
+          (_version: string, engine: string | null) => engine !== ">=99.0.0",
+        );
+        databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(
+          ({ supportedVersions }: { supportedVersions: { state: number; agent: number } }) => ({
+            incompatible:
+              supportedVersions.state < 17
+                ? [
+                    {
+                      kind: "state",
+                      path: path.join(profileStateDir(), "state", "openclaw.sqlite"),
+                      foundVersion: 17,
+                      supportedVersion: supportedVersions.state,
+                      writerAppVersion: "2026.9.3",
+                    },
+                  ]
+                : [],
+            indeterminate: [],
+          }),
+        );
+      }
+      await expect(
+        updateCommand({ yes: true, json: true }).catch((error: unknown) => ({
+          error,
+          result: lastWriteJsonCall(),
+        })),
+      ).resolves.toBeUndefined();
 
       expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
       expect(freshRestartCalls()).toHaveLength(0);
@@ -7433,6 +7473,11 @@ describe("update-cli", () => {
         status: "succeeded",
         origin: { updateRecoveryCapture: { retirement: { outcome: "committed" } } },
       });
+      if (installKind === "package") {
+        expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith(
+          expect.objectContaining({ supportedVersions: { state: 17, agent: 11 } }),
+        );
+      }
     },
   );
 

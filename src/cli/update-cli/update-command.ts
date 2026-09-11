@@ -380,7 +380,7 @@ async function updateCommandInternal(
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-    if (targetVersion) {
+    if (targetVersion && !packageAlreadyCurrent) {
       const targetMetadata = await fetchNpmPackageTargetStatus({
         target: targetVersion,
         spec: resolveGlobalInstallSpec({
@@ -444,6 +444,7 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageAlreadyCurrent,
     packageTargetVersion: targetVersion ?? undefined,
     packageInstallSpec,
     opts,
