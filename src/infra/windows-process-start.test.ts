@@ -69,7 +69,7 @@ describe("readWindowsProcessStartTimeSync", () => {
   });
 
   it("does not start WMIC once PowerShell has spent the whole budget", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
       spawnSyncMock.mockImplementationOnce(() => {
         vi.advanceTimersByTime(1000);
@@ -86,7 +86,7 @@ describe("readWindowsProcessStartTimeSync", () => {
   });
 
   it("gives WMIC only the time left on the caller's budget", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
       spawnSyncMock
         .mockImplementationOnce(() => {
@@ -108,7 +108,7 @@ describe("readWindowsProcessStartTimeSync", () => {
   });
 
   it("preserves the default WMIC fallback after PowerShell spends five seconds", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     try {
       spawnSyncMock
         .mockImplementationOnce(() => {
@@ -125,6 +125,59 @@ describe("readWindowsProcessStartTimeSync", () => {
       expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ timeout: 5000 });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps the WMIC fallback budget bounded across a wall-clock rollback", () => {
+    // A wall-clock step backward while the PowerShell probe runs must not inflate
+    // the fallback timeout beyond the caller's end-to-end budget. The budget is
+    // elapsed monotonic time, not wall-clock delta.
+    const realNow = Date.now;
+    let offset = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    try {
+      spawnSyncMock
+        .mockImplementationOnce(() => {
+          offset -= 60_000;
+          return { status: 1, stdout: "" };
+        })
+        .mockReturnValueOnce({
+          status: 0,
+          stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
+        } as never);
+
+      expect(readWindowsProcessStartTimeSync(654, 1000)).toBe(
+        Date.parse("2026-07-13T07:20:49.123Z"),
+      );
+      expect(spawnSyncMock.mock.calls[1]?.[2]?.timeout).toBeLessThanOrEqual(1000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("still runs the WMIC fallback after a wall-clock jump forward", () => {
+    // A wall-clock jump forward must not silently skip the WMIC fallback while
+    // real time still remains on the caller's budget.
+    const realNow = Date.now;
+    let offset = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    try {
+      spawnSyncMock
+        .mockImplementationOnce(() => {
+          offset += 60_000;
+          return { status: 1, stdout: "" };
+        })
+        .mockReturnValueOnce({
+          status: 0,
+          stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
+        } as never);
+
+      expect(readWindowsProcessStartTimeSync(654, 1000)).toBe(
+        Date.parse("2026-07-13T07:20:49.123Z"),
+      );
+      expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 
