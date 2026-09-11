@@ -316,6 +316,7 @@ export async function waitForGatewayHealthyRestart(params: {
   const settleProbes = Math.max(1, params.settle?.probes ?? 1);
   const settleDurationMs = (settleProbes - 1) * delayMs;
   const standardDeadlineMs = params.timeoutMs ?? attempts * delayMs;
+  const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
     auth: undefined,
@@ -352,12 +353,19 @@ export async function waitForGatewayHealthyRestart(params: {
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
   let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
+  let updateStartupDeadlineMs: number | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
+    if (updateInProgress && snapshot.runtime.status === "running") {
+      // Old updaters invoke the candidate CLI without forwarding their budget. A live
+      // process earns the startup watchdog; later phases never reset its finite cap.
+      updateStartupDeadlineMs ??= Math.max(standardDeadlineMs, STARTUP_MIGRATION_LEASE_TTL_MS);
+    }
+    const boundedDeadlineMs = params.timeoutMs ?? updateStartupDeadlineMs;
     // A managed settle streak needs a concrete process identity. Scheduled Tasks can
     // report running without exposing a PID, so Windows retains status-only proof.
     const healthy =
@@ -372,6 +380,9 @@ export async function waitForGatewayHealthyRestart(params: {
         : snapshot.portUsage.status === "free"
           ? "waiting for Gateway listener"
           : "waiting for Gateway health and identity";
+    if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
+      return withWaitContext({ ...snapshot, healthy: false }, "timeout", elapsedMs);
+    }
     if (healthy) {
       if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
@@ -444,12 +455,11 @@ export async function waitForGatewayHealthyRestart(params: {
       snapshot.startupPhase = "startup migration";
     }
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
-      // Settling gets its own readiness time, but cannot extend an active migration's watchdog.
-      // An update supplies its complete readiness budget, including migration progress.
-      // Standalone restarts retain their migration watchdog and post-migration window.
+      // Explicit update budgets win. Older update children use the startup watchdog;
+      // standalone restarts retain their migration and post-migration windows.
       const deadlineMs =
-        params.timeoutMs !== undefined
-          ? standardDeadlineMs + settleDurationMs
+        boundedDeadlineMs !== undefined
+          ? boundedDeadlineMs + settleDurationMs
           : migrationActive
             ? migrationDeadlineMs
             : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;

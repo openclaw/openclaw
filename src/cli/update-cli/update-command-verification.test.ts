@@ -66,7 +66,7 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
-  it.each(["restart script", "service refresh", "child readiness timeout"])(
+  it.each(["restart script", "service refresh", "child readiness timeout", "legacy update marker"])(
     "lets a 90-second startup finish within the update budget (%s)",
     async (activation) => {
       const refreshServiceEnv = activation === "service refresh";
@@ -100,28 +100,45 @@ describe("update readiness generation", () => {
       if (!address || typeof address === "string") {
         throw new Error("missing loopback listener");
       }
-      const result = await maybeRestartService({
-        shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          steps: [],
-          durationMs: 0,
-          after: { version: "2026.9.4", buildId: "candidate-build" },
-        },
-        opts: { json: true },
-        refreshServiceEnv,
-        serviceEnv: { HOME: "/synthetic-home" },
-        gatewayPort: address.port,
-        restartScriptPath: childTimeout ? undefined : "/synthetic-restart.sh",
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 120_000,
-      });
+      const result =
+        activation === "legacy update marker"
+          ? (
+              await verifyUpdatedGateway({
+                result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+                opts: { json: true },
+                serviceEnv: { HOME: "/synthetic-home", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+                gatewayPort: address.port,
+                expectedVersion: "2026.9.4",
+                expectedBuildId: "candidate-build",
+                requireRunningService: true,
+              })
+            ).ok
+            ? "ok"
+            : "restart-health-failed"
+          : await maybeRestartService({
+              shouldRestart: true,
+              result: {
+                status: "ok",
+                mode: "npm",
+                steps: [],
+                durationMs: 0,
+                after: { version: "2026.9.4", buildId: "candidate-build" },
+              },
+              opts: { json: true },
+              refreshServiceEnv,
+              serviceEnv: { HOME: "/synthetic-home" },
+              gatewayPort: address.port,
+              restartScriptPath: childTimeout ? undefined : "/synthetic-restart.sh",
+              requireRunningServiceAfterRestart: true,
+              timeoutMs: 120_000,
+            });
       expect(result, JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toBe("ok");
       expect(monotonicClock.nowMs).toBe(95_500);
       expect(callGateway).toHaveBeenCalledTimes(14);
       const { runRestartScript } = await import("./restart-helper.js");
-      expect(runRestartScript).toHaveBeenCalledTimes(refreshServiceEnv || childTimeout ? 0 : 1);
+      expect(runRestartScript).toHaveBeenCalledTimes(
+        refreshServiceEnv || childTimeout || activation === "legacy update marker" ? 0 : 1,
+      );
     },
   );
 

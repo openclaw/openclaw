@@ -197,10 +197,14 @@ identity, a 12-probe health settle passes, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
 Startup receives the update's existing per-step `--timeout` budget (1800 seconds
 by default), including migration and listener initialization, followed by the
-12-probe settle window. A slow startup does not trigger another restart at the
-ordinary restart command's 60-second deadline. The budget remains finite even
-while migration activity continues; an exhausted wait reports the last observed
-startup phase. Standalone restart deadlines are unchanged.
+12-probe settle window. On the first update from an older release, the old updater
+invokes the newly installed CLI but does not pass that readiness budget. The
+candidate recognizes the existing update marker and, once the managed process is
+running, uses the five-minute startup watchdog instead of the standalone
+60-second deadline. Migration, listener, and health transitions do not reset this
+bound. The old updater's subprocess timeout also remains in force. An exhausted
+wait reports the last observed startup phase. Standalone restart deadlines are
+unchanged.
 Verification facts and measured downtime are retained in the
 [update run report](/cli/update#run-history-and-reports).
 

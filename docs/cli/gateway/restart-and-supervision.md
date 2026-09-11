@@ -33,6 +33,14 @@ Gateway state without starting a schema migration while the old Gateway is still
 running. If no state database exists, it logs that intent recording was skipped
 and continues the restart.
 
+When an updater invokes the installed `gateway restart` command, its existing
+update marker enables the five-minute startup watchdog after the managed process
+is observed running. This lets an older updater complete a slow first-hop startup
+without passing a new option. The watchdog includes migration, listener, and health
+phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
+by newer update callers take precedence. Ordinary standalone restarts keep their
+existing deadlines. See [Restart recovery](/gateway/restart-recovery).
+
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
 On macOS, when `openclaw gateway restart`, `stop`, `install`, or `uninstall` runs inside the managed LaunchAgent's process tree, including an agent's shell command, OpenClaw detects that from launchd's service environment or, when a hand-written plist omits those variables, from process ancestry against the PID launchd reports for the job. Restart hands off to a detached helper so `kickstart -k` cannot kill the caller. Stop, install, and uninstall refuse and ask you to run the command from an external shell.
