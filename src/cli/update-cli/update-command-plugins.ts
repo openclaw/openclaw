@@ -1,5 +1,4 @@
 // Plugin synchronization and convergence after the core update.
-import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
@@ -36,8 +35,10 @@ import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-c
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { readPackageVersion } from "./shared.js";
 import {
+  assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
   type PostCorePluginUpdateResult,
+  type ProducedPluginUpdateResult,
 } from "./update-command-plugins-internals.js";
 
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -109,6 +110,8 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   beforePersistentEffect?: () => void | Promise<void>;
+  /** Requirements for this installation, supplied by its owner. Missing is not optional. */
+  pluginRequirements?: Readonly<Record<string, "optional" | "required">>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -120,8 +123,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
   acceptCapabilities?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
-}): Promise<PostCorePluginUpdateResult> {
+}): Promise<ProducedPluginUpdateResult> {
   const runtime = params.runtime ?? defaultRuntime;
+  const requirements = { ...params.pluginRequirements };
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
     if (!params.json) {
@@ -130,7 +134,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return invalid.result;
+    return { ...invalid.result, assessment: { kind: "core-critical", reason: "invalid-config" } };
   }
 
   const clawHubTrustNotices = new Set<string>();
@@ -307,7 +311,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
         : [],
     ),
   ];
-  const convergenceErrored = convergence.errored;
   for (const warning of [...convergence.warnings, ...(convergence.notices ?? [])]) {
     warnings.push(warning);
     if (!params.json) {
@@ -420,18 +423,39 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  const assessment = assessPluginUpdate({
+    smokeFailures: convergence.smokeFailures,
+    // A failed cohort repair can disable a plugin before active smoke verification.
+    // Keep that unavailable capability visible; prior failures that were re-enabled
+    // by a successful repair remain diagnostic history only.
+    disabledPluginIds: [
+      ...new Set(
+        pluginUpdateOutcomes
+          .filter(
+            (outcome) =>
+              isDisabledAfterFailureOutcome(outcome) &&
+              pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
+          )
+          .map((outcome) => outcome.pluginId),
+      ),
+    ],
+    errored: convergence.errored,
+    outcomes: pluginUpdateOutcomes,
+    integrityDrift: integrityDrifts.length > 0,
+    requirements,
+  });
   const status =
-    convergenceErrored ||
-    pluginUpdateOutcomes.some(
-      (outcome) =>
-        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-    )
+    assessment.kind === "unsafe" || assessment.kind === "core-critical"
       ? "error"
-      : warnings.length > 0
+      : warnings.length > 0 || assessment.kind === "optional-repair-needed"
         ? "warning"
         : "ok";
-  const result: PostCorePluginUpdateResult = {
+  const result: ProducedPluginUpdateResult = {
     status,
+    assessment,
+    ...(assessment.kind === "optional-repair-needed"
+      ? { reason: "plugin-payload-repair-pending" }
+      : {}),
     changed: pluginsChanged,
     warnings,
     sync: {
