@@ -101,7 +101,7 @@ final class MacControlLiveOwner: MacControlOwner {
         var result: [MacControlGatewayStatus] = []
         let state = AppStateStore.shared
         if state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary {
-            let endpoint = try? GatewayEndpointStore.localEndpoint()
+            let endpoint = try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
             let connection = await MacGatewayConnectionFleet.shared.existingLocalConnection()
             let summary = await connection?.connectionSummary()
             result.append(MacControlGatewayStatus(

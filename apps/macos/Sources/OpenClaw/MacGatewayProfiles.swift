@@ -634,7 +634,7 @@ actor MacGatewayConnectionFleet {
                 guard let generation else { throw URLError(.notConnectedToInternet) }
                 let root = OpenClawConfigFile.loadDict()
                 guard ConnectionModeResolver.resolve(root: root).mode == .remote else { throw CancellationError() }
-                let endpoint = try GatewayEndpointStore.localEndpoint(root: root)
+                let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true, root: root)
                 let isCurrent = await MainActor.run {
                     let state = AppStateStore.shared
                     return active.value && state.connectionMode == .remote &&

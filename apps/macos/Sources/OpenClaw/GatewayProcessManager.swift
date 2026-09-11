@@ -229,7 +229,8 @@ final class GatewayProcessManager {
         }
         if active {
             do {
-                _ = try GatewayEndpointStore.localEndpoint()
+                _ = try GatewayEndpointStore.localEndpoint(
+                    hostingBesideRemotePrimary: self.hostsLocalGatewayWithRemotePrimary)
             } catch {
                 let conflict = error.localizedDescription
                 if self.desiredActive { self.stop() }
@@ -357,8 +358,8 @@ final class GatewayProcessManager {
         // status read cannot look reusable, so the ownership guard preserves it instead of forcing
         // an install; a reusable PID from this same snapshot receives its readiness cycle below.
         let listener = await PortGuardian.shared.describe(port: request.port)
-        guard request.generation == self.gatewayStartGeneration,
-              request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
+        // Stop waits for the admitted install before disabling; it only discards queued requests.
+        guard request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
         else { return .skipped }
         if let listener {
             guard listener.pid == launchAgent.runningPID else {

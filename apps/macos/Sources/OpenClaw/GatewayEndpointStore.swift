@@ -1168,6 +1168,7 @@ extension GatewayEndpointStore {
 
 extension GatewayEndpointStore {
     static func localEndpoint(
+        hostingBesideRemotePrimary: Bool,
         root: [String: Any] = OpenClawConfigFile.loadDict()) throws -> GatewayConnection.EndpointSnapshot
     {
         let port = GatewayEnvironment.gatewayPort(root: root)
@@ -1175,7 +1176,7 @@ extension GatewayEndpointStore {
         let remoteURL = GatewayRemoteConfig.resolveGatewayUrl(root: root)
         let primaryUsesLoopback = GatewayRemoteConfig.resolveTransport(root: root) == .ssh ||
             remoteURL?.host.map(LoopbackHost.isLoopbackHost) == true
-        if conflict == nil, ConnectionModeResolver.resolve(root: root).mode == .remote,
+        if conflict == nil, hostingBesideRemotePrimary,
            primaryUsesLoopback, port == RemotePortTunnel.localPort(root: root)
         {
             conflict = "Local Gateway port \(port) is also used by the remote primary connection. " +

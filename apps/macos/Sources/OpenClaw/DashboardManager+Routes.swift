@@ -103,7 +103,7 @@ extension DashboardManager {
         }
 
         if mode == .local {
-            return try? GatewayEndpointStore.localEndpoint()
+            return try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: false)
         }
 
         return nil

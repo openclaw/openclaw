@@ -1151,7 +1151,7 @@ extension DashboardManager {
             guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
                   state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
             let generation = state.gatewayRoutingGeneration
-            let endpoint = try GatewayEndpointStore.localEndpoint()
+            let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
             let configuration = try await dashboardConfiguration(
                 endpoint: endpoint, mode: .local, target: target, token: endpoint.config.token)
             guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
