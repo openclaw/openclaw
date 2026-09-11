@@ -181,22 +181,30 @@ suite.define(() => {
       action: "Apply",
       method: "skills.proposals.apply",
       status: "applied",
+      width: 1280,
     },
     {
       action: "Reject",
       method: "skills.proposals.reject",
       status: "rejected",
+      width: 1280,
+    },
+    {
+      action: "Reject",
+      method: "skills.proposals.reject",
+      status: "rejected",
+      width: 390,
     },
   ] as const)(
-    "refreshes H2 and requires a second explicit $action after stale H1",
-    async ({ action, method, status }) => {
+    "refreshes H2 and requires a second explicit $action after stale H1 at $width px",
+    async ({ action, method, status, width }) => {
       const label = action.toLowerCase();
       const caseDir = path.join(artifactDir, label);
       await mkdir(caseDir, { recursive: true });
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
-        viewport,
+        viewport: { ...viewport, width },
       });
       const page = await context.newPage();
       try {
@@ -230,6 +238,29 @@ suite.define(() => {
           fullPage: true,
           path: path.join(caseDir, "02-stale-h2-review-required.png"),
         });
+
+        if (width === 390) {
+          const noticeSize = await page.locator(".sw-action-toast").evaluate((element) => ({
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+          }));
+          expect(noticeSize.scrollWidth).toBeLessThanOrEqual(noticeSize.clientWidth);
+          const messageBounds = await page.getByText(staleMessage).evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const bounds = range.getBoundingClientRect();
+            return {
+              left: bounds.left,
+              right: bounds.right,
+              top: bounds.top,
+              bottom: bounds.bottom,
+            };
+          });
+          expect(messageBounds.left).toBeGreaterThanOrEqual(0);
+          expect(messageBounds.right).toBeLessThanOrEqual(width);
+          expect(messageBounds.top).toBeGreaterThanOrEqual(0);
+          expect(messageBounds.bottom).toBeLessThanOrEqual(viewport.height);
+        }
 
         await proveNoReplayAcrossReconnect(page, gateway, method, actionCount + 1);
 

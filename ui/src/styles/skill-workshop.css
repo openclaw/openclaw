@@ -1245,6 +1245,10 @@
 
   .sw-action-toast {
     position: fixed;
+    width: max-content;
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .sw-hub-panel,
