@@ -14,6 +14,8 @@ export type ControlUiDialogProps = {
   /** The plugin retains rendering ownership of this node. */
   content: HTMLElement;
   returnFocusTarget?: HTMLElement | null;
+  /** Set to false to ignore backdrop clicks (explicit dismissal still works). */
+  lightDismiss?: boolean;
   /** Returning false keeps the dialog open, for example during a pending save. */
   onCancel: () => boolean | void;
 };

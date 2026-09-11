@@ -1,7 +1,7 @@
 // Control UI adapter for Web Awesome's accessible modal dialog.
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-import { css, html, type PropertyValues } from "lit";
+import { css, html, nothing, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
@@ -20,6 +20,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   @property({ type: Boolean, reflect: true }) manual = false;
   @property() label = "";
   @property() description = "";
+  /** Set to false to keep backdrop clicks from dismissing the dialog. */
+  @property({ type: Boolean, attribute: "light-dismiss" }) lightDismiss = true;
 
   @query("wa-dialog") private webAwesomeDialog?: WaDialog;
 
@@ -208,7 +210,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     return html`
       <wa-dialog
         without-header
-        light-dismiss
+        light-dismiss=${this.lightDismiss ? "" : nothing}
         .label=${this.label}
         @focusin=${this.handleInitialFocus}
         @wa-after-show=${this.handleInitialFocus}

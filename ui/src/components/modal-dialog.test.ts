@@ -221,6 +221,29 @@ describe("openclaw-modal-dialog", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the dialog open on backdrop clicks when light dismiss is disabled", async () => {
+    render(
+      html`<openclaw-modal-dialog label="New card" .lightDismiss=${false}>
+        <input id="draft-field" value="unsaved draft" />
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    const { modal, webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    expect(webAwesomeDialog.lightDismiss).toBe(false);
+
+    dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(modal.open).toBe(true);
+    expect(dialog.open).toBe(true);
+    expect((container.querySelector("#draft-field") as HTMLInputElement)?.value).toBe(
+      "unsaved draft",
+    );
+  });
+
   it("ignores lifecycle events from tooltips and menus nested in the modal", async () => {
     const { modal, dialog } = await renderModal();
     const nestedSurface = container.querySelector("#first-action");

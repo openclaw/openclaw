@@ -6,6 +6,7 @@ import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { icons } from "../components/icons.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 
 export function createControlUiComponents(options: {
   current: () => ApplicationContext<RouteId>;
@@ -89,13 +90,14 @@ export function createControlUiComponents(options: {
       mount(
         container,
         props,
-        async () => {
+        async (): Promise<OpenClawModalDialog> => {
           await import("../components/modal-dialog.ts");
           return document.createElement("openclaw-modal-dialog");
         },
         (element, next) => {
           element.label = next.label;
           element.description = next.description ?? "";
+          element.lightDismiss = next.lightDismiss ?? true;
           element.className = next.className ?? "";
           element.style.cssText = next.style ?? "";
           if (next.returnFocusTarget !== undefined) {
