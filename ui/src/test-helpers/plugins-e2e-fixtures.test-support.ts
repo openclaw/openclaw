@@ -131,12 +131,7 @@ const discoveryCategoryDefinitions = [
   ["scheduling", "Scheduling", "Calendars and appointments.", "calendar-days"],
   ["finance-payments", "Finance & payments", "Accounting and payments.", "wallet-cards"],
   ["sales-marketing", "Sales & marketing", "Sales and marketing.", "megaphone"],
-  [
-    "data-analytics",
-    "Data & analytics",
-    "Data analysis and reporting.",
-    "chart-no-axes-combined",
-  ],
+  ["data-analytics", "Data & analytics", "Data analysis and reporting.", "chart-no-axes-combined"],
   ["agent-orchestration", "Agent orchestration", "Agent workflows.", "workflow"],
   ["research", "Research", "Research and synthesis.", "search"],
   ["other", "Other", "Other plugins.", "package"],
