@@ -111,7 +111,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
     );
   }
   await invoke("progressCard.put", { sessionKey: "agent:work:main", expectedRevision: 2 });
-  expect(progressCardStore.get("global", "work")?.revision).toBe(1);
+  expect((await progressCardStore.get("global", "work"))?.revision).toBe(1);
   const cleared = await invoke("progressCard.put", {
     sessionKey: "global",
     agentId: "work",
@@ -126,7 +126,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
     },
     { sessionKeys: ["global"], agentId: "work" },
   );
-  expect(progressCardStore.get("global", "main")?.revision).toBe(1);
+  expect((await progressCardStore.get("global", "main"))?.revision).toBe(1);
 });
 
 it("keeps retained global progress separate from an ordinary qualified global row in per-sender mode", async () => {
@@ -202,14 +202,14 @@ it("keeps retained global progress separate from an ordinary qualified global ro
     expectedRevision: 1,
   });
   expect(cleared).toHaveBeenCalledWith(true, { card: null }, undefined);
-  expect(progressCardStore.get("global", "work")).toBeNull();
-  expect(progressCardStore.get("global", "main")?.markdown).toBe("main/global");
-  expect(progressCardStore.get("agent:work:global", "work")?.markdown).toBe(
+  expect(await progressCardStore.get("global", "work")).toBeNull();
+  expect((await progressCardStore.get("global", "main"))?.markdown).toBe("main/global");
+  expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
     "work/agent:work:global",
   );
 });
 
-it("reopens separate boards and progress cards in a shared database owned by another agent", () => {
+it("reopens separate boards and progress cards in a shared database owned by another agent", async () => {
   const stateDir = tempDirs.make("openclaw-gateway-shared-boards-");
   const storePath = path.join(stateDir, "shared.sqlite");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -233,7 +233,7 @@ it("reopens separate boards and progress cards in a shared database owned by ano
       name: agentId,
       content: { kind: "html", html: `<p>${agentId}</p>` },
     });
-    progressCardStore.put(sessionKey, { markdown: `${agentId} progress` });
+    await progressCardStore.put(sessionKey, { markdown: `${agentId} progress` });
   }
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -243,7 +243,7 @@ it("reopens separate boards and progress cards in a shared database owned by ano
     expect(boardStore.getSnapshot({ sessionKey }).widgets).toEqual([
       expect.objectContaining({ name: agentId, revision: 1 }),
     ]);
-    expect(progressCardStore.get(sessionKey)).toMatchObject({
+    expect(await progressCardStore.get(sessionKey)).toMatchObject({
       sessionKey,
       markdown: `${agentId} progress`,
       revision: 1,

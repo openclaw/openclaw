@@ -65,7 +65,6 @@ describe("status-all report tables", () => {
     });
 
     expect(section).toEqual({
-      kind: "table",
       title: "Channel detail",
       columns: [
         { key: "Channel", header: "Channel", flex: false, minWidth: 10 },

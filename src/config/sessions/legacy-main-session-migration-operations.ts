@@ -129,7 +129,9 @@ function mutateLegacySessionClaims<T>(
     store: PhysicalStore;
     env: NodeJS.ProcessEnv;
     claims: readonly SessionClaim[];
-    operationLabel: string;
+    operationLabel:
+      | "session-migration.legacy-main-in-place"
+      | "session-migration.legacy-main-quarantine";
     beforePersistentApply?: () => void;
   },
   commit: (database: OpenClawAgentDatabase) => T,
@@ -144,13 +146,17 @@ function mutateLegacySessionClaims<T>(
     scope,
     params.claims.map(({ key: sessionKey, entry }) => ({ sessionKey, entry })),
     async (assertCurrent) =>
-      runExclusiveSqliteSessionWrite(scope, async () => {
-        assertCurrent();
-        params.beforePersistentApply?.();
-        return runSqliteSessionDeletionTransaction(commit, scope, {
-          operationLabel: params.operationLabel,
-        });
-      }),
+      runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          assertCurrent();
+          params.beforePersistentApply?.();
+          return runSqliteSessionDeletionTransaction(commit, scope, {
+            operationLabel: params.operationLabel,
+          });
+        },
+        params.operationLabel,
+      ),
   );
 }
 

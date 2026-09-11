@@ -65,37 +65,18 @@ function normalizeSafeNpmSpec(raw: unknown): string | undefined {
   return spec;
 }
 
-function normalizeSafeGoModule(raw: unknown): string | undefined {
+function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const moduleSpec = raw.trim();
-  if (
-    !moduleSpec ||
-    moduleSpec.startsWith("-") ||
-    moduleSpec.includes("\\") ||
-    moduleSpec.includes("://")
-  ) {
+  const value = raw.trim();
+  if (!value || value.startsWith("-") || value.includes("\\") || value.includes("://")) {
     return undefined;
   }
-  if (!GO_MODULE_PATTERN.test(moduleSpec)) {
+  if (!pattern.test(value)) {
     return undefined;
   }
-  return moduleSpec;
-}
-
-function normalizeSafeUvPackage(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const pkg = raw.trim();
-  if (!pkg || pkg.startsWith("-") || pkg.includes("\\") || pkg.includes("://")) {
-    return undefined;
-  }
-  if (!UV_PACKAGE_PATTERN.test(pkg)) {
-    return undefined;
-  }
-  return pkg;
+  return value;
 }
 
 function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
@@ -147,12 +128,12 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
       spec.package = pkg;
     }
   } else if (spec.kind === "uv") {
-    const pkg = normalizeSafeUvPackage(raw.package);
+    const pkg = normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
     if (pkg) {
       spec.package = pkg;
     }
   }
-  const moduleSpec = normalizeSafeGoModule(raw.module);
+  const moduleSpec = normalizeSafePackageSpec(raw.module, GO_MODULE_PATTERN);
   if (moduleSpec) {
     spec.module = moduleSpec;
   }

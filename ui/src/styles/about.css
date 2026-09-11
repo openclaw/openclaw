@@ -154,7 +154,6 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  text-decoration: none;
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -165,7 +164,6 @@
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .about-hero__link:focus-visible {

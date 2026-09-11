@@ -2,12 +2,12 @@
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildCodexLoginRecovery } from "../../../auto-reply/codex-login-recovery.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
+import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -171,7 +171,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems,
     hasSourceReplyPayload,
     deliveredSourceReplyViaMessageTool,
-    explicitFinalSourceReply,
     completedSourceReplyViaMessageTool,
   } = buildSourceReplyPayloadState({
     payloads: params.messagingToolSourceReplyPayloads,
@@ -214,8 +213,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
   const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
-  const codexLoginRecovery = buildCodexLoginRecovery({
-    provider: oauthRefreshFailure?.provider ?? params.provider,
+  const providerLoginRecovery = buildProviderLoginRecovery({
     oauthReason: oauthRefreshFailure?.reason,
   });
   const errorText =
@@ -223,7 +221,7 @@ export function buildEmbeddedRunPayloads(params: {
       ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
-          ? (codexLoginRecovery?.hint ??
+          ? (providerLoginRecovery?.hint ??
             formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
@@ -252,7 +250,7 @@ export function buildEmbeddedRunPayloads(params: {
     const errorPayload = {
       text: errorText,
       isError: true,
-      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+      ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
     };
     replyItems.push(setReplyPayloadMetadata(errorPayload, { terminalProviderError: true }));
   }
@@ -431,7 +429,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
-        explicitFinalSourceReply === false
+        !suppressFailureArtifacts
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
       }

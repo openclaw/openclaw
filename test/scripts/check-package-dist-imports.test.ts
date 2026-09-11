@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -9,6 +10,28 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
+});
+
+describe("collectPackageDistImports", () => {
+  it("limits URL dependencies without filtering ordinary relative imports", () => {
+    const imports = collectPackageDistImports({
+      files: ["package\\dist\\index.mjs"],
+      readText: () =>
+        [
+          'import("./data.json");',
+          'require("../outside.cjs");',
+          'new URL("./worker.mjs?rev=1", import.meta.url);',
+          'new URL("./asset.png", import.meta.url);',
+          'new URL("../outside.cjs", import.meta.url);',
+        ].join("\n"),
+    });
+    expect(imports).toEqual(
+      ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
+        importerPath: "dist/index.mjs",
+        importedPath,
+      })),
+    );
+  });
 });
 
 describe("check-package-dist-imports", () => {

@@ -10,9 +10,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
   isHostScopedAgentToolActive,
@@ -21,6 +23,7 @@ import {
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -534,9 +537,31 @@ export async function runAgentHarnessAttempt(
                       : input;
                   },
               (prepared) =>
-                pluginAttempt.runWithHostScope(() =>
-                  runAgentHarnessLifecycleAttempt(harness, prepared),
-                ),
+                pluginAttempt.runWithHostScope(async () => {
+                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  const note = await claimHeartbeatContextForUserRun({
+                    ...prepared,
+                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
+                    storePath: prepared.sessionTarget?.storePath,
+                    detached: prepared.sessionPersistence === "detached",
+                    assertCurrent: resolveAdmittedRunActiveAssertion(
+                      internalParams.admittedRunContext,
+                      prepared.abortSignal,
+                    ),
+                  });
+                  if (!note) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  return runAgentHarnessLifecycleAttempt(harness, {
+                    ...prepared,
+                    currentInboundContext: appendCurrentInboundContext(
+                      prepared.currentInboundContext,
+                      [{ kind: "heartbeat-outcome", text: note }],
+                    ),
+                  });
+                }),
             ),
         );
       }),
@@ -567,6 +592,12 @@ export async function runAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
+      runtimeContext: {
+        provider: internalParams.provider,
+        modelId: internalParams.modelId,
+        modelContextWindow: internalParams.modelContextWindow,
+        tokenBudget: internalParams.contextTokenBudget,
+      },
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
@@ -891,11 +922,13 @@ export function resolvePluginHarnessToolPolicies(
     senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const { policy } = capabilityProfile;
-  const requestedToolPolicy = params.disableTools
-    ? { allow: [] }
-    : params.toolsAllow
-      ? { allow: params.toolsAllow }
-      : undefined;
+  // Runtime allowlists treat [] as deny-all; config allow: [] means unrestricted.
+  const requestedToolPolicy =
+    params.disableTools || params.toolsAllow?.length === 0
+      ? { deny: ["*"] }
+      : params.toolsAllow
+        ? { allow: params.toolsAllow }
+        : undefined;
   const explicitPolicies = [
     policy.globalPolicy,
     policy.globalProviderPolicy,

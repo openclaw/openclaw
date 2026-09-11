@@ -1,5 +1,9 @@
 // Coverage for assembling provider-transformed embedded attempt system prompts.
-import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  prependSystemPromptAdditionAfterCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -145,12 +149,16 @@ async function preparePermissionPrompt(
 
 describe("buildAttemptSystemPrompt", () => {
   it.each([undefined, "agent:main:execution"])(
-    "shows only execution-owned processes with sessionKey=%s and borrowed policy",
+    "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {
       const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
       owned.scopeKey = sessionKey ?? "permission-prompt";
       const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
       other.scopeKey = "agent:main:policy";
+      const idle = await preparePermissionPrompt(false, undefined, undefined, {
+        sessionKey,
+        sandboxSessionKey: other.scopeKey,
+      });
       addSession(owned);
       addSession(other);
       try {
@@ -158,7 +166,8 @@ describe("buildAttemptSystemPrompt", () => {
           sessionKey,
           sandboxSessionKey: other.scopeKey,
         });
-        expect(prepared.systemPromptText).toContain(owned.id);
+        expect(prepared.systemPromptText).toBe(idle.prepared.systemPromptText);
+        expect(prepared.systemPromptText).not.toContain(owned.id);
         expect(prepared.systemPromptText).not.toContain(other.id);
       } finally {
         deleteSession(owned.id);
@@ -292,6 +301,24 @@ describe("buildAttemptSystemPrompt", () => {
     expect(refreshed).toContain("permissions to read-only");
     expect(refreshed).not.toContain("permissions to workspace");
     expect(refreshed.match(/## Permission change/g)).toHaveLength(1);
+  });
+
+  it("keeps an appended permission notice out of the relocatable region", async () => {
+    // `refreshSystemPrompt` appends its PERMISSION section after the built
+    // prompt. The relocatable region is closed before that, so a transport that
+    // carries the region onto a user turn cannot demote the notice with it.
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt();
+    const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
+    expect(refreshed).toContain("<!-- openclaw:attempt:PERMISSION -->");
+
+    const split = splitSystemPromptRelocatableBoundary(refreshed);
+
+    expect(split?.relocatable).toContain("Runtime:");
+    expect(split?.relocatable).not.toContain("PERMISSION");
+    expect(split?.remainingPrompt).toContain("<!-- openclaw:attempt:PERMISSION -->");
+    expect(stripSystemPromptCacheBoundary(refreshed)).not.toContain(
+      "OPENCLAW-RELOCATABLE-BOUNDARY",
+    );
   });
 
   it("does not inject permission guidance into raw model prompts", async () => {

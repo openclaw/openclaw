@@ -1,7 +1,7 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import type { Page } from "playwright";
+import type { Page, WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
@@ -139,13 +139,17 @@ suite.define(() => {
           },
           async ({ page }) => {
             const pageErrors: string[] = [];
+            let latestSocket: WebSocket | undefined;
+            page.on("websocket", (socket) => (latestSocket = socket));
             page.on("pageerror", (error) => pageErrors.push(String(error)));
             const url = new URL("logs", suite.server.baseUrl);
             url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation
+              .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
+              .click();
             await waitForControlUiGatewayReady(page);
             await expect.poll(() => visibleMessages(page)).toEqual(["source A only"]);
 
@@ -233,6 +237,53 @@ suite.define(() => {
                 "source B after reconnect",
               ]);
             await capture(page, "03-reconnected-tail-complete.png");
+
+            if (!latestSocket) {
+              throw new Error("Logs did not open a Gateway connection");
+            }
+            const missingTail = latestSocket.waitForEvent("framereceived", {
+              timeout: 15_000,
+              predicate: ({ payload }) => {
+                const frame: {
+                  type: string;
+                  ok?: boolean;
+                  payload?: { file: string; cursor: number };
+                } = JSON.parse(payload.toString());
+                return (
+                  frame.type === "res" &&
+                  frame.ok === true &&
+                  frame.payload?.file === sourceB &&
+                  frame.payload.cursor === 0
+                );
+              },
+            });
+            await unlink(sourceB);
+            const missingResponse = await missingTail;
+            if (captureUiProof) {
+              await writeFile(
+                path.join(suite.artifactDir, "04-missing-tail.json"),
+                missingResponse.payload.toString(),
+              );
+            }
+            const replacement = logLine("source B replacement", "info", 8);
+            await writeFile(sourceB, `${replacement}\n`, "utf8");
+            await page.getByText("source B replacement", { exact: true }).waitFor();
+            await capture(page, "04-recreated-tail.png");
+            expect.soft(await visibleMessages(page)).toEqual(["source B replacement"]);
+            const replacementDownload = page.waitForEvent("download");
+            await page.getByRole("button", { name: "Export visible" }).click();
+            const replacementStream = await (await replacementDownload).createReadStream();
+            if (!replacementStream) {
+              throw new Error("replacement log export did not provide a readable download");
+            }
+            const replacementExport = await text(replacementStream);
+            if (captureUiProof) {
+              await writeFile(
+                path.join(suite.artifactDir, "04-recreated-export.log"),
+                replacementExport,
+              );
+            }
+            expect.soft(replacementExport).toBe(`${replacement}\n`);
             expect(pageErrors).toEqual([]);
           },
         );

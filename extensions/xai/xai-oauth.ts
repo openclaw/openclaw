@@ -20,7 +20,8 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyXaiOAuthConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildLiveXaiOAuthProvider, buildXaiProvider } from "./provider-catalog.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -580,7 +581,7 @@ async function noteXaiDeviceCode(
       title: "xAI OAuth",
       code: deviceCode.userCode,
       expiresInMinutes,
-      message: "Enter this one-time code on the xAI sign-in page.",
+      message: `Open ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri} and enter this one-time code.`,
     });
     return;
   }
@@ -589,7 +590,7 @@ async function noteXaiDeviceCode(
       ctx.isRemote
         ? "Open this URL in your LOCAL browser and enter the code below."
         : "Open this URL in your browser and enter the code below.",
-      `URL: ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}`,
+      `URL: <${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}>`,
       `Code: ${deviceCode.userCode}`,
       `Code expires in ${expiresInMinutes} minutes. Never share it.`,
     ].join("\n"),
@@ -632,17 +633,25 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ...requestOptions,
     });
     const identity = resolveXaiOAuthIdentity(tokens);
+    const provider = ctx.credentialOnly
+      ? buildXaiProvider("openai-responses", "oauth")
+      : await buildLiveXaiOAuthProvider({
+          discoveryApiKey: tokens.accessToken,
+          signal: ctx.signal,
+          fetchGuard: (params) =>
+            fetchWithSsrFGuard({ ...params, beforeRequest: ctx.assertCurrent }),
+        });
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
+      defaultModel: XAI_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,
       email: identity.email,
       displayName: identity.displayName,
       profileName: identity.email ?? identity.accountId,
-      configPatch: applyXaiOAuthConfig(ctx.config),
+      configPatch: applyXaiOAuthConfig(ctx.credentialOnly ? {} : ctx.config, provider),
       credentialExtra: {
         tokenEndpoint: discovery.tokenEndpoint,
         deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,

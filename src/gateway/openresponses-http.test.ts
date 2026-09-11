@@ -457,7 +457,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { itemId: "answer-1", text: "Echo", delta: "Echo" },
         { itemId: "answer-2", text: "Echo", delta: "Echo" },
       ],
-      expected: "EchoEcho",
+      expected: "Echo\n\nEcho",
       resultTexts: ["Echo", "Echo"],
     },
     {
@@ -469,7 +469,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { itemId: "answer-2", text: "Echo", delta: "Echo" },
         { itemId: "answer-2", text: "Echo!", delta: "!" },
       ],
-      expected: "EchoEcho!",
+      expected: "Echo\n\nEcho!",
     },
     {
       name: "repeated delta-only text within an assistant item",
@@ -480,12 +480,32 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expected: "EchoEcho",
     },
     {
+      name: "split leading newlines followed by the matching item snapshot",
+      events: [
+        { itemId: "answer-1", text: "First." },
+        { itemId: "answer-2", delta: "\n" },
+        { itemId: "answer-2", delta: "\nSecond." },
+        { itemId: "answer-2", text: "\n\nSecond." },
+      ],
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "an empty new item followed by deltas and a matching snapshot",
+      events: [
+        { itemId: "answer-1", text: "First." },
+        { itemId: "answer-2", delta: "" },
+        { itemId: "answer-2", delta: "Second." },
+        { itemId: "answer-2", text: "Second." },
+      ],
+      expected: "First.\n\nSecond.",
+    },
+    {
       name: "text beyond the live display cap",
       events: [
         { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },
         { itemId: "answer-2", text: "tail", delta: "tail" },
       ],
-      expected: `${"x".repeat(500_001)}tail`,
+      expected: `${"x".repeat(500_001)}\n\ntail`,
     },
   ])(
     "preserves $name in official SDK assistant streams",
@@ -521,6 +541,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         deltas: expected,
         outputText: expected,
       });
+      expect(response.status).toBe("completed");
     },
   );
 
@@ -1979,64 +2000,69 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it("fails an official SDK stream when an error lifecycle precedes a resolved run", async () => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-      const runId = (opts as { runId?: string }).runId;
-      if (!runId) {
-        throw new Error("expected a streaming response run ID");
-      }
-      emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error", error: "All model fallback candidates failed" },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error", error: "A later lifecycle event must not replace the failure" },
-      });
-      return {
-        payloads: [{ text: "partial answer" }],
-        meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
-      };
-    }) as never);
+  it.each(["stop", "length"])(
+    "keeps a failed SDK stream failed when the run stops with %s",
+    async (stopReason) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", error: "All model fallback candidates failed" },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", error: "A later lifecycle event must not replace the failure" },
+        });
+        return {
+          payloads: [{ text: "partial answer" }],
+          meta: { stopReason, agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
+        };
+      }) as never);
 
-    const client = new OpenAI({
-      apiKey: "test",
-      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-      maxRetries: 0,
-    });
-    const stream = client.responses.stream({
-      model: "openclaw",
-      input: "Report the provider failure.",
-    });
-    let completedEvents = 0;
-    let failedEvents = 0;
-    stream.on("response.completed", () => {
-      completedEvents += 1;
-    });
-    stream.on("response.failed", () => {
-      failedEvents += 1;
-    });
+      const client = new OpenAI({
+        apiKey: "test",
+        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+        maxRetries: 0,
+      });
+      const stream = client.responses.stream({
+        model: "openclaw",
+        input: "Report the provider failure.",
+      });
+      let completedEvents = 0;
+      let failedEvents = 0;
+      stream.on("response.completed", () => {
+        completedEvents += 1;
+      });
+      stream.on("response.failed", () => {
+        failedEvents += 1;
+      });
 
-    const response = await stream.finalResponse();
-    expect(completedEvents).toBe(0);
-    expect(failedEvents).toBe(1);
-    expect(response.status).toBe("failed");
-    expect(response.error).toEqual({
-      code: "server_error",
-      message: "All model fallback candidates failed",
-    });
-    expect(response.usage).toMatchObject({
-      input_tokens: 11,
-      output_tokens: 7,
-      total_tokens: 18,
-    });
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-  });
+      const response = await stream.finalResponse();
+      expect(completedEvents).toBe(0);
+      expect(failedEvents).toBe(1);
+      expect(response.status).toBe("failed");
+      expect(response.incomplete_details).toBeUndefined();
+      expect(response.output[0]).toMatchObject({ type: "message", status: "completed" });
+      expect(response.error).toEqual({
+        code: "server_error",
+        message: "All model fallback candidates failed",
+      });
+      expect(response.usage).toMatchObject({
+        input_tokens: 11,
+        output_tokens: 7,
+        total_tokens: 18,
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     {
@@ -2811,6 +2837,74 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "You must call one of the available tools",
     );
     await ensureResponseConsumed(res);
+  });
+
+  it("reports output-budget truncation as incomplete on the non-streaming path", async () => {
+    const port = enabledPort;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "A partial answer cut off by the output token budget mid-sent" }],
+      meta: { stopReason: "length" },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "write a long story",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      incomplete_details?: { reason?: string };
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(json.output?.map((item) => item.type)).toEqual(["message"]);
+    expect(json.output?.[0]?.status).toBe("incomplete");
+    expect(json.output?.[0]?.phase).toBe("final_answer");
+    await ensureResponseConsumed(res);
+  });
+
+  it("carries output-budget truncation as incomplete on the streaming path", async () => {
+    const port = enabledPort;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "A streamed partial answer cut off by the output token budget mid-" }],
+      meta: { stopReason: "length" },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "write another long story",
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    expect(
+      collectSseEventTypes(events).filter((type) =>
+        ["response.completed", "response.incomplete", "response.failed"].includes(type),
+      ),
+    ).toEqual(["response.incomplete"]);
+    expect(text.split("data: [DONE]")).toHaveLength(2);
+    const incomplete = parseSseData(findSseEvent(events, "response.incomplete")) as {
+      type: string;
+      response: ResponseResource;
+    };
+    expect(incomplete.type).toBe("response.incomplete");
+    expect(incomplete.response.status).toBe("incomplete");
+    expect(incomplete.response.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(incomplete.response.output[0]).toMatchObject({
+      type: "message",
+      status: "incomplete",
+      phase: "final_answer",
+    });
+    expect(parseSseData(findSseEvent(events, "response.output_item.done"))).toMatchObject({
+      item: incomplete.response.output[0],
+    });
   });
 
   it("rejects an unsatisfied function tool_choice on the non-streaming path", async () => {

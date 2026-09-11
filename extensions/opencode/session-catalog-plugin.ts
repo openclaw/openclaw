@@ -320,6 +320,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
       },
       terminal: {
         executable: "opencode",
+        uploadPathStyle: "native",
         args: (threadId) => ["--session", threadId],
         title: (threadId) => `opencode --session ${threadId.slice(0, 12)}…`,
         requireLocalSession: requireLocalOpenCodeSession,

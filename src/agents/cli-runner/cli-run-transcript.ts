@@ -372,6 +372,12 @@ export async function finalizeCliContextEngineTurn(params: {
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
         isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+        runtimeContext: {
+          provider: runParams.modelProvider ?? runParams.provider,
+          modelId: context.modelId,
+          modelContextWindow: runParams.modelContextWindow,
+          tokenBudget: context.contextWindowInfo?.tokens,
+        },
       });
     }
   } else {

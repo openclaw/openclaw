@@ -86,6 +86,14 @@ function isActiveRunProgressStale(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+  // A retry can start after recovery was queued. Recheck its current owner and
+  // deadline here before an earlier classification is allowed to abort it.
+  if (
+    activity.activeRetryWaitDeadlineAtMs !== undefined &&
+    Date.now() < activity.activeRetryWaitDeadlineAtMs
+  ) {
+    return false;
+  }
   if (params.allowActiveAbort) {
     // Recovery may have queued before a fresh byte arrived. Revalidate the
     // backend allowance here; active tools retain their separate recovery policy.

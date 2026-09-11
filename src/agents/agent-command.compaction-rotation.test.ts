@@ -362,6 +362,7 @@ describe("agentCommand compaction transcript rotation", () => {
           activeWriterRunId: params.runId,
         }));
         params.deferredLifecycle?.adopt({
+          beginRetryWait: () => undefined,
           discard: () => {},
           complete: async () => {
             expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({

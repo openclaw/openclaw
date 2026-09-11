@@ -189,7 +189,7 @@ final class QuickChatModel {
     private(set) var modelChoices: [OpenClawChatModelChoice] = []
     private(set) var currentSessionModelSelectionID: String?
     private(set) var currentSessionThinkingLevel: String?
-    private(set) var thinkingOptions = QuickChatModelControlLogic.baseThinkingOptions
+    private(set) var thinkingOptions: [OpenClawChatThinkingLevelOption] = []
     private(set) var selectedModelSelectionID: String?
     private(set) var selectedThinkingLevel: String?
     private(set) var modelDefaultProvider: String?
@@ -280,14 +280,18 @@ final class QuickChatModel {
         },
         modelControlsProvider: @escaping ModelControlsProvider = { target in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
-            async let models = transport.listModels(agentID: target.agentID)
+            async let catalog = transport.loadModelCatalog(sessionKey: target.sessionKey, agentID: target.agentID)
             async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
             async let agents = GatewayConnection.shared.agentsList()
-            return try await QuickChatModelControlLogic.snapshot(
+            let modelCatalog = try await catalog
+            var snapshot = try await QuickChatModelControlLogic.snapshot(
                 target: target,
-                models: models,
+                models: modelCatalog.choices,
                 sessions: sessions,
                 agents: agents)
+            snapshot.catalogMessage = modelCatalog.message
+            snapshot.catalogRefreshFailed = modelCatalog.refreshFailed
+            return snapshot
         },
         modelPatchProvider: @escaping ModelPatchProvider = { target, model in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
@@ -540,7 +544,7 @@ final class QuickChatModel {
         guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
-            self.modelChoices.contains(where: { $0.selectionID == normalized })
+            self.modelChoices.contains(where: { $0.selectionID == normalized && $0.available != false })
         else { return }
         guard normalized != self.selectedModelSelectionID else { return }
         let patchDecision = QuickChatModelControlLogic.modelPatchDecision(
@@ -1096,9 +1100,9 @@ extension QuickChatModel {
                 self.currentSessionThinkingLevel = snapshot.currentThinkingLevel
                 self.thinkingOptions = snapshot.thinkingOptions
                 self.modelDefaultProvider = snapshot.defaultProvider
-                self.modelControlStatusMessage = self.isSelectedThinkingLevelSupported
+                self.modelControlStatusMessage = snapshot.catalogMessage ?? (self.isSelectedThinkingLevelSupported
                     ? nil
-                    : String(localized: "Selected reasoning is unavailable for this target.")
+                    : String(localized: "Selected reasoning is unavailable for this target."))
             } catch is CancellationError {
                 return
             } catch {
@@ -1184,6 +1188,7 @@ extension QuickChatModel {
             if result?.thinkingLevels == nil, self.isCurrentModelPatchPresentation(request) {
                 do {
                     refreshedSnapshot = try await self.modelControlsProvider(request.target)
+                    refreshFailed = refreshedSnapshot?.catalogRefreshFailed == true
                 } catch {
                     refreshFailed = true
                 }
@@ -1218,7 +1223,7 @@ extension QuickChatModel {
                 }
                 let thinkingOptions = result?.thinkingLevels ?? refreshedSnapshot?.thinkingOptions ?? []
                 self.thinkingOptions = thinkingOptions
-                if !refreshFailed {
+                if !refreshFailed, !thinkingOptions.isEmpty {
                     let validated = QuickChatModelControlLogic.validatedThinkingSelection(
                         self.selectedThinkingLevel,
                         options: thinkingOptions)
@@ -1227,9 +1232,9 @@ extension QuickChatModel {
                         self.retryIdentity = nil
                     }
                 }
-                self.modelControlStatusMessage = refreshFailed
+                self.modelControlStatusMessage = refreshedSnapshot?.catalogMessage ?? (refreshFailed
                     ? String(localized: "Couldn't load model settings.")
-                    : nil
+                    : nil)
             }
             return true
         } catch {

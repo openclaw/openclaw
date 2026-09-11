@@ -43,7 +43,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
-  resetPreparedModelRuntimeStateForHotReload,
   revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
@@ -61,6 +60,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
+    getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,
   } = createGatewayActiveWorkTracker({ params, myGeneration });
 
@@ -104,10 +104,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
-
-    // Revalidate auth on demand, as startup does. A broad sweep prepares plugin
-    // auth in this thread before its worker starts and can starve config RPCs.
-    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
@@ -406,7 +402,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (targets.size === 0 || shouldSkipChannelRestart) {
           return;
         }
-        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent)) {
+        if (await waitForActiveWorkBeforeChannelReload(targets, isCurrent, !runtimeCommitted)) {
           params.logChannels.info(
             "channel reload before plugin replace cancelled by config supersession or restart",
           );
@@ -499,7 +495,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
           // Only a successfully published replacement can authoritatively retire channel owners.
           params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
-          resetPreparedModelRuntimeStateForHotReload();
         } else {
           pluginReloadAborted = true;
         }
@@ -513,7 +508,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // Newly activated channels can follow plugin services that already admitted agent work.
     // Recheck before their startup; existing channels were drained before registry replacement.
     if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
-      const waitCancelled = await waitForActiveWorkBeforeChannelReload(channelTargets, isCurrent);
+      const waitCancelled = await waitForActiveWorkBeforeChannelReload(
+        channelTargets,
+        isCurrent,
+        !runtimeCommitted,
+      );
       // A committed owner must finish its model/channel tail before the next config runs.
       // Supersession ends this wait: a newer writer may itself be awaiting that next reload.
       pluginReloadAborted =
@@ -650,6 +649,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
   return {
     applyHotReload,
+    getDeferredChannelReloads,
     acceptRestartConfig,
     publishAppliedConfigHash,
     publishDeferredAppliedConfigHash,

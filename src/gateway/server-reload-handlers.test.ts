@@ -6,6 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -16,11 +17,6 @@ import {
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
-import {
-  clearCurrentProviderAuthState as clearWarmedProviderAuthState,
-  getCurrentProviderAuthStates,
-  publishProviderAuthWarmSnapshot,
-} from "../agents/model-provider-auth-state.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
@@ -332,7 +328,6 @@ const hoisted = vi.hoisted(() => ({
     async (_cfg: OpenClawConfig, _options?: { catalogMode?: "live" | "static" }) => {},
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
-  clearCurrentProviderAuthState: vi.fn(() => {}),
   reloadSessionMcpRuntimes: vi.fn(async () => {}),
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
@@ -452,13 +447,6 @@ vi.mock("../agents/context.js", () => ({
   refreshContextWindowCache: async (cfg: OpenClawConfig) => {
     hoisted.reloadEvents.push("refresh-context-window");
     await hoisted.refreshContextWindowCache(cfg);
-  },
-}));
-
-vi.mock("../agents/model-provider-auth.js", () => ({
-  clearCurrentProviderAuthState: () => {
-    hoisted.reloadEvents.push("clear-provider-auth");
-    hoisted.clearCurrentProviderAuthState();
   },
 }));
 
@@ -1061,7 +1049,6 @@ afterEach(() => {
   hoisted.rejectPendingPreparedModelRuntimeReplacement.mockClear();
   hoisted.refreshPreparedModelRuntimeSnapshots.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
-  hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.reloadSessionMcpRuntimes.mockClear();
   hoisted.reloadSessionMcpRuntimes.mockResolvedValue(undefined);
   hoisted.buildGatewayCronService.mockClear();
@@ -2880,7 +2867,7 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("clears provider auth before reload and after plugin replacement", async () => {
+  it("refreshes prepared models and context after plugin replacement", async () => {
     const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
       hoisted.reloadEvents.push("prepare-plugins");
       await params.commitRuntime();
@@ -2896,14 +2883,12 @@ describe("gateway hot reload model state", () => {
     const nextConfig = { plugins: { enabled: true } } as OpenClawConfig;
     await applyHotReload(createPluginReloadPlan(), nextConfig);
 
-    const firstResetIndex = hoisted.reloadEvents.indexOf("clear-provider-auth");
-    expect(firstResetIndex).toBeGreaterThanOrEqual(0);
-    expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
-      "clear-provider-auth",
+    const firstPrepareIndex = hoisted.reloadEvents.indexOf("prepare-plugins");
+    expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
+    expect(hoisted.reloadEvents.slice(firstPrepareIndex)).toEqual([
       "prepare-plugins",
       "stale-prepared-model-runtime",
       "replace-plugins",
-      "clear-provider-auth",
       "refresh-prepared-model-runtime",
       "refresh-context-window",
     ]);
@@ -2944,96 +2929,6 @@ describe("gateway hot reload model state", () => {
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
     );
   });
-
-  it.each([
-    {
-      name: "heartbeat",
-      changedPath: "agents.defaults.heartbeat.target",
-      nextConfig: { agents: { defaults: { heartbeat: { target: "telegram" } } } },
-    },
-    {
-      name: "auth",
-      changedPath: "auth.order.openai",
-      nextConfig: { auth: { order: { openai: ["openai:fixture"] } } },
-    },
-    {
-      name: "model provider",
-      changedPath: "models.providers.openai",
-      nextConfig: {
-        models: {
-          providers: {
-            openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [] },
-          },
-        },
-      },
-    },
-    {
-      name: "agent roster",
-      changedPath: "agents.entries.worker",
-      nextConfig: {
-        agents: { entries: { main: {}, worker: { workspace: "/virtual/worker-workspace" } } },
-      },
-    },
-  ] satisfies Array<{ name: string; changedPath: string; nextConfig: OpenClawConfig }>)(
-    "keeps $name reloads lazy and authenticates the next user lookup once",
-    async ({ changedPath, nextConfig }) => {
-      const { applyHotReload } = createReloadHandlersForTest();
-      const readProfiles = vi.fn(() => ({
-        "openai:fixture": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "provider-auth-test-fixture",
-        },
-      }));
-      publishProviderAuthWarmSnapshot({
-        agents: [
-          {
-            agentId: "main",
-            configFingerprint: "previous-config-fingerprint",
-            providers: [["openai", false]],
-          },
-        ],
-      });
-      hoisted.clearCurrentProviderAuthState.mockImplementationOnce(clearWarmedProviderAuthState);
-
-      try {
-        await applyHotReload(
-          createHotTailPlan({
-            changedPaths: [changedPath],
-            hotReasons: [changedPath],
-          }),
-          nextConfig,
-        );
-
-        expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
-        expect(getCurrentProviderAuthStates()).toBeNull();
-
-        const { hasAuthForModelProvider } = await vi.importActual<
-          typeof import("../agents/model-provider-auth.js")
-        >("../agents/model-provider-auth.js");
-        await expect(
-          hasAuthForModelProvider({
-            provider: "openai",
-            cfg: nextConfig,
-            agentDir: "/virtual/provider-auth-agent",
-            workspaceDir: "/virtual/provider-auth-workspace",
-            env: {},
-            allowPluginSyntheticAuth: false,
-            discoverExternalCliAuth: false,
-            store: {
-              version: 1,
-              get profiles() {
-                return readProfiles();
-              },
-            },
-          }),
-        ).resolves.toBe(true);
-        expect(readProfiles).toHaveBeenCalledOnce();
-      } finally {
-        clearWarmedProviderAuthState();
-      }
-    },
-  );
 
   it("refreshes context metadata when the default workspace changes", async () => {
     const { applyHotReload, setState } = createReloadHandlersForTest(
@@ -4280,7 +4175,7 @@ describe("gateway restart deferral preflight", () => {
     const setState = vi.fn();
     let runtimePublished = false;
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createGatewayReloadHandlers({
+    const { applyHotReload, getDeferredChannelReloads } = createGatewayReloadHandlers({
       setState,
       startChannel,
       stopChannel,
@@ -4317,6 +4212,9 @@ describe("gateway restart deferral preflight", () => {
       expect(startChannel).not.toHaveBeenCalled();
       expect(runtimePublished).toBe(false);
       expect(setState).not.toHaveBeenCalled();
+      expect(getDeferredChannelReloads?.()).toEqual([
+        { channel: "discord", publicationPending: true },
+      ]);
 
       hoisted.activeEmbeddedRunCount.value = 0;
       await vi.advanceTimersByTimeAsync(500);
@@ -4339,6 +4237,7 @@ describe("gateway restart deferral preflight", () => {
     });
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
@@ -4346,7 +4245,7 @@ describe("gateway restart deferral preflight", () => {
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createGatewayReloadHandlers({
+    const { applyHotReload, getDeferredChannelReloads } = createGatewayReloadHandlers({
       startChannel,
       stopChannel,
       logReload,
@@ -4368,6 +4267,9 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(299_500);
       expect(stopChannel).not.toHaveBeenCalled();
       expect(startChannel).not.toHaveBeenCalled();
+      expect(getDeferredChannelReloads?.()).toEqual([
+        { channel: "telegram", publicationPending: true },
+      ]);
 
       await vi.advanceTimersByTimeAsync(500);
       await reloadPromise;
@@ -4390,6 +4292,7 @@ describe("gateway restart deferral preflight", () => {
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
@@ -4811,7 +4714,11 @@ describe("gateway channel hot reload handlers", () => {
       return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const { applyHotReload } = createReloadHandlersForTest(logReload, channels, reloadPlugins);
+    const { applyHotReload, getDeferredChannelReloads } = createReloadHandlersForTest(
+      logReload,
+      channels,
+      reloadPlugins,
+    );
     vi.useFakeTimers();
     let reload: Promise<GatewayHotReloadApplicationStatus> | undefined;
 
@@ -4822,6 +4729,9 @@ describe("gateway channel hot reload handlers", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(events).toEqual([]);
         expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("(discord)"));
+        expect(getDeferredChannelReloads?.()).toEqual([
+          { channel: "discord", publicationPending: false },
+        ]);
 
         hoisted.activeEmbeddedRunCount.value = 0;
         await vi.advanceTimersByTimeAsync(500);
@@ -4836,6 +4746,7 @@ describe("gateway channel hot reload handlers", () => {
 
     expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
     expect(reloadPlugins).toHaveBeenCalledOnce();
+    expect(getDeferredChannelReloads?.()).toEqual([]);
   });
 
   it("requires a recovery owner for targeted account reloads", async () => {
@@ -7790,9 +7701,14 @@ describe("deferred channel reload abort generation", () => {
 
     try {
       await vi.advanceTimersByTimeAsync(10);
+      expect(oldHandlers.getDeferredChannelReloads?.()).toEqual([
+        { channel: "whatsapp", publicationPending: true },
+      ]);
       resetGatewayRestartStateForInProcessRestart();
+      expect(oldHandlers.getDeferredChannelReloads?.()).toEqual([]);
       hoisted.activeTaskBlockers.length = 0;
       const nextHandlers = createTestHandlers(logChannels, nextChannels);
+      expect(nextHandlers.getDeferredChannelReloads?.()).toEqual([]);
       const nextReload = nextHandlers
         .applyHotReload({ ...abortChannelReloadPlan, reloadInternalHooks: true }, {})
         .then(
@@ -7978,7 +7894,11 @@ describe("deferred channel reload abort generation", () => {
           activeChannels: new Set(["whatsapp"]),
         });
       };
-      const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+      const { applyHotReload, getDeferredChannelReloads } = createTestHandlers(
+        logChannels,
+        channels,
+        { reloadPlugins },
+      );
       hoisted.activeTaskBlockers.push(
         makeActiveTaskBlocker({ taskId: "task-blocking-superseded-reload" }),
       );
@@ -8004,14 +7924,20 @@ describe("deferred channel reload abort generation", () => {
           (error: unknown) => error,
         );
         await vi.advanceTimersByTimeAsync(10);
+        expect(getDeferredChannelReloads?.()).toEqual([
+          { channel: "whatsapp", publicationPending: !committed },
+        ]);
 
         if (cancellationKind === "lifecycle") {
           abortPendingChannelReloads();
         } else {
           transactionCurrent = false;
         }
+        // Status follows the live owner immediately, not the next 500 ms poll.
+        expect(getDeferredChannelReloads?.()).toEqual([]);
         await vi.advanceTimersByTimeAsync(500);
         const error = await reloadError;
+        expect(getDeferredChannelReloads?.()).toEqual([]);
         if (committed && cancellationKind === "config") {
           expect(error).toBeNull();
           expect(channels.stop).toHaveBeenCalledOnce();
@@ -8098,11 +8024,7 @@ describe("deferred channel reload abort generation", () => {
       const application = createRuntimeConfigWriteApplication();
       const settled = vi.fn();
       void application.result.then(settled);
-      const logReload = {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
+      const logReload = createInfoWarnErrorLogger();
       const watch = vi.spyOn(chokidar, "watch");
       setActivePluginRegistry(registry);
       const reloader = startManagedGatewayConfigReloader({
@@ -8139,12 +8061,16 @@ describe("deferred channel reload abort generation", () => {
         );
         expect(application.claimed).toBe(true);
         expect(settled).not.toHaveBeenCalled();
+        expect(reloader.getDeferredChannelReloads?.()).toEqual([
+          { channel: "whatsapp", publicationPending: true },
+        ]);
 
         // Revoke the write epoch while real hot reload is waiting on unrelated work.
         // Hold the disk reread so cancellation settles before exact-candidate replay.
         const watcher = watch.mock.results[0]?.value;
         expect(watcher).toBeDefined();
         watcher.emit("change", "/tmp/openclaw.json");
+        expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
         await vi.advanceTimersByTimeAsync(500);
         await vi.advanceTimersByTimeAsync(300);
         await snapshotStarted.promise;
@@ -8159,6 +8085,7 @@ describe("deferred channel reload abort generation", () => {
           await expect(application.result).resolves.toBe("stopped");
           snapshotGate.resolve();
           await stopping;
+          expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
           expect(setState).not.toHaveBeenCalled();
           expect(startChannel).not.toHaveBeenCalled();
         } else {
@@ -8173,6 +8100,9 @@ describe("deferred channel reload abort generation", () => {
             expect(settled).not.toHaveBeenCalled();
             expect(setState).not.toHaveBeenCalled();
             expect(logReload.warn).toHaveBeenCalledTimes(2);
+            expect(reloader.getDeferredChannelReloads?.()).toEqual([
+              { channel: "whatsapp", publicationPending: true },
+            ]);
           }
           unrelatedRequest.release();
           await vi.advanceTimersByTimeAsync(500);
@@ -8183,6 +8113,7 @@ describe("deferred channel reload abort generation", () => {
                 ? "failed"
                 : "applied",
           );
+          expect(reloader.getDeferredChannelReloads?.()).toEqual([]);
           if (outcome === "same write") {
             expect(setState).toHaveBeenCalledOnce();
             expect(commitRuntimePolicy).toHaveBeenCalledWith(nextConfig);

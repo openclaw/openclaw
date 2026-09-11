@@ -96,6 +96,7 @@ export function createProgressState(
       draftState.answerLane.finalized = false;
       draftState.answerLane.stream?.updatePreview(
         renderTelegramProgressDraftPreview(options.snapshot, {
+          toolProgress: progressCompositor.previewToolProgressEnabled,
           richMessages: config.telegramCfg.richMessages === true,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
@@ -135,7 +136,6 @@ export function canPushToolProgress(turn: Turn): boolean {
 
 function canPushCompactionProgress(turn: Turn): boolean {
   return Boolean(
-    turn.streamMode === "progress" &&
     turn.answerLane.stream &&
     !turn.answerLane.finalized &&
     !turn.finalAnswerDeliveryStarted &&

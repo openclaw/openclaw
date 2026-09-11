@@ -51,7 +51,6 @@ export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
@@ -511,6 +510,13 @@ export function importPluginStateEntriesForDoctor(
     }
   }
   flush();
+}
+
+/** Opens an async plugin-state namespace for a trusted core owner id. */
+export function createCorePluginStateKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+): Required<PluginStateKeyedStore<T>> {
+  return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

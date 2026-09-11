@@ -12,6 +12,7 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
 import { listAgentWorkspaceDirs } from "./workspace-dirs.js";
 import { assertWorkspaceStateMigrationReady } from "./workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 
 /** Select configured workspaces and active sandbox copies for migration and readiness. */
 export function listWorkspaceStateDirs(params: {
@@ -82,11 +83,12 @@ export function listWorkspaceStateDirs(params: {
   return [...dirs];
 }
 
-/** Refuse completion before channels accept work that a workspace cannot execute. */
-export function assertConfiguredWorkspaceStateReady(params: {
+type ConfiguredWorkspaceStateParams = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): void {
+};
+
+function configuredWorkspaceStateScope(params: ConfiguredWorkspaceStateParams) {
   const env = params.env ?? process.env;
   const homedir = os.homedir;
   const workspaceDirs = listWorkspaceStateDirs({
@@ -95,5 +97,20 @@ export function assertConfiguredWorkspaceStateReady(params: {
     homedir,
     stateDir: resolveStateDir(env, homedir),
   });
-  assertWorkspaceStateMigrationReady({ workspaceDirs, env, homedir });
+  return { ...params, workspaceDirs, env, homedir };
+}
+
+/** Refuse completion before channels accept work that a workspace cannot execute. */
+export function assertConfiguredWorkspaceStateReady(params: ConfiguredWorkspaceStateParams): void {
+  assertWorkspaceStateMigrationReady(configuredWorkspaceStateScope(params));
+}
+
+export async function assertConfiguredWorkspaceStateReadyForDoctor(
+  params: ConfiguredWorkspaceStateParams,
+): Promise<void> {
+  const scope = configuredWorkspaceStateScope(params);
+  for (const workspaceDir of scope.workspaceDirs) {
+    await readWorkspaceStateSnapshot(workspaceDir, { env: scope.env, readOnly: true });
+  }
+  assertWorkspaceStateMigrationReady({ ...scope, operation: "doctor" });
 }

@@ -233,6 +233,9 @@ describe("createReplyMediaPathNormalizer", () => {
         path.join("/tmp/sandboxes/session-1", "screens", "final image.png"),
         5 * 1024 * 1024,
       );
+      expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionWorkspaceDir: "/tmp/sandboxes/session-1" }),
+      );
     },
   );
 

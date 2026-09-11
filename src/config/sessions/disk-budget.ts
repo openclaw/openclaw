@@ -29,6 +29,8 @@ import {
 } from "./disk-budget-files.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
 import { resolveSessionFilePathCore } from "./paths.js";
+import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { timeArchivePruningAsync } from "./session-history-archive-pruning-diagnostics.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { isSessionEntryDiskBudgetEvictable } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -213,6 +215,7 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
 
 /** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
+  diagnostics?: SqliteSessionArchivePruningDiagnostics;
   excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
   storePath: string;
@@ -220,23 +223,42 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   // Oldest-first is the hard-cap sacrifice order: under extreme pressure this
   // may prune an archive the current pass just extracted, which is preferred
   // over evicting additional sessions' searchable rows to spare a copy.
-  const files = (await readSessionsDirFiles(path.dirname(params.storePath)))
-    .filter(
-      (file) =>
-        isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
-    )
-    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
-  let usage = await measureSessionPhysicalDiskUsage(params.storePath);
+  const { diagnostics } = params;
+  const files = await timeArchivePruningAsync(diagnostics, "legacyInventoryMs", async () =>
+    (await readSessionsDirFiles(path.dirname(params.storePath)))
+      .filter(
+        (file) =>
+          isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
+      )
+      .toSorted((left, right) => left.mtimeMs - right.mtimeMs),
+  );
+  let usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+    measureSessionPhysicalDiskUsage(params.storePath),
+  );
   let removedFiles = 0;
   for (const file of files) {
     if (usage.totalBytes <= params.highWaterBytes) {
       break;
     }
-    if (!(await removeFileIfExists(file.path)).ok) {
+    if (
+      !(
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
+          removeFileIfExists(file.path),
+        )
+      ).ok
+    ) {
+      if (diagnostics) {
+        diagnostics.failedRemovals = (diagnostics.failedRemovals ?? 0) + 1;
+      }
       continue;
     }
     removedFiles += 1;
-    usage = await measureSessionPhysicalDiskUsage(params.storePath);
+    if (diagnostics) {
+      diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
+    }
+    usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+      measureSessionPhysicalDiskUsage(params.storePath),
+    );
   }
   return { removedFiles, usage };
 }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,13 +22,60 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-export type UpdatePostInstallDoctorResult = {
-  status: "advisory";
-  advisory: PackageUpdateStepAdvisory & {
-    reason: "deferred-configured-plugin-repair";
-    details: string[];
-  };
-};
+export type UpdatePostInstallDoctorResult = (
+  | { status: "ok" | "error" }
+  | {
+      status: "advisory";
+      advisory: PackageUpdateStepAdvisory & {
+        reason: "deferred-configured-plugin-repair";
+        details: string[];
+      };
+    }
+) & { configHash?: string; configInputHash?: string; warnings?: string[] };
+
+/** Keep optional health diagnostics bounded across Doctor and its update parent. */
+export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const warning of warnings) {
+    const message = warning.trim().slice(0, 500);
+    if (message) {
+      normalized.push(message);
+      if (normalized.length === 32) {
+        break;
+      }
+    }
+  }
+  return normalized;
+}
+
+type DoctorConfigCapture = { path: string; hash: string; inputHash?: string };
+const doctorConfigWrites = new AsyncLocalStorage<DoctorConfigCapture>();
+
+export function captureUpdateDoctorConfigWrites<T>(
+  configPath: string,
+  run: (capture: DoctorConfigCapture) => Promise<T>,
+): Promise<T> {
+  const capture = { path: path.resolve(configPath), hash: "unchanged" };
+  return doctorConfigWrites.run(capture, () => run(capture));
+}
+
+/** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
+export function recordUpdateDoctorConfigWrite(
+  configPath: string,
+  inputHash: string | null,
+  hash: string,
+): void {
+  const capture = doctorConfigWrites.getStore();
+  if (capture && capture.path === path.resolve(configPath)) {
+    if (capture.hash === "unchanged") {
+      capture.inputHash = inputHash ?? undefined;
+    } else if (inputHash !== capture.hash) {
+      // An outside write between Doctor passes breaks ownership permanently for this run.
+      delete capture.inputHash;
+    }
+    capture.hash = hash;
+  }
+}
 
 export function createUpdatePostInstallDoctorResultPath(): string {
   return path.join(
@@ -66,12 +114,21 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
+  const { warnings, ...result } = params.result;
+  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
-  await fs.writeFile(resultPath, `${JSON.stringify(params.result)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
+  await fs.writeFile(
+    resultPath,
+    `${JSON.stringify({
+      ...result,
+      ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+    })}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
 }
 
 export async function consumeUpdatePostInstallDoctorResult(
@@ -98,6 +155,38 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
     return null;
   }
   const record = value as Record<string, unknown>;
+  const warnings = record.warnings;
+  if (
+    warnings !== undefined &&
+    (!Array.isArray(warnings) ||
+      !warnings.every((warning): warning is string => typeof warning === "string"))
+  ) {
+    return null;
+  }
+  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
+  const configHash = record.configHash;
+  if (
+    configHash !== undefined &&
+    (typeof configHash !== "string" ||
+      (configHash !== "unchanged" && !/^[0-9a-f]{64}$/u.test(configHash)))
+  ) {
+    return null;
+  }
+  const configInputHash = record.configInputHash;
+  if (
+    configInputHash !== undefined &&
+    (typeof configInputHash !== "string" || !/^[0-9a-f]{64}$/u.test(configInputHash))
+  ) {
+    return null;
+  }
+  const configWrite = {
+    ...(configHash === undefined ? {} : { configHash }),
+    ...(configInputHash === undefined ? {} : { configInputHash }),
+    ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+  };
+  if (record.status === "ok" || record.status === "error") {
+    return { status: record.status, ...configWrite };
+  }
   if (record.status !== "advisory") {
     return null;
   }
@@ -119,6 +208,7 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   }
   return {
     status: "advisory",
+    ...configWrite,
     advisory: {
       kind: "package-post-install-doctor",
       reason: "deferred-configured-plugin-repair",

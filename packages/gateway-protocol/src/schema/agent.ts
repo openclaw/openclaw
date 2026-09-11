@@ -48,10 +48,7 @@ const AgentInternalEventSchema = closedObject({
   status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
   statusLabel: Type.String(),
   result: Type.String(),
-  // `true` when `result` carries only placeholder copy because the child
-  // produced no output. Delivery gates read the fact instead of matching the
-  // placeholder wording, so it has to survive the request boundary; absent on
-  // the ordinary has-output path.
+  // The producer records placeholder substitution independently of its display text.
   noVisibleResult: Type.Optional(Type.Boolean()),
   modelRouteChange: Type.Optional(Type.String()),
   attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),

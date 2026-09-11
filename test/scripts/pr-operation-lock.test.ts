@@ -755,7 +755,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
     ["diff --name-only --no-renames -z", "require_no_ignored_transition_paths"],
     ["ls-files --others --ignored --exclude-standard -z", "require_no_ignored_transition_paths"],
-    ["diff --cached --name-only --no-renames -z", "validate_review_transition_state"],
+    ["ls-tree -r -z", "validate_review_transition_state"],
   ])("rejects failed %s reads in %s", (query, guard) => {
     const repoDir = createRepo();
     const head = refOid(repoDir, "HEAD");
@@ -767,8 +767,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     const proxy = writeFixtureFile(binDir, "git", [
       "#!/usr/bin/env bash",
+      'args=("$@")',
+      'while [ "${1:-}" = -c ]; do shift 2; done',
       `case "$*" in ${JSON.stringify(query)}*) echo 'fixture query failed' >&2; exit 7 ;; esac`,
-      `exec '${realGit}' "$@"`,
+      `exec '${realGit}' "\${args[@]}"`,
     ]);
     chmodSync(proxy, 0o755);
     const result = runLockShell(repoDir, [
@@ -2066,49 +2068,66 @@ describePosix("scripts/pr per-PR operation lock", () => {
   });
   it("joins Git read producers before releasing a successful operation lock", async () => {
     const repoDir = createRepo();
-    const producerExited = join(repoDir, "worktree-producer-exited");
+    mkdirSync(join(repoDir, ".local"));
+    const producerExited = join(repoDir, ".local", "worktree-producer-exited");
     const binDir = tempDirs.make("openclaw-pr-joined-query-");
     const queryExited = join(binDir, "query-exited");
+    const validatorStarted = join(binDir, "validator-started");
+    const validatorExited = join(binDir, "validator-exited");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     const proxy = writeFixtureFile(binDir, "git", [
       "#!/usr/bin/env bash",
+      'args=("$@")',
+      'while [ "${1:-}" = -c ]; do shift 2; done',
+      'if [ "$1" = ls-tree ]; then',
+      `  printf '%s\\n' "$$" >> '${validatorStarted}'`,
+      `  '${realGit}' "\${args[@]}" || exit $?`,
+      "  exec 1>&-",
+      "  sleep 0.1",
+      `  printf '%s\\n' "$$" >> '${validatorExited}'`,
+      "  exit 0",
+      "fi",
       'if [ "$1" = ls-files ] && [ "${3:-}" = --ignored ]; then',
       "  exec 1>&-",
       "  sleep 0.1",
       `  : > '${queryExited}'`,
       "  exit 0",
       "fi",
-      `exec '${realGit}' "$@"`,
+      `exec '${realGit}' "\${args[@]}"`,
     ]);
     chmodSync(proxy, 0o755);
-    const result = await runSupervisedOperation(repoDir, "joined-worktree-operation.sh", [
+    const result = await runSupervisedOperation(repoDir, ".local/joined-worktree-operation.sh", [
       `export PATH='${binDir}':"$PATH"`,
       "acquire_pr_operation_lock 42",
       "git() {",
       '  case "$*" in',
       '    "worktree list"*) printf \'worktree %s\\0branch refs/heads/pr-42\\0\\0\' "$PWD" ;;',
       "    \"diff --name-only --no-renames -z \"*) printf 'base.txt\\0' ;;",
-      '    "ls-files --others --exclude-standard -z"|"diff --cached --name-only --no-renames -z "*) ;;',
+      '    "ls-files --others --exclude-standard -z") ;;',
       '    *) command git "$@"; return $? ;;',
       "  esac",
       "  exec 1>&-",
       "  sleep 0.1",
-      "  : >worktree-producer-exited",
+      "  : >.local/worktree-producer-exited",
       "}",
       'worktree_is_registered "$PWD"',
-      "test -f worktree-producer-exited",
-      "rm worktree-producer-exited",
+      "test -f .local/worktree-producer-exited",
+      "rm .local/worktree-producer-exited",
       'resolved="$(worktree_path_for_branch pr-42)"',
       'test "$resolved" = "$PWD"',
-      "test -f worktree-producer-exited",
+      "test -f .local/worktree-producer-exited",
       'head="$(git rev-parse HEAD)"',
       "for guard in require_no_foreign_untracked require_no_ignored_transition_paths validate_review_transition_state; do",
-      "  rm worktree-producer-exited",
+      "  rm .local/worktree-producer-exited",
       '  "$guard" 42 "$head" "$head" || exit $?',
-      "  test -f worktree-producer-exited",
+      "  test -f .local/worktree-producer-exited",
       '  if [ "$guard" != require_no_foreign_untracked ]; then',
       `    test -f '${queryExited}'`,
       `    rm '${queryExited}'`,
+      "  fi",
+      '  if [ "$guard" = validate_review_transition_state ]; then',
+      `    test -s '${validatorStarted}'`,
+      `    test "$(sort '${validatorStarted}')" = "$(sort '${validatorExited}')"`,
       "  fi",
       "done",
     ]);

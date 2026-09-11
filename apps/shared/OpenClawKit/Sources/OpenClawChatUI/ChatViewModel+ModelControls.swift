@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
             }
             self.modelChoices = catalog.choices
             self.modelAvailabilityIsSessionScoped = catalog.availabilityIsSessionScoped
+            self.modelCatalogMessage = catalog.message
             if target == self.currentModelPatchTarget(),
                settingsRevision == self.settingsPatchRevisionsByTarget[target, default: 0],
                self.inFlightSettingsPatchCountsByTarget[target] == nil
@@ -24,11 +25,36 @@ extension OpenClawChatViewModel {
             }
             syncThinkingLevelOptions()
         } catch {
-            // Best-effort.
+            guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else { return }
+            self.modelCatalogMessage = String(localized: "Model choices could not load. Reconnect and try again.")
+            self.syncThinkingLevelOptions()
         }
     }
 
     public static let verboseLevelOptions = ["off", "on", "full"]
+
+    public func modelSignInContext() async -> OpenClawChatModelSignInContext? {
+        let session = self.currentSessionSnapshot()
+        let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
+        guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
+            guard self.isCurrentSession(session) else { return nil }
+            self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
+            return nil
+        }
+        guard self.isCurrentSession(session) else { return nil }
+        return OpenClawChatModelSignInContext(
+            agentID: context.agentID,
+            request: context.request,
+            isCurrent: { [weak self] in
+                guard let self, self.isCurrentSession(session) else { return false }
+                let current = await context.isCurrent()
+                return current && self.isCurrentSession(session)
+            })
+    }
+
+    public func refreshModelSignIn() async {
+        await self.fetchModels()
+    }
 
     public var modelPickerSections: ChatModelPickerSections {
         let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
@@ -143,17 +169,12 @@ extension OpenClawChatViewModel {
         if let separator = modelID.firstIndex(of: "/"), separator != modelID.startIndex {
             let embeddedProvider = String(modelID[..<separator])
             let model = String(modelID[modelID.index(after: separator)...])
-            return "\(self.modelAvailabilityProvider(embeddedProvider))/\(model)"
+            return "\(embeddedProvider)/\(model)"
         }
         guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
               !provider.isEmpty
         else { return modelID }
-        return "\(self.modelAvailabilityProvider(provider))/\(modelID)"
-    }
-
-    private static func modelAvailabilityProvider(_ provider: String) -> String {
-        let normalized = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "codex" || normalized == "openai-codex" ? "openai" : normalized
+        return "\(provider.lowercased())/\(modelID)"
     }
 
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
@@ -203,8 +224,9 @@ extension OpenClawChatViewModel {
     }
 
     public var fastModeIsEnabled: Bool {
-        guard let session = self.currentSessionEntry() else { return false }
-        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true
+        let session = self.currentSessionEntry()
+        return (session?.effectiveFastMode ?? session?.fastMode ??
+            self.selectedModelChoice(for: session)?.effectiveFastMode)?.isEnabled == true
     }
 
     public var composerInlineModelLabel: String {
@@ -252,7 +274,7 @@ extension OpenClawChatViewModel {
                 format: String(localized: "Inherited %@"),
                 self.thinkingLevel)
             : self.thinkingLevel
-        return self.fastModeSelectionID == "on"
+        return self.fastModeIsEnabled
             ? String(
                 format: String(localized: "%@, Fast"),
                 effort)
@@ -268,10 +290,12 @@ extension OpenClawChatViewModel {
         return -120 + fraction * 240
     }
 
-    /// `models.list` currently has no fast-support capability field. Keep the
-    /// control available and let the gateway validate the session patch.
     public var selectedModelSupportsFastMode: Bool {
-        true
+        self.selectedModelChoice(for: self.currentSessionEntry())?.supportsFastMode == true
+    }
+
+    public var showsFastModeControls: Bool {
+        self.selectedModelSupportsFastMode || self.currentSessionEntry()?.fastMode != nil
     }
 
     public var isUpdatingSessionSettings: Bool {
@@ -381,6 +405,7 @@ extension OpenClawChatViewModel {
         case "off": next = .off
         default: return
         }
+        guard next == nil || self.selectedModelSupportsFastMode else { return }
         let target = self.currentModelPatchTarget()
         let sessionKey = self.sessionKey
         let baselineFastMode = self.currentSessionEntry()?.fastMode

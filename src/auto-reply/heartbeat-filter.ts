@@ -7,7 +7,7 @@ import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
-  HEARTBEAT_TRANSCRIPT_PROMPT,
+  INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
@@ -247,7 +247,7 @@ function collectSuccessfulToolResultCallIds(message: {
   return uniqueStrings(ids);
 }
 
-export function isRealNonHeartbeatUserMessage(
+function isRealNonHeartbeatUserMessage(
   message: { role: string; content?: unknown },
   heartbeatPrompt?: string,
 ): boolean {
@@ -314,12 +314,13 @@ export function isHeartbeatUserMessage(
     return false;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
-  if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
+  const transcriptPrompts = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
+  if (transcriptPrompts.some((prompt) => trimmed === prompt)) {
     return true;
   }
   if (
     MESSAGE_TOOL_DELIVERY_HINTS.some((prefix) => trimmed.startsWith(prefix)) &&
-    trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
+    transcriptPrompts.some((prompt) => trimmed.endsWith(prompt))
   ) {
     return true;
   }

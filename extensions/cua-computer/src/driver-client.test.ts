@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execution } from "./commands.test-helpers.js";
+import {
+  CUA_DRIVER_CONTRACT_FIXTURES,
+  cuaToolResult,
+} from "./cua-driver-contract.test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   callTool: vi.fn(async () => ({})),
@@ -128,6 +133,34 @@ describe("CUA Driver direct session", () => {
     expect(mocks.close).toHaveBeenCalledOnce();
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
+
+  it.each(["sync", "async"])(
+    "discovers windows on the first execution action with %s SDK loading",
+    async (loading) => {
+      const loadSdk = () => sdk as never;
+      const driver = createCuaDriver({
+        loadSdk: loading === "async" ? async () => loadSdk() : loadSdk,
+      });
+      const computer = await execution(driver);
+      mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
+
+      const listed = JSON.parse(await computer.act('{"action":"list_windows"}'));
+      expect(listed).toMatchObject({
+        ok: true,
+        details: {
+          windows: [
+            {
+              windowRef: expect.stringMatching(/^cua:v2:window:/),
+              appName: "Editor",
+              title: "Notes",
+            },
+          ],
+        },
+      });
+
+      await computer.close("completion");
+    },
+  );
 
   it("starts the shared lifecycle session once before using driver tools", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });

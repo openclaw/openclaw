@@ -119,7 +119,7 @@ export async function prepareWorkshopWorkspaceRelocation(
   if (existing?.status === "prepared") {
     return;
   }
-  const snapshot = readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
+  const snapshot = await readWorkspaceStateSnapshot(workspaceDir, { env, readOnly: true });
   const attestation = snapshot.attestation;
   const now = Date.now();
   if (
@@ -230,7 +230,8 @@ export async function finishWorkshopWorkspaceRelocations(env: NodeJS.ProcessEnv)
       complete = (await directoryIdentity(captured.workspaceDir)) === captured.directoryIdentity;
     }
     runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      (writeDatabase) => {
+        const { db } = writeDatabase;
         const current = executeSqliteQueryTakeFirstSync(
           db,
           kysely
@@ -244,7 +245,7 @@ export async function finishWorkshopWorkspaceRelocations(env: NodeJS.ProcessEnv)
         const retired =
           complete &&
           retireWorkspaceRelocationAttestation({
-            database: { db },
+            database: writeDatabase,
             identity: captured,
             attestedAtMs: captured.attestedAtMs,
           });

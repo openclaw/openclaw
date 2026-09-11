@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
@@ -123,7 +123,12 @@ describe("doctor-contract-registry module loader", () => {
     }
 
     const originalOwner = createPluginCache();
-    const resolvePath = () => resolvePluginDoctorContractArtifactPath(pluginRoot);
+    const resolvePath = () =>
+      resolvePluginDoctorContractArtifact({
+        rootDir: pluginRoot,
+        origin: "bundled",
+        sourcePreferred: true,
+      })?.modulePath ?? null;
     expect(withPluginCache(originalOwner, resolvePath)).toBe(candidates[0]);
     for (const candidate of candidates) {
       expect(withPluginCache(createPluginCache(), resolvePath)).toBe(candidate);

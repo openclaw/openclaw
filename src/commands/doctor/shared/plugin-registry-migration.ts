@@ -174,7 +174,7 @@ export async function importShippedPluginInstallConfigForDoctor(
       }
       const storeOptions = { filePath: lease.databasePath };
       const previousInstallRecords = await loadInstalledPluginIndexInstallRecords(storeOptions);
-      const persisted = await readPersistedInstalledPluginIndexInstallRecords(storeOptions);
+      const persisted = readPersistedInstalledPluginIndexInstallRecords(storeOptions);
       let nextInstallRecords = copyPluginInstallRecordMap(previousInstallRecords);
       for (const [pluginId, record] of Object.entries(source.records)) {
         // Authored provenance outranks disk recovery, but never an existing ledger owner.

@@ -82,6 +82,7 @@ export function createOpenClawDelegateToolsForRun(
     catalogMode: "direct-only",
     description:
       "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers. " +
+      "Setup flows collect credentials with masked entry; never request them in chat. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
         : "Changes wait for human approval and return the final outcome."),

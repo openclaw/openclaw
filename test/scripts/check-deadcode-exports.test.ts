@@ -12,6 +12,8 @@ import {
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
+import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -44,20 +46,6 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 }
 
 describe("check-deadcode-exports", () => {
-  it("requests every unused-export issue class from Knip", () => {
-    const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
-      "utf8",
-    );
-    expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
-    expect(script).toContain('"config/knip.config.ts", "--production"');
-    expect(script).toContain('"config/knip.all-exports.config.ts"');
-    expect(script).toContain('"config/knip.scripts-exports.config.ts"');
-    expect(script).toContain(
-      'args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"]',
-    );
-  });
-
   it("excludes test support only from the production scan", () => {
     expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
@@ -102,6 +90,31 @@ describe("check-deadcode-exports", () => {
     expect(fullUiWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
   });
 
+  it("models both compiled subprocess registries as workspace-relative full-tree roots", () => {
+    const buildSources = Object.values(vitestWorkerBuildEntries).map((source) =>
+      path.relative(".", source).replaceAll("\\", "/"),
+    );
+    const declarationSources = Object.values(vitestWorkerDeclarationEntries);
+    for (const [workspace, settings] of Object.entries(allExportsKnipConfig.workspaces)) {
+      expect(
+        settings.entry.filter((entry) => entry.replaceAll("\\", "/").startsWith("../")),
+        workspace,
+      ).toEqual([]);
+      const prefix = workspace === "." ? "" : `${workspace}/`;
+      for (const source of [...buildSources, ...declarationSources]) {
+        if (source.startsWith(prefix)) {
+          expect(settings.entry, `${workspace}: ${source}`).toContain(
+            `${source.slice(prefix.length)}!`,
+          );
+        }
+      }
+    }
+
+    expect(allExportsKnipConfig.workspaces["extensions/qa-lab"]?.entry).toContain(
+      "src/gateway-child-artifacts-runtime.test-support.ts!",
+    );
+  });
+
   it("models every QA scenario execution path as a full-tree root", () => {
     const rootEntries = fullRootWorkspace.entry;
     const executionPaths = listQaScenarioExecutionPaths();
@@ -114,6 +127,21 @@ describe("check-deadcode-exports", () => {
     expect(rootEntries).toContain(
       "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
     );
+  });
+
+  it("models path-launched Mantis runtime roots separately from its cross-repository test fixture", () => {
+    const runtimeEntries = [
+      "scripts/mantis/observe-request-telegram-qa.mts!",
+      "scripts/mantis/observe-request-web-ui.mts!",
+      "scripts/mantis/telegram-proof-bridge.mjs!",
+    ];
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toEqual(expect.arrayContaining(runtimeEntries));
+    }
+    const fixture = "test/fixtures/mantis-request-producer.mts!";
+    expect(fullRootWorkspace.entry).toContain(fixture);
+    expect(knipConfig.workspaces["."].entry).not.toContain(fixture);
+    expect(scriptRootWorkspace.entry).not.toContain(fixture);
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {

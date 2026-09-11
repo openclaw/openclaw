@@ -7,6 +7,7 @@ import {
 import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchManager,
   type MemorySearchResult,
   type MemorySource,
@@ -28,6 +29,7 @@ import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
+const SEARCH_CANDIDATE_UNIVERSE = 200;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const log = createSubsystemLogger("memory");
@@ -58,9 +60,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
+    // Rank one shared window before trimming small requests. Preserve the historical
+    // project selection cap and caller-sized selection for ordinary requests above it.
     const candidateMaxResults = hasActiveProject
-      ? Math.min(200, Math.max(maxResults, maxResults * 4))
-      : maxResults;
+      ? SEARCH_CANDIDATE_UNIVERSE
+      : Math.max(SEARCH_CANDIDATE_UNIVERSE, maxResults);
     // Retrieval owners apply project ranking and eligibility, including lexical recall.
     // Only cap the expanded window here so partial and final recall survive together.
     const selectResults = (results: MemorySearchResult[]) => results.slice(0, maxResults);
@@ -344,6 +348,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             semanticProvider,
             false,
             semanticProviderRuntime,
+            opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
           );
         } catch (err) {
           releaseSemanticProvider();
@@ -393,6 +398,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
                 semanticProvider,
                 false,
                 semanticProviderRuntime,
+                opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
               );
             } catch (fallbackErr) {
               releaseFallbackProvider();

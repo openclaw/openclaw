@@ -217,6 +217,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   return await resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
@@ -270,7 +271,17 @@ export async function executeTelegramBuiltinCommand(
       : `/${params.commandName}`;
   if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
-    return await executeTelegramLoginCommand({ dispatch, commandArgs });
+    const currentProvider =
+      resolveTelegramCommandMenuModelContext({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+        sessionKey: dispatch.targetSessionKey,
+      }).provider ??
+      resolveDefaultModelForAgent({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+      }).provider;
+    return await executeTelegramLoginCommand({ dispatch, commandText: prompt, currentProvider });
   }
 
   const menuNeedsModelContext =

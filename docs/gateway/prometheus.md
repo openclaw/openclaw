@@ -21,7 +21,7 @@ Content type is `text/plain; version=0.0.4; charset=utf-8`, the standard
 Prometheus exposition format.
 
 <Warning>
-The route uses Gateway authentication (operator scope, trusted-operator surface). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
+The route uses Gateway authentication (operator scope, trusted-operator surface) and requires the caller's effective scopes to include `operator.read` (implied by `operator.write` or `operator.admin`). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
 </Warning>
 
 For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [OpenTelemetry export](/gateway/opentelemetry).
@@ -60,6 +60,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
   </Step>
   <Step title="Restart the Gateway">
     The HTTP route is registered at plugin startup, so reload after enabling.
+
+    ```bash
+    openclaw gateway restart
+    ```
+
   </Step>
   <Step title="Scrape the protected route">
     Send the same gateway auth your operator clients use:
@@ -299,7 +304,7 @@ histogram_quantile(
   sum by (le, method) (rate(openclaw_gateway_rpc_queue_wait_seconds_bucket[5m]))
 )
 
-# Tokens per minute, split by provider
+# Tokens per second, split by provider
 sum by (provider) (rate(openclaw_model_tokens_total[1m]))
 
 # Spend (USD) over the last hour, by model
@@ -373,6 +378,9 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
   </Accordion>
   <Accordion title="401 / unauthorized">
     The endpoint requires the Gateway operator scope (`auth: "gateway"` with `gatewayRuntimeScopeSurface: "trusted-operator"`). Use the same token or password Prometheus uses for any other Gateway operator route. There is no public unauthenticated mode.
+  </Accordion>
+  <Accordion title="403 `missing scope: operator.read`">
+    The caller authenticated, but its effective operator scopes do not include `operator.read`. This happens when an identity-bearing auth mode such as `trusted-proxy` maps the scraper to a [named role](/gateway/operator-scopes) whose scope ceiling excludes reads. Grant the scraper role `operator.read` (or `operator.write` / `operator.admin`, which imply it).
   </Accordion>
   <Accordion title="`openclaw_prometheus_series_dropped_total` is climbing">
     A new attribute is exceeding the **2048**-series cap. Inspect recent metrics for an unexpectedly high-cardinality label and fix it at the source. The exporter intentionally drops new series instead of silently rewriting labels.

@@ -83,6 +83,18 @@ describe("version resolution", () => {
     });
   });
 
+  it("reports the built version when dist lags the source package version", async () => {
+    await withVersionFixtureDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2026.9.2" });
+      await writeJsonFixture(root, "build-info.json", { version: "2026.8.1" });
+      const moduleUrl = await ensureModuleFixture(root);
+      // A git checkout that pulled but never rebuilt still executes the old dist,
+      // so reporting the source version hides the stale runtime from operators.
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.9.2");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.8.1");
+    });
+  });
+
   it("reads the bounded immutable build id from generated provenance", async () => {
     await withVersionFixtureDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);

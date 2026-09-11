@@ -140,12 +140,4 @@ export class FilterableSelectList implements Component, Focusable {
       this.applyFilter();
     }
   }
-
-  getSelectedItem(): SelectItem | null {
-    return this.selectList.getSelectedItem();
-  }
-
-  getFilterText(): string {
-    return this.input.getValue();
-  }
 }

@@ -319,6 +319,10 @@ describe("secrets apply", () => {
   });
 
   it("preflights and applies one-way scrub without plaintext backups", async () => {
+    await fs.appendFile(
+      fixture.envPath,
+      "GH_TOKEN=sk-openai-plaintext\nGITHUB_TOKEN=unmigrated-github-token\n", // pragma: allowlist secret
+    );
     const plan = createPlan({
       targets: [createOpenAiProviderTarget()],
       options: createOneWayScrubOptions(),
@@ -359,6 +363,7 @@ describe("secrets apply", () => {
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
+    expect(nextEnv).toContain("GITHUB_TOKEN=unmigrated-github-token");
   });
 
   it("preserves auth-profile tokenRef during provider scrub", async () => {

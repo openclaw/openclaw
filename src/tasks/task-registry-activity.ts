@@ -5,7 +5,7 @@ import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js"
 import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
-import { cloneTaskRecord } from "./task-registry-records.js";
+import { cloneTaskRecordForObserver } from "./task-registry-records.js";
 import {
   emitTaskRegistryObserverEvent,
   taskActivityByTaskId,
@@ -197,7 +197,10 @@ export function flushTaskActivity(taskId: string): void {
   }
   activity.dirty = false;
   activity.lastFlushedAt = Date.now();
-  emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: cloneTaskRecord(task) }));
+  emitTaskRegistryObserverEvent(() => ({
+    kind: "upserted",
+    task: cloneTaskRecordForObserver(task),
+  }));
 }
 
 export function clearTaskActivity(taskId: string): void {

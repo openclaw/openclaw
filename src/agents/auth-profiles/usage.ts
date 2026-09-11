@@ -16,7 +16,6 @@ import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
-import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
@@ -32,7 +31,7 @@ import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
-  resetAuthProfileFailureState,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -41,13 +40,12 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
-
-export { setAuthProfileFailureHook };
 
 /** Test-only dependency injection for usage persistence hooks. */
 const testing = {
@@ -102,12 +100,6 @@ async function updateOwnedAuthProfileUsage(
     store.usageStats = { ...store.usageStats, [profileId]: usage };
   }
   return updated;
-}
-
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-export function resolveInlineProviderApiKeyUsageId(provider: string): string {
-  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -742,7 +734,7 @@ export function resolveProfilesUnavailableReason(params: {
 }
 
 /** Returns the regular transient-failure cooldown duration for an error count. */
-export function calculateAuthProfileCooldownMs(errorCount: number): number {
+function calculateAuthProfileCooldownMs(errorCount: number): number {
   const normalized = Math.max(1, errorCount);
   if (normalized <= 1) {
     return 30_000; // 30 seconds
@@ -853,19 +845,6 @@ function updateUsageStatsEntry(
 ): void {
   store.usageStats = store.usageStats ?? {};
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
-}
-
-function notifyAuthProfileFailureSafely(reason: AuthProfileFailureReason): void {
-  try {
-    notifyAuthProfileFailureHook(reason);
-  } catch (err) {
-    // Hook errors must not break failure recording; log and continue.
-    authProfileUsageLog.warn("auth profile failure hook threw", {
-      event: "auth_profile_failure_hook_error",
-      tags: ["error_handling", "auth_profiles"],
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 function keepActiveWindowOrRecompute(params: {
@@ -1020,7 +999,11 @@ export async function markAuthProfileFailure(params: {
 }): Promise<void> {
   const { store, profileId, reason, agentDir, runId, modelId } = params;
   const profile = store.profiles[profileId];
-  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    isAuthCooldownBypassedForProvider(profile.provider)
+  ) {
     return;
   }
 
@@ -1040,7 +1023,11 @@ export async function markAuthProfileFailure(params: {
     agentDir,
     updater: (freshStore) => {
       const profileValue = freshStore.profiles[profileId];
-      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
+      if (
+        !profileValue ||
+        profileValue.setup?.replacement ||
+        isAuthCooldownBypassedForProvider(profileValue.provider)
+      ) {
         return false;
       }
       const currentWhamResult =
@@ -1090,7 +1077,6 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {
@@ -1257,7 +1243,6 @@ export async function markInlineProviderApiKeyFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {
@@ -1265,53 +1250,4 @@ export async function markInlineProviderApiKeyFailure(params: {
   }
 }
 
-/**
- * Mark a profile as transiently failed. Applies stepped backoff cooldown.
- * Cooldown times: 30s, 1min, 5min (capped).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function markAuthProfileCooldown(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-  runId?: string;
-}): Promise<void> {
-  await markAuthProfileFailure({
-    store: params.store,
-    profileId: params.profileId,
-    reason: "unknown",
-    agentDir: params.agentDir,
-    runId: params.runId,
-  });
-}
-
-/**
- * Clear cooldown for a profile (e.g., manual reset).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function clearAuthProfileCooldown(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<void> {
-  const { store, profileId, agentDir } = params;
-  const updated = await updateOwnedAuthProfileUsage(store, profileId, {
-    agentDir,
-    updater: (freshStore) => {
-      const existing = freshStore.usageStats?.[profileId];
-      if (!existing) {
-        return false;
-      }
-
-      updateUsageStatsEntry(freshStore, profileId, () => resetAuthProfileFailureState(existing));
-      return true;
-    },
-  });
-  if (updated) {
-    return;
-  }
-  if (updated === null) {
-    logDroppedAuthProfileBookkeeping("clear_cooldown", profileId);
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

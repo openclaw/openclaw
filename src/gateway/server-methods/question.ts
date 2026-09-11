@@ -13,7 +13,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -21,7 +20,6 @@ import {
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   listSecretStoreEntries,
-  SECRET_STORE_ALLOWED_HOSTS_MAX,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
@@ -30,6 +28,7 @@ import {
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "../question-manager.js";
+import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   authorizeSessionSharing,
@@ -99,49 +98,16 @@ function authorizeQuestionRecord(params: {
 }
 
 function normalizeQuestions(params: QuestionRequestParams): Question[] {
-  const ids = new Set<string>();
+  const error = questionShapeError(params.questions, {
+    allowPlainSecretQuestions: false,
+    validateUrls: true,
+  });
+  if (error) {
+    throw new QuestionRequestValidationError(error);
+  }
   return params.questions.map((question) => {
-    if (ids.has(question.questionId)) {
-      throw new QuestionRequestValidationError(`duplicate question id '${question.questionId}'`);
-    }
-    ids.add(question.questionId);
-    if (question.options.length === 1) {
-      throw new QuestionRequestValidationError(
-        `question '${question.questionId}' must have either no options or 2 to 4 options`,
-      );
-    }
     const binding = question.secretStore;
-    if (question.isSecret && !binding) {
-      throw new QuestionRequestValidationError(
-        `question '${question.questionId}': secret questions are not supported yet`,
-      );
-    }
     if (binding) {
-      if (!question.isSecret) {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}': secret store binding requires a secret question`,
-        );
-      }
-      if (params.questions.length !== 1 || question.options.length !== 0 || question.multiSelect) {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}': secret store requests require one free-text, single-select question`,
-        );
-      }
-      if (!ENV_SECRET_REF_ID_RE.test(binding.name)) {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}': invalid secret store entry name`,
-        );
-      }
-      if (binding.kind !== "secret") {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}': masked requests require kind "secret"; set environment values in Settings or the CLI`,
-        );
-      }
-      if ((binding.allowedHosts?.length ?? 0) > SECRET_STORE_ALLOWED_HOSTS_MAX) {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}': secret store allowed hosts exceed the limit`,
-        );
-      }
       const existing = listSecretStoreEntries({ scope: { kind: "team" } }).find(
         (entry) => entry.name === binding.name,
       );
@@ -161,16 +127,6 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
             }
           : {}),
       };
-    }
-    const optionLabels = new Set<string>();
-    for (const option of question.options) {
-      const normalizedLabel = option.label.trim().toLowerCase();
-      if (optionLabels.has(normalizedLabel)) {
-        throw new QuestionRequestValidationError(
-          `question '${question.questionId}' has duplicate option label '${option.label}'`,
-        );
-      }
-      optionLabels.add(normalizedLabel);
     }
     return question;
   });

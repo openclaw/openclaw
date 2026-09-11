@@ -17,6 +17,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -196,7 +197,7 @@ describe("local gateway request context", () => {
           isCurrent: () => true,
           authModes: {},
           authStore: { version: 1, profiles: {} },
-          metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
           modelCatalog: { entries: [], routeVariants: [] },
         }),
       );
@@ -252,7 +253,7 @@ describe("local gateway request context", () => {
       isCurrent: () => true,
       authModes: {},
       authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [model], routeVariants: [model] },
     } satisfies PublishedModelCatalogOwnerCandidate;
     const refreshAuth = vi
@@ -271,15 +272,20 @@ describe("local gateway request context", () => {
         },
       })
       .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
+    let published: PublishedOwnerSnapshot | undefined;
+    const readOwner = vi
+      .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockImplementation(() => published);
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(async () => {
         const auth = await refreshAuth({ providerIds: ["local-auth-provider"] });
-        return asPublishedOwner({
+        published = asPublishedOwner({
           ...candidate,
           authModes: auth.authModes,
           authStore: auth.authStore,
         });
+        return published;
       });
 
     const list = () =>
@@ -312,9 +318,10 @@ describe("local gateway request context", () => {
       expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
     );
     loadOwner.mockRestore();
+    readOwner.mockRestore();
   });
 
-  it("uses the prepared local owner when a catalog read times out", async () => {
+  it("uses the prepared local owner without starting a catalog load", async () => {
     const cfg = {
       agents: {
         list: [
@@ -337,7 +344,7 @@ describe("local gateway request context", () => {
       isCurrent: () => true,
       authModes: {},
       authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
     } satisfies PublishedModelCatalogOwnerCandidate;
     const loadOwner = vi
@@ -353,7 +360,7 @@ describe("local gateway request context", () => {
     );
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
-    expect(loadOwner).toHaveBeenCalledOnce();
+    expect(loadOwner).not.toHaveBeenCalled();
     expect(readOwner).toHaveBeenCalledOnce();
     loadOwner.mockRestore();
     readOwner.mockRestore();

@@ -41,7 +41,11 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     const destination = resolveWorkerPlacementDestination({
       cfg: config,
       ...(moveTarget.kind === "profile"
-        ? { profileId: moveTarget.profileId, machineClass: moveTarget.machineClass }
+        ? {
+            profileId: moveTarget.profileId,
+            machineClass: moveTarget.machineClass,
+            os: moveTarget.os,
+          }
         : { deviceId: moveTarget.deviceId }),
     });
     if (!destination.ok || !destination.value) {

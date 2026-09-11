@@ -1,5 +1,5 @@
 ---
-summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
+summary: "How OpenClaw picks an agent and session for each inbound message, and how replies route back"
 read_when:
   - Changing channel routing or inbox behavior
 title: "Channel routing"
@@ -202,3 +202,5 @@ This is consistent across channels.
 - [Groups](/channels/groups)
 - [Broadcast groups](/channels/broadcast-groups)
 - [Pairing](/channels/pairing)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent bindings](/concepts/agent-bindings)

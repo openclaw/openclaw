@@ -391,17 +391,26 @@ export function createMattermostDraftStream(params: {
   };
   const deleteCurrentMessage = async () => {
     assertNoAcceptedDeliveryFailure();
-    await clearWithStop(async () => {
-      // Retraction drains this preview but keeps the turn open for its replacement.
-      loop.resetPending();
-      await loop.waitForInFlight();
-      await currentGeneration.ready;
-      assertNoAcceptedDeliveryFailure();
-      currentGeneration.lastSentText = "";
-      currentGeneration.latestSourceText = "";
-      currentGeneration.latestAssistantText = undefined;
-      loop.resetThrottleWindow();
-    });
+    const retiring = currentGeneration;
+    loop.resetPending();
+    const inFlight = loop.waitForInFlight();
+    const retirement = clearWithStop(
+      async () => {
+        await retiring.ready;
+        await inFlight;
+        assertNoAcceptedDeliveryFailure();
+      },
+      {
+        readMessageId: () => retiring.postId,
+        clearMessageId: () => {
+          retiring.postId = undefined;
+        },
+      },
+    );
+    // Claim retirement before yielding; replacement sends wait without reusing the deleted post.
+    currentGeneration = { lastSentText: "", latestSourceText: "", ready: retirement };
+    loop.resetThrottleWindow();
+    await retirement;
     assertNoAcceptedDeliveryFailure();
   };
   const seal = async () => {

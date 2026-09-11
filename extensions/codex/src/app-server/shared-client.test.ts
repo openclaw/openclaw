@@ -8,7 +8,7 @@ import { SemVer } from "semver";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
-import type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
       agentDir?: string;
       authProfileId?: string;
       config?: unknown;
-    }): Promise<void> => undefined,
+    }): Promise<CodexAppServerAuthHandoff | undefined> => undefined,
   ),
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
@@ -90,6 +90,7 @@ vi.mock("./auth-profile.js", () => ({
 }));
 
 vi.mock("./auth-cache-key.js", () => ({
+  fingerprintTokenAuthProfileCacheKey: (accessToken: string) => `token:${accessToken}`,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey: mocks.resolveCodexAppServerPreparedApiKeyCacheKey,
 }));
@@ -240,8 +241,8 @@ function clientStartCall(startSpy: unknown) {
 
 function deferNextAuthProfileApplication(): () => void {
   let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = () => resolve();
+  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
+    release = () => resolve(undefined);
   });
   mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
   return release;
@@ -338,6 +339,56 @@ describe("shared Codex app-server client", () => {
     mocks.embeddedAgentLog.debug.mockClear();
     mocks.embeddedAgentLog.warn.mockClear();
     mocks.resolveDefaultAgentDir.mockClear();
+  });
+
+  it.each(["shared", "isolated"] as const)(
+    "uses the configured remote endpoint for a %s client without explicit start options",
+    async (kind) => {
+      const harness = createAutoInitializingClientHarness();
+      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const acquire =
+        kind === "shared" ? getSharedCodexAppServerClient : createIsolatedCodexAppServerClient;
+
+      const client = await acquire({
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+        },
+        timeoutMs: 1_000,
+      });
+
+      expect(client).toBe(harness.client);
+      expect(startSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ transport: "websocket", url: "ws://127.0.0.1:39175" }),
+        expect.anything(),
+      );
+      await client.closeAndWait();
+    },
+  );
+
+  it("preserves explicit start options over the plugin endpoint", async () => {
+    const harness = createAutoInitializingClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+
+    const client = await getSharedCodexAppServerClient({
+      pluginConfig: {
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+      },
+      startOptions: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        headers: {},
+        url: "ws://127.0.0.1:39176",
+      },
+      timeoutMs: 1_000,
+    });
+
+    expect(client).toBe(harness.client);
+    expect(startSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ transport: "websocket", url: "ws://127.0.0.1:39176" }),
+      expect.anything(),
+    );
+    await client.closeAndWait();
   });
 
   it("closes the shared app-server when the version gate fails", async () => {
@@ -1957,6 +2008,11 @@ describe("shared Codex app-server client", () => {
   it("registers persisted profile refresh for isolated app-server startup", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const authHandoff = {
+      accessFingerprint: "token:startup-access",
+      chatgptAccountId: "persisted-account",
+    };
+    mocks.applyCodexAppServerAuthProfile.mockResolvedValueOnce(authHandoff);
 
     const clientPromise = createIsolatedCodexAppServerClient({
       timeoutMs: 1000,
@@ -1982,6 +2038,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw-persisted-agent",
       authProfileId: "openai:persisted",
+      authHandoff,
       previousAccountId: "persisted-account",
       config: undefined,
     });
@@ -3420,7 +3477,10 @@ describe("shared Codex app-server client", () => {
       const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
       const harness = createCodexAppServerAgentHarness({
         bindingStore: createCodexTestBindingStore(),
-        pluginConfig: { discovery: { timeoutMs: 1_000 } },
+        pluginConfig: {
+          appServer: { homeScope: "agent" },
+          discovery: { timeoutMs: 1_000 },
+        },
       });
       const load = harness.loadModelCatalog!({
         config: {},

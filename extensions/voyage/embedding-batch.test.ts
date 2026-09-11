@@ -1,4 +1,3 @@
-// Voyage batch tests cover the real HTTP boundary and bounded response reads.
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,13 +6,6 @@ import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./emb
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 function buildClient(): VoyageEmbeddingClient {
   return {
@@ -45,11 +37,11 @@ function resolveBatchStage(url: string, init?: RequestInit): BatchStage {
 function defaultBatchResponse(stage: BatchStage): Response {
   switch (stage) {
     case "upload":
-      return jsonResponse({ id: "input-0" });
+      return Response.json({ id: "input-0" });
     case "create":
-      return jsonResponse({ id: "batch-0", status: "in_progress" });
+      return Response.json({ id: "batch-0", status: "in_progress" });
     case "status":
-      return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      return Response.json({ id: "batch-0", status: "completed", output_file_id: "output-0" });
     case "output":
       return new Response(
         JSON.stringify({
@@ -135,49 +127,91 @@ afterEach(() => {
 });
 
 describe("voyage batch bounded reads", () => {
-  it("preserves configured query parameters on real direct embedding requests", async () => {
-    const received: Array<{ url: string; authorization: string | undefined }> = [];
-    const server = createServer((request, response) => {
-      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
-      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta") {
-        response.writeHead(404).end("wrong embedding endpoint");
-        return;
+  it.each([
+    { operation: "single", inputType: "query", expectedInputs: [["first"]] },
+    { operation: "single", inputType: "document", expectedInputs: [["first"]] },
+    { operation: "single", inputType: undefined, expectedInputs: [["first"]] },
+    { operation: "batch", inputType: "query", expectedInputs: [["first"], ["second"]] },
+    { operation: "batch", inputType: "document", expectedInputs: [["first", "second"]] },
+    { operation: "batch", inputType: undefined, expectedInputs: [["first", "second"]] },
+  ] as const)(
+    "preserves real $operation $inputType requests, grouping, and configured query parameters",
+    async ({ operation, inputType, expectedInputs }) => {
+      const received: Array<{
+        url: string;
+        authorization: string | undefined;
+        body: unknown;
+      }> = [];
+      const vectors: Record<string, number[]> = { first: [7, 11], second: [13, 17] };
+      const server = createServer((request, response) => {
+        request.setEncoding("utf8");
+        let text = "";
+        request.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        request.on("end", () => {
+          if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta") {
+            response.writeHead(404).end("wrong embedding endpoint");
+            return;
+          }
+          const body = JSON.parse(text) as { input: string[] };
+          received.push({ url: request.url, authorization: request.headers.authorization, body });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              data: body.input.map((input, index) => ({ index, embedding: vectors[input] })),
+            }),
+          );
+        });
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
       }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ embedding: [7, 11] }] }));
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback TCP address");
-    }
 
-    try {
-      const { provider } = await createVoyageEmbeddingProvider({
-        config: {},
-        provider: "voyage",
-        model: "voyage-3",
-        fallback: "none",
-        remote: {
-          baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
-          apiKey: "voyage-loopback-key",
-        },
-      });
-
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([7, 11]);
-      expect(received).toEqual([
-        {
-          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
-          authorization: "Bearer voyage-loopback-key",
-        },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+      try {
+        const { provider } = await createVoyageEmbeddingProvider({
+          config: {},
+          provider: "voyage",
+          model: "voyage/voyage-3",
+          fallback: "none",
+          remote: {
+            baseUrl: `http://127.0.0.1:${address.port}/tenant/v1/?api-version=2024-10-21&tenant=beta#local`,
+            apiKey: "voyage-loopback-key",
+          },
+        });
+        expect(provider.maxInputTokens).toBe(32000);
+        if (operation === "single") {
+          await expect(provider.embed({ text: "first" }, { inputType })).resolves.toEqual([7, 11]);
+        } else {
+          await expect(
+            provider.embedBatch([{ text: "first" }, "second"], { inputType }),
+          ).resolves.toEqual([
+            [7, 11],
+            [13, 17],
+          ]);
+        }
+        expect(received).toHaveLength(expectedInputs.length);
+        expect(received).toEqual(
+          expect.arrayContaining(
+            expectedInputs.map((input) => ({
+              url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
+              authorization: "Bearer voyage-loopback-key",
+              body: { model: "voyage-3", input, input_type: inputType ?? "document" },
+            })),
+          ),
+        );
+        await expect(provider.embedBatch([], { inputType })).resolves.toEqual([]);
+        expect(received).toHaveLength(expectedInputs.length);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("preserves configured query parameters through real batch upload, create, status, and error output", async () => {
     const received: Array<{ url: string; authorization: string | undefined }> = [];
@@ -307,7 +341,7 @@ describe("voyage batch bounded reads", () => {
     const streamed = streamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
     stubBatchFetch((stage) => {
       if (stage === "create") {
-        return jsonResponse({
+        return Response.json({
           id: "batch-0",
           status: "completed",
           output_file_id: "output-0",
@@ -371,7 +405,7 @@ describe("voyage batch bounded reads", () => {
   it("reads a completed error file before downloading successful output", async () => {
     const fetchMock = stubBatchFetch((stage) =>
       stage === "status"
-        ? jsonResponse({
+        ? Response.json({
             id: "batch-0",
             status: "completed",
             output_file_id: "output-0",
@@ -417,7 +451,7 @@ describe("voyage batch bounded reads", () => {
       if (stage !== "create" || ++attempts > 1) {
         return undefined;
       }
-      return jsonResponse({ error: { message: "retry this request" } }, 503);
+      return Response.json({ error: { message: "retry this request" } }, { status: 503 });
     });
 
     await expect(runBatch()).resolves.toEqual(new Map([["req-0", [1, 2]]]));

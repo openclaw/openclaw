@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import type { FSWatcherEventMap } from "chokidar";
 import { expect, vi } from "vitest";
 
-type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+type WatchEvent = keyof FSWatcherEventMap;
 type WatchCallback = (...args: unknown[]) => void;
 type WatchOptions = {
   depth: number;

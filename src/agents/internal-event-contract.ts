@@ -21,15 +21,7 @@ const GENERATED_MEDIA_COMPLETION_SOURCES = new Set<AgentInternalEventSource>([
 export type AgentInternalEventSource = (typeof AGENT_INTERNAL_EVENT_SOURCES)[number];
 export type AgentInternalEventStatus = (typeof AGENT_INTERNAL_EVENT_STATUSES)[number];
 
-/**
- * Total read for the "did the child produce output" fact on a completion event.
- *
- * `noVisibleResult` is recorded by the producer that substituted placeholder
- * copy into `result`; delivery gates consult it instead of matching the
- * placeholder wording, so display copy and control flow stay independent.
- * Absence means the ordinary case — `result` carries the child's own output —
- * which keeps payloads from producers that always have output byte-identical.
- */
+/** Only the producer that substituted placeholder text records absence. */
 export function hasVisibleCompletionResult(event: { noVisibleResult?: boolean }): boolean {
   return event.noVisibleResult !== true;
 }

@@ -57,16 +57,14 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards(
-    input,
-    {
+  const { onModelRequest, onModelUsage, getPromptCacheObservation } =
+    installEmbeddedAttemptStreamGuards(input, {
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
       },
       onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
       diagnosticOwner,
-    },
-  );
+    });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
@@ -137,6 +135,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
@@ -165,6 +164,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     sandboxSessionKey: input.setup.sandboxSessionKey,
     builtinToolNames: sessionRuntime.agentSession.builtinToolNames,
     coreBuiltinToolNames: sessionRuntime.agentSession.coreBuiltinToolNames,
+    trustedLocalMediaToolNames: sessionRuntime.agentSession.trustedLocalMediaToolNames,
     replaySafeToolNames: sessionRuntime.agentSession.replaySafeToolNames,
     codeModeExecToolNames: sessionRuntime.agentSession.codeModeExecToolNames,
     sideEffectToolOwners: sessionRuntime.agentSession.sideEffectToolOwners,
@@ -196,8 +196,8 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStreamRuntime = {
     abortable,
     cache: {
-      observabilityEnabled: cacheObservabilityEnabled,
-      promptTools: promptCacheTools,
+      onModelRequest,
+      getObservation: getPromptCacheObservation,
     },
     history: preparedHistory,
     isProbeSession,

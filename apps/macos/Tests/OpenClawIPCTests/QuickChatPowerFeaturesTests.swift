@@ -5,11 +5,15 @@ import Testing
 @testable import OpenClaw
 
 extension QuickChatModelControlSnapshot {
+    static let testThinkingOptions = ["off", "minimal", "low", "medium", "high"].map {
+        OpenClawChatThinkingLevelOption(id: $0, label: $0)
+    }
+
     static let testFixture = QuickChatModelControlSnapshot(
         models: [],
         currentModelSelectionID: nil,
         currentThinkingLevel: nil,
-        thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+        thinkingOptions: Self.testThinkingOptions,
         defaultProvider: nil)
 }
 
@@ -20,7 +24,8 @@ struct QuickChatPowerFeaturesTests {
         name: "Sol",
         provider: "openai",
         contextWindow: 400_000,
-        reasoning: true)
+        reasoning: true,
+        thinkingLevels: ["off", "medium", "high"].map { .init(id: $0, label: $0) })
 
     @Test func `dictation inserts at a UTF16 caret and replaces each partial`() {
         let text = "Hello"
@@ -137,7 +142,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(sections.providers.first?.isDefaultProvider == true)
     }
 
-    @Test func `model controls use target agent defaults when no session row exists`() throws {
+    @Test func `model controls use the target model profile when no session row exists`() throws {
         let sessions = try JSONDecoder().decode(
             OpenClawChatSessionsListResponse.self,
             from: Data(Self.sessionsFixture.utf8))
@@ -146,7 +151,10 @@ struct QuickChatPowerFeaturesTests {
             from: Data(Self.agentsFixture.utf8))
         let snapshot = QuickChatModelControlLogic.snapshot(
             target: QuickChatRoutingTarget(sessionKey: "agent:work:main", agentID: nil),
-            models: [],
+            models: [.init(
+                modelID: "deepseek-v4", name: "Fixture", provider: "deepseek", contextWindow: nil,
+                thinkingLevels: [.init(id: "off", label: "off"), .init(id: "high", label: "high")],
+                thinkingDefault: "high")],
             sessions: sessions,
             agents: agents)
 
@@ -215,7 +223,7 @@ struct QuickChatPowerFeaturesTests {
                     models: [],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: "low",
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             modelPatchProvider: { _, _ in nil })
@@ -253,7 +261,7 @@ struct QuickChatPowerFeaturesTests {
                     models: [choice],
                     currentModelSelectionID: controlsCallCount == 1 ? nil : choice.selectionID,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             patchProvider: { _, _ in
@@ -296,7 +304,8 @@ struct QuickChatPowerFeaturesTests {
         #expect(sendCount == 0)
     }
 
-    @Test func `failed post-patch refresh preserves and blocks explicit reasoning`() async {
+    @Test(arguments: [false, true])
+    func `failed post-patch refresh preserves and blocks explicit reasoning`(publishedFailure: Bool) async {
         let patchStarted = AsyncTestGate()
         let finishPatch = AsyncTestGate()
         let refreshStarted = AsyncTestGate()
@@ -315,13 +324,19 @@ struct QuickChatPowerFeaturesTests {
                 if controlsCallCount > 1 {
                     refreshStarted.open()
                     await finishRefresh.wait()
+                    if publishedFailure {
+                        return QuickChatModelControlSnapshot(
+                            models: [], currentModelSelectionID: choice.selectionID, currentThinkingLevel: nil,
+                            thinkingOptions: [], defaultProvider: choice.provider,
+                            catalogMessage: "Model choices could not refresh.", catalogRefreshFailed: true)
+                    }
                     throw QuickChatModelControlsTestError.refreshFailed
                 }
                 return QuickChatModelControlSnapshot(
                     models: [choice],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             patchProvider: { _, _ in
@@ -397,7 +412,7 @@ struct QuickChatPowerFeaturesTests {
                     models: [choice],
                     currentModelSelectionID: nil,
                     currentThinkingLevel: nil,
-                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    thinkingOptions: QuickChatModelControlSnapshot.testThinkingOptions,
                     defaultProvider: nil)
             },
             modelPatchProvider: { target, _ in

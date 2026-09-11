@@ -1,12 +1,23 @@
 // Covers config backup rotation limits and snapshot behavior.
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  releaseUpdateCommandPreflightForHandoff,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../infra/update-managed-service-handoff-database.js";
 import { createPreUpdateConfigSnapshot, maintainConfigBackups } from "./backup-rotation.js";
 import {
   expectPosixMode,
   IS_WINDOWS,
   resolveConfigPathFromTempState,
 } from "./config.backup-rotation.test-helpers.js";
+import { createConfigIO } from "./io.factory.js";
 import { withTempHome } from "./test-helpers.js";
 
 async function expectRegularFile(filePath: string): Promise<void> {
@@ -21,6 +32,29 @@ async function expectPathMissing(filePath: string): Promise<void> {
     error = err as { code?: unknown };
   }
   expect(error?.code).toBe("ENOENT");
+}
+
+async function withConfigExecutor(
+  home: string,
+  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
+) {
+  const root = path.join(await fs.realpath(home), "package");
+  await fs.mkdir(root);
+  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
+  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+  await withUpdateCommandExecutor(
+    "config-backup-fence",
+    async (executor) => {
+      const fence = await executor.enter(root, { preflight: true });
+      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
+    },
+    {
+      existingAuthority: {
+        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+        installKey: root,
+      },
+    },
+  );
 }
 
 describe("config backup rotation", () => {
@@ -82,6 +116,96 @@ describe("config backup rotation", () => {
       }
     });
   });
+
+  it.each(["unlink", "rename", "copyFile", "chmod"] as const)(
+    "stops backup maintenance when executor authority ends after %s",
+    async (revokeAfter) => {
+      await withTempHome(async (home) =>
+        withConfigExecutor(home, async (assertCurrent, revoke) => {
+          const configPath = resolveConfigPathFromTempState();
+          const raw = '{"gateway":{"mode":"local","port":18789}}\n';
+          await fs.writeFile(configPath, raw);
+          const backupPaths = ["", ".1", ".2", ".3", ".4"].map(
+            (suffix) => `${configPath}.bak${suffix}`,
+          );
+          for (const [index, backupPath] of backupPaths.entries()) {
+            await fs.writeFile(backupPath, `recovery-${index}`, { mode: 0o644 });
+          }
+          const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
+          const readBackups = () =>
+            Promise.all(
+              backupPaths.map(async (backupPath) => {
+                try {
+                  return {
+                    raw: await fs.readFile(backupPath, "utf8"),
+                    mode: (await fs.stat(backupPath)).mode,
+                  };
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                    throw error;
+                  }
+                  return null;
+                }
+              }),
+            );
+          let atRevocation: Awaited<ReturnType<typeof readBackups>> | undefined;
+          const mutationsAfterRevocation: string[] = [];
+          const afterMutation = async (operation: typeof revokeAfter, target: fsNode.PathLike) => {
+            if (!String(target).includes(".bak")) {
+              return;
+            }
+            if (atRevocation) {
+              mutationsAfterRevocation.push(operation);
+            } else if (operation === revokeAfter) {
+              revoke();
+              atRevocation = await readBackups();
+            }
+          };
+          const io = createConfigIO({
+            env,
+            homedir: () => home,
+            observe: false,
+            pluginValidation: "skip",
+            fs: {
+              ...fsNode,
+              promises: {
+                ...fsNode.promises,
+                unlink: async (target) => {
+                  await fs.unlink(target);
+                  await afterMutation("unlink", target);
+                },
+                rename: async (source, destination) => {
+                  await fs.rename(source, destination);
+                  await afterMutation("rename", destination);
+                },
+                copyFile: async (source, destination, mode) => {
+                  await fs.copyFile(source, destination, mode);
+                  await afterMutation("copyFile", destination);
+                },
+                chmod: async (target, mode) => {
+                  await fs.chmod(target, mode);
+                  await afterMutation("chmod", target);
+                },
+              },
+            },
+          });
+          const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+
+          await expect(
+            io.writeConfigFile(
+              { gateway: { mode: "local", port: 19001 } },
+              { ...writeOptions, baseSnapshot: snapshot, assertCurrent },
+            ),
+          ).rejects.toThrow(/executor ownership is no longer current|source ownership changed/);
+
+          expect(atRevocation).toBeDefined();
+          expect(mutationsAfterRevocation).toEqual([]);
+          expect(await readBackups()).toEqual(atRevocation);
+          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        }),
+      );
+    },
+  );
 
   it("createPreUpdateConfigSnapshot writes .pre-update outside rotation ring", async () => {
     await withTempHome(async () => {

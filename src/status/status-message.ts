@@ -1,4 +1,5 @@
 // Status message helpers read and format stored status messages.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
@@ -9,7 +10,7 @@ import {
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
@@ -18,17 +19,10 @@ import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
-import {
-  buildModelAliasIndex,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
-import {
-  formatProviderModelRef,
-  resolveSelectedAndActiveModel,
-} from "../auto-reply/model-runtime.js";
+import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -41,6 +35,7 @@ import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -95,7 +90,8 @@ type QueueStatus = {
 };
 
 type StatusArgs = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
+  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
   configuredDefaultModelLabel?: string;
@@ -118,6 +114,7 @@ type StatusArgs = {
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   activeModelAuth?: string;
+  activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
   timeLine?: string;
   uptimeValue?: string;
@@ -313,8 +310,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
-      cacheRead: number;
-      cacheWrite: number;
+      cacheRead?: number;
+      cacheWrite?: number;
       promptTokens: number;
       total: number;
       totalTokensFresh: boolean;
@@ -344,9 +341,9 @@ const readUsageFromSessionLog = (
 
     const input = snapshot.inputTokens ?? 0;
     const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead ?? 0;
-    const cacheWrite = snapshot.cacheWrite ?? 0;
-    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    const cacheRead = snapshot.cacheRead;
+    const cacheWrite = snapshot.cacheWrite;
+    const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
     const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
@@ -386,12 +383,9 @@ const formatCacheHitValue = (
   cacheRead?: number | null,
   cacheWrite?: number | null,
 ) => {
-  if (!cacheRead && !cacheWrite) {
-    return null;
-  }
   if (
-    (typeof cacheRead !== "number" || cacheRead <= 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite <= 0)
+    (typeof cacheRead !== "number" || cacheRead < 0) &&
+    (typeof cacheWrite !== "number" || cacheWrite < 0)
   ) {
     return null;
   }
@@ -570,58 +564,24 @@ export type StatusMessageParts = {
   presentation: MessagePresentation;
 };
 
-export function buildStatusMessage(args: StatusArgs): string {
-  return buildStatusMessageParts(args).text;
-}
-
 export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
-  const cronNow = args.config ? resolveCronStyleNow(args.config, now) : undefined;
+  const cronNow = resolveCronStyleNow(args.config, now);
   const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
-  const selectionConfig = {
+  const contextConfig = {
+    ...args.config,
     agents: {
-      defaults: args.agent ?? {},
+      ...args.config.agents,
+      defaults: { ...args.config.agents?.defaults, ...args.agent },
     },
-  } as OpenClawConfig;
-  const contextConfig = args.config
-    ? ({
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: {
-            ...args.config.agents?.defaults,
-            ...args.agent,
-          },
-        },
-      } as OpenClawConfig)
-    : ({
-        agents: {
-          defaults: args.agent ?? {},
-        },
-      } as OpenClawConfig);
-  const resolved = resolveConfiguredModelRef({
-    cfg: selectionConfig,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: false,
-  });
-  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
-  const parseSelectedProvider = Boolean(
-    entry?.modelOverride?.trim() && !entry?.providerOverride?.trim(),
-  );
-  const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider,
-    selectedModel,
-    sessionEntry: entry,
-    parseSelectedProvider,
-  });
-  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider;
-  const selectedLookupModel = modelRefs.selected.model || selectedModel;
+  };
+  const { modelRefs } = args;
+  const selectedLookupProvider = modelRefs.selected.provider;
+  const selectedLookupModel = modelRefs.selected.model;
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
@@ -632,8 +592,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   let activeModel = modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
-  const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
-  const runtimeProviderRaw = normalizeOptionalString(entry?.modelProvider) ?? "";
+  const runtimeModelRaw = normalizeOptionalString(args.activeModel?.model ?? entry?.model) ?? "";
+  const runtimeProviderRaw =
+    normalizeOptionalString(args.activeModel?.modelProvider ?? entry?.modelProvider) ?? "";
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
@@ -696,7 +657,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ) {
         totalTokens = candidate;
       }
-      if (!entry?.model && logUsage.model) {
+      if (!entry?.model && !args.activeModel && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
         if (slashIndex > 0) {
           const provider = logUsage.model.slice(0, slashIndex).trim();
@@ -725,15 +686,15 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         outputTokens = logUsage.output;
       }
       if (typeof cacheRead !== "number" || cacheRead <= 0) {
-        cacheRead = logUsage.cacheRead;
+        cacheRead = logUsage.cacheRead ?? cacheRead;
       }
       if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
-        cacheWrite = logUsage.cacheWrite;
+        cacheWrite = logUsage.cacheWrite ?? cacheWrite;
       }
     }
   }
 
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label || "unknown",
@@ -872,9 +833,17 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const contextBudgetStatus = args.activeModel
+    ? resolveProjectedSessionContextBudgetStatus({
+        entry,
+        provider: activeProvider,
+        model: activeModel,
+        contextTokens,
+      })
+    : entry?.contextBudgetStatus;
   const contextUsageLabel =
     totalTokens == null || totalTokens === 0
-      ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
+      ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
   const queueMode = args.queue?.mode ?? "unknown";

@@ -2002,7 +2002,13 @@ function verifyStateTransition(decision, drain, executionPlan) {
     (decision.state === "passed" && drain.state === "blocked_complete") ||
     (decision.state.startsWith("blocked_") && drain.state === "passed" && !reuseRecovery)
   ) {
-    throw new Error("release decision and diagnostic drain transition is invalid");
+    throw new Error(
+      "release decision and diagnostic drain transition is invalid: " +
+        `decision(parentRunAttempt=${decision.parentRunAttempt}, state=${decision.state}), ` +
+        `drain(parentRunAttempt=${drain.parentRunAttempt}, state=${drain.state}); ` +
+        `executionPlan(originalParentRunAttempt=${executionPlan.parentRunAttempt}, sha256=${executionPlan.sha256}); ` +
+        "compatible collector evidence for the same execution plan is required",
+    );
   }
   if (
     decision.state.startsWith("blocked_") &&
