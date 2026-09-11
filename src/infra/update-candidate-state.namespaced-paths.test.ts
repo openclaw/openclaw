@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
+import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
@@ -11,9 +12,11 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   readUpdateStateSchemaVersions,
   type snapshotUpdateCandidateState,
+  updateStateSchemaVersionsMatch,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
 
@@ -88,9 +91,10 @@ it.skipIf(process.platform !== "win32")(
       targetStateDir: target,
       config: {},
     });
-    // The namespaced registration dedupes to the database's plain spelling.
+    // The physical copy dedupes to one identity, but the published versions
+    // keep every raw alias so released mixed-alias baselines still match.
     expect(versions.map((entry) => entry.path)).toContain(canonical);
-    expect(versions.map((entry) => entry.path)).not.toContain(namespaced);
+    expect(versions.map((entry) => entry.path)).toContain(namespaced);
     const copied = openNodeSqliteDatabase(
       path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
     );
@@ -237,6 +241,71 @@ it.skipIf(process.platform !== "win32")(
     expect(path.isAbsolute(rebound.path)).toBe(false);
     // The rebound registry entry must name exactly the one copied database.
     const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
+    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
+      value: "preserved",
+    });
+    copied.close();
+  },
+);
+
+// Released 2026.9.3/2026.9.4 workers reported every discovered spelling, so a
+// host whose registry carries both a relative row and a \\?\-prefixed row for
+// one database produced a mixed-alias versions baseline. The released Doctor
+// update path compares those exact paths against the candidate's response:
+// the candidate must publish every raw alias while still deduping the physical
+// snapshot copies, or the schema comparison fails on exactly the Windows
+// installs this fix targets.
+it.skipIf(process.platform !== "win32")(
+  "keeps every raw alias in the versions response for a released mixed-alias baseline",
+  async () => {
+    const source = path.join(root, "source");
+    const target = path.join(root, "copy");
+    const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createDatabase(canonical);
+    const namespaced = `\\\\?\\${canonical}`;
+    const shared = path.join(source, "state", "openclaw.sqlite");
+    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    const insert = registry.prepare(
+      "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
+    );
+    insert.run("main", path.join("agents", "main", "agent", "openclaw-agent.sqlite"));
+    insert.run("main", namespaced);
+    closeOpenClawStateDatabaseByPath(shared);
+    // Hand-built to mirror a released worker's response: every discovered
+    // spelling, with versions read straight from the physical databases rather
+    // than from a patched worker's response.
+    const sharedDb = openNodeSqliteDatabase(shared, { readOnly: true });
+    const releasedBaseline = [
+      {
+        path: shared,
+        userVersion: readSqliteUserVersion(sharedDb),
+        contentVersion: readStateSchemaContentVersion(sharedDb),
+      },
+      { path: canonical, userVersion: 3 },
+      { path: namespaced, userVersion: 3 },
+    ];
+    sharedDb.close();
+    const inspected = await readUpdateStateSchemaVersions({
+      stateDir: source,
+      config: {},
+    });
+    expect(inspected.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([shared, canonical, namespaced]),
+    );
+    expect(inspected).toHaveLength(3);
+    expect(
+      updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
+    ).toBe(true);
+    const versions = await runSnapshotWorker({
+      stateDir: source,
+      targetStateDir: target,
+      config: {},
+    });
+    // Snapshot mode publishes the same aliases but copies each database once.
+    expect(versions).toEqual(inspected);
+    const copied = openNodeSqliteDatabase(
+      path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    );
     expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
       value: "preserved",
     });

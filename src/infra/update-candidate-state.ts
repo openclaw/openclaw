@@ -98,7 +98,29 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
-function collectRegisteredPaths(db: DatabaseSync, shared: string, files: Map<string, string>) {
+/** Every raw spelling discovered for one database, grouped by projection identity. */
+type StateDatabaseDiscovery = { spellings: [string, ...string[]] };
+
+function queueStateDatabaseSpelling(
+  files: Map<string, StateDatabaseDiscovery>,
+  identity: string,
+  file: string,
+): void {
+  const discovery = files.get(identity);
+  if (discovery) {
+    if (!discovery.spellings.includes(file)) {
+      discovery.spellings.push(file);
+    }
+    return;
+  }
+  files.set(identity, { spellings: [file] });
+}
+
+function collectRegisteredPaths(
+  db: DatabaseSync,
+  shared: string,
+  files: Map<string, StateDatabaseDiscovery>,
+) {
   const rows = tableExists(db, "agent_databases")
     ? executeSqliteQuerySync(
         db,
@@ -110,16 +132,15 @@ function collectRegisteredPaths(db: DatabaseSync, shared: string, files: Map<str
     : [];
   return rows.map(({ path: stored }) => {
     const source = resolveOpenClawRegisteredAgentDatabasePath(shared, stored);
-    // Discover registrations from the exact private generation being inspected,
-    // deduped on one projection identity per database while keeping the raw
-    // spelling as the published path identity.
-    const identity = resolveUpdateCandidateStateIdentity(
-      resolveOpenClawStateDirForDatabasePath(shared),
+    // Discover registrations from the exact private generation being inspected.
+    // Spellings dedupe on one projection identity per database, but every raw
+    // alias stays queued: released workers reported them all, and released
+    // rollback baselines compare exact paths against the versions response.
+    queueStateDatabaseSpelling(
+      files,
+      resolveUpdateCandidateStateIdentity(resolveOpenClawStateDirForDatabasePath(shared), source),
       source,
     );
-    if (!files.has(identity)) {
-      files.set(identity, source);
-    }
     return { stored, source };
   });
 }
@@ -154,21 +175,20 @@ async function withStateDatabaseSnapshot<T>(
   return outcome.value;
 }
 
-async function collectStateDatabasePaths(input: StateInput): Promise<Map<string, string>> {
+async function collectStateDatabasePaths(
+  input: StateInput,
+): Promise<Map<string, StateDatabaseDiscovery>> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   // Every discovery source queues one projection identity per database: with an
   // extended-length state root, directory enumeration and a registry
   // registration spell the same file differently, and queuing both copies
-  // breaks the snapshot with a duplicate destination. The first raw spelling
-  // wins so versions-mode responses keep the path identities older updaters
-  // captured in their rollback baselines.
+  // breaks the snapshot with a duplicate destination. Each identity keeps
+  // every raw spelling so the published versions response matches the mixed
+  // alias baselines released updaters captured.
   const stateRoot = path.resolve(input.stateDir);
-  const files = new Map<string, string>();
+  const files = new Map<string, StateDatabaseDiscovery>();
   const queue = (file: string) => {
-    const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
-    if (!files.has(identity)) {
-      files.set(identity, file);
-    }
+    queueStateDatabaseSpelling(files, resolveUpdateCandidateStateIdentity(stateRoot, file), file);
   };
   queue(shared);
   let directories: string[] = [];
@@ -197,20 +217,45 @@ async function collectStateDatabasePaths(input: StateInput): Promise<Map<string,
   for (const id of new Set(["main", ...directories])) {
     queue(path.resolve(input.stateDir, "agents", id, "agent", "openclaw-agent.sqlite"));
   }
-  return new Map([...files.entries()].toSorted(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return new Map(
+    [...files.entries()].toSorted(([, a], [, b]) =>
+      a.spellings[0] < b.spellings[0] ? -1 : a.spellings[0] > b.spellings[0] ? 1 : 0,
+    ),
+  );
+}
+
+/** Released updaters compare exact response paths, so every raw alias is published. */
+function publishStateDatabaseVersions(
+  files: Map<string, StateDatabaseDiscovery>,
+  inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
+): UpdateStateSchemaVersion[] {
+  const versions: UpdateStateSchemaVersion[] = [];
+  for (const [identity, discovery] of files) {
+    const result = inspected.get(identity);
+    if (!result) {
+      continue;
+    }
+    for (const spelling of discovery.spellings) {
+      versions.push({ path: spelling, ...result });
+    }
+  }
+  return versions;
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
 export async function readUpdateStateSchemaVersionsInProcess(
   input: StateInput,
 ): Promise<UpdateStateSchemaVersion[]> {
-  const versions: UpdateStateSchemaVersion[] = [];
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = await collectStateDatabasePaths(input);
-  for (const file of files.values()) {
-    versions.push({
-      path: file,
-      ...((await fileExists(file))
+  // Inspect each physical database once on its first spelling; every raw alias
+  // publishes the same result so released mixed-alias baselines still match.
+  const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
+  for (const [identity, discovery] of files) {
+    const file = discovery.spellings[0];
+    inspected.set(
+      identity,
+      (await fileExists(file))
         ? await withStateDatabaseSnapshot(file, (location) => {
             const db = openNodeSqliteDatabase(location, { readOnly: true });
             try {
@@ -225,10 +270,10 @@ export async function readUpdateStateSchemaVersionsInProcess(
               db.close();
             }
           })
-        : { userVersion: null }),
-    });
+        : { userVersion: null },
+    );
   }
-  return versions;
+  return publishStateDatabaseVersions(files, inspected);
 }
 
 /** Schema fencing reads private copies in a child under a fixed inspection deadline. */
@@ -292,11 +337,14 @@ export async function snapshotUpdateCandidateState(
       resolveUpdateCandidateStatePath(sourceRoot, input.targetStateDir, path.dirname(source)),
       path.basename(source),
     );
-  const versions: UpdateStateSchemaVersion[] = [];
+  // Physical copies dedupe on projection identity; the published versions
+  // keep every raw alias so released rollback baselines still match.
   const files = await collectStateDatabasePaths(input);
-  for (const file of files.values()) {
+  const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
+  for (const [identity, discovery] of files) {
+    const file = discovery.spellings[0];
     if (!(await fileExists(file))) {
-      versions.push({ path: file, userVersion: null });
+      inspected.set(identity, { userVersion: null });
       continue;
     }
     const target = targetPath(file);
@@ -362,12 +410,12 @@ export async function snapshotUpdateCandidateState(
           : {}),
       }),
     );
-    versions.push({
-      path: file,
+    inspected.set(identity, {
       userVersion: snapshot.userVersion,
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
+  const versions = publishStateDatabaseVersions(files, inspected);
   const { projectUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
   const pluginPaths = await projectUpdateCandidatePlugins(input);
   return { versions, pluginPaths };
