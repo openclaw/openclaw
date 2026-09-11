@@ -340,6 +340,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         recovery: result.recovery,
+        updateRun: params.opts.run,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
@@ -551,14 +552,13 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         reason: verificationFailure,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       };
-      const canRepairService =
-        restartContext.serviceMutationAllowed &&
-        !restartContext.skipLegacyServiceRestart &&
-        !postVerificationRepairAttempted;
       const recovered = await recoverFailedResult(
         failure,
         false,
-        verificationFailure !== "service-runtime-refresh-failed" && canRepairService
+        verificationFailure !== "service-runtime-refresh-failed" &&
+          restartContext.serviceMutationAllowed &&
+          !restartContext.skipLegacyServiceRestart &&
+          !postVerificationRepairAttempted
           ? (result) =>
               repairUpdateService({
                 result,

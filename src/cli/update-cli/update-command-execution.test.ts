@@ -284,6 +284,47 @@ describe("mutable update execution", () => {
         expect(mocks.validateCanary).not.toHaveBeenCalled();
       }),
   );
+  it("retains the live update run when stopped-service context capture fails", async () => {
+    await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
+      const control = path.join(dir, "leases");
+      await fs.mkdir(control);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+      const env = { OPENCLAW_STATE_DIR: dir };
+      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const params = executionParams("package");
+      params.root = dir;
+      params.opts.run = { runId, env };
+      mocks.maybeStopService.mockImplementation(async () => ({
+        ...inspectOrStopService("prepare"),
+        serviceEnv: env,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: dir,
+          fingerprint: "original",
+          refreshDefinition: false,
+        },
+      }));
+      mocks.captureManagedContext.mockRejectedValueOnce(
+        new Error("fixture config became unreadable"),
+      );
+      let recoveryRun: typeof params.opts.run;
+      mocks.maybeRestartService.mockImplementation(async (request) => {
+        recoveryRun = request.updateRun;
+        recoveryRun?.executorFence?.assertCurrent();
+        return "healthy";
+      });
+      await withUpdateCommandExecutor(runId, async (executor) => {
+        params.opts.run!.executorFence = await executor.enter(dir, { preflight: true });
+        const result = await executeMutableUpdate(params);
+        expect(result?.result.status).toBe("error");
+        expect(mocks.maybeRestartService).toHaveBeenCalledOnce();
+        expect(recoveryRun).toBe(params.opts.run);
+        expect(mocks.serviceStopped).toBe(true);
+        expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it("refuses service admission before mutable startup housekeeping", async () => {
     mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
       if (handoffFromGateway) {

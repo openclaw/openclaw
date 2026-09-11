@@ -155,15 +155,6 @@ export async function executeMutableUpdate(
     params.installKind === "git"
       ? readCurrentGitUpdateRecovery(params.root)
       : verifyPackageUpdateRecovery(params.root);
-  const recoverStoppedService = async () =>
-    maybeRestartServiceAfterFailedMutableUpdate({
-      recovery: await originalRecovery(),
-      preManagedServiceStop,
-      jsonMode: Boolean(opts.json),
-      nodeRunner: params.packageUpdateNodeRunner,
-      timeoutMs: updateStepTimeoutMs,
-      invocationCwd: params.invocationCwd,
-    });
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -265,7 +256,15 @@ export async function executeMutableUpdate(
       }
     } catch (err) {
       params.stop();
-      await recoverStoppedService();
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        recovery: await originalRecovery(),
+        updateRun: opts.run,
+        preManagedServiceStop,
+        jsonMode: Boolean(opts.json),
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
+      });
       throw new Error(`Failed to capture managed gateway update state: ${String(err)}`, {
         cause: err,
       });
@@ -273,11 +272,10 @@ export async function executeMutableUpdate(
 
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
-      const updateLabel = params.updateInstallKind === "git" ? "Git updates" : "Package updates";
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         [
-          `${updateLabel} cannot run from inside the gateway service process.`,
+          `${params.updateInstallKind === "git" ? "Git updates" : "Package updates"} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${formatCliCommand("openclaw update")}\` from a terminal outside the gateway service.`,
         ].join("\n"),
@@ -297,20 +295,17 @@ export async function executeMutableUpdate(
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
   const readCandidateSource = async (env: NodeJS.ProcessEnv) => {
-    if (!params.legacyConfigPlan) {
-      return withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-      );
+    if (params.legacyConfigPlan) {
+      const context = await captureTargetDatabaseSchemaContext(env, {
+        legacyConfigPlan: params.legacyConfigPlan,
+      });
+      if (context.legacyConfigPlan) {
+        return { config: context.config, hash: context.configSnapshot.hash };
+      }
     }
-    const context = await captureTargetDatabaseSchemaContext(env, {
-      legacyConfigPlan: params.legacyConfigPlan,
-    });
-    if (!context.legacyConfigPlan) {
-      return withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
-      );
-    }
-    return { config: context.config, hash: context.configSnapshot.hash };
+    return withOwnedManagedUpdateEnv(env, () =>
+      readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+    );
   };
   const validateCandidate = async (root: string) => {
     assertUpdateCommandRecovery(opts);
