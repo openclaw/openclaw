@@ -106,14 +106,21 @@ function createCore(params: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
-function createEvent(params?: { messageName?: string; threadName?: string }): GoogleChatEvent {
+function createEvent(params?: {
+  messageName?: string;
+  // `null` omits the inbound thread entirely (unthreaded group message); `undefined` uses the default.
+  threadName?: string | null;
+  spaceType?: string;
+}): GoogleChatEvent {
+  const threadName =
+    params?.threadName === undefined ? "spaces/CLASSIFY/threads/requested" : params.threadName;
   return {
     type: "MESSAGE",
-    space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
+    space: { name: "spaces/CLASSIFY", spaceType: params?.spaceType ?? "SPACE" },
     message: {
       name: params?.messageName ?? "spaces/CLASSIFY/messages/1",
       text: "hello",
-      thread: { name: params?.threadName ?? "spaces/CLASSIFY/threads/requested" },
+      ...(threadName ? { thread: { name: threadName } } : {}),
       sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
     },
   } satisfies GoogleChatEvent;
@@ -279,5 +286,73 @@ describe("Google Chat automatic reply target reconciliation", () => {
       text: "explicit reply",
       thread: targetMessageName.trim(),
     });
+  });
+
+  it("delivers top-level in a direct message when automatic delivery supplies the source message name", async () => {
+    // Regression guard: DMs have no inbound thread, so `replyThreadName` is undefined. The
+    // source-message target must collapse to top-level rather than being sent as a message
+    // resource (which Google Chat rejects as a thread), and the placeholder must not be deleted.
+    const sourceMessageName = "spaces/CLASSIFY/messages/1";
+    let durableResult: unknown;
+    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
+    const core = createCore({
+      run: async (delivery) => {
+        const payload = { text: "dm reply", replyToId: sourceMessageName };
+        durableResult = delivery.durable(payload, { kind: "final" });
+        await delivery.deliver(payload);
+      },
+    });
+    apiMocks.sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/CLASSIFY/messages/reply",
+      threadName: undefined,
+    });
+
+    await processEvent({ account, core, event: createEvent({ spaceType: "DIRECT_MESSAGE" }) });
+
+    expect(durableResult).toEqual({ to: "spaces/CLASSIFY", replyToId: null });
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/CLASSIFY",
+      text: "dm reply",
+      thread: undefined,
+    });
+    expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("delivers top-level in a group space that carries no inbound thread", async () => {
+    // Regression guard: a group message can arrive without a thread resource, so
+    // `replyThreadName` is undefined here too. The source-message target must still collapse
+    // to top-level instead of echoing the message resource back as the thread.
+    const sourceMessageName = "spaces/CLASSIFY/messages/1";
+    let durableResult: unknown;
+    const account = createAccount({ replyToMode: "all", typingIndicator: "none" });
+    const core = createCore({
+      run: async (delivery) => {
+        const payload = { text: "group reply", replyToId: sourceMessageName };
+        durableResult = delivery.durable(payload, { kind: "final" });
+        await delivery.deliver(payload);
+      },
+    });
+    apiMocks.sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/CLASSIFY/messages/reply",
+      threadName: undefined,
+    });
+
+    await processEvent({
+      account,
+      core,
+      event: createEvent({ spaceType: "SPACE", threadName: null }),
+    });
+
+    expect(durableResult).toEqual({ to: "spaces/CLASSIFY", replyToId: null });
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/CLASSIFY",
+      text: "group reply",
+      thread: undefined,
+    });
+    expect(apiMocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
   });
 });
