@@ -14,6 +14,7 @@ import {
 type TerminalProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  afterSequence?: number | null;
   live: boolean;
 };
 
