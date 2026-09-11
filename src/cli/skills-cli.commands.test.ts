@@ -263,6 +263,11 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
   isGatewayClientRequestError: (error: unknown) =>
