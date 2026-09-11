@@ -145,13 +145,7 @@ final class QuickChatController: NSObject {
         recentSessionsProvider: @escaping RecentSessionsProvider = {
             try await SessionLoader.loadSnapshot(limit: 5).rows
         },
-        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = {
-            let transport = MacGatewayChatTransport(defaultGlobalAgentID: $0.agentID)
-            return OpenClawChatViewModel(
-                sessionKey: $0.sessionKey,
-                transport: transport,
-                activeAgentId: $0.agentID)
-        },
+        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = QuickChatReplyBinding.makeViewModel,
         allowsHotkeyRegistrationInTests: Bool = false)
     {
         self.enableUI = enableUI
@@ -168,14 +162,14 @@ final class QuickChatController: NSObject {
         self.recentSessionsProvider = recentSessionsProvider
         self.allowsHotkeyRegistrationInTests = allowsHotkeyRegistrationInTests
         super.init()
-        self.model.onSendDispatched = { [weak self] route in
+        self.model.onSendDispatched = { [weak self] identity in
             guard let self else { return }
             self.stopDictation()
             self.cancelPasteRequest()
             // A dispatched send supersedes any pending recents fetch: its menu popping
             // over the fresh reply would rebind away from the response just sent.
             self.invalidateRecentsFetch()
-            self.replyBinding.prepare(route: route)
+            self.replyBinding.prepare(identity: identity)
         }
     }
 
@@ -406,15 +400,15 @@ final class QuickChatController: NSObject {
     private func handleSendAccepted(openChat: Bool) {
         // Command-Return must open the immutable route that accepted the send,
         // not live model routing state that may already have changed.
-        let route = self.model.lastAcceptedRoute
+        let identity = self.model.lastAcceptedRoutingIdentity
         guard openChat else {
-            if let route {
-                self.replyBinding.show(route: route)
+            if let identity {
+                self.replyBinding.show(identity: identity)
             }
             return
         }
         self.dismiss()
-        if let route, !route.sessionKey.isEmpty {
+        if let route = identity?.target, !route.sessionKey.isEmpty {
             self.chatOpener(route.sessionKey, route.agentID)
         } else {
             self.chatOpener(nil, nil)
@@ -711,8 +705,8 @@ final class QuickChatController: NSObject {
         let target = QuickChatAgentMenuTarget { [weak self] id in
             guard let self else { return }
             self.model.selectAgent(id)
-            if let route = self.model.routingTarget {
-                self.replyBinding.rebindIfActive(route: route)
+            if let identity = self.model.routingIdentity {
+                self.replyBinding.rebindIfActive(identity: identity)
             }
         }
         let menu = NSMenu()
@@ -786,11 +780,9 @@ final class QuickChatController: NSObject {
         }
     }
 
-    private var canShowRecentSessions: Bool {
+    var canShowRecentSessions: Bool {
         self.isVisible &&
             self.model.canSelectRecentSession &&
-            !self.model.isGrantingPermissions &&
-            !self.model.isCapturingTextContext &&
             self.windowPicker?.isInteractionActive != true &&
             !self.isMenuActive
     }
@@ -824,8 +816,8 @@ final class QuickChatController: NSObject {
         let target = QuickChatRecentMenuTarget { [weak self] selection in
             guard let self else { return }
             self.model.selectSessionOverride(selection)
-            if let route = self.model.routingTarget {
-                self.replyBinding.rebindIfActive(route: route)
+            if let identity = self.model.routingIdentity {
+                self.replyBinding.rebindIfActive(identity: identity)
             }
         }
         let menu = NSMenu()

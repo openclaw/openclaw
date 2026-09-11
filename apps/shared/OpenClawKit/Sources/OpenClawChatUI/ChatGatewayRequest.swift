@@ -709,10 +709,9 @@ public enum OpenClawChatGatewayRequests {
             "idempotencyKey": AnyCodable(idempotencyKey),
         ]
         self.add(agentID, to: &params, key: "agentId")
-        self.add(
-            expectedSessionRoutingContract,
-            to: &params,
-            key: "expectedSessionRoutingContract")
+        if let expectedSessionRoutingContract, !expectedSessionRoutingContract.isEmpty {
+            params["expectedSessionRoutingContract"] = AnyCodable(expectedSessionRoutingContract)
+        }
         self.add(thinking, to: &params, key: "thinking")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode

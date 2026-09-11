@@ -581,6 +581,39 @@ private func makeTalkModel() -> (TalkModeManager, NodeAppModel) {
 }
 
 @MainActor
+private func withCachedRoutingIdentity(
+    _ appModel: NodeAppModel,
+    stableID: String = "routing-fixture-\(UUID().uuidString)",
+    defaultAgentID: String = "main",
+    selectionRequired: Bool = false,
+    selectedAgentID: String? = nil,
+    _ body: @MainActor () async throws -> Void) async throws
+{
+    let directoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+    let databases = try OpenClawClientDatabases(directoryURL: directoryURL)
+    let identity = try #require(OpenClawChatSessionRoutingIdentity(
+        scope: "per-sender",
+        mainSessionKey: "main",
+        defaultAgentID: defaultAgentID,
+        selectionRequired: selectionRequired,
+        sessionRoutingContract: nil))
+    let store = databases.store(gatewayID: stableID)
+    await store.storeSessionRoutingIdentity(identity)
+    await store.retire()
+    GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: selectedAgentID)
+    defer {
+        appModel.setTalkEnabled(false)
+        appModel.voiceWake.stop()
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        try? databases.removeGatewayData(gatewayID: stableID)
+    }
+    appModel.prepareForGatewayConnect(stableID: stableID)
+    await appModel.chatSessionRoutingRestoreTask?.value
+    #expect(appModel.chatSessionRoutingContract == identity.contract)
+    try await body()
+}
+
+@MainActor
 private func makeNodeModelWithMockServices() -> NodeAppModel {
     NodeAppModel(
         notificationCenter: MockBootstrapNotificationCenter(),
@@ -1336,12 +1369,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.chatDeliveryAgentId == nil)
     }
 
-    @Test @MainActor func `chat delivery owner and refresh identity follow gateway ownership`() {
-        let appModel = NodeAppModel()
+    @Test @MainActor func `chat delivery owner and refresh identity follow gateway ownership`() async throws {
+        try await withUserDefaults(["talk.enabled": false]) {
+            let appModel = NodeAppModel()
         let ownerlessIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == nil)
 
-        appModel.gatewayDefaultAgentId = " Agent-A "
+        try await withCachedRoutingIdentity(appModel, defaultAgentID: " Agent-A ") {
         let defaultIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-a")
         #expect(defaultIdentity != ownerlessIdentity)
@@ -1354,6 +1388,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.openChat(sessionKey: "agent:Agent-C:incident")
         #expect(appModel.chatDeliveryAgentId == "agent-c")
         #expect(appModel.chatViewModelIdentityID != selectedIdentity)
+            }
+        }
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -1362,7 +1398,113 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             let appModel = NodeAppModel(talkMode: talkMode)
 
             #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
-            #expect(appModel.talkMode.isEnabled)
+            #expect(!appModel.isTalkCaptureActive)
+            #expect(!talkMode.isListening)
+            #expect(!talkMode._test_audioSessionIsActive())
+            #expect(talkMode.statusText == "Waiting for gateway routing")
+        }
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `saved Talk intent resumes only after owned routing and survives same target reconnect`(
+        selectionRequired: Bool) async throws
+    {
+        try await withUserDefaults(["talk.enabled": true]) {
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(talkMode: talkMode, audioAdmissionInitiallyAllowed: false)
+            #expect(!appModel.isTalkCaptureActive)
+            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+
+            try await withCachedRoutingIdentity(
+                appModel,
+                selectionRequired: selectionRequired,
+                selectedAgentID: selectionRequired ? "main" : nil)
+            {
+                #expect(talkMode.isEnabled)
+                #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+                #expect(!talkMode.isListening)
+                #expect(!talkMode._test_audioSessionIsActive())
+                let stableID = try #require(appModel.connectedGatewayID)
+                appModel.openChat(sessionKey: "agent:main:incident")
+
+                appModel.prepareForGatewayConnect(stableID: stableID, preservingFocusedChatSession: true)
+                #expect(appModel.chatSessionRoutingContract == nil)
+                #expect(!appModel.isTalkCaptureActive)
+                #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+                await appModel.chatSessionRoutingRestoreTask?.value
+
+                #expect(talkMode.isEnabled)
+                #expect(talkMode.isUsingMainSessionKey("agent:main:incident"))
+                #expect(appModel.chatSessionKey == "agent:main:incident")
+
+                // A different target must resolve its own identity; the old selected owner
+                // and focused session cannot admit Talk on the replacement gateway.
+                let replacementID = "talk-new-target-\(UUID().uuidString)"
+                appModel.prepareForGatewayConnect(stableID: replacementID)
+                await appModel.chatSessionRoutingRestoreTask?.value
+                #expect(appModel.chatSessionRoutingContract == nil)
+                #expect(appModel.chatDeliveryAgentId == nil)
+                #expect(appModel.selectedAgentId == nil)
+                #expect(appModel.chatSessionKey == "main")
+                #expect(!appModel.isTalkCaptureActive)
+                #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+
+                try await withCachedRoutingIdentity(appModel, stableID: replacementID, defaultAgentID: "other") {
+                    #expect(talkMode.isEnabled)
+                    #expect(appModel.chatDeliveryAgentId == "other")
+                    #expect(talkMode.isUsingMainSessionKey("main"))
+                    #expect(!talkMode._test_audioSessionIsActive())
+                }
+            }
+        }
+    }
+
+    @Test @MainActor func `known unowned routing rejects Talk and revokes active selection`() async throws {
+        try await withUserDefaults(["talk.enabled": false]) {
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(talkMode: talkMode)
+            try await withCachedRoutingIdentity(appModel, selectionRequired: true) {
+                appModel.setTalkEnabled(true)
+                #expect(!appModel.isTalkCaptureActive)
+                #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+                #expect(talkMode.statusText == "Select an agent before enabling Talk")
+
+                appModel.setSelectedAgentId("main")
+                #expect(!talkMode.isEnabled)
+                appModel.setTalkEnabled(true)
+                #expect(talkMode.isEnabled)
+
+                appModel.setSelectedAgentId(nil)
+                #expect(!appModel.isTalkCaptureActive)
+                #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+                #expect(!talkMode._test_audioSessionIsActive())
+                appModel.setSelectedAgentId("main")
+                #expect(!talkMode.isEnabled)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `stopping suspended Talk clears intent before identity arrives`(gatewaySync: Bool) async throws {
+        try await withUserDefaults(["talk.enabled": true]) {
+            let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+            #expect(!appModel.isTalkCaptureActive)
+            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+            if gatewaySync {
+                await appModel.handleOperatorGatewayServerEvent(EventFrame(
+                    type: "event",
+                    event: "talk.mode",
+                    payload: AnyCodable(["enabled": false]),
+                    seq: nil,
+                    stateversion: nil))
+            } else {
+                appModel.setTalkEnabled(false)
+            }
+            #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+            try await withCachedRoutingIdentity(appModel) {
+                #expect(!appModel.isTalkCaptureActive)
+                #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+            }
         }
     }
 
@@ -1372,6 +1514,102 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.setSelectedAgentId("agent-123")
         #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
+    }
+
+    @Test @MainActor func `explicit ownership keeps selected default agent scoped for Talk`() async throws {
+        let appModel = NodeAppModel()
+        let stableID = "talk-explicit-default-\(UUID().uuidString)"
+        let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+        let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "opaque-routing-contract"))
+        let store = databases.store(gatewayID: stableID)
+        await store.storeSessionRoutingIdentity(identity)
+        await store.retire()
+        defer {
+            try? databases.removeGatewayData(gatewayID: stableID)
+            appModel.voiceWake.stop()
+        }
+
+        appModel.prepareForGatewayConnect(stableID: stableID)
+        await appModel.chatSessionRoutingRestoreTask?.value
+
+        appModel.openChat(sessionKey: "agent:research:incident")
+        #expect(appModel.chatDeliveryAgentId == "research")
+        #expect(appModel.mainSessionKey == "main")
+
+        appModel.setTalkEnabled(true)
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(appModel.talkMode.statusText == "Select an agent before enabling Talk")
+        #expect(appModel.voiceCommandSessionKey() == nil)
+        #expect(appModel.voiceWake.statusText == "Select an agent before using Voice Wake")
+        await #expect(throws: Error.self) {
+            try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
+        }
+
+        appModel.setSelectedAgentId("main")
+
+        #expect(appModel.gatewayAgentSelectionRequired)
+        #expect(appModel.mainSessionKey == "agent:main:main")
+        #expect(appModel.talkMode._test_mainSessionKey() == "agent:main:main")
+        #expect(appModel.voiceCommandSessionKey() == "agent:main:main")
+    }
+
+    @Test @MainActor func `routing restore revokes persisted Talk for an unowned session`() async throws {
+        try await withUserDefaults(["talk.enabled": true]) {
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(talkMode: talkMode)
+            let stableID = "talk-persisted-unowned-\(UUID().uuidString)"
+            let databaseDirectoryURL = try #require(NodeAppModel.chatDatabaseDirectoryURL())
+            let databases = try OpenClawClientDatabases(directoryURL: databaseDirectoryURL)
+            let identity = try #require(OpenClawChatSessionRoutingIdentity(
+                scope: "per-sender",
+                mainSessionKey: "main",
+                defaultAgentID: "main",
+                selectionRequired: true,
+                sessionRoutingContract: "opaque-routing-contract"))
+            let store = databases.store(gatewayID: stableID)
+            await store.storeSessionRoutingIdentity(identity)
+            await store.retire()
+            defer {
+                try? databases.removeGatewayData(gatewayID: stableID)
+                appModel.voiceWake.stop()
+            }
+
+            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+            #expect(!appModel.isTalkCaptureActive)
+            #expect(!talkMode._test_audioSessionIsActive())
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            await appModel.chatSessionRoutingRestoreTask?.value
+
+            #expect(appModel.gatewayAgentSelectionRequired)
+            #expect(appModel.chatDeliveryAgentId == nil)
+            #expect(!appModel.talkMode.isEnabled)
+            #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+            #expect(appModel.talkMode.statusText == "Select an agent before enabling Talk")
+        }
+    }
+
+    @Test @MainActor func `fresh ownerless gateway stays gated until routing metadata resolves`() async {
+        let appModel = NodeAppModel()
+        let stableID = "routing-metadata-pending-\(UUID().uuidString)"
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        defer {
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+            appModel.voiceWake.stop()
+        }
+
+        appModel.prepareForGatewayConnect(stableID: stableID)
+        await appModel.chatSessionRoutingRestoreTask?.value
+
+        #expect(appModel.gatewayAgentSelectionRequired)
+        #expect(appModel.chatDeliveryAgentId == nil)
+        #expect(appModel.chatSessionRoutingContract == nil)
+        #expect(appModel.requiresExplicitAgentSelectionForVoice)
     }
 
     @Test @MainActor func `session key extracts canonical agent ID`() {
@@ -2782,7 +3020,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "per-sender",
             mainSessionKey: "restored-main",
-            defaultAgentID: "main"))
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|restored-main|unowned"))
         let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
@@ -2809,6 +3049,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(talkMode.isGatewayConnected)
         #expect(appModel.chatSessionRoutingContract == identity.contract)
+        #expect(appModel.chatDeliveryAgentId == nil)
         #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
     }
 
@@ -3299,46 +3540,50 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `enabling unified voice requests a missing Talk scope upgrade`() async throws {
-        let (talkMode, appModel) = makeTalkModel()
-        let config = try GatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: "manual|gateway.example.com|443",
-            tls: nil,
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
-            nodeOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: nil))
-        appModel.activeGatewayConnectConfig = config
-        talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
-        defer {
-            appModel.setTalkEnabled(false)
-            appModel.disconnectGateway()
+        try await withUserDefaults(["talk.enabled": false]) {
+            let (talkMode, appModel) = makeTalkModel()
+            let config = try GatewayConnectConfig(
+                url: #require(URL(string: "wss://127.0.0.1:1")),
+                stableID: "talk-scope-upgrade-\(UUID().uuidString)",
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: nil))
+            try await withCachedRoutingIdentity(appModel, stableID: config.effectiveStableID) {
+                appModel.activeGatewayConnectConfig = config
+                talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
+                defer {
+                    appModel.setTalkEnabled(false)
+                    appModel.disconnectGateway()
+                }
+
+                appModel.setTalkEnabled(true)
+                await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
+
+                #expect(appModel._test_forceTalkPermissionUpgradeRequest())
+                appModel.gatewayAutoReconnectEnabled = false
+                appModel.gatewayPairingPaused = true
+                appModel.setTalkEnabled(false)
+                #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
+                #expect(appModel.gatewayAutoReconnectEnabled)
+                #expect(!appModel.gatewayPairingPaused)
+
+                appModel.gatewayAutoReconnectEnabled = false
+                appModel.gatewayPairingPaused = true
+                appModel.setTalkEnabled(false)
+                #expect(!appModel.gatewayAutoReconnectEnabled)
+                #expect(appModel.gatewayPairingPaused)
+            }
         }
-
-        appModel.setTalkEnabled(true)
-        await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
-
-        #expect(appModel._test_forceTalkPermissionUpgradeRequest())
-        appModel.gatewayAutoReconnectEnabled = false
-        appModel.gatewayPairingPaused = true
-        appModel.setTalkEnabled(false)
-        #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
-        #expect(appModel.gatewayAutoReconnectEnabled)
-        #expect(!appModel.gatewayPairingPaused)
-
-        appModel.gatewayAutoReconnectEnabled = false
-        appModel.gatewayPairingPaused = true
-        appModel.setTalkEnabled(false)
-        #expect(!appModel.gatewayAutoReconnectEnabled)
-        #expect(appModel.gatewayPairingPaused)
     }
 
     @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
@@ -5621,24 +5866,28 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(snapshot.pendingApprovalCount == 1)
     }
 
-    @Test @MainActor func `watch app command controls talk through phone model`() async {
-        let watchService = MockWatchMessagingService()
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
-        let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
+    @Test @MainActor func `watch app command controls talk through phone model`() async throws {
+        try await withUserDefaults(["talk.enabled": false]) {
+            let watchService = MockWatchMessagingService()
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
 
-        watchService.emitAppCommand(
-            makeWatchAppCommand("watch-start-talk", .startTalk, sentAt: 123))
-        await Task.yield()
+            try await withCachedRoutingIdentity(appModel) {
+                watchService.emitAppCommand(
+                    makeWatchAppCommand("watch-start-talk", .startTalk, sentAt: 123))
+                await Task.yield()
 
-        #expect(appModel.talkMode.isEnabled == true)
-        #expect(watchService.lastSentAppSnapshot?.talkEnabled == true)
+                #expect(appModel.talkMode.isEnabled == true)
+                #expect(watchService.lastSentAppSnapshot?.talkEnabled == true)
 
-        watchService.emitAppCommand(
-            makeWatchAppCommand("watch-stop-talk", .stopTalk, sentAt: 124))
-        await Task.yield()
+                watchService.emitAppCommand(
+                    makeWatchAppCommand("watch-stop-talk", .stopTalk, sentAt: 124))
+                await Task.yield()
 
-        #expect(appModel.talkMode.isEnabled == false)
-        #expect(watchService.lastSentAppSnapshot?.talkEnabled == false)
+                #expect(appModel.talkMode.isEnabled == false)
+                #expect(watchService.lastSentAppSnapshot?.talkEnabled == false)
+            }
+        }
     }
 
     @Test @MainActor func `watch app command opens chat session on phone model`() async {
@@ -5656,40 +5905,43 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentAppSnapshot?.sessionKey == "incident-42")
     }
 
-    @Test @MainActor func `watch app commands reject stale gateway targets`() async {
-        let watchService = MockWatchMessagingService()
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
-        let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
-        appModel.connectedGatewayID = "gateway-current"
-        appModel.setTalkEnabled(false)
+    @Test @MainActor func `watch app commands reject stale gateway targets`() async throws {
+        try await withUserDefaults(["talk.enabled": false]) {
+            let watchService = MockWatchMessagingService()
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
+            try await withCachedRoutingIdentity(appModel) {
+                appModel.setTalkEnabled(false)
 
-        for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
-            watchService.emitAppCommand(
-                makeWatchAppCommand(
-                    "watch-stale-\(command.rawValue)",
-                    command,
-                    session: "stale-session",
-                    gateway: "gateway-stale",
-                    sentAt: 125,
-                    transport: "transferUserInfo"))
-            await Task.yield()
+                for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
+                    watchService.emitAppCommand(
+                        makeWatchAppCommand(
+                            "watch-stale-\(command.rawValue)",
+                            command,
+                            session: "stale-session",
+                            gateway: "gateway-stale",
+                            sentAt: 125,
+                            transport: "transferUserInfo"))
+                    await Task.yield()
+                }
+
+                #expect(appModel.chatSessionKey != "stale-session")
+                #expect(appModel.talkMode.isEnabled == false)
+
+                appModel.setTalkEnabled(true)
+                watchService.emitAppCommand(
+                    makeWatchAppCommand(
+                        "watch-stale-stop-talk",
+                        .stopTalk,
+                        session: "stale-session",
+                        gateway: "gateway-stale",
+                        sentAt: 126,
+                        transport: "transferUserInfo"))
+                await Task.yield()
+
+                #expect(appModel.talkMode.isEnabled == true)
+            }
         }
-
-        #expect(appModel.chatSessionKey != "stale-session")
-        #expect(appModel.talkMode.isEnabled == false)
-
-        appModel.setTalkEnabled(true)
-        watchService.emitAppCommand(
-            makeWatchAppCommand(
-                "watch-stale-stop-talk",
-                .stopTalk,
-                session: "stale-session",
-                gateway: "gateway-stale",
-                sentAt: 126,
-                transport: "transferUserInfo"))
-        await Task.yield()
-
-        #expect(appModel.talkMode.isEnabled == true)
     }
 
     @Test @MainActor func `legacy watch chat is visibly rejected instead of entering demo or live dispatch`() async {

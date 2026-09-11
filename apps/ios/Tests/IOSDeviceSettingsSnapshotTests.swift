@@ -12,6 +12,25 @@ import UserNotifications
 
 @MainActor
 struct IOSDeviceSettingsSnapshotTests {
+    @Test func `talk toggle retains suspended intent until explicitly stopped`() throws {
+        let suite = "IOSDeviceSettingsSnapshotTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        appModel.talkMode.setEnabled(false)
+        let producer = IOSDeviceSettingsSnapshotProducer(
+            appModel: appModel,
+            appearanceModel: AppAppearanceModel(userDefaults: defaults),
+            defaults: defaults)
+
+        defaults.set(true, forKey: "talk.enabled")
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(producer.snapshot().voice.talkEnabled == true)
+
+        defaults.set(false, forKey: "talk.enabled")
+        #expect(producer.snapshot().voice.talkEnabled == false)
+    }
+
     @Test func `ios snapshot publishes device families and native defaults`() throws {
         let suite = "IOSDeviceSettingsSnapshotTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

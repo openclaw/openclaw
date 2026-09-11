@@ -158,6 +158,9 @@ struct RootTabsSidebarRegressionTests {
 
         #expect(!source.contains("visibleAgentCount"))
         #expect(!source.contains("More Agents"))
+        #expect(agents.contains("if !self.selectableAgents.isEmpty {"))
+        #expect(!agents.contains("if let selectedAgent = self.selectedAgent {"))
+        #expect(agents.contains("Choose Agent"))
         #expect(agents.contains("Menu {"))
         #expect(agents.contains("Picker(selection:"))
         #expect(agents.contains("ForEach(self.selectableAgents"))
@@ -167,7 +170,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(agents.contains("self.selectableAgents.first(where: { $0.id == self.currentAgentID })"))
         #expect(!agents.contains("?? self.selectableAgents.first"))
         let selectorValue = try #require(
-            agents.range(of: ".accessibilityValue(Self.agentDisplayName(selectedAgent))"))
+            agents.range(of: ".accessibilityValue(self.selectedAgent.map(Self.agentDisplayName)"))
         let newChat = try #require(agents.range(of: "self.newChatButton"))
         #expect(agents[selectorValue.upperBound..<newChat.lowerBound].contains("\n            }"))
         #expect(!agents.contains(".background(.ultraThinMaterial"))

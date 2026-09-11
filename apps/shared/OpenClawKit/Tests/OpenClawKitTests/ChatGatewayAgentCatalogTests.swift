@@ -9,8 +9,17 @@ struct ChatGatewayAgentCatalogTests {
         {"defaultId":"system","mainKey":"main","scope":"per-agent","agents":\(agents)}
         """.utf8)
 
+        let routingIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-agent",
+            mainSessionKey: "main",
+            defaultAgentID: "system",
+            selectionRequired: false,
+            sessionRoutingContract: "per-agent|main|system"))
         #expect(try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data) ==
-            OpenClawChatAgentsListResponse(defaultId: "system", agents: []))
+            OpenClawChatAgentsListResponse(
+                defaultId: "system",
+                agents: [],
+                routingIdentity: routingIdentity))
     }
 
     @Test(arguments: [

@@ -8,6 +8,27 @@ struct ChatLiveRunState: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
+        if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
+            return true
+        }
+        let parts = sessionKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return false }
+        let normalizedSessionKey = parts[2].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let resolvedMainParts = self.resolvedMainSessionKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+        let normalizedMainSessionKey = String(resolvedMainParts.last ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let contractMainKey = OpenClawChatSessionRoutingContract.parse(contract)?.mainKey ?? ""
+        return normalizedSessionKey == "global" ||
+            normalizedSessionKey == "main" ||
+            normalizedSessionKey == normalizedMainSessionKey ||
+            normalizedSessionKey == contractMainKey
+    }
+
     nonisolated static func chatContextUsageFraction(for session: OpenClawChatSessionEntry?) -> Double? {
         guard session?.totalTokensFresh != false,
               let totalTokens = session?.totalTokens,
@@ -224,8 +245,7 @@ extension OpenClawChatViewModel {
             targetKey = candidate
             targetAgentID = nil
         }
-        let normalizedContract = sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedContract = sessionRoutingContract
         let routeContract: String? = if self.usesMutableContractRouting(
             sessionKey: candidate,
             contract: normalizedContract)
@@ -453,9 +473,27 @@ extension OpenClawChatViewModel {
         return false
     }
 
-    private static func normalizedAgentId(_ agentId: String?) -> String? {
+    static func normalizedAgentId(_ agentId: String?) -> String? {
         let normalized = agentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    static func resolvedAgentSelectionRequired(
+        explicit: Bool?,
+        sessionRoutingContract: String?,
+        fallback: Bool = false) -> Bool
+    {
+        if let explicit {
+            return explicit
+        }
+        // Compatibility only: old callers supplied the display-form contract
+        // before the boolean was added. New opaque authority tokens must
+        // arrive with the explicit boolean. During an update, preserve the
+        // current gate when opaque or temporarily unavailable metadata omits it.
+        guard let parsed = OpenClawChatSessionRoutingContract.parse(sessionRoutingContract) else {
+            return fallback
+        }
+        return parsed.defaultAgentID == "unowned"
     }
 
     private static func matchesAliasAgent(

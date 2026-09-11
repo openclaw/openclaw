@@ -5,6 +5,37 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func authoritativeRoutingTokenSurvivesDecodeLiveRequestAndQueuedCommand() throws {
+        let contract = " \tServer-fingerprint:v2/Case+opaque==\n "
+        let data = try JSONSerialization.data(withJSONObject: [
+            "defaultId": "main", "mainKey": "main", "scope": "per-sender",
+            "selectionRequired": true, "sessionRoutingContract": contract,
+            "agents": [["id": "research"], ["id": "internal", "kind": "system"]],
+        ])
+        let agents = try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
+        #expect(agents.agents.map(\.id) == ["research"])
+        let identity = try #require(agents.routingIdentity)
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:research:main",
+            agentID: "research",
+            expectedSessionRoutingContract: OpenClawChatSessionRoutingContract.expectedValue(
+                identity.contract, serverSupportsGuard: true),
+            message: "owned message",
+            thinking: nil,
+            idempotencyKey: "opaque-route-send",
+            attachments: [])
+        #expect(identity.contract == contract)
+        #expect(request.params["expectedSessionRoutingContract"]?.value as? String == contract)
+        let command = OpenClawChatOutboxCommand(
+            id: "opaque-route-send", sessionKey: "agent:research:main",
+            routingContract: identity.contract, agentID: "research", text: "owned message",
+            thinking: "off", createdAt: 1, status: .queued, retryCount: 0, lastError: nil)
+        #expect(command.routingContract == contract)
+        #expect(OpenClawChatSessionRoutingContract.expectedValue(contract, serverSupportsGuard: false) == nil)
+        #expect(OpenClawChatSessionRoutingContract.make(
+            scope: " Per-Sender ", mainKey: " Main ", defaultAgentID: " Research ") == "per-sender|main|research")
+    }
+
     @Test(arguments: [
         ("global", "research", "global", Optional("research")),
         ("agent:research:global", "research", "agent:research:global", nil),
@@ -675,7 +706,7 @@ struct ChatGatewayRequestTests {
         #expect(request.method == "chat.send")
         #expect(request.timeoutMs == 30000)
         #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["expectedSessionRoutingContract"]?.value as? String == "per-sender|main|reviewer")
+        #expect(request.params["expectedSessionRoutingContract"]?.value as? String == " per-sender|main|reviewer ")
         #expect(request.params["expectedPermissionMode"]?.value as? String == "guarded")
         let expectedTools = try JSONEncoder().encode(request.params["expectedToolOverrides"])
         let expectedToolsValue = try #require(
@@ -843,10 +874,41 @@ struct ChatGatewayPayloadCodecTests {
 
     @Test func `routing identity decodes agent and canonical contract`() throws {
         let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(
+            Data(
+                #"{"defaultId":"Work","mainKey":"Primary","scope":"per-sender","selectionRequired":true,"sessionRoutingContract":"per-sender|Primary|unowned","agents":[]}"#
+                    .utf8))
+
+        #expect(identity.defaultAgentID == "work")
+        #expect(identity.selectionRequired)
+        #expect(identity.contract == "per-sender|Primary|unowned")
+    }
+
+    @Test func `legacy routing identity initializer preserves required selection`() throws {
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            contract: "per-sender|main|unowned"))
+
+        #expect(identity.selectionRequired)
+        #expect(identity.defaultAgentID == "unowned")
+        #expect(identity.contract == "per-sender|main|unowned")
+    }
+
+    @Test func `routing identity reconstructs legacy gateway contract`() throws {
+        let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(
             Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"global","agents":[]}"#.utf8))
 
         #expect(identity.defaultAgentID == "work")
+        #expect(!identity.selectionRequired)
         #expect(identity.contract == "global|primary|work")
+    }
+
+    @Test func `routing identity preserves legacy required selection without contract`() throws {
+        let identity = try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(
+            Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"per-sender","selectionRequired":true,"agents":[]}"#
+                .utf8))
+
+        #expect(identity.defaultAgentID == "work")
+        #expect(identity.selectionRequired)
+        #expect(identity.contract == "per-sender|primary|unowned")
     }
 
     @Test func `model choices preserve metadata and replace blank names`() throws {

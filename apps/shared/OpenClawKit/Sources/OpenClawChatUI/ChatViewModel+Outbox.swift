@@ -1182,8 +1182,7 @@ extension OpenClawChatViewModel {
         if !self.transport.outboxRequiresSessionRoutingContract {
             return OpenClawChatOutboxCommand.legacyUnboundRoutingContract
         }
-        let normalized = session.sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = session.sessionRoutingContract
         return normalized?.isEmpty == false ? normalized : nil
     }
 

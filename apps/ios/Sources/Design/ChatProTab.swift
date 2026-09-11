@@ -37,6 +37,8 @@ struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
+    // Routing can suspend capture without clearing intent; keep Stop available during hydration.
+    @AppStorage("talk.enabled") private var isTalkRequested = false
     @State private var viewModel: OpenClawChatViewModel?
     @State private var viewModelOwnerID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
@@ -49,6 +51,7 @@ struct ChatProTab: View {
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
     @State private var viewModelRoutingContract = ""
+    @State private var viewModelAgentSelectionRequired = false
     @State private var viewModelPresentationAgentID = "main"
     @State private var viewModelPresentationAgentName = "Main"
     @State private var viewModelPresentationAgentBadge = "M"
@@ -98,6 +101,9 @@ struct ChatProTab: View {
                 self.syncChatViewModel()
             }
             .onChange(of: self.appModel.chatSessionRoutingContract) { _, _ in
+                self.syncChatViewModel()
+            }
+            .onChange(of: self.appModel.gatewayAgentSelectionRequired) { _, _ in
                 self.syncChatViewModel()
             }
             .onChange(of: self.appModel.voiceNoteRecorder.ownsPendingChatAttachment) { _, _ in
@@ -219,7 +225,7 @@ struct ChatProTab: View {
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
-                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                    isCaptureInFlight: self.isTalkRequested) ? self.talkControl : nil,
                 dictationControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
                     isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
@@ -442,7 +448,7 @@ struct ChatProTab: View {
     }
 
     private var voiceAvatarAccessibilityLabel: String {
-        let state = self.appModel.talkMode.isEnabled
+        let state = self.isTalkRequested
             ? self.appModel.talkMode.statusText
             : String(localized: "Voice off")
         return "\(self.agentDisplayName), \(state)"
@@ -456,31 +462,56 @@ struct ChatProTab: View {
         let deliveryAgentID = self.appModel.chatDeliveryAgentId
         let transportAgentID = Self.transportAgentID(deliveryAgentID)
         let routingContract = self.appModel.chatSessionRoutingContract ?? ""
-        if let viewModel, !Self.requiresViewModelRebuild(
+        let agentSelectionRequired = self.appModel.gatewayAgentSelectionRequired
+        guard let viewModel else {
+            self.viewModelOwnerID = ownerID
+            self.viewModelTransportAgentID = transportAgentID
+            self.viewModelRoutingContract = routingContract
+            self.viewModelAgentSelectionRequired = agentSelectionRequired
+            self.captureCurrentPresentationIdentity()
+            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
+            return
+        }
+        if Self.requiresViewModelRebuild(
             currentOwnerID: self.viewModelOwnerID,
             nextOwnerID: ownerID,
             currentTransportAgentID: self.viewModelTransportAgentID,
             nextTransportAgentID: transportAgentID)
         {
-            if self.viewModelRoutingContract != routingContract {
-                self.viewModelRoutingContract = routingContract
-                viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
+            // Keep recording, staging, and delivery on their captured route.
+            // The pin-change observer replays this rebuild with latest state.
+            guard !viewModel.isAttachmentOwnerPinned else { return }
+            let replacementDraft = Self.composerDraftForReplacement(
+                viewModel.input,
+                currentOwnerID: self.viewModelOwnerID,
+                nextOwnerID: ownerID)
+            viewModel.detachTransport()
+            self.viewModelOwnerID = ownerID
+            self.viewModelTransportAgentID = transportAgentID
+            self.viewModelRoutingContract = routingContract
+            self.viewModelAgentSelectionRequired = agentSelectionRequired
+            self.captureCurrentPresentationIdentity()
+            let replacement = self.makeChatViewModel(sessionKey: sessionKey)
+            if let replacementDraft {
+                replacement.input = replacementDraft
             }
-            viewModel.syncSession(to: sessionKey)
-            if !viewModel.isAttachmentOwnerPinned {
-                self.captureCurrentPresentationIdentity()
-            }
+            self.viewModel = replacement
             return
         }
-        // Keep recording, staging, and delivery on their captured route.
-        // The pin-change observer replays this rebuild with latest state.
-        guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
-        self.viewModel?.detachTransport()
-        self.viewModelOwnerID = ownerID
-        self.viewModelTransportAgentID = transportAgentID
-        self.viewModelRoutingContract = routingContract
-        self.captureCurrentPresentationIdentity()
-        self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
+        if self.viewModelRoutingContract != routingContract ||
+            self.viewModelAgentSelectionRequired != agentSelectionRequired
+        {
+            self.viewModelRoutingContract = routingContract
+            self.viewModelAgentSelectionRequired = agentSelectionRequired
+            viewModel.syncDeliveryIdentity(
+                activeAgentId: self.appModel.chatDeliveryAgentId,
+                sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+                agentSelectionRequired: agentSelectionRequired)
+        }
+        viewModel.syncSession(to: sessionKey)
+        if !viewModel.isAttachmentOwnerPinned {
+            self.captureCurrentPresentationIdentity()
+        }
     }
 
     private func handleNewChatRequest(_ requestID: Int) async {
@@ -514,6 +545,7 @@ struct ChatProTab: View {
             transport: self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
             activeAgentId: self.appModel.chatDeliveryAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            agentSelectionRequired: self.appModel.gatewayAgentSelectionRequired,
             attachmentOwnerIsActive: { voiceNoteRecorder.ownsPendingChatAttachment },
             transcriptCache: offlineStore,
             outbox: offlineStore,
@@ -539,7 +571,7 @@ struct ChatProTab: View {
 
     private var talkControl: OpenClawChatTalkControl {
         OpenClawChatTalkControl(
-            isEnabled: self.appModel.talkMode.isEnabled,
+            isEnabled: self.isTalkRequested,
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
             isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
@@ -557,7 +589,7 @@ struct ChatProTab: View {
             },
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
-                self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
+                self.appModel.setTalkEnabled(!self.isTalkRequested)
             })
     }
 
@@ -835,6 +867,9 @@ struct ChatProTab: View {
     }
 
     private var messagePlaceholder: String {
+        if self.requiresExplicitAgentSelection {
+            return String(localized: "Select an agent")
+        }
         if self.gatewayConnected {
             return String(
                 format: String(localized: "Message %@..."),
@@ -873,7 +908,10 @@ struct ChatProTab: View {
     }
 
     private var currentAgentID: String {
-        self.normalized(self.appModel.chatAgentId) ?? "main"
+        Self.presentationAgentID(
+            deliveryAgentID: self.appModel.chatDeliveryAgentId,
+            displayAgentID: self.appModel.chatAgentId,
+            selectionRequired: self.appModel.gatewayAgentSelectionRequired)
     }
 
     private var currentActiveAgent: AgentSummary? {
@@ -896,7 +934,10 @@ struct ChatProTab: View {
     }
 
     private var currentAgentDisplayName: String {
-        self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
+        if self.requiresExplicitAgentSelection {
+            return String(localized: "Select an agent")
+        }
+        return self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
     }
 
     private var agentDisplayName: String {
@@ -904,6 +945,9 @@ struct ChatProTab: View {
     }
 
     private var currentAgentBadge: String {
+        if self.requiresExplicitAgentSelection {
+            return "?"
+        }
         if let identity = currentActiveAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
            let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
@@ -921,21 +965,14 @@ struct ChatProTab: View {
         AgentIdentityPresentation.initialsBadge(for: displayName)
     }
 
+    private var requiresExplicitAgentSelection: Bool {
+        !self.isAttachmentOwnerPinned &&
+            self.appModel.gatewayAgentSelectionRequired &&
+            self.appModel.chatDeliveryAgentId == nil
+    }
+
     nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
         AgentIdentityPresentation.normalizedBadgeEmoji(value)
-    }
-
-    nonisolated static func transportAgentID(_ value: String?) -> String {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
@@ -957,5 +994,43 @@ struct ChatProTab: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension ChatProTab {
+    nonisolated static func presentationAgentID(
+        deliveryAgentID: String?,
+        displayAgentID: String,
+        selectionRequired: Bool) -> String
+    {
+        let delivery = deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !delivery.isEmpty {
+            return delivery
+        }
+        if selectionRequired {
+            return ""
+        }
+        return displayAgentID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    nonisolated static func transportAgentID(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    nonisolated static func requiresViewModelRebuild(
+        currentOwnerID: String,
+        nextOwnerID: String,
+        currentTransportAgentID: String,
+        nextTransportAgentID: String) -> Bool
+    {
+        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
+    }
+
+    nonisolated static func composerDraftForReplacement(
+        _ input: String,
+        currentOwnerID: String,
+        nextOwnerID: String) -> String?
+    {
+        currentOwnerID == nextOwnerID ? input : nil
     }
 }

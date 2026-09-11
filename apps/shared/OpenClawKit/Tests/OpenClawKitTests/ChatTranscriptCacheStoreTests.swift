@@ -832,13 +832,16 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         let identity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: " Per-Sender ",
             mainSessionKey: " Work ",
-            defaultAgentID: " Main "))
+            defaultAgentID: " Main ",
+            selectionRequired: true,
+            sessionRoutingContract: " Server-fingerprint:v2/Case+opaque== "))
         await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
         try databases.close()
 
         let reopened = try OpenClawClientDatabases(directoryURL: directory)
         #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
-        #expect(identity.contract == "per-sender|work|main")
+        #expect(identity.contract == " Server-fingerprint:v2/Case+opaque== ")
+        #expect(identity.selectionRequired)
         #expect(try await reopened.stateQueue.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
         } == [
@@ -853,6 +856,123 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-watch-message-journal-v9",
             "client-state-watch-message-legacy-receipts-v1",
         ])
+    }
+
+    @Test func `routing identity lazily upgrades the legacy table shape`() async throws {
+        try databases.close()
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, "ALTER TABLE gateway_routing_identity RENAME TO gateway_routing_identity_new")
+            execute(raw, """
+            CREATE TABLE gateway_routing_identity(
+                gateway_id TEXT NOT NULL PRIMARY KEY,
+                scope TEXT NOT NULL,
+                main_session_key TEXT NOT NULL,
+                default_agent_id TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """)
+            execute(raw, "DROP TABLE gateway_routing_identity_new")
+        }
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|main|unowned"))
+
+        await reopened.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
+        #expect(try await reopened.stateQueue.read { db in
+            try Set(db.columns(in: "gateway_routing_identity").map(\.name))
+                .isSuperset(of: [
+                    "routing_contract",
+                    "selection_required",
+                    "routing_identity_updated_at",
+                ])
+        })
+    }
+
+    @Test func `routing identity upgrade preserves complete rows written before the freshness marker`() async throws {
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "opaque-routing-contract-v2"))
+        await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+        try databases.close()
+
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, "ALTER TABLE gateway_routing_identity DROP COLUMN routing_identity_updated_at")
+        }
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
+    }
+
+    @Test func `routing identity upgrade repairs legacy unowned selection state`() async throws {
+        let staleIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: false,
+            sessionRoutingContract: "per-sender|main|unowned"))
+        await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(staleIdentity)
+        try databases.close()
+
+        let stateURL = directory.appendingPathComponent("client-state.sqlite")
+        try withRawDatabase(at: stateURL) { raw in
+            execute(raw, "ALTER TABLE gateway_routing_identity DROP COLUMN routing_identity_updated_at")
+        }
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        let repaired = try #require(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a"))
+        #expect(repaired.contract == "per-sender|main|unowned")
+        #expect(repaired.selectionRequired)
+    }
+
+    @Test func `routing identity rejects a downgraded writer update`() async throws {
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "main",
+            defaultAgentID: "main",
+            selectionRequired: true,
+            sessionRoutingContract: "per-sender|main|unowned"))
+        await databases.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+
+        try databases.close()
+        // Exercise the previous named-column reader/writer contract through a fresh connection.
+        // A full older-app migration/open remains a separate native downgrade proof.
+        let legacy = try DatabaseQueue(path: directory.appendingPathComponent("client-state.sqlite").path)
+        let owner = try legacy.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT scope, main_session_key, default_agent_id
+                FROM gateway_routing_identity WHERE gateway_id = 'gw-a'
+                """)
+        }
+        #expect((owner?["default_agent_id"] as String?) == "main")
+        try await legacy.write { db in
+            try db.execute(
+                sql: """
+                UPDATE gateway_routing_identity SET
+                    scope = 'global',
+                    main_session_key = 'global',
+                    default_agent_id = 'ops',
+                    updated_at = updated_at + 1
+                WHERE gateway_id = 'gw-a'
+                """)
+        }
+
+        try legacy.close()
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == nil)
+        await reopened.store(gatewayID: "gw-a").storeSessionRoutingIdentity(identity)
+        #expect(reopened.loadSessionRoutingIdentity(gatewayID: "gw-a") == identity)
+        try reopened.close()
     }
 }
 
@@ -1026,7 +1146,7 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
         #expect(await store.loadCommands().map(\.id) == ["keep"])
     }
 
-    @Test func `legacy v6 imports attachments and routing identity`() async throws {
+    @Test func `legacy v6 imports attachments and repairs routing identity`() async throws {
         let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
         let attachment = OpenClawChatOutboxAttachment(
             type: "image",
@@ -1061,6 +1181,8 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
                 scope TEXT NOT NULL,
                 main_session_key TEXT NOT NULL,
                 default_agent_id TEXT NOT NULL,
+                routing_contract TEXT,
+                selection_required INTEGER,
                 updated_at REAL NOT NULL
             );
             """)
@@ -1081,8 +1203,10 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
             sqlite3_finalize(statement)
             execute(raw, """
             INSERT INTO gateway_routing_identity(
-                gateway_id, scope, main_session_key, default_agent_id, updated_at
-            ) VALUES ('gw-a', 'per-sender', 'main', 'main', 10);
+                gateway_id, scope, main_session_key, default_agent_id,
+                routing_contract, selection_required, updated_at
+            ) VALUES ('gw-a', 'per-sender', 'main', 'main',
+                'per-sender|main|unowned', 0, 10);
             PRAGMA user_version = 6;
             """)
         }
@@ -1092,7 +1216,32 @@ final class ClientDatabaseLegacyImportTests: TemporaryDatabaseTestSuite, @unchec
 
         #expect(command.id == "legacy-v6")
         #expect(command.attachments == [attachment])
-        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a")?.contract == "per-sender|main|main")
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a")?.contract == "per-sender|main|unowned")
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a")?.selectionRequired == true)
+        #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
+    @Test func `legacy routing rows without authoritative columns stay untrusted`() async throws {
+        let legacyURL = directory.appendingPathComponent("chat-cache.sqlite")
+        try withRawDatabase(at: legacyURL) { raw in
+            execute(raw, """
+            CREATE TABLE gateway_routing_identity(
+                gateway_id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                main_session_key TEXT NOT NULL,
+                default_agent_id TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            INSERT INTO gateway_routing_identity(
+                gateway_id, scope, main_session_key, default_agent_id, updated_at
+            ) VALUES ('gw-a', 'per-sender', 'main', 'main', 10);
+            PRAGMA user_version = 5;
+            """)
+        }
+
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+
+        #expect(databases.loadSessionRoutingIdentity(gatewayID: "gw-a") == nil)
         #expect(!FileManager.default.fileExists(atPath: legacyURL.path))
     }
 

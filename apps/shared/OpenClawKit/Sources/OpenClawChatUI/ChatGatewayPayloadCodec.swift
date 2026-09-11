@@ -17,14 +17,15 @@ public enum OpenClawChatSessionKey {
 public enum OpenClawChatGatewayPayloadCodec {
     public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
         let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        return OpenClawChatAgentsListResponse(
+        return try OpenClawChatAgentsListResponse(
             defaultId: result.defaultid,
             agents: result.agents.filter(\.isSelectableAgent).map {
                 OpenClawChatAgentChoice(
                     id: $0.id,
                     name: $0.name,
                     workspaceGit: $0.workspacegit)
-            })
+            },
+            routingIdentity: self.sessionRoutingIdentity(result))
     }
 
     public static func decodeProgressCard(_ data: Data, agentID: String?) throws -> ProgressCard? {
@@ -93,10 +94,18 @@ public enum OpenClawChatGatewayPayloadCodec {
 
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
         let decoded = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        return try self.sessionRoutingIdentity(decoded)
+    }
+
+    private static func sessionRoutingIdentity(_ decoded: AgentsListResult) throws
+        -> OpenClawChatSessionRoutingIdentity
+    {
         guard let identity = OpenClawChatSessionRoutingIdentity(
             scope: decoded.scope.value as? String,
             mainSessionKey: decoded.mainkey,
-            defaultAgentID: decoded.defaultid)
+            defaultAgentID: decoded.defaultid,
+            selectionRequired: decoded.selectionrequired ?? false,
+            sessionRoutingContract: decoded.sessionroutingcontract)
         else { throw CancellationError() }
         return identity
     }

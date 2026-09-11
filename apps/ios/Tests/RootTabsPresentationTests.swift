@@ -459,6 +459,17 @@ struct RootTabsPresentationTests {
             nextTransportAgentID: "work"))
     }
 
+    @Test func `chat preserves a draft only across same-gateway agent resolution`() {
+        #expect(ChatProTab.composerDraftForReplacement(
+            "  unsent draft  ",
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a") == "  unsent draft  ")
+        #expect(ChatProTab.composerDraftForReplacement(
+            "do not leak",
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-b") == nil)
+    }
+
     @Test func `localized QR status matcher accepts positional placeholders`() {
         #expect(SettingsProTab.localizedFormat(
             "qr loaded. connecting to %1$@:%2$@...",
@@ -577,6 +588,36 @@ struct RootTabsPresentationTests {
 
         #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
         #expect(layout.sections.map(\.id) == ["recent"])
+    }
+
+    @Test func `sidebar does not present the display default as selected when ownership is explicit`() {
+        #expect(RootSidebar.currentAgentID(
+            selectedAgentID: nil,
+            defaultAgentID: "main",
+            selectionRequired: true).isEmpty)
+        #expect(RootSidebar.currentAgentID(
+            selectedAgentID: "research",
+            defaultAgentID: "main",
+            selectionRequired: true) == "research")
+        #expect(RootSidebar.currentAgentID(
+            selectedAgentID: nil,
+            defaultAgentID: "main",
+            selectionRequired: false) == "main")
+    }
+
+    @Test func `chat does not present the display default as selected when ownership is explicit`() {
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: nil,
+            displayAgentID: "main",
+            selectionRequired: true).isEmpty)
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: " Research ",
+            displayAgentID: "main",
+            selectionRequired: true) == "research")
+        #expect(ChatProTab.presentationAgentID(
+            deliveryAgentID: nil,
+            displayAgentID: " Main ",
+            selectionRequired: false) == "main")
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {

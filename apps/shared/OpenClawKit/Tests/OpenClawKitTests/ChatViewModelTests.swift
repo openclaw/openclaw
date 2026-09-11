@@ -370,6 +370,7 @@ private func makeViewModel(
     activeAgentId: String? = nil,
     historyResponses: [OpenClawChatHistoryPayload],
     sessionRoutingContract: String? = nil,
+    agentSelectionRequired: Bool? = nil,
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
     modelAvailabilityIsSessionScoped: Bool = false,
@@ -467,6 +468,7 @@ private func makeViewModel(
         transport: transport,
         activeAgentId: activeAgentId,
         sessionRoutingContract: sessionRoutingContract,
+        agentSelectionRequired: agentSelectionRequired,
         modelPickerStore: pickerStore,
         initialThinkingLevel: initialThinkingLevel,
         initialVerboseLevel: initialVerboseLevel,
@@ -3821,6 +3823,114 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.canSend })
     }
 
+    @Test func `unowned routing contract requires explicit agent before send`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "opaque-routing-contract-v2",
+            agentSelectionRequired: true)
+
+        await MainActor.run {
+            vm.input = "choose an owner first"
+            // Keep the control actionable so the refusal explains how to recover.
+            #expect(vm.canSend)
+            vm.send()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await transport.sentMessages().isEmpty)
+        #expect(await MainActor.run { vm.errorText } == "Select an agent before sending this message.")
+
+        let (_, explicit) = await makeViewModel(
+            activeAgentId: "Research",
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "opaque-routing-contract-v2",
+            agentSelectionRequired: true)
+        await MainActor.run {
+            explicit.input = "owned message"
+            #expect(explicit.canSend)
+        }
+    }
+
+    @Test func `legacy unowned contract still gates callers that omit the explicit boolean`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "per-sender|main|unowned")
+
+        #expect(await MainActor.run { vm.requiresExplicitAgentSelection })
+    }
+
+    @Test func `explicit routing boolean overrides the legacy contract fallback`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "per-sender|main|unowned",
+            agentSelectionRequired: false)
+
+        #expect(await MainActor.run { !vm.requiresExplicitAgentSelection })
+    }
+
+    @Test func `legacy routing contract sync updates the selection gate`() async {
+        let (_, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run {
+            vm.syncDeliveryIdentity(
+                activeAgentId: nil,
+                sessionRoutingContract: "per-sender|main|unowned")
+            #expect(vm.requiresExplicitAgentSelection)
+        }
+    }
+
+    @Test func `opaque routing contract sync preserves an existing selection gate`() async {
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "opaque-routing-contract-v1",
+            agentSelectionRequired: true)
+
+        await MainActor.run {
+            vm.syncDeliveryIdentity(
+                activeAgentId: nil,
+                sessionRoutingContract: "opaque-routing-contract-v2")
+            #expect(vm.requiresExplicitAgentSelection)
+
+            vm.syncDeliveryIdentity(
+                activeAgentId: nil,
+                sessionRoutingContract: nil)
+            #expect(vm.requiresExplicitAgentSelection)
+        }
+    }
+
+    @Test func `unowned routing contract requires explicit agent before new session`() async {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "opaque-routing-contract-v2",
+            agentSelectionRequired: true)
+
+        let created = await vm.startNewSession()
+
+        #expect(!created)
+        #expect(await transport.createdSessionKeys().isEmpty)
+        #expect(await MainActor.run { vm.errorText } == "Select an agent before starting a new chat.")
+    }
+
+    @Test func `live routing gate applies before later persistence can suspend`() async throws {
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "main",
+            historyResponses: [historyPayload()],
+            sessionRoutingContract: "released-contract")
+
+        await MainActor.run {
+            vm.input = "must not use stale ownership"
+            vm.syncDeliveryIdentity(
+                activeAgentId: nil,
+                sessionRoutingContract: "opaque-routing-contract-v2",
+                agentSelectionRequired: true)
+            #expect(vm.requiresExplicitAgentSelection)
+            vm.send()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await transport.sentMessages().isEmpty)
+    }
+
     @Test func `foreground clears completed run without assistant output`() async throws {
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
@@ -4228,7 +4338,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `live send binds the captured agent and routing contract`() async throws {
-        let contract = "per-sender|main|reviewer"
+        let contract = " Server-fingerprint:v2/Case+opaque== "
         let (transport, vm) = await makeViewModel(
             activeAgentId: "reviewer",
             historyResponses: [historyPayload(), historyPayload()],
@@ -4291,7 +4401,9 @@ struct ChatViewModelTests {
         }
 
         await MainActor.run {
-            vm.syncSessionRoutingContract("per-sender|work|ops")
+            vm.syncDeliveryIdentity(
+                activeAgentId: "ops",
+                sessionRoutingContract: "per-sender|work|ops")
         }
 
         try await waitUntil("replacement custom main history") {
@@ -11114,7 +11226,10 @@ struct ChatViewModelTests {
 
         await MainActor.run { vm.syncActiveAgentId("beta") }
         try await waitUntil("replacement agent bootstrap completes") {
-            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" }
+            await MainActor.run {
+                // History publishes sessionId before the session list and model catalog settle.
+                vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" && !vm.isLoading
+            }
         }
         await patchGate.open()
         try await waitUntil("late patch updates canonical main row") {
@@ -11283,7 +11398,9 @@ struct ChatViewModelTests {
         }
 
         await MainActor.run {
-            vm.syncSessionRoutingContract("per-sender|work|alpha")
+            vm.syncDeliveryIdentity(
+                activeAgentId: "alpha",
+                sessionRoutingContract: "per-sender|work|alpha")
             vm.selectModel("openai/model-b")
         }
         try await Task.sleep(for: .milliseconds(50))
@@ -11330,7 +11447,11 @@ struct ChatViewModelTests {
             await transport.patchedModels() == ["openai/model-a"]
         }
 
-        await MainActor.run { vm.syncSessionRoutingContract(newContract) }
+        await MainActor.run {
+            vm.syncDeliveryIdentity(
+                activeAgentId: "alpha",
+                sessionRoutingContract: newContract)
+        }
         try await waitUntil("replacement route bootstraps") {
             await MainActor.run { vm.sessionId == "sess-new" }
         }
@@ -12701,7 +12822,9 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions, sessions],
             sessionSettingsPatchHook: { patch in
                 let level = try #require(patch.verboseLevel ?? nil)
-                if level == "on" { await firstPatchGate.wait() }
+                if level == "on" {
+                    await firstPatchGate.wait()
+                }
                 throw NSError(domain: "ChatViewModelTests", code: 1)
             },
             onVerboseLevelChanged: { callbacks.values.append($0) })
@@ -13113,7 +13236,9 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
-                if call == 2 { await staleListGate.wait() }
+                if call == 2 {
+                    await staleListGate.wait()
+                }
                 return staleSessions
             })
 

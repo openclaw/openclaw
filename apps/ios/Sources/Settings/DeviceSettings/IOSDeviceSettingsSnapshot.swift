@@ -56,7 +56,7 @@ final class IOSDeviceSettingsSnapshotProducer {
                 supported: ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] == nil &&
                     ProcessInfo.processInfo.environment["SIMULATOR_UDID"] == nil,
                 wakeEnabled: self.appModel.voiceWake.isEnabled,
-                talkEnabled: self.appModel.talkMode.isEnabled,
+                talkEnabled: self.defaults.bool(forKey: "talk.enabled"),
                 talkButtonEnabled: self.defaults.object(forKey: "talk.button.enabled") as? Bool ?? true,
                 talkBackgroundEnabled: self.defaults.bool(forKey: "talk.background.enabled"),
                 speakerphoneEnabled: TalkDefaults.speakerphoneEnabled(defaults: self.defaults)))

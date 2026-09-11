@@ -131,16 +131,22 @@ struct RootSidebar: View {
             action: self.dismissSidebar)
     }
 
-    /// The current agent is the single roster entry. Opening it shows every
-    /// selectable agent and native Picker selection state.
+    /// Keep selection available before an unowned gateway has a current agent.
+    /// Only an explicit picker action commits its routing owner.
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if let selectedAgent = self.selectedAgent {
+            if !self.selectableAgents.isEmpty {
                 Menu {
                     Picker(selection: Binding(
-                        get: { selectedAgent.id },
+                        get: { self.selectedAgent?.id ?? "" },
                         set: { self.appModel.setSelectedAgentId($0) }))
                     {
+                        if self.selectedAgent == nil {
+                            Text(String(localized: "Choose Agent"))
+                                .font(OpenClawType.subheadSemiBold)
+                                .tag("")
+                                .disabled(true)
+                        }
                         ForEach(self.selectableAgents, id: \.id) { agent in
                             Label {
                                 Text(verbatim: Self.agentDisplayName(agent))
@@ -156,13 +162,13 @@ struct RootSidebar: View {
                     }
                     .pickerStyle(.inline)
                 } label: {
-                    self.agentSelectorLabel(selectedAgent)
+                    self.agentSelectorLabel(self.selectedAgent)
                 }
                 .menuIndicator(.hidden)
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("RootTabs.Sidebar.AgentSelector")
                 .accessibilityLabel(String(localized: "Agent"))
-                .accessibilityValue(Self.agentDisplayName(selectedAgent))
+                .accessibilityValue(self.selectedAgent.map(Self.agentDisplayName) ?? String(localized: "Choose Agent"))
             }
 
             self.newChatButton
@@ -177,23 +183,31 @@ struct RootSidebar: View {
         self.selectableAgents.first(where: { $0.id == self.currentAgentID })
     }
 
-    private func agentSelectorLabel(_ agent: AgentSummary) -> some View {
+    private func agentSelectorLabel(_ agent: AgentSummary?) -> some View {
         HStack(spacing: 9) {
-            ZStack(alignment: .bottomTrailing) {
-                self.agentAvatarBadge(agent, size: 28)
-                Circle()
-                    .fill(OpenClawBrand.ok)
-                    .frame(width: 8, height: 8)
-                    .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
+            Group {
+                if let agent {
+                    ZStack(alignment: .bottomTrailing) {
+                        self.agentAvatarBadge(agent, size: 28)
+                        Circle()
+                            .fill(OpenClawBrand.ok)
+                            .frame(width: 8, height: 8)
+                            .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
+                    }
+                } else {
+                    Image(systemName: "person.crop.circle")
+                        .font(OpenClawType.title2)
+                        .frame(width: 28, height: 28)
+                }
             }
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: Self.agentDisplayName(agent))
+                Text(verbatim: agent.map(Self.agentDisplayName) ?? String(localized: "Choose Agent"))
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(OpenClawSidebarPalette.textStrong)
                     .lineLimit(1)
-                if let model = Self.agentModelLabel(agent) {
+                if let agent, let model = Self.agentModelLabel(agent) {
                     Text(verbatim: model)
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
@@ -263,9 +277,21 @@ struct RootSidebar: View {
     }
 
     private var currentAgentID: String {
-        let selected = self.appModel.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Self.currentAgentID(
+            selectedAgentID: self.appModel.selectedAgentId,
+            defaultAgentID: self.appModel.gatewayDefaultAgentId,
+            selectionRequired: self.appModel.gatewayAgentSelectionRequired)
+    }
+
+    static func currentAgentID(
+        selectedAgentID: String?,
+        defaultAgentID: String?,
+        selectionRequired: Bool) -> String
+    {
+        let selected = selectedAgentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !selected.isEmpty { return selected }
-        return self.appModel.gatewayDefaultAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !selectionRequired else { return "" }
+        return defaultAgentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     static func agentDisplayName(_ agent: AgentSummary) -> String {

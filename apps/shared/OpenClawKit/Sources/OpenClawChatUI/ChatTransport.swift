@@ -1417,8 +1417,9 @@ public enum OpenClawChatSessionRoutingContract {
         _ contract: String?,
         serverSupportsGuard: Bool) -> String?
     {
-        guard serverSupportsGuard else { return nil }
-        return self.normalize(contract)
+        guard serverSupportsGuard, let contract, !contract.isEmpty else { return nil }
+        // Gateway fingerprints are opaque. Only legacy display components are normalized.
+        return contract
     }
 
     public static func make(
