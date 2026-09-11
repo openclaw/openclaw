@@ -11,6 +11,7 @@ import {
   desktopProofCommit,
   desktopProofSource,
   exportDesktopResizeProof,
+  readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
@@ -57,6 +58,11 @@ const receipt = {
   },
   commands: [] as Array<{ label: string; exitCode: number | null; elapsedMs: number }>,
   carriers: [] as string[],
+  testDiagnostics: [] as Array<{
+    carrier: "node" | "ssh";
+    status: "pending" | "available" | "missing" | "invalid";
+    report: Awaited<ReturnType<typeof readDesktopProofTestReport>> | null;
+  }>,
   cleanup: {
     joined: false,
     unjoinedWork: false,
@@ -507,6 +513,13 @@ async function main() {
       const raw = path.join(privateRoot, carrier);
       await mkdir(raw);
       const fixtureFile = path.join(privateRoot, `${carrier}.json`);
+      const reportFile = path.join(privateRoot, `${carrier}-vitest.json`);
+      const diagnostic: (typeof receipt.testDiagnostics)[number] = {
+        carrier,
+        status: "pending",
+        report: null,
+      };
+      receipt.testDiagnostics.push(diagnostic);
       await writeFile(fixtureFile, JSON.stringify({ ...fixture, carrier }), { mode: 0o600 });
       await withDesktopProofCleanup(
         async () => {
@@ -520,6 +533,10 @@ async function main() {
               "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
               "--configLoader",
               "runner",
+              "--reporter=json",
+              "--outputFile",
+              reportFile,
+              "--includeTaskLocation",
               "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
             ],
             {
@@ -532,26 +549,42 @@ async function main() {
             },
           );
         },
-        async () => {
-          const exported = await exportDesktopResizeProof(
-            raw,
-            path.join(output, carrier),
-            carrier,
-            artifactBudget,
-          );
-          if (exported.proof) {
-            for (const [name, hash] of Object.entries(exported.proof.assets)) {
-              assert.equal(
-                sha256(await readFile(path.join(root, "dist/control-ui/assets", name))),
-                hash,
+        () =>
+          withDesktopProofCleanup(
+            async () => {
+              try {
+                diagnostic.report = await readDesktopProofTestReport(reportFile);
+                diagnostic.status = "available";
+              } catch (error) {
+                diagnostic.status =
+                  error instanceof Error && "code" in error && error.code === "ENOENT"
+                    ? "missing"
+                    : "invalid";
+                throw error;
+              }
+            },
+            async () => {
+              const exported = await exportDesktopResizeProof(
+                raw,
+                path.join(output, carrier),
+                carrier,
+                artifactBudget,
               );
-            }
-          }
-          assert(
-            exported.complete,
-            `Incomplete ${carrier} desktop proof (including a skipped test)`,
-          );
-        },
+              if (exported.proof) {
+                for (const [name, hash] of Object.entries(exported.proof.assets)) {
+                  assert.equal(
+                    sha256(await readFile(path.join(root, "dist/control-ui/assets", name))),
+                    hash,
+                  );
+                }
+              }
+              assert(
+                exported.complete,
+                `Incomplete ${carrier} desktop proof (including a skipped test)`,
+              );
+            },
+            recordFailure,
+          ),
         recordFailure,
       );
       await sourceIdentity();

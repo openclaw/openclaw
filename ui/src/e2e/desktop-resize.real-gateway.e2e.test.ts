@@ -6,6 +6,7 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import { createServer } from "vite";
 import { expect, it } from "vitest";
+import type { desktopProofTestPhases } from "../../../scripts/lib/desktop-resize-proof.mts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
@@ -22,6 +23,12 @@ import {
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
 } from "./desktop-resize-real.test-support.ts";
+
+declare module "vitest" {
+  interface TaskMeta {
+    desktopProofPhase?: (typeof desktopProofTestPhases)[number];
+  }
+}
 
 const fixturePath = process.env.OPENCLAW_DESKTOP_REAL_FIXTURE;
 let gatewayPort: number;
@@ -117,6 +124,13 @@ suite.define(() => {
   it.skipIf(!fixturePath)(
     "matches a real XFCE display through the configured worker carrier and preserves controller ownership",
     async (context) => {
+      const phase = (value: (typeof desktopProofTestPhases)[number]) => {
+        // A timed-out callback can continue while the suite joins its cleanup.
+        if (!context.signal.aborted) {
+          context.task.meta.desktopProofPhase = value;
+        }
+      };
+      phase("fixture");
       const fixture = await readDesktopResizeFixture(fixturePath!);
       const baseUrl = suite.server.baseUrl;
       const state = await createOpenClawTestState({
@@ -145,6 +159,7 @@ suite.define(() => {
       await suite.runScenario(context, {
         retainedState: () => state.root,
         run: async () => {
+          phase("gateway-config");
           const pluginDir = await writeDesktopResizeProvider(state.workspaceDir, fixture);
           const gatewayToken = randomUUID();
           const trustedProxy = {
@@ -185,6 +200,7 @@ suite.define(() => {
               trustedProxies: ["127.0.0.1", "::1"],
             },
           });
+          phase("gateway-start");
           const { startGatewayServer } = await import("../../../src/gateway/server.js");
           gateway = await startGatewayServer(gatewayPort, {
             bind: "loopback",
@@ -197,12 +213,16 @@ suite.define(() => {
               url: `ws://127.0.0.1:${gatewayPort}`,
               gatewayToken,
             };
+            phase("admin-connect");
             ({ client: admin } = await SkillLibraryWireClient.connect(endpoint));
+            phase("node-admission");
             node = await startSkillLibraryNodeProcess(endpoint, admin);
             nodeDeviceId = node.nodeId;
           }
           seedDesktopResizeSources(fixture, nodeDeviceId);
+          phase("guest-ssh");
           guest = await createDesktopResizeGuest(fixture);
+          phase("browser-context");
           const browserContext = await suite.newBrowserContext({
             viewport: null,
             locale: "en-US",
@@ -285,7 +305,9 @@ suite.define(() => {
               );
             }
           });
+          phase("browser-navigation");
           await page.goto(new URL("activity", baseUrl).href);
+          phase("ui-ready");
           await waitForControlUiGatewayReady(page);
           await page.evaluate(() => {
             window.dispatchEvent(
@@ -296,6 +318,7 @@ suite.define(() => {
           });
           const panel = page.locator("openclaw-desktop-panel");
           const canvas = panel.locator(".desktop-surface canvas");
+          phase("desktop-connect");
           try {
             await canvas.waitFor();
           } catch (error) {
@@ -338,6 +361,7 @@ suite.define(() => {
             });
             throw error;
           }
+          phase("initial-framebuffer");
           const initial = await guest.geometry();
           await expect.poll(() => framebuffer(canvas)).toEqual(initial);
           if (fixture.carrier === "node") {
@@ -347,6 +371,7 @@ suite.define(() => {
             ).toBe(true);
           }
           const originalCanvas = await canvas.elementHandle();
+          phase("control-takeover");
           await panel.getByRole("button", { name: "Take control", exact: true }).click();
           const menu = panel.getByRole("combobox", { name: "Desktop size", exact: true });
           await expect
@@ -355,6 +380,7 @@ suite.define(() => {
           await expect.poll(() => canvas.count()).toBe(1);
           await expect.poll(() => framebuffer(canvas)).toEqual(initial);
           await page.screenshot({ path: path.join(suite.artifactDir, "01-fit.png") });
+          phase("resize-matrix");
           await resizeWindow(page, 1200, 850);
           await expect.poll(() => framebuffer(canvas)).toEqual(initial);
           expect(await guest.geometry()).toEqual(initial);

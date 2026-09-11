@@ -6,8 +6,10 @@ import {
   desktopProofAssets,
   desktopProofCommit,
   desktopProofSource,
+  desktopProofTestReport,
   desktopResizeStages,
   exportDesktopResizeProof,
+  readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
@@ -21,6 +23,30 @@ const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
 const assets = { "index-fixture.js": "e".repeat(64) };
+const rawTestReport = (message = "AssertionError: private-token") => ({
+  success: true,
+  numTotalTests: 1,
+  numFailedTests: 1,
+  numFailedTestSuites: 1,
+  snapshot: { private: "secret" },
+  testResults: [
+    {
+      name: "/private/workspace/ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+      status: "failed",
+      message: "",
+      assertionResults: [
+        {
+          title: "private-title",
+          fullName: "private-title",
+          status: "failed",
+          location: { line: 120, column: 3 },
+          meta: { desktopProofPhase: "node-admission", password: "private-token" },
+          failureMessages: [message],
+        },
+      ],
+    },
+  ],
+});
 const proof = (carrier: "node" | "ssh" = "node") => ({
   carrier,
   observerFilterPhase: carrier === "node" ? "clientInit" : "version",
@@ -41,6 +67,109 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("publishes fixed phases and known failure locations, not raw reporter content", () => {
+    const result = desktopProofTestReport(
+      rawTestReport(
+        "AssertionError: private-token actual=secret expected=password\n at /private/workspace/test/e2e/qa-lab/runtime/skill-library-node-process.ts:42:9\n at /private/secret.ts:1:2\n https://private.invalid/token",
+      ),
+    );
+    expect(result).toMatchObject({
+      failedTests: 1,
+      files: [
+        {
+          file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+          assertions: [
+            {
+              index: 0,
+              phase: "node-admission",
+              declarationLocation: { line: 120, column: 3 },
+              failures: [
+                {
+                  category: "AssertionError",
+                  failureLocations: [
+                    {
+                      file: "test/e2e/qa-lab/runtime/skill-library-node-process.ts",
+                      line: 42,
+                      column: 9,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /private|token|secret|password|actual|expected|success|title|https/u,
+    );
+  });
+
+  it.each([
+    ["Error: Test timed out in 120000ms.\nprivate pending operation", "test-timeout"],
+    ["Error: Test timed out in 120000ms while waiting for private operation.", "test-timeout"],
+    ["Error: Hook timed out in 60000ms.\nprivate pending operation", "hook-timeout"],
+    ["Error: a timeout might have happened after 174000ms", "test-error"],
+  ])("classifies only the emitted timeout contract: %s", (message, category) => {
+    const result = desktopProofTestReport(rawTestReport(message));
+    expect(result.files[0]?.assertions[0]?.failures[0]?.category).toBe(category);
+  });
+
+  it("rejects unknown report files and excessive counts, and ignores unknown metadata phases", () => {
+    const report = rawTestReport();
+    report.testResults[0]!.assertionResults[0]!.meta.desktopProofPhase = "private-token";
+    expect(desktopProofTestReport(report).files[0]?.assertions[0]?.phase).toBe("unknown");
+    expect(() => desktopProofTestReport({ ...report, numTotalTests: 17 })).toThrow();
+    report.testResults[0]!.name = "/private/other.test.ts";
+    expect(() => desktopProofTestReport(report)).toThrow();
+  });
+
+  it("keeps the original child failure when the private report is missing and export fails", async () => {
+    const root = dirs.make("desktop-report-failure-");
+    const child = Object.assign(new Error("test-node failed"), { code: "ERR_ASSERTION" });
+    const exporting = new Error("export failed");
+    const recorded: unknown[] = [];
+    const record = (error: unknown) => {
+      recorded.push(error);
+    };
+    const failure = await withDesktopProofCleanup(
+      async () => {
+        throw child;
+      },
+      () =>
+        withDesktopProofCleanup(
+          async () => {
+            expect(recorded[0]).toBe(child);
+            await readDesktopProofTestReport(path.join(root, "missing.json"));
+          },
+          async () => {
+            throw exporting;
+          },
+          record,
+        ),
+      record,
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors[0]).toBe(child);
+    expect(aggregate.errors[1].errors[0]).toMatchObject({ code: "ENOENT" });
+    expect(aggregate.errors[1].errors[1]).toBe(exporting);
+  });
+
+  it("accepts only bounded regular reporter files", async () => {
+    const root = dirs.make("desktop-private-report-");
+    const file = path.join(root, "report.json");
+    await writeFile(file, JSON.stringify(rawTestReport()));
+    expect((await readDesktopProofTestReport(file)).failedTests).toBe(1);
+    const link = path.join(root, "report-link.json");
+    await symlink(file, link);
+    await expect(readDesktopProofTestReport(link)).rejects.toThrow("regular file");
+    await writeFile(file, "{");
+    await expect(readDesktopProofTestReport(file)).rejects.toThrow();
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    await expect(readDesktopProofTestReport(file)).rejects.toThrow("bounded");
+  });
+
   it("launches only the owned foreground window manager, without session autostart", async () => {
     const bootstrap = await readFile(
       new URL("../../scripts/test-desktop-resize-real.mts", import.meta.url),

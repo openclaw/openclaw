@@ -1,5 +1,6 @@
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const desktopResizeStages = [
@@ -11,6 +12,136 @@ export const desktopResizeStages = [
 ] as const;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
+export const desktopProofTestPhases = [
+  "fixture",
+  "gateway-config",
+  "gateway-start",
+  "admin-connect",
+  "node-admission",
+  "guest-ssh",
+  "browser-context",
+  "browser-navigation",
+  "ui-ready",
+  "desktop-connect",
+  "initial-framebuffer",
+  "control-takeover",
+  "resize-matrix",
+] as const;
+const desktopTestFile = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
+const failureSourceFiles = [
+  desktopTestFile,
+  "ui/src/e2e/desktop-resize-real.test-support.ts",
+  "ui/src/e2e/control-ui-e2e-suite.test-support.ts",
+  "ui/src/test-helpers/control-ui-e2e.ts",
+  "ui/src/test-helpers/control-ui-e2e-readiness.ts",
+  "test/e2e/qa-lab/runtime/skill-library-node-process.ts",
+  "test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts",
+  "test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-fixture.ts",
+  "test/helpers/openclaw-test-instance.ts",
+];
+
+function reportInteger(value: unknown, maximum: number) {
+  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > maximum) {
+    throw new Error("Invalid desktop test report number");
+  }
+  return Number(value);
+}
+
+function publicTestFailure(value: unknown) {
+  if (typeof value !== "string" || value.length > 64 * 1024) {
+    throw new Error("Invalid desktop test failure");
+  }
+  const message = stripVTControlCharacters(value).trimStart();
+  // Vitest emits these exact timeout prefixes; elapsed time is not failure evidence.
+  const category = /^(?:Error: )?Test timed out in \d+ms(?:\.| while waiting for )/u.test(message)
+    ? "test-timeout"
+    : /^(?:Error: )?Hook timed out in \d+ms(?:\.| while waiting for )/u.test(message)
+      ? "hook-timeout"
+      : (/^(AssertionError|TimeoutError|TypeError|ReferenceError|SyntaxError|RangeError):/u.exec(
+          message,
+        )?.[1] ?? "test-error");
+  const locations = failureSourceFiles
+    .flatMap((file) =>
+      [
+        ...message
+          .replaceAll("\\", "/")
+          .matchAll(new RegExp(`${file.replaceAll(".", "\\.")}:(\\d+):(\\d+)`, "gu")),
+      ]
+        .slice(0, 4)
+        .map((match) => ({
+          file,
+          line: reportInteger(Number(match[1]), 100_000),
+          column: reportInteger(Number(match[2]), 100_000),
+        })),
+    )
+    .slice(0, 8);
+  return { category, failureLocations: locations };
+}
+
+/** Project the private built-in Vitest report; no error text, arbitrary metadata, or paths escape. */
+export function desktopProofTestReport(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.testResults) || value.testResults.length > 4) {
+    throw new Error("Invalid desktop test report");
+  }
+  const statuses = new Set(["passed", "failed", "pending", "skipped", "todo"]);
+  return {
+    totalTests: reportInteger(value.numTotalTests, 16),
+    failedTests: reportInteger(value.numFailedTests, 16),
+    failedSuites: reportInteger(value.numFailedTestSuites, 16),
+    files: value.testResults.map((file) => {
+      if (
+        !isRecord(file) ||
+        typeof file.name !== "string" ||
+        !file.name.replaceAll("\\", "/").endsWith(`/${desktopTestFile}`) ||
+        !Array.isArray(file.assertionResults) ||
+        file.assertionResults.length > 16 ||
+        (file.status !== "passed" && file.status !== "failed")
+      ) {
+        throw new Error("Unexpected desktop test report file");
+      }
+      return {
+        file: desktopTestFile,
+        status: file.status,
+        suiteFailure: file.message ? publicTestFailure(file.message) : null,
+        assertions: file.assertionResults.map((test, index) => {
+          if (
+            !isRecord(test) ||
+            typeof test.status !== "string" ||
+            !statuses.has(test.status) ||
+            !Array.isArray(test.failureMessages) ||
+            test.failureMessages.length > 8
+          ) {
+            throw new Error("Invalid desktop assertion report");
+          }
+          const meta = isRecord(test.meta) ? test.meta : {};
+          const phase =
+            desktopProofTestPhases.find((candidate) => candidate === meta.desktopProofPhase) ??
+            "unknown";
+          return {
+            index,
+            status: test.status,
+            phase,
+            declarationLocation: isRecord(test.location)
+              ? {
+                  line: reportInteger(test.location.line, 100_000),
+                  column: reportInteger(test.location.column, 100_000),
+                }
+              : null,
+            failures: test.failureMessages.map(publicTestFailure),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+export async function readDesktopProofTestReport(file: string) {
+  const stat = await lstat(file);
+  if (!stat.isFile() || stat.size > 1024 * 1024) {
+    throw new Error("Desktop test report must be a bounded regular file");
+  }
+  return desktopProofTestReport(JSON.parse(await readFile(file, "utf8")));
+}
 
 /** Preserve child ownership before fallible logging or evidence export can replace its error. */
 export async function withDesktopProofCleanup<T>(
