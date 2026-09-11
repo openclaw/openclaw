@@ -4,8 +4,8 @@ import {
   findMarkdownCodeRegions,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import {
-  markdownDisclosureTagKind,
-  MAX_MARKDOWN_DETAILS_DEPTH,
+  walkMarkdownDisclosureTags,
+  type MarkdownDetailsFrame,
   scanMarkdownDisclosureLine,
 } from "./markdown-details.ts";
 
@@ -16,7 +16,6 @@ const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
 const STREAMING_SPLIT_CACHE_LIMIT = 8;
 
-type DetailsFrame = { hasSummary: boolean };
 type FenceMarker = { length: number; marker: "`" | "~" };
 type StrippedMarkdownLine = { content: string; offset: number };
 
@@ -55,7 +54,7 @@ function isFenceClose(line: string, fence: FenceMarker): boolean {
 
 function updateDetailsStack(
   line: string,
-  stack: DetailsFrame[],
+  stack: MarkdownDetailsFrame[],
   allowPendingSummary: boolean,
   codeSpans: ReadonlyArray<readonly [number, number]>,
   lineOffset: number,
@@ -66,42 +65,7 @@ function updateDetailsStack(
     codeSpans,
     lineOffset + stripped.offset,
   );
-  if (!tags) {
-    return false;
-  }
-  const kinds = tags.map((tag) => markdownDisclosureTagKind(tag.raw));
-  const nextSummaryClose = Array.from({ length: tags.length }, () => -1);
-  let nearestSummaryClose = -1;
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    nextSummaryClose[index] = nearestSummaryClose;
-    if (kinds[index] === "summary_close") {
-      nearestSummaryClose = index;
-    }
-  }
-  for (let index = 0; index < tags.length; index += 1) {
-    const kind = kinds[index];
-    if (
-      (kind === "details_open" || kind === "details_open_expanded") &&
-      stack.length < MAX_MARKDOWN_DETAILS_DEPTH
-    ) {
-      stack.push({ hasSummary: false });
-    } else if (kind === "details_close" && stack.length > 0) {
-      stack.pop();
-    } else if (kind === "summary_open") {
-      const frame = stack.at(-1);
-      if (!frame || frame.hasSummary) {
-        continue;
-      }
-      const closeIndex = nextSummaryClose[index] ?? -1;
-      if (closeIndex >= 0) {
-        frame.hasSummary = true;
-        index = closeIndex;
-      } else if (allowPendingSummary) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return tags ? walkMarkdownDisclosureTags(tags, stack, { allowPendingSummary }) : false;
 }
 
 type StreamingMarkdownSplit = {
@@ -152,7 +116,7 @@ function scanStableStreamingMarkdown(
   let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastFenceOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
-  const detailsStack: DetailsFrame[] = [];
+  const detailsStack: MarkdownDetailsFrame[] = [];
   // Completed fences cannot gain indentation ownership from later prose. Keep
   // list containers and unfinished fences intact when parsing the retained suffix.
   const codeStart = cursor.openFence
@@ -328,7 +292,7 @@ export function repairStreamingMarkdownTail(tail: string, repairStart = 0): stri
   if (!repaired.includes("<")) {
     return repaired;
   }
-  const detailsStack: DetailsFrame[] = [];
+  const detailsStack: MarkdownDetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(repaired);
   let openFence: FenceMarker | null = null;
   let pendingSummary = false;
