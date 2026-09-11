@@ -1,9 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getRetainedLegacyDefaultAgentId,
   setRetainedLegacyDefaultAgentId,
-} from "../../../config/legacy.default-agent-owner-state.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+} from "./legacy.default-agent-owner-state.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Drop the retired discovery switch before validation, including malformed values. */
 export function removeLegacyCopilotDiscovery(config: OpenClawConfig): OpenClawConfig;
