@@ -1,0 +1,9 @@
+{
+  "id": "continuity-spike",
+  "name": "Continuity Spike",
+  "description": "Synthetic development experiment; not production multi-environment authority",
+  "activation": { "onStartup": false },
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+  "contracts": { "tools": ["continuity_advance"] },
+  "toolMetadata": { "continuity_advance": { "optional": true } }
+}

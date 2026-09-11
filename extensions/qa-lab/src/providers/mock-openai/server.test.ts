@@ -5434,22 +5434,28 @@ Update and merge these partial structured summaries.`,
     expect(String(toolPlanOutput.arguments)).toContain("OpenClaw runtime parity fixed query");
   });
 
-  it("plans QA tool-search calls from explicit fixture targets even without Responses tools", async () => {
-    const server = await startMockServer();
+  it.each([
+    { target: "session_status", args: { sessionKey: "current" } },
+    { target: "continuity_advance", args: {} },
+  ])(
+    "plans valid $target fixture arguments even without Responses tools",
+    async ({ target, args }) => {
+      const server = await startMockServer();
 
-    const response = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(
-          "tool search qa check target=session_status. Call exactly that tool once and then summarize.",
-        ),
-      ],
-    });
+      const response = await expectNonStreamingResponses(server, {
+        input: [
+          makeUserInput(
+            `tool search qa check target=${target}. Call exactly that tool once and then summarize.`,
+          ),
+        ],
+      });
 
-    const toolPlanOutput = outputItem(await response.json());
-    expect(toolPlanOutput.type).toBe("function_call");
-    expect(toolPlanOutput.name).toBe("session_status");
-    expect(String(toolPlanOutput.arguments)).toContain("current");
-  });
+      const toolPlanOutput = outputItem(await response.json());
+      expect(toolPlanOutput.type).toBe("function_call");
+      expect(toolPlanOutput.name).toBe(target);
+      expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual(args);
+    },
+  );
 
   it("plans one structured batch search for the Tool Search gateway fixture", async () => {
     const server = await startMockServer();

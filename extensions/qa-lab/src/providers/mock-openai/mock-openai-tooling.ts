@@ -337,6 +337,9 @@ export function buildQaToolSearchArgs(
   if (targetTool === "session_status") {
     return { sessionKey: "current" };
   }
+  if (targetTool === "continuity_advance") {
+    return {};
+  }
   if (targetTool === "sessions_spawn") {
     return {
       task: "Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
