@@ -318,6 +318,7 @@ function createDefaultState(): WorkboardUiState {
     boardFilter: "__all__",
     showArchived: false,
     layout: "comfortable",
+    viewMode: "board",
     emptyColumnMode: "show",
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
