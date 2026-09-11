@@ -11,6 +11,7 @@ import {
   throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const OAUTH_BASE_URL = "https://radius.pi.dev/v1/oauth";
@@ -95,8 +96,14 @@ function parseDevice(payload: Record<string, unknown>) {
   const lifetimeMs = positiveSecondsToSafeMilliseconds(payload.expires_in);
   const expiresAt =
     lifetimeMs === undefined ? undefined : resolveExpiresAtMsFromDurationMs(lifetimeMs);
-  const intervalMs =
-    payload.interval === undefined ? 5_000 : positiveSecondsToSafeMilliseconds(payload.interval);
+  const intervalSeconds =
+    payload.interval === undefined
+      ? 5
+      : asFiniteNumberInRange(payload.interval, {
+          min: Number.MIN_VALUE,
+          max: MAX_TIMER_TIMEOUT_MS / 1000,
+        });
+  const intervalMs = intervalSeconds === undefined ? undefined : Math.ceil(intervalSeconds * 1000);
   if (
     typeof payload.device_code !== "string" ||
     !payload.device_code.trim() ||

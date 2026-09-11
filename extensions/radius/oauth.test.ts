@@ -95,6 +95,21 @@ afterEach(() => {
 });
 
 describe("Radius OAuth", () => {
+  it("accepts the fractional polling interval returned by the live Radius service", async () => {
+    device({ interval: 0.1 });
+    token();
+    const { ctx } = context();
+    const result = loginRadiusOAuth(ctx).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.advanceTimersByTimeAsync(99);
+    expect(guardedFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toMatchObject({ value: { access: "access-test" } });
+    expect(guardedFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("pairs through the native device grant and slows subsequent polls after slow_down", async () => {
     device();
     reply({ error: "authorization_pending" }, 400);
