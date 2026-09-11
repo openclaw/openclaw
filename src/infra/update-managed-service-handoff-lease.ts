@@ -8,7 +8,11 @@ import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
@@ -632,9 +636,13 @@ export function createManagedHandoffLeaseStore(
       // schema objects with SQLite's name matching so wrong shapes still refuse.
       if (
         !options.existingIdentity &&
-        !db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE name = ? COLLATE NOCASE")
-          .get("managed_update_handoffs")
+        !executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<{ sqlite_schema: { name: string } }>(db)
+            .selectFrom("sqlite_schema")
+            .select("name")
+            .where((eb) => eb(eb.fn<string>("lower", ["name"]), "=", "managed_update_handoffs")),
+        )
       ) {
         return [];
       }
