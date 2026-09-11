@@ -84,6 +84,9 @@ receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
 be retired. Preserved roots require manual review of workspace ownership, backup
 manifests, and workspace migration blockers. If both kinds remain, Doctor reports
 both next steps. Do not delete preserved backups to clear the warning.
+The check uses the configured agent directories and actual filesystem paths even
+when lint reads a private state snapshot. Correctly placed Workshop targets do
+not need relocation merely because lint uses a temporary directory.
 
 ## Check selection
 
