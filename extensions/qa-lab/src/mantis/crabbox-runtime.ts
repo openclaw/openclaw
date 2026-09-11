@@ -115,80 +115,89 @@ export async function runCommand(params: {
   });
 }
 
-export async function warmupCrabbox(params: {
+export function createMantisCrabboxSession(params: {
   crabboxBin: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  idleTimeout: string;
-  machineClass: string;
-  market?: string;
-  provider: string;
-  runner: CommandRunner;
-  ttl: string;
-}) {
-  const marketArgs = params.market ? ["--market", params.market] : [];
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      params.provider,
-      "--desktop",
-      "--browser",
-      "--class",
-      params.machineClass,
-      ...marketArgs,
-      "--idle-timeout",
-      params.idleTimeout,
-      "--ttl",
-      params.ttl,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
-  if (!leaseId) {
-    throw new Error("Crabbox warmup did not print a lease id.");
-  }
-  return leaseId;
-}
-
-export async function inspectCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
+  leaseId?: string;
   provider: string;
   runner: CommandRunner;
 }) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: ["inspect", "--provider", params.provider, "--id", params.leaseId, "--json"],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  return JSON.parse(result.stdout) as CrabboxInspect;
-}
-
-export async function stopCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  await runCommand({
-    command: params.crabboxBin,
-    args: ["stop", "--provider", params.provider, params.leaseId],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
+  let leaseId = params.leaseId;
+  const createdLease = leaseId === undefined;
+  const run = (args: readonly string[], stdio?: "inherit" | "pipe") =>
+    runCommand({ ...params, command: params.crabboxBin, args, stdio });
+  const requireLeaseId = () => {
+    if (!leaseId) {
+      throw new Error("Crabbox lease id is unavailable before acquisition.");
+    }
+    return leaseId;
+  };
+  return {
+    createdLease,
+    get leaseId() {
+      return leaseId;
+    },
+    async acquire(options: {
+      idleTimeout: string;
+      machineClass: string;
+      market?: string;
+      ttl: string;
+    }) {
+      if (leaseId !== undefined) {
+        return leaseId;
+      }
+      const result = await run(
+        [
+          "warmup",
+          "--provider",
+          params.provider,
+          "--desktop",
+          "--browser",
+          "--class",
+          options.machineClass,
+          ...(options.market ? ["--market", options.market] : []),
+          "--idle-timeout",
+          options.idleTimeout,
+          "--ttl",
+          options.ttl,
+        ],
+        "inherit",
+      );
+      const acquired = extractLeaseId(`${result.stdout}\n${result.stderr}`);
+      if (!acquired) {
+        throw new Error("Crabbox warmup did not print a lease id.");
+      }
+      leaseId = acquired;
+      return acquired;
+    },
+    async inspect() {
+      const result = await run([
+        "inspect",
+        "--provider",
+        params.provider,
+        "--id",
+        requireLeaseId(),
+        "--json",
+      ]);
+      return JSON.parse(result.stdout) as CrabboxInspect;
+    },
+    describe(inspected?: CrabboxInspect) {
+      return {
+        bin: params.crabboxBin,
+        createdLease,
+        id: leaseId ?? "unallocated",
+        provider: params.provider,
+        ...(inspected ? { slug: inspected.slug, state: inspected.state } : {}),
+        vncCommand: leaseId
+          ? `${params.crabboxBin} vnc --provider ${params.provider} --id ${leaseId} --open`
+          : "unallocated",
+      };
+    },
+    async stop() {
+      await run(["stop", "--provider", params.provider, requireLeaseId()], "inherit");
+    },
+  };
 }
 
 function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
