@@ -591,8 +591,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await matrixCard.getByRole("button", { name: "Install Matrix" }).count()).toBe(1);
 
       await explore.getByRole("button", { name: "Documents & files", exact: true }).click();
+      // Match full results, excluding section previews, then select the first page.
       const categoryRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { category: "documents-files" },
+        after: 0,
+        match: { intent: "all", category: "documents-files", pageSize: 100 },
       });
       expect(categoryRequest.params).toEqual({
         intent: "all",
@@ -605,7 +607,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const search = explore.getByRole("searchbox", { name: "Search plugins" });
       await search.fill("matrix");
       const searchRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { query: "matrix" },
+        after: 0,
+        match: { intent: "all", query: "matrix", pageSize: 100 },
       });
       expect(searchRequest.params).toEqual({ intent: "all", query: "matrix", pageSize: 100 });
       expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
@@ -623,7 +626,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await explore.getByRole("button", { name: "Scheduling", exact: true }).click();
       // The fresh page may still issue its initial unfiltered browse request.
       const mobileCategoryRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { category: "scheduling" },
+        after: 0,
+        match: { intent: "all", category: "scheduling", pageSize: 100 },
       });
       expect(mobileCategoryRequest.params).toEqual({
         intent: "all",
