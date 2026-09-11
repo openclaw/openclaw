@@ -23,7 +23,6 @@ import {
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import {
   matchesWorkerPlacementTarget,
-  type WorkerPlacementCancellationTarget,
   type WorkerPlacementReclaimBarriers,
   type WorkerPlacementPendingOperations,
   type WorkerReclaimPlacement,
@@ -36,6 +35,7 @@ import { reportPlacementTransition } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
+  WorkerPlacementCancellationTarget,
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,

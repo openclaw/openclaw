@@ -12,7 +12,6 @@ import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
-import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
@@ -162,6 +161,10 @@ export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
 
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
+
+export type WorkerPlacementCancellationTarget = Readonly<
+  Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
+>;
 
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
 export type WorkerPlacementReclaimSourceCheck = (
