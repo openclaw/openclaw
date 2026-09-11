@@ -4,9 +4,12 @@ import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-prot
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../i18n/locales/en-dreaming.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+
+registerDreamingEnglish();
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =

@@ -3,10 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../app/route-transition.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
+import {
+  CHAT_ROUTE_READY_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import { publishChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";

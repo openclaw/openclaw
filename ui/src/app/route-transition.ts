@@ -1,4 +1,5 @@
 import type { RouteId } from "../app-routes.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
 
 type RouteTransitionOptions = {
   document: Document;
@@ -8,7 +9,6 @@ type RouteTransitionOptions = {
   to: RouteId;
 };
 
-export const CHAT_ROUTE_READY_EVENT = "openclaw-chat-route-ready";
 const SESSION_ROUTE_ENTER_KEYFRAMES: Keyframe[] = [
   { transform: "translateY(5px) scale(0.997)" },
   { transform: "none" },

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 

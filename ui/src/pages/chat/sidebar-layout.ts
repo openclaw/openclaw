@@ -1,3 +1,12 @@
+import {
+  cloneLayout,
+  clampWidth,
+  clampHeight,
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+} from "./sidebar-layout-geometry.ts";
 import type {
   SidebarColumn,
   SidebarDock,
@@ -14,20 +23,22 @@ export type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
+export {
+  sidebarDock,
+  sidebarMainPanel,
+  sidebarSidePanels,
+  sidebarActivePanel,
+  isSidebarSlotVisible,
+  fitSidebarLayout,
+  isSidebarRegionCollapsed,
+  SIDEBAR_MIN_WIDTH_PX,
+  SIDEBAR_MIN_HEIGHT_PX,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+} from "./sidebar-layout-geometry.ts";
+
 const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
 export const SIDEBAR_GEOMETRY_COMMIT_EVENT = "openclaw-sidebar-geometry-commit";
-export const SIDEBAR_MIN_WIDTH_PX = 260;
-export const SIDEBAR_MIN_HEIGHT_PX = 220;
-const SIDEBAR_MAX_WIDTH_PX = 1_200;
-const SIDEBAR_MAX_HEIGHT_PX = 800;
-const SIDEBAR_MAIN_MIN_WIDTH_PX = 312;
-export const SIDEBAR_NARROW_BREAKPOINT_PX = 680;
-const SIDEBAR_DIVIDER_WIDTH_PX = 4;
-
-function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return structuredClone(layout);
-}
 
 function createSidebarColumn(): SidebarColumn {
   return {
@@ -38,40 +49,6 @@ function createSidebarColumn(): SidebarColumn {
     height: SIDEBAR_DEFAULT_HEIGHT_PX,
     width: SIDEBAR_DEFAULT_WIDTH_PX,
   };
-}
-
-function clampWidth(width: number): number {
-  return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, width));
-}
-
-function clampHeight(height: number): number {
-  return Math.min(SIDEBAR_MAX_HEIGHT_PX, Math.max(SIDEBAR_MIN_HEIGHT_PX, height));
-}
-
-export function sidebarDock(layout: SidebarLayout): SidebarDock {
-  return layout.dock === "bottom" || layout.dock === "left" ? layout.dock : "right";
-}
-
-export function sidebarMainPanel(layout: SidebarLayout): SidebarPanel | undefined {
-  return layout.columns[0]?.panels.find((panel) => panel.id === layout.mainPanelId);
-}
-
-export function sidebarSidePanels(layout: SidebarLayout): SidebarPanel[] {
-  return layout.columns[0]?.panels.filter((panel) => panel.id !== layout.mainPanelId) ?? [];
-}
-
-export function sidebarActivePanel(layout: SidebarLayout): SidebarPanel | undefined {
-  return sidebarSidePanels(layout).find((panel) => panel.id === layout.columns[0]?.activePanelId);
-}
-
-export function isSidebarSlotVisible(layout: SidebarLayout, slot: SidebarSlotId): boolean {
-  if (layout.expanded && layout.expandedSide) {
-    return layout.open === true && sidebarActivePanel(layout)?.slot === slot;
-  }
-  if ((sidebarMainPanel(layout)?.slot ?? "conversation") === slot) {
-    return true;
-  }
-  return layout.open === true && !layout.expanded && sidebarActivePanel(layout)?.slot === slot;
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
@@ -294,39 +271,6 @@ export function resizeSidebarPanel(
     }
   }
   return next;
-}
-
-export function fitSidebarLayout(
-  layout: SidebarLayout,
-  availableWidth: number,
-): SidebarLayout | null {
-  const next = cloneLayout(layout);
-  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
-    return next;
-  }
-  const column = next.columns[0];
-  if (!column) {
-    return next;
-  }
-  next.columns = [column];
-  if (sidebarDock(next) === "bottom") {
-    column.height = clampHeight(column.height);
-    return next;
-  }
-  const maxColumnWidth = Math.max(
-    SIDEBAR_MIN_WIDTH_PX,
-    Math.min(SIDEBAR_MAX_WIDTH_PX, availableWidth * 0.6),
-  );
-  const budget = Math.max(0, availableWidth - SIDEBAR_MAIN_MIN_WIDTH_PX - SIDEBAR_DIVIDER_WIDTH_PX);
-  if (SIDEBAR_MIN_WIDTH_PX > budget) {
-    return null;
-  }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
-  return next;
-}
-
-export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth: number): boolean {
-  return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
 }
 
 export { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";

@@ -17,17 +17,11 @@
   min-height: 28px;
   padding: 5px;
 }
-
 /* The workspace rail docks flush to the window edge like the terminal panel:
    drop the chat content's right gutter and square the card's right corners in
    both rail states. Guarded to wide viewports; narrow ones keep the gutter
    because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
-  .content--chat:has(.chat-workbench) {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
   .content--chat:has(.chat-workbench) .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
@@ -61,21 +55,6 @@
   min-width: 0;
   min-height: 0;
   flex: 1 1 0;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.chat-main__conversation {
-  --chat-composer-top-margin: 8px;
-  --chat-transcript-composer-underlap: 30px;
-  --chat-transcript-fade-height: 24px;
-  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
-
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
 }
@@ -116,210 +95,6 @@
   .chat-main__conversation::before {
     display: none;
   }
-}
-
-openclaw-chat-sidebar-region,
-.sidebar-region__right-runtime {
-  display: contents;
-}
-
-.sidebar-region {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas: "main-header" "main";
-  flex: 1 1 0;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar-region__header {
-  grid-area: main-header;
-  min-width: 0;
-}
-
-.sidebar-region__primary {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar-region--open:not(.sidebar-region--expanded) {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, var(--side-panel-width));
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas: "main-header divider side-header" "main divider side";
-}
-
-.sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded) {
-  grid-template-columns: minmax(0, var(--side-panel-width)) auto minmax(0, 1fr);
-  grid-template-areas: "side-header divider main-header" "side divider main";
-}
-
-.sidebar-region--bottom.sidebar-region--open:not(.sidebar-region--expanded),
-.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
-  /* Fit saved heights to short task panes without consuming the main content row. */
-  --side-panel-max-height: calc(
-    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
-  );
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
-      0,
-      min(var(--side-panel-height), var(--side-panel-max-height))
-    );
-  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
-}
-
-.sidebar-region [data-region="main"] {
-  grid-area: main;
-}
-
-.sidebar-region [data-region="side"] {
-  grid-area: side;
-}
-
-.sidebar-region [data-region-header="side"] {
-  grid-area: side-header;
-  height: auto;
-}
-
-.sidebar-region__primary[hidden],
-.sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
-.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side .sidebar-region__header {
-  display: none;
-}
-
-/* Focus the side in place; its header (including restore/close) stays reachable. */
-.sidebar-region--expanded-side {
-  grid-template-areas: "side-header" "side";
-}
-
-.sidebar-region--bottom .sidebar-column__divider {
-  --resize-handle-line-block: 100%;
-  width: 100%;
-}
-
-/* Canonical rail header contract. The header owns geometry; actions are bare
-   glyphs with an invisible hit area so generic button chrome cannot leak in. */
-.rail-header {
-  display: flex;
-  height: var(--rail-header-height);
-  min-height: var(--rail-header-height);
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
-  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
-  background: var(--rail-header-background);
-}
-
-.rail-header__copy {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--rail-header-copy-gap);
-}
-
-.rail-header__eyebrow {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--rail-header-eyebrow-size);
-  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
-  line-height: 1;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.rail-header__title {
-  overflow: hidden;
-  color: var(--text);
-  font-size: var(--rail-header-title-size);
-  font-weight: var(--rail-header-title-weight);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail-header__actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--rail-header-action-gap);
-}
-
-.rail-header__action {
-  display: inline-flex;
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  box-shadow: none;
-  color: var(--rail-header-action-color);
-  font: inherit;
-  opacity: 1;
-  transform: none;
-}
-
-.rail-header__action:hover,
-.rail-header__action:focus-visible {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--rail-header-action-hover-color);
-  transform: none;
-}
-
-.rail-header__action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -3px;
-}
-
-.rail-header__action.is-active,
-.rail-header__action[aria-pressed="true"] {
-  background: transparent;
-  color: var(--rail-header-action-active-color);
-}
-
-.rail-header__action:disabled,
-.rail-header__action[aria-disabled="true"] {
-  opacity: var(--rail-header-action-disabled-opacity);
-}
-
-.rail-header__action svg,
-.rail-header__action .nav-collapse-toggle__icon,
-.rail-header__action .nav-collapse-toggle__icon svg {
-  display: block;
-  width: var(--rail-header-action-glyph-size);
-  height: var(--rail-header-action-glyph-size);
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-column__divider {
-  --resize-handle-line-inline: 100%;
-  z-index: 2;
-  grid-area: divider;
-}
-
-.sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
-  grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
 }
 
 .chat-workspace-rail {
@@ -628,15 +403,6 @@ openclaw-chat-sidebar-region,
   min-width: 0;
   min-height: 0;
   background: color-mix(in srgb, var(--panel) 84%, transparent);
-}
-
-.chat-pane-primary-column {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 .chat-tasks-rail__state {
