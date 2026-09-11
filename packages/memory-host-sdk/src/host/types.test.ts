@@ -80,15 +80,11 @@ describe("memory search staleness", () => {
     } as const;
     expect(
       resolveMemoryIndexIdentityDiagnostic({
-        backend: "builtin",
-        provider: "openai",
         custom: { indexIdentity: { ...base, chunkingVersionOnly: true } },
       }),
     ).toEqual({ ...base, chunkingVersionOnly: true });
     expect(
       resolveMemoryIndexIdentityDiagnostic({
-        backend: "builtin",
-        provider: "openai",
         custom: { indexIdentity: { ...base } },
       }),
     ).toEqual({ ...base });

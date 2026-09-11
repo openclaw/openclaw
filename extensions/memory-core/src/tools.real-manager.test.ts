@@ -817,6 +817,51 @@ describe("memory_search real manager", () => {
     }
   });
 
+  it("keeps memory_search paused when a pending upgrade has no usable FTS index", async () => {
+    const cfg = fixture.createConfig({ minScore: 0 });
+    const filePath = path.join(fixture.paths.memory, "upgrade-fts-paused.md");
+    await fs.writeFile(filePath, "UpgradeFtsPaused()\nfinish()");
+    const dbPath = await seedPriorChunkingVersionIndex(cfg);
+    // The changed file forces the upgrade rebuild to request a fresh embedding
+    // instead of republishing from the embedding cache.
+    await fs.writeFile(filePath, "UpgradeFtsPaused() changed after the prior index was published.");
+    // Occupy the FTS table name with a view so every schema ensure — including
+    // the upgrade rebuild's republish — fails to restore a usable keyword index.
+    const sabotaged = new DatabaseSync(dbPath);
+    try {
+      sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
+      sabotaged.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
+    } finally {
+      sabotaged.close();
+    }
+    fixture.provider.embedBatchPermanentFailure = Object.assign(
+      new Error("openai embeddings failed: 429 insufficient_quota"),
+      { status: 429, code: "insufficient_quota" },
+    );
+
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      oneShotCliRun: true,
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    try {
+      const result = await tool.execute("upgrade-fts-paused", {
+        query: "UpgradeFtsPaused",
+        corpus: "memory",
+      });
+      expect(result.details).toMatchObject({
+        unavailable: true,
+        error: expect.stringContaining("chunking"),
+      });
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
   it("pauses memory_search when a pending upgrade coincides with a changed scope", async () => {
     const wikiPath = path.join(fixture.paths.root, "wiki");
     await fs.mkdir(wikiPath, { recursive: true });

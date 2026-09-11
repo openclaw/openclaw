@@ -211,8 +211,13 @@ export type MemoryIndexIdentityState =
       | {
           code: "provenance_version" | "chunking_version";
           owner: "openclaw";
-          // Set only when every configuration-owned constraint still matches, so
-          // a pending OpenClaw chunking upgrade cannot mask a narrowed scope.
+          // Corpus-compatibility marker: set only when every configuration-owned
+          // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
+          // matches, so a pending OpenClaw chunking upgrade cannot mask a narrowed
+          // scope. It excludes embedding identity — provider, model, provider
+          // settings, and vector dims may differ — and does not establish keyword
+          // retrieval availability; consumers must still check usable FTS before
+          // treating the index as servable.
           chunkingVersionOnly?: boolean;
         }
       | {
