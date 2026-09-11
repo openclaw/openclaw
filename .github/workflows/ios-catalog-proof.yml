@@ -114,6 +114,12 @@ jobs:
         run: |
           set -o pipefail
           swift test --package-path apps/shared/OpenClawKit --scratch-path "$RUNNER_TEMP/catalog-swift" --no-parallel --filter "$SWIFT_FILTER" 2>&1 | tee "$RUNNER_TEMP/catalog-proof/swift-tests.log"
+      - name: macOS Quick Chat tests
+        id: mac
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          swift test --package-path apps/macos --scratch-path "$RUNNER_TEMP/catalog-mac" --no-parallel --filter QuickChatPowerFeaturesTests 2>&1 | tee "$RUNNER_TEMP/catalog-proof/mac-tests.log"
       - name: Start isolated real Gateway and record catalog
         run: |
           set -euo pipefail
@@ -220,5 +226,6 @@ jobs:
         if: always()
         env:
           SWIFT_OUTCOME: ${{ steps.swift.outcome }}
+          MAC_OUTCOME: ${{ steps.mac.outcome }}
           SIMULATOR_OUTCOME: ${{ steps.simulator.outcome }}
-        run: test "$SWIFT_OUTCOME" = success && test "$SIMULATOR_OUTCOME" = success
+        run: test "$SWIFT_OUTCOME" = success && test "$MAC_OUTCOME" = success && test "$SIMULATOR_OUTCOME" = success
