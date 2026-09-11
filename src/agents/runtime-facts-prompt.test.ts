@@ -9,7 +9,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("approved executable runtime facts", () => {
   it("sorts current agent and wildcard hints, preserves paths and argument notes, and clears stale hints", () =>
-    withMockedPlatform("win32", () => {
+    withMockedPlatform("win32", async () => {
       const file: execApprovals.ExecApprovalsFile = {
         version: 1,
         agents: {
@@ -19,10 +19,10 @@ describe("approved executable runtime facts", () => {
         },
       };
       vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => file);
-      expect(buildRuntimeFactsContext(params)).toEqual([
+      expect(await buildRuntimeFactsContext(params)).toEqual([
         { kind: "conversation-data", text: expect.any(String) },
       ]);
-      const before = buildRuntimeFactsContext(params).at(0)?.text;
+      const before = (await buildRuntimeFactsContext(params)).at(0)?.text;
       expect(before).toContain("## Approved executables");
       expect(before).toContain(
         "exact arguments are enforced at runtime; no approval prompt needed when args match",
@@ -32,16 +32,18 @@ describe("approved executable runtime facts", () => {
       );
       expect(before).not.toContain("other.exe");
       file.agents!.main!.allowlist!.unshift({ pattern: "C:\\Tools\\b.exe" });
-      const added = buildRuntimeFactsContext(params).at(0)?.text;
+      const added = (await buildRuntimeFactsContext(params)).at(0)?.text;
       expect(added).toContain("b.exe (any arguments)");
       file.agents!.main!.allowlist!.reverse();
-      expect(buildRuntimeFactsContext(params).at(0)?.text).toBe(added);
+      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(added);
       file.agents = {};
-      expect(buildRuntimeFactsContext(params).at(0)?.text).toBe("## Approved executables\nnone");
+      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(
+        "## Approved executables\nnone",
+      );
     }));
 
   it("bounds hints and omits command approvals, global wildcards, bare names, and unsafe or oversized tokens", () =>
-    withMockedPlatform("win32", () => {
+    withMockedPlatform("win32", async () => {
       vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
         version: 1,
         agents: {
@@ -62,7 +64,7 @@ describe("approved executable runtime facts", () => {
         },
       });
       const facts = expectDefined(
-        buildRuntimeFactsContext(params).at(0),
+        (await buildRuntimeFactsContext(params)).at(0),
         "approved executable facts",
       ).text;
       expect(facts.match(/\(any arguments\)/g)).toHaveLength(10);
@@ -75,15 +77,15 @@ describe("approved executable runtime facts", () => {
   it.each(["linux", "darwin", "win32"] as const)(
     "gates approval reads on Windows and exec capability: %s",
     (platform) =>
-      withMockedPlatform(platform, () => {
+      withMockedPlatform(platform, async () => {
         const load = vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => {
           throw new Error("unavailable");
         });
         expect(
-          buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
+          await buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
         ).toEqual([]);
         expect(load).not.toHaveBeenCalled();
-        const facts = buildRuntimeFactsContext(params).at(0)?.text;
+        const facts = (await buildRuntimeFactsContext(params)).at(0)?.text;
         if (platform === "win32") {
           expect(facts).toBe("## Approved executables\nunavailable");
         } else {

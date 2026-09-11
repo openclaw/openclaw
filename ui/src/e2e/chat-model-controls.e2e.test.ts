@@ -38,9 +38,17 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe("catalog proof");
       const after: typeof before = await cdp.send("Performance.getMetrics");
       const elapsedMs = performance.now() - started;
-      const metric = (name: string) => {
-        const earlier = before.metrics.find((entry) => entry.name === name)?.value ?? 0;
-        const later = after.metrics.find((entry) => entry.name === name)?.value ?? 0;
+      const metric = (name: string, beforeMetrics = before, afterMetrics = after) => {
+        const earlier = beforeMetrics.metrics.find((entry) => entry.name === name)?.value;
+        const later = afterMetrics.metrics.find((entry) => entry.name === name)?.value;
+        if (
+          typeof earlier !== "number" ||
+          !Number.isFinite(earlier) ||
+          typeof later !== "number" ||
+          !Number.isFinite(later)
+        ) {
+          throw new Error(`Missing or invalid CDP metric: ${name}`);
+        }
         return (later - earlier) * 1_000;
       };
       const timings = {
@@ -52,7 +60,22 @@ suite.define(() => {
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
       await trigger.click();
-      await picker.locator("[data-chat-model-search]").fill("Model 0999");
+      const search = picker.locator("[data-chat-model-search]");
+      await search.click();
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+      const searchBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const searchStarted = performance.now();
+      await search.pressSequentially("Model 0999");
+      expect(await search.inputValue()).toBe("Model 0999");
+      const searchAfter: typeof before = await cdp.send("Performance.getMetrics");
+      const searchTimings = {
+        route,
+        models: models.length,
+        elapsedMs: performance.now() - searchStarted,
+        scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
+        taskMs: metric("TaskDuration", searchBefore, searchAfter),
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
@@ -60,6 +83,10 @@ suite.define(() => {
       if (artifactRoot) {
         const dir = createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot);
         await writeFile(`${dir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
+        await writeFile(
+          `${dir}/search-timings.json`,
+          `${JSON.stringify(searchTimings, null, 2)}\n`,
+        );
         await page.screenshot({ path: `${dir}/filtered-catalog.png`, animations: "disabled" });
       }
       const selectionBefore: typeof before = await cdp.send("Performance.getMetrics");
@@ -71,11 +98,7 @@ suite.define(() => {
         route,
         models: models.length,
         elapsedMs: performance.now() - selectionStarted,
-        taskMs:
-          (selectionAfter.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
-            1_000 -
-          (selectionBefore.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
-            1_000,
+        taskMs: metric("TaskDuration", selectionBefore, selectionAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
       await cdp.detach();

@@ -211,6 +211,7 @@ export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
   finalMessage = false,
+  preparedText?: string,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
@@ -218,7 +219,10 @@ export function emitAssistantCommentaryStreamData(
   const commentaryMessage = isResponsesCommentary
     ? scopeAssistantMessageToStreamBlock(message, index, itemId)
     : message;
-  const text = extractAssistantCommentaryText(commentaryMessage);
+  const text =
+    !isResponsesCommentary && preparedText !== undefined
+      ? preparedText
+      : extractAssistantCommentaryText(commentaryMessage);
   if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
     // Generic commentary must carry the identity the phase tagger generated so
     // the Control UI can key the live row to the persisted fallback row; without

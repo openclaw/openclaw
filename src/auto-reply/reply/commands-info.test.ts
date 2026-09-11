@@ -573,7 +573,7 @@ const toolsTestState = vi.hoisted(() => {
   const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
 
   return {
-    releaseRuntimeModel: vi.fn(),
+    releaseRuntimeModel: vi.fn(async () => {}),
     resolveToolsImpl: defaultResolveTools,
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
     resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
@@ -591,7 +591,7 @@ vi.mock("../../agents/tools-effective-inventory.js", () => ({
     const context = await toolsTestState.resolveRuntimeModelContextMock(params);
     return {
       run: <T>(project: (value: typeof context) => T): T => project(context),
-      release: toolsTestState.releaseRuntimeModel,
+      [Symbol.asyncDispose]: toolsTestState.releaseRuntimeModel,
     };
   },
 }));

@@ -362,18 +362,28 @@ function installResolver(): void {
   moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
-      if (aliasTarget) {
-        if (isPluginSdkAliasSpecifier(specifier) && context.conditions.includes("import")) {
-          // Finish the SDK graph before async linking caches an uninstantiated job
-          // that a concurrently activated CJS plugin cannot require.
-          Module.createRequire(import.meta.url)(aliasTarget);
+      const resolved = aliasTarget
+        ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
+        : nextResolve(specifier, context);
+      if (context.conditions.includes("import") && resolved.url.startsWith("file:")) {
+        const filename = fileURLToPath(resolved.url);
+        const sdkTarget = isPluginSdkAliasSpecifier(specifier)
+          ? aliasTarget
+          : Array.from(getPluginCache().sdk.contexts.values()).some(({ sdkRoots }) =>
+                sdkRoots.includes(path.dirname(filename)),
+              )
+            ? resolveAliasTargetForParentUrl(
+                `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`,
+                context.parentURL,
+              )
+            : undefined;
+        // Built plugins use relative SDK URLs. Match the authorized host alias before
+        // evaluation so later synchronous loads never inherit an uninstantiated job.
+        if (sdkTarget && pathToFileURL(sdkTarget).href === resolved.url) {
+          Module.createRequire(import.meta.url)(sdkTarget);
         }
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
       }
-      return nextResolve(specifier, context);
+      return resolved;
     },
   });
   installed = true;

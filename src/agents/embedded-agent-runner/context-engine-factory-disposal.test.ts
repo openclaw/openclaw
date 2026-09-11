@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -20,13 +20,23 @@ import {
   runContextEngineMaintenance,
   waitForDeferredTurnMaintenanceForSession,
 } from "./context-engine-maintenance.js";
+import { log } from "./logger.js";
 
 it.each([
-  { name: "one shared instance", ids: ["active", "active", "active"] },
-  { name: "a superseded instance", ids: ["active", "superseded", "latest"] },
-  { name: "a shared queued instance", ids: ["active", "latest", "latest"] },
-  { name: "a return to the active instance", ids: ["active", "superseded", "active"] },
-] as const)("joins every factory lifetime for $name", async ({ ids }) => {
+  { name: "one shared instance", ids: ["active", "active", "active"], releaseFailure: false },
+  { name: "a superseded instance", ids: ["active", "superseded", "latest"], releaseFailure: false },
+  { name: "a shared queued instance", ids: ["active", "latest", "latest"], releaseFailure: false },
+  {
+    name: "a return to the active instance",
+    ids: ["active", "superseded", "active"],
+    releaseFailure: false,
+  },
+  {
+    name: "a superseded release failure",
+    ids: ["active", "superseded", "latest"],
+    releaseFailure: true,
+  },
+] as const)("joins every factory lifetime for $name", async ({ ids, releaseFailure }) => {
   await withStateDirEnv("openclaw-factory-disposal-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
     resetTaskRegistryForTests({ persist: false });
@@ -36,6 +46,16 @@ it.each([
     const context = new AsyncLocalStorage<string>();
     const activeEntered = createDeferredCore();
     const finishActive = createDeferredCore();
+    const releaseEntered = createDeferredCore();
+    const finishReleases = createDeferredCore();
+    const failure = new Error("fixture resource release failed");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const completedCleanup = new Set<string>();
+    const releaseFacts: Array<{
+      index: number;
+      factorySettled: boolean;
+      cleanupFinished: boolean;
+    }> = [];
     const sessionKey = "agent:main:factory-disposal";
     const disposals: string[] = [];
     const factoryValues: unknown[] = [];
@@ -93,6 +113,7 @@ it.each([
               await stop.promise;
               signal.throwIfAborted();
               cleanupValues.push(db.prepare("SELECT value FROM answer").get()?.value);
+              completedCleanup.add(id);
             });
             cleanupTails.push(tail);
             void tail.catch(() => {});
@@ -119,10 +140,12 @@ it.each([
         { once: true },
       );
       item.signals.push(work.signal);
+      let factorySettled = false;
       const service = captured(() =>
         trackAsyncWork(async () => {
           await item.wait;
           factoryValues.push(db.prepare("SELECT value FROM answer").get()?.value);
+          factorySettled = true;
         }),
       );
       services.push(service);
@@ -136,7 +159,17 @@ it.each([
         sessionFile: path.join(stateDir, "session.jsonl"),
         reason: "turn",
         disposeDeferredContextEngineAfterMaintenance: true,
-        closeFactoryWork,
+        factoryResources: {
+          closeFactoryWork,
+          release: async () => {
+            releaseFacts.push({ index, factorySettled, cleanupFinished: completedCleanup.has(id) });
+            releaseEntered.resolve();
+            await finishReleases.promise;
+            if (releaseFailure && index === 1) {
+              throw failure;
+            }
+          },
+        },
         onDeferredMaintenance: (completion) => {
           pending.push(completion);
         },
@@ -148,6 +181,21 @@ it.each([
       await schedule(ids[1], 1);
       await schedule(ids[2], 2);
       finishActive.resolve();
+      await withTestTimeout(
+        releaseEntered.promise,
+        1_000,
+        "Maintenance did not start resource release",
+      );
+      let completed = false;
+      const completion = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
+        completed = true;
+      });
+      pending.push(completion);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(completed).toBe(false);
+      finishReleases.resolve();
       await withTestTimeout(
         Promise.all(callbacks.map(({ closed }) => closed)),
         1_000,
@@ -161,7 +209,19 @@ it.each([
       expect(cleanupValues).toHaveLength(new Set(ids).size);
       expect(cleanupValues.every((value) => value === 42)).toBe(true);
       expect(disposals.toSorted()).toEqual([...new Set(ids)].toSorted());
+      expect(releaseFacts.toSorted((left, right) => left.index - right.index)).toEqual(
+        [0, 1, 2].map((index) => ({ index, factorySettled: true, cleanupFinished: true })),
+      );
+      if (releaseFailure) {
+        expect(warn).toHaveBeenCalledWith(
+          "context engine dispose failed after deferred maintenance",
+          {
+            errorMessage: failure.message,
+          },
+        );
+      }
     } finally {
+      finishReleases.resolve();
       finishActive.resolve();
       for (const engine of engines.values()) {
         engine.stop();
@@ -170,6 +230,7 @@ it.each([
       await Promise.allSettled([...services, ...cleanupTails, ...pending]);
       await waitForDeferredTurnMaintenanceForSession(sessionKey);
       db.close();
+      warn.mockRestore();
       resetCommandQueueStateForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });

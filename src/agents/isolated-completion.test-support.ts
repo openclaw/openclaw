@@ -169,10 +169,10 @@ export function resetIsolatedCompletionTestState(): void {
     workspaceDir: "/tmp/workspace",
     createStores: () => ({ modelRegistry: {} }),
   };
-  releaseRuntimeLease = vi.fn();
+  releaseRuntimeLease = vi.fn(async () => {});
   isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
     snapshot: preparedModelRuntime,
-    release: releaseRuntimeLease,
+    [Symbol.asyncDispose]: releaseRuntimeLease,
   });
   isolatedCompletionMocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
   isolatedCompletionMocks.resolveCliBackendConfig.mockReturnValue({

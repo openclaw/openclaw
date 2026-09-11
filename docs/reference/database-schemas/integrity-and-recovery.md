@@ -73,6 +73,11 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
 
+Some older packages omit schema metadata. The updater recognizes the schema-1
+contract for plain 2026 stable releases through `2026.7.1` and checks it before
+activation, including when updating from a local package tarball. An incompatible
+target is refused while the current installation remains in place.
+
 Downgrading the binary never downgrades the data. Use the managed recovery path
 or restore the verified pre-update backup with its matching release. Retain
 migration recovery originals until you have verified the upgrade; they do not

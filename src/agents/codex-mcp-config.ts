@@ -227,9 +227,9 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfigCore(
+export async function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
-): CodexBundleMcpThreadConfig {
+): Promise<CodexBundleMcpThreadConfig> {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
@@ -286,7 +286,7 @@ export function loadCodexBundleMcpThreadConfigCore(
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
   const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
-  const grants = params.agentId ? loadMcpToolGrants(params.agentId) : [];
+  const grants = params.agentId ? await loadMcpToolGrants(params.agentId) : [];
   const configuredGrants = grants.filter((grant) => {
     const server = Object.hasOwn(configuredMcp, grant.server)
       ? configuredMcp[grant.server]

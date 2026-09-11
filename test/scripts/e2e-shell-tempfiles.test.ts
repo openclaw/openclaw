@@ -40,6 +40,22 @@ async function extractClawhubSkillInstallVerifier(): Promise<string> {
   return script.slice(verifierStart, verifierEnd);
 }
 
+async function extractClawhubSkillInstallSelector(): Promise<string> {
+  const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
+  const marker =
+    'node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" <<\'NODE\'\n';
+  const start = script.indexOf(marker);
+  if (start === -1) {
+    throw new Error("ClawHub skill install selector heredoc was not found");
+  }
+  const selectorStart = start + marker.length;
+  const selectorEnd = script.indexOf("\nNODE", selectorStart);
+  if (selectorEnd === -1) {
+    throw new Error("ClawHub skill install selector heredoc was not terminated");
+  }
+  return script.slice(selectorStart, selectorEnd);
+}
+
 describe("e2e shell tempfile hygiene", () => {
   it("does not allocate FIFO paths with mktemp -u", async () => {
     const offenders: string[] = [];
@@ -303,6 +319,58 @@ exit 42
       expect(
         scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
       ).toEqual([]);
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("selects a non-suspicious ClawHub search result without weakening explicit requests", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-select-test-"));
+    const searchPath = path.join(tempRoot, "search.json");
+    const resolvePath = path.join(tempRoot, "resolved.json");
+    const selector = await extractClawhubSkillInstallSelector();
+    await writeFile(
+      searchPath,
+      `${JSON.stringify({
+        results: [
+          {
+            installRef: "@owner/risky",
+            native: { skill: { isSuspicious: true } },
+            slug: "preferred",
+            trust: { clawHubVerdict: "suspicious" },
+          },
+          {
+            installRef: "@owner/safe",
+            native: { skill: { isSuspicious: false } },
+            slug: "homeassistant-safe",
+            trust: { clawHubVerdict: null, installability: "installable" },
+          },
+        ],
+      })}\n`,
+    );
+
+    try {
+      const defaultResult = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", searchPath, resolvePath, "", "preferred"],
+        { encoding: "utf8", input: selector },
+      );
+      expect(defaultResult.status, defaultResult.stderr).toBe(0);
+      expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
+        installRef: "@owner/safe",
+        slug: "homeassistant-safe",
+      });
+
+      const explicitResult = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", searchPath, resolvePath, "preferred", "preferred"],
+        { encoding: "utf8", input: selector },
+      );
+      expect(explicitResult.status, explicitResult.stderr).toBe(0);
+      expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
+        installRef: "@owner/risky",
+        slug: "preferred",
+      });
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

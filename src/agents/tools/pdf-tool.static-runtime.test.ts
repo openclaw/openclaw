@@ -149,7 +149,7 @@ describe("PDF tool static prepared runtime", () => {
               native: false,
             });
           } finally {
-            lease.release();
+            await lease[Symbol.asyncDispose]();
           }
         },
       );
@@ -258,7 +258,7 @@ describe("PDF tool static prepared runtime", () => {
           );
           expect(result.details).toMatchObject({ model: modelRef, native: false });
         } finally {
-          lease.release();
+          await lease[Symbol.asyncDispose]();
         }
       },
     );

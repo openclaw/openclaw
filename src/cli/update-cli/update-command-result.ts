@@ -227,6 +227,26 @@ export function resolveAutomaticUpdateTriage(
     : undefined;
 }
 
+export type UpdateAdmissionReportParams = {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  reason: string;
+  message?: string;
+  opts: UpdateCommandOptions;
+  controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+};
+
+/** A fresh admission decision is data until its staging and executor owners settle. */
+export class UnreportedUpdateAdmissionOutcome extends Error {
+  constructor(
+    readonly report: UpdateAdmissionReportParams,
+    readonly skipped?: { exitCode: 0 | 1 },
+  ) {
+    super(report.message ?? report.reason);
+    this.name = "UnreportedUpdateAdmissionOutcome";
+  }
+}
+
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
   meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
   result: UpdateRunResult;

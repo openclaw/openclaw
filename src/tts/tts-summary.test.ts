@@ -75,6 +75,7 @@ beforeEach(() => {
   installSpeechProviders([createMockSpeechProvider()]);
   completion.complete.mockReset();
   completion.prepare.mockReturnValue({
+    async [Symbol.asyncDispose]() {},
     model,
     auth: { apiKey: "synthetic-test-key", source: "test", mode: "api-key" },
     release: () => {},

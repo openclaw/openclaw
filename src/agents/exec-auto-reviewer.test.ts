@@ -29,7 +29,7 @@ function createReviewerHarness(decision: "allow" | "ask" = "allow") {
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
-    release: () => {},
+    [Symbol.asyncDispose]: async () => {},
   }));
   const complete = vi.fn(async () => ({
     stopReason: "stop" as const,
@@ -61,7 +61,7 @@ async function reviewExecResponse(text: string) {
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
-    release: () => {},
+    [Symbol.asyncDispose]: async () => {},
   }));
   const complete = vi.fn(async () => ({
     stopReason: "stop" as const,
@@ -356,7 +356,7 @@ describe("createModelExecAutoReviewer", () => {
       },
       model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
       auth: { apiKey: "key", mode: "env" },
-      release: () => {},
+      [Symbol.asyncDispose]: async () => {},
     }));
     let capturedPrompt = "";
     const complete = vi.fn(
@@ -512,7 +512,7 @@ describe("createModelExecAutoReviewer", () => {
       },
       model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
       auth: { apiKey: "key", mode: "env" },
-      release: () => {},
+      [Symbol.asyncDispose]: async () => {},
     }));
     const complete = vi.fn(async () => ({
       stopReason: "stop" as const,
@@ -611,7 +611,7 @@ describe("createModelExecAutoReviewer", () => {
           },
           model: { provider: "atlassian-aigw", id: "gpt-5.4-nano", api: "openai-responses" },
           auth: { apiKey: "key", mode: "env" },
-          release: () => {},
+          [Symbol.asyncDispose]: async () => {},
         })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
         completeWithPreparedSimpleCompletionModel:
           complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
@@ -722,7 +722,7 @@ describe("createModelExecAutoReviewer", () => {
             selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/agent" },
             model: { provider: "openai", id: "gpt-5.5", api: "openai-responses" },
             auth: { apiKey: "key", mode: "env" },
-            release: () => {},
+            [Symbol.asyncDispose]: async () => {},
           })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
           completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
             stopReason,
@@ -830,7 +830,7 @@ describe("createModelExecAutoReviewer", () => {
           selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
           model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
           auth: { apiKey: "redacted", mode: "env" as const },
-          release: () => {},
+          [Symbol.asyncDispose]: async () => {},
         })) as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
         completeWithPreparedSimpleCompletionModel:
           complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
@@ -885,7 +885,7 @@ describe("createModelExecAutoReviewer", () => {
             selection: { provider: string; modelId: string; agentDir: string };
             model: { provider: string; id: string; api: "openai" };
             auth: { apiKey: string; mode: "env" };
-            release: () => void;
+            [Symbol.asyncDispose]: () => Promise<void>;
           }>((resolve) => {
             setTimeout(() => {
               resolve({
@@ -896,7 +896,7 @@ describe("createModelExecAutoReviewer", () => {
                 },
                 model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
                 auth: { apiKey: "key", mode: "env" },
-                release: () => {},
+                [Symbol.asyncDispose]: async () => {},
               });
             }, 4_900);
           }),
@@ -1051,7 +1051,7 @@ describe("createModelExecAutoReviewer", () => {
         selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
         model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
         auth: { apiKey: "redacted", mode: "env" as const },
-        release: () => {},
+        [Symbol.asyncDispose]: async () => {},
       };
     });
     const complete = vi.fn(async () => ({

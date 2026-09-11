@@ -495,7 +495,7 @@ function renderSessionCatalog(params: {
       onNavigate: host.onNavigate,
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,
-      onOpenTerminal: openCatalogSessionInTerminal,
+      onOpenTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
       onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
       isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),

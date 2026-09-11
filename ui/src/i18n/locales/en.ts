@@ -2265,7 +2265,6 @@ export const en: TranslationMap & {
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
     startCancelled: "Terminal start was cancelled. Try again.",
-    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -5647,6 +5646,7 @@ export const en: TranslationMap & {
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
+      waitingForAgent: "Queued · waiting for the agent",
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:

@@ -4,6 +4,7 @@ import Foundation
 final class MacGatewaySelectionPreferences {
     static let shared = MacGatewaySelectionPreferences(defaults: AppDefaults.standard)
     private static let profileKey = "openclaw.webchat.lastGatewayProfileID"
+    private static let localKey = "openclaw.webchat.lastGatewayLocal"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults) {
@@ -15,12 +16,17 @@ final class MacGatewaySelectionPreferences {
     }
 
     var target: DashboardGatewayTarget {
-        self.profileID.map(DashboardGatewayTarget.profile) ?? .primary
+        if self.defaults.bool(forKey: Self.localKey) {
+            let state = AppStateStore.shared
+            return state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary ? .local : .primary
+        }
+        return self.profileID.map(DashboardGatewayTarget.profile) ?? .primary
     }
 
     func select(_ target: DashboardGatewayTarget) {
+        self.defaults.set(target == .local, forKey: Self.localKey)
         switch target {
-        case .primary:
+        case .primary, .local:
             self.defaults.removeObject(forKey: Self.profileKey)
         case let .profile(id):
             self.defaults.set(id, forKey: Self.profileKey)

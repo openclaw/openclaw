@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -231,10 +232,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function requireCommandByName(name: string): Record<string, unknown> {
@@ -648,7 +646,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
       name: "safe-name",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });

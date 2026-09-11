@@ -35,8 +35,10 @@ include `registry.reason` (`selector_missing`, `selector_query_failed`,
 
 Every admitted update has a durable `runId`, including updates requested from
 chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
-and updates refused after admission keep a skipped or failed record with their
-reason. CLI invocations rejected before admission leave state untouched. The same ID follows
+on profiles with an existing runtime database and updates refused after admission
+keep a skipped or failed record with their reason. A fresh-profile dry-run leaves
+the database absent and records no run. CLI invocations rejected before admission
+leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
@@ -45,7 +47,7 @@ a run ID.
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
 
-`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
+An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 If history cannot be read or classified, status still shows update availability
 and runtime findings. Human output explains that run status is unavailable;

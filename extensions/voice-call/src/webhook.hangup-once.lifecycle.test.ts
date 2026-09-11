@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
@@ -24,11 +24,8 @@ function installStateRuntime(): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
-      openKeyedStore: (() => {
-        throw new Error("openKeyedStore is not used by voice-call webhook lifecycle tests");
-      }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error(
           "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
@@ -242,12 +239,12 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       if (!state) {
         throw new Error("expected fixture SQLite runtime");
       }
-      const openStore = state.openSyncKeyedStore.bind(state);
+      const openStore = state.openKeyedStore.bind(state);
       const fault = vi
-        .spyOn(state, "openSyncKeyedStore")
+        .spyOn(state, "openKeyedStore")
         .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
           const store = openStore<T>(options);
-          store.entries = () => {
+          store.entries = async () => {
             throw new Error("synthetic signed callback history failure");
           };
           return store;
@@ -267,7 +264,7 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       try {
         await server.stop();
       } finally {
-        finalizeTestManagerCalls(manager);
+        await finalizeTestManagerCalls(manager);
         resetPluginStateStoreForTests();
         fs.rmSync(storePath, { recursive: true, force: true });
       }

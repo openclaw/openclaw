@@ -7,6 +7,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -91,15 +92,23 @@ beforeEach(async () => {
       OPENCLAW_UPDATE_RUN_ID: undefined,
     },
   });
+  // Config-write custody is stored outside the profile; isolate both process owners.
+  const control = state.path("control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
   await state.writeText("events.jsonl", "");
-  await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
   entrypoint = await state.writeText(
     "entry.mjs",
     `
-    import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
-    const { runUpdateLeaseChild } = await tsImport(${JSON.stringify(new URL("./update-command-lease.test-support.ts", import.meta.url).href)}, { parentURL: import.meta.url, tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+    import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
+    import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+    const loader = register({ namespace: "update-lease-fixture", tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+    const { registerSealedRuntime } = await loader.import(${JSON.stringify(new URL("../../infra/sealed-runtime-registry.ts", import.meta.url).href)}, import.meta.url);
+    registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(control)} });
+    const { runUpdateLeaseChild } = await loader.import(${JSON.stringify(new URL("./update-command-lease.test-support.ts", import.meta.url).href)}, import.meta.url);
     await runUpdateLeaseChild();
+    await loader.unregister();
   `,
   );
   mocks.entrypoint.mockResolvedValue(entrypoint);
@@ -121,6 +130,12 @@ async function writeScenario(
   lane: Lane,
   scenario: Omit<LeaseScenario, "lane"> = {},
 ): Promise<void> {
+  // Fresh-process fixtures must advertise a runtime supporting continuation;
+  // legacy targets intentionally exercise the current-process fallback.
+  await fs.writeFile(
+    state.path("package.json"),
+    JSON.stringify({ version: lane === "fresh-process" ? VERSION : "1.0.0" }),
+  );
   await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
 }
 
@@ -152,7 +167,7 @@ async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promi
       mode: "npm",
       root: state.root,
       before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
-      after: { version: "1.0.0" },
+      after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
       steps: [],
       durationMs: 1,
     },
@@ -256,7 +271,7 @@ describe("update orchestration lifecycle ownership", () => {
         });
       }
       await writeScenario(lane, {
-        hostVersion: lane === "repair" ? undefined : "1.0.0",
+        hostVersion: lane === "current-process" ? "1.0.0" : undefined,
       });
       if (lane === "current-process") {
         vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", "1");
@@ -604,7 +619,7 @@ describe("update orchestration lifecycle ownership", () => {
     async ({ lane, failure, reason }) => {
       await writeScenario(lane, {
         readinessFailure: failure,
-        hostVersion: lane === "repair" ? undefined : "1.0.0",
+        hostVersion: lane === "current-process" ? "1.0.0" : undefined,
       });
 
       await invokeReportedFailure(lane);

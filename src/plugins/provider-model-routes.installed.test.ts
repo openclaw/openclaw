@@ -7,8 +7,8 @@ import { resolveConfiguredModelCatalogOverrides } from "../agents/model-catalog-
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getModelRefStatus, resolveModelRefFromString } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import type { PreparedRuntimeCapabilityModel } from "../agents/prepared-model-runtime.configured.js";
 import { materializePreparedModelCatalog } from "../agents/prepared-model-runtime.full-catalog.js";
+import type { PreparedRuntimeCapabilityModel } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";

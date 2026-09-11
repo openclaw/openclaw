@@ -141,9 +141,7 @@ suite.define(() => {
       await place.getByRole("button", { name: "Local" }).waitFor();
       expect(await place.locator('[data-value^="device:"]').count()).toBe(0);
       expect(await place.locator('[data-value^="cloud:"]').count()).toBe(0);
-      expect(
-        await place.getByRole("switch", { name: "Choose a device automatically" }).count(),
-      ).toBe(0);
+      expect(await place.locator('[data-value="auto-device"]').count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -363,7 +361,10 @@ suite.define(() => {
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      const cloud = where.getByRole("button", { name: "Cloud · aws" });
+      const cloud = where.getByRole("button", {
+        name: "aws · Cloud needs a Git checkout",
+        exact: true,
+      });
       await cloud.waitFor();
       expect(await cloud.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");

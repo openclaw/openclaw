@@ -6,14 +6,16 @@ import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
+import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
   prefersBuiltPluginArtifacts,
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
+import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
 import type {
   ProviderDiscoveryPlan,
@@ -99,21 +101,17 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
         }),
       }).modulePath
     : source;
-  const moduleLoader = getCachedPluginModuleLoader({
-    modulePath,
-    rootDir,
-    importerUrl: import.meta.url,
-    loaderFilename: import.meta.url,
-    preferBuiltDist: true,
+  const moduleLoader = getPluginSetupModuleLoader(manifest, modulePath, rootDir);
+  return moduleLoader.initialize(() => {
+    const loaded = withProfile(
+      { pluginId: manifest.id, source: modulePath },
+      "provider-discovery-entry",
+      () => moduleLoader(modulePath) as ProviderDiscoveryModule,
+    );
+    return normalizeDiscoveryModule(loaded).map((provider) =>
+      Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
+    );
   });
-  const loaded = withProfile(
-    { pluginId: manifest.id, source: modulePath },
-    "provider-discovery-entry",
-    () => moduleLoader(modulePath) as ProviderDiscoveryModule,
-  );
-  return normalizeDiscoveryModule(loaded).map((provider) =>
-    Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
-  );
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
@@ -260,7 +258,12 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      providers.push(...loadProviderDiscoveryProviders(manifest));
+      // Deferred discovery fills and retires with its snapshot, even outside the producer's scope.
+      providers.push(
+        ...withPluginCache(getPluginMetadataSnapshotCache(metadataSnapshot), () =>
+          loadProviderDiscoveryProviders(manifest),
+        ),
+      );
     } catch {
       // Entry loading is all-or-nothing: discarded results no longer cover their owners.
       // Keep static manifest coverage for the scope-aware full-loader fallback.

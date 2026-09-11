@@ -126,7 +126,7 @@ beforeEach(() => {
   };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
     snapshot: preparedModelRuntime,
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
   });
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
@@ -912,7 +912,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });
@@ -951,7 +951,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledTimes(2);
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });
@@ -995,7 +995,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(modelResolver).toHaveBeenCalledTimes(1);
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });
@@ -1028,7 +1028,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       expect(result.model).toMatchObject({ id: "gpt-5.5", api: "openai-responses" });
     } finally {
       if (!("error" in result)) {
-        result.release();
+        await result[Symbol.asyncDispose]();
       }
     }
   });

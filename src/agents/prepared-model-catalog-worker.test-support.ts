@@ -32,6 +32,7 @@ import {
   getPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
@@ -638,6 +639,10 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       "static",
     ).pending
   )[0]!;
+  // Direct builds need the same retained generation that publication gives real callers.
+  await using _ = {
+    [Symbol.asyncDispose]: retainPreparedPluginGeneration(build.pluginGeneration),
+  };
   await expectNativeHarnessModelsPublished({
     config,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
