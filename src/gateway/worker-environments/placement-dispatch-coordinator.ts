@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type {
+  WorkerDispatchPlacement,
+  WorkerProvisioningDispatchPlacement,
+} from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import {
   matchesWorkerPlacementTarget,
@@ -49,6 +52,7 @@ function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
 export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
   admitDispatch: WorkerPlacementDispatchAdmission,
+  recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
   waitForInitialPlacement(
@@ -198,9 +202,13 @@ export function coordinateWorkerPlacementDispatch(
     [Kind in keyof OperationServices]: {
       kind: Kind;
       request: Parameters<OperationServices[Kind]>[0];
-    } & ReturnType<typeof trackPlacementOperation<Awaited<ReturnType<OperationServices[Kind]>>>>;
+    } & ReturnType<typeof trackPlacementOperation<Awaited<ReturnType<OperationServices[Kind]>>>> &
+      (Kind extends "recovery"
+        ? { foreground: ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]> }
+        : unknown);
   }[keyof OperationServices];
   const operationsInFlight = new Map<string, Set<PlacementOperation>>();
+  const setupWaiters = new Map<string, Set<(operation: PlacementOperation) => void>>();
   const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
   const registerOperation = (record: PlacementOperation) => {
     const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
@@ -213,6 +221,9 @@ export function coordinateWorkerPlacementDispatch(
     }
     pending.add(record);
     operationsInFlight.set(record.request.sessionId, pending);
+    for (const observe of setupWaiters.get(record.request.sessionId) ?? []) {
+      observe(record);
+    }
     const release = () => {
       pending.delete(record);
       if (pending.size === 0) {
@@ -233,34 +244,82 @@ export function coordinateWorkerPlacementDispatch(
     async waitForInitialPlacement(placement, signal) {
       signal?.throwIfAborted();
       const pending = pendingOperations(placement.sessionId);
-      const owner = pending.length === 1 ? pending[0] : undefined;
-      // The persisted state is not proof of a live setup owner. Only join the exact
-      // dispatch/recovery that published it, never a Move or Stop operation.
-      if (
-        !owner ||
-        (owner.kind !== "dispatch" && owner.kind !== "recovery") ||
-        owner.request.sessionKey !== placement.sessionKey ||
-        owner.request.agentId !== placement.agentId ||
-        !matchesWorkerPlacementTarget(
+      const matchesOwner = (owner: PlacementOperation) =>
+        (owner.kind === "dispatch" || owner.kind === "recovery") &&
+        owner.request.sessionKey === placement.sessionKey &&
+        owner.request.agentId === placement.agentId &&
+        matchesWorkerPlacementTarget(
           owner.currentPlacement() ?? (owner.kind === "recovery" ? owner.request : undefined),
           placement,
-        )
-      ) {
-        throw new Error(
+        );
+      const missingOwner = () =>
+        new Error(
           "Worker setup has no matching live dispatch owner. Wait for recovery or explicitly retry setup.",
         );
+      const initialOwner = pending.length === 1 ? pending[0] : undefined;
+      const recover =
+        recoverInitialPlacement && placement.state === "provisioning" && placement.environmentId
+          ? () => recoverInitialPlacement(placement)
+          : undefined;
+      if (pending.length ? !initialOwner || !matchesOwner(initialOwner) : !recover) {
+        throw missingOwner();
       }
-      const waitSignal = signal
-        ? AbortSignal.any([signal, owner.superseded.signal])
-        : owner.superseded.signal;
-      const completed = await racePromiseWithAbortSignal(owner.operation, waitSignal);
-      waitSignal.throwIfAborted();
-      if (!completed || !matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
-        throw new Error(
-          "Worker setup did not publish a ready placement. Inspect the setup recovery error.",
-        );
+      const superseded = new AbortController();
+      let recoveryFailure: { error: unknown } | undefined;
+      const waitSignal = signal ? AbortSignal.any([signal, superseded.signal]) : superseded.signal;
+      let nextOwner = createDeferredCore<PlacementOperation>();
+      const observe = (owner: PlacementOperation) => {
+        // A restart can leave a gap between provider recovery passes. Stop, Move, or
+        // replacement during that gap still permanently invalidates the held input.
+        if (pendingOperations(placement.sessionId).length !== 1 || !matchesOwner(owner)) {
+          superseded.abort(missingOwner());
+        } else {
+          nextOwner.resolve(owner);
+        }
+      };
+      const waiters = setupWaiters.get(placement.sessionId) ?? new Set();
+      waiters.add(observe);
+      setupWaiters.set(placement.sessionId, waiters);
+      try {
+        if (initialOwner) {
+          nextOwner.resolve(initialOwner);
+        } else if (recover) {
+          // Subscribe before waking the existing guarded recovery owner. Its environment
+          // coordinator deduplicates concurrent waiters and owns subsequent provider passes.
+          void recover().catch((error: unknown) => {
+            recoveryFailure = { error };
+            superseded.abort(error);
+          });
+        }
+        for (;;) {
+          const owner = await racePromiseWithAbortSignal(nextOwner.promise, waitSignal);
+          nextOwner = createDeferredCore<PlacementOperation>();
+          const ownerSignal = AbortSignal.any([waitSignal, owner.superseded.signal]);
+          const completed = await racePromiseWithAbortSignal(owner.operation, ownerSignal);
+          ownerSignal.throwIfAborted();
+          if (completed && matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
+            return completed;
+          }
+          if (
+            !completed &&
+            recover &&
+            owner.kind === "recovery" &&
+            matchesWorkerPlacementTarget(owner.currentPlacement(), placement)
+          ) {
+            continue;
+          }
+          throw new Error(
+            "Worker setup did not publish a ready placement. Inspect the setup recovery error.",
+          );
+        }
+      } catch (error) {
+        throw recoveryFailure ? recoveryFailure.error : error;
+      } finally {
+        waiters.delete(observe);
+        if (waiters.size === 0) {
+          setupWaiters.delete(placement.sessionId);
+        }
       }
-      return completed;
     },
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = pendingOperations(request.sessionId).find(
@@ -378,6 +437,14 @@ export function coordinateWorkerPlacementDispatch(
         ? runReconciliation(() => service.reconcileActive())
         : runReconciliation(() => service.reconcileActive(environmentId), false),
     resumeProvisioning: (placement, reconcileEnvironmentCore) => {
+      const inFlight = pendingOperations(placement.sessionId).find(
+        (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
+      );
+      if (inFlight?.kind === "recovery") {
+        // A timed-out provider retains admission after foreground recovery has finished.
+        // Reuse that pass until it settles; a later sweep can then resume the same owner.
+        return inFlight.foreground;
+      }
       // Insertion order matters: a later queued sweep must not steal a provisioning join
       // from the earlier sweep already awaiting that environment pass.
       const sweep = [...reconciliationSweeps].find((candidate) => candidate.acceptingJoins);
@@ -452,7 +519,12 @@ export function coordinateWorkerPlacementDispatch(
           throw error;
         }
       });
-      registerOperation({ kind: "recovery", request: placement, ...tracked });
+      registerOperation({
+        kind: "recovery",
+        request: placement,
+        ...tracked,
+        foreground: foreground.promise,
+      });
       return foreground.promise;
     },
   };

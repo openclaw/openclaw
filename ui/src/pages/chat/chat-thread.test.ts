@@ -5377,6 +5377,26 @@ describe("user message expansion state", () => {
 });
 
 describe("thread item cache", () => {
+  it("repositions an initial placement prompt when recovery identifies its existing queue row", () => {
+    const queued = queuedSend("initial", "Original request", 10_000, "failed", {
+      sendRunId: "initial",
+      sendAttempts: 1,
+    });
+    const input = createProps({
+      messages: [assistantMessage("Gateway recovery", 2)],
+      queue: [queued],
+    });
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+    expect(roles(buildCachedChatItems({ ...input, initialTurnId: queued.id }))).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+  });
+
   it("sender provenance refreshes reply display without changing the person", () => {
     resetChatThreadState();
     const alice = userMessage("first", 1, {
