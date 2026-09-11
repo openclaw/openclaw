@@ -370,6 +370,22 @@ async function stopManagedServiceBeforeMutableUpdate(
     assertNative?.();
     assertExecutor();
   };
+  // A Linux systemd scope changes cgroup ownership, not Unix ancestry. Reprove
+  // the exact current handoff lease at each boundary that can stop its ancestor.
+  const resolveAncestryBlock = async (state: GatewayServiceState) => {
+    const blockMessage = gatewayMaintenanceBlockMessage(state, params.root);
+    if (
+      !blockMessage ||
+      ((params.phase === "inspect" || process.platform === "linux") &&
+        (await isCurrentManagedServiceUpdateHandoffProcess({
+          root: params.root,
+          runId: params.updateRun?.runId,
+        })))
+    ) {
+      return undefined;
+    }
+    return blockMessage;
+  };
   assertCurrent();
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
   const markInspectionUnavailable = (
@@ -490,17 +506,8 @@ async function stopManagedServiceBeforeMutableUpdate(
   }
   if (params.phase === "inspect") {
     const blockMessage = params.handoffFromGateway
-      ? gatewayMaintenanceBlockMessage(serviceState, params.root)
+      ? await resolveAncestryBlock(serviceState)
       : undefined;
-    if (
-      blockMessage &&
-      (await isCurrentManagedServiceUpdateHandoffProcess({
-        root: params.root,
-        runId: params.updateRun?.runId,
-      }))
-    ) {
-      return inspected;
-    }
     return blockMessage ? { ...inspected, blockMessage } : inspected;
   }
   const suspendTask = async () => {
@@ -545,7 +552,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
   }
-  const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root);
+  const blockMessage = await resolveAncestryBlock(serviceState);
   if (blockMessage) {
     return { ...inspected, blockMessage };
   }
@@ -579,7 +586,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       },
     });
     assertCurrent();
-    const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
+    const currentBlockMessage = await resolveAncestryBlock(currentState);
     if (currentBlockMessage) {
       throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
     }
