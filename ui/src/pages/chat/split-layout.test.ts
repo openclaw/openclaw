@@ -4,6 +4,7 @@ import { normalizeChatSplitLayout } from "./split-layout-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
+  balanceLayout,
   closePane,
   findPane,
   insertPane,
@@ -58,7 +59,7 @@ describe("chat split layout", () => {
     });
   });
 
-  it("inserts columns immediately left or right and halves only the target weight", () => {
+  it("inserts columns immediately left or right and shares the row evenly until a divider is dragged", () => {
     const right = insertPane(createSplitLayout("main"), "p1", "right", "right");
     expect(right.columns.map((column) => column.id)).toEqual(["c1", "c3", "c2"]);
     expect(right.columns.map((column) => column.panes.map((pane) => pane.id))).toEqual([
@@ -66,7 +67,7 @@ describe("chat split layout", () => {
       ["p3"],
       ["p2"],
     ]);
-    expect(right.columnWeights).toEqual([0.25, 0.25, 0.5]);
+    expect(right.columnWeights).toEqual([1 / 3, 1 / 3, 1 / 3]);
     expect(right.activePaneId).toBe("p3");
 
     const left = insertPane(createSplitLayout("main"), "p2", "left", "left");
@@ -75,8 +76,13 @@ describe("chat split layout", () => {
       "left",
       "main",
     ]);
-    expect(left.columnWeights).toEqual([0.5, 0.25, 0.25]);
+    expect(left.columnWeights).toEqual([1 / 3, 1 / 3, 1 / 3]);
     expect(left.activePaneId).toBe("p3");
+
+    // Once the user has dragged a column divider, a new split halves only its source column.
+    const custom = resizeColumns(createSplitLayout("main"), 0, 0.5);
+    expect(custom.customColumnWeights).toBe(true);
+    expect(insertPane(custom, "p1", "right", "right").columnWeights).toEqual([0.25, 0.25, 0.5]);
   });
 
   it("inserts panes immediately up or down and halves only the target weight", () => {
@@ -113,9 +119,15 @@ describe("chat split layout", () => {
     const threeColumns = insertPane(createSplitLayout("main"), "p1", "third", "right");
     const collapsedColumn = closePane(threeColumns, "p3");
     expect(collapsedColumn?.columns.map((column) => column.id)).toEqual(["c1", "c2"]);
-    expect(collapsedColumn?.columnWeights.at(0)).toBeCloseTo(1 / 3);
-    expect(collapsedColumn?.columnWeights.at(1)).toBeCloseTo(2 / 3);
+    expect(collapsedColumn?.columnWeights.at(0)).toBeCloseTo(0.5);
+    expect(collapsedColumn?.columnWeights.at(1)).toBeCloseTo(0.5);
     expect(collapsedColumn?.activePaneId).toBe("p1");
+
+    // Manually sized rows keep their proportions when a column closes.
+    const customThree = resizeColumns(threeColumns, 1, 0.25);
+    const collapsedCustom = closePane(customThree, "p3");
+    expect(collapsedCustom?.columnWeights.at(0)).toBeCloseTo(0.4);
+    expect(collapsedCustom?.columnWeights.at(1)).toBeCloseTo(0.6);
 
     const collapsed = closePane(createSplitLayout("main"), "p1");
     expect(collapsed).toBeUndefined();
@@ -165,16 +177,18 @@ describe("chat split layout", () => {
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {
     const layout = insertPane(createSplitLayout("main"), "p1", "third", "right");
     const columns = resizeColumns(layout, 0, 0.8);
-    expect(columns.columnWeights.at(0)).toBeCloseTo(0.4);
-    expect(columns.columnWeights.at(1)).toBeCloseTo(0.1);
-    expect(columns.columnWeights.at(2)).toBe(0.5);
+    expect(columns.columnWeights.at(0)).toBeCloseTo((2 / 3) * 0.8);
+    expect(columns.columnWeights.at(1)).toBeCloseTo((2 / 3) * 0.2);
+    expect(columns.columnWeights.at(2)).toBeCloseTo(1 / 3);
+    expect(columns.customColumnWeights).toBe(true);
     const clampedColumns = resizeColumns(layout, 0, 0.99).columnWeights;
-    expect(clampedColumns.at(0)).toBeCloseTo(0.425);
-    expect(clampedColumns.at(1)).toBeCloseTo(0.075);
-    expect(clampedColumns.at(2)).toBe(0.5);
+    expect(clampedColumns.at(0)).toBeCloseTo((2 / 3) * 0.85);
+    expect(clampedColumns.at(1)).toBeCloseTo((2 / 3) * 0.15);
+    expect(clampedColumns.at(2)).toBeCloseTo(1 / 3);
 
     const panes = resizePanes(threePaneLayout(), "c2", 0, 0.2);
     expect(panes.columns.at(1)?.paneWeights).toEqual([0.2, 0.8]);
+    expect(panes.columns.at(1)?.customPaneWeights).toBe(true);
     expect(resizePanes(threePaneLayout(), "c2", 0, -1).columns.at(1)?.paneWeights).toEqual([
       0.15, 0.85,
     ]);
@@ -211,16 +225,53 @@ describe("chat split layout", () => {
             { id: "p1", sessionKey: "second" },
           ],
           paneWeights: [2 / 3, 1 / 3],
+          customPaneWeights: false,
         },
         {
           id: "c1",
           panes: [{ id: "p2", sessionKey: "third" }],
           paneWeights: [1],
+          customPaneWeights: false,
         },
       ],
       columnWeights: [0.5, 0.5],
       activePaneId: "same",
+      customColumnWeights: false,
     });
+    const manual = normalizeChatSplitLayout({
+      columns: [
+        {
+          id: "c1",
+          panes: [{ id: "p1", sessionKey: "a" }],
+          paneWeights: [1],
+          customPaneWeights: true,
+        },
+        { id: "c2", panes: [{ id: "p2", sessionKey: "b" }], paneWeights: [1] },
+      ],
+      columnWeights: [0.3, 0.7],
+      activePaneId: "p1",
+      customColumnWeights: true,
+    });
+    expect(manual?.customColumnWeights).toBe(true);
+    expect(manual?.columns.map((column) => column.customPaneWeights)).toEqual([true, false]);
+  });
+
+  it("balances every column and stacked pane and clears manual sizing", () => {
+    const uneven = resizePanes(resizeColumns(threePaneLayout(), 0, 0.8), "c2", 0, 0.2);
+    expect(uneven.customColumnWeights).toBe(true);
+    const balanced = balanceLayout(uneven);
+    expect(balanced.columnWeights).toEqual([0.5, 0.5]);
+    expect(balanced.columns.map((column) => column.paneWeights)).toEqual([[1], [0.5, 0.5]]);
+    expect(balanced.customColumnWeights).toBe(false);
+    expect(balanced.columns.every((column) => column.customPaneWeights === false)).toBe(true);
+    expect(balanced.activePaneId).toBe(uneven.activePaneId);
+    // Balancing forgets manual sizing, so the next split is even again.
+    expect(insertPane(balanced, "p1", "fourth", "right").columnWeights).toEqual([
+      1 / 3,
+      1 / 3,
+      1 / 3,
+    ]);
+    expect(uneven.columnWeights.at(0)).toBeCloseTo(0.8);
   });
 
   it("returns undefined for unrecoverable values and drops empty columns", () => {
