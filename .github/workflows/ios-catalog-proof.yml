@@ -72,7 +72,7 @@ jobs:
           import fs from 'node:fs';
           const config = {
             gateway: { mode: 'local', bind: 'loopback', port: 19876, auth: { mode: 'token', token: 'catalog-proof-token' } },
-            agents: { defaults: { model: { primary: 'openai/o3' }, models: { 'openai/o3': { agentRuntime: { id: 'openclaw' } } } } },
+            agents: { entries: { main: {} }, defaults: { model: { primary: 'openai/o3' }, models: { 'openai/o3': { agentRuntime: { id: 'openclaw' } } } } },
             models: { mode: 'replace', providers: { openai: { apiKey: 'catalog-proof-fake-key', baseUrl: 'http://127.0.0.1:9/v1', api: 'openai-completions', models: [{ id: 'o3', name: 'Catalog Proof', reasoning: true, input: ['text', 'image'], contextWindow: 32000, maxTokens: 2048 }] } } },
           };
           fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
@@ -80,11 +80,11 @@ jobs:
           pnpm openclaw gateway run --allow-unconfigured > "$RUNNER_TEMP/catalog-proof/gateway.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/catalog-proof/gateway.pid"
           for attempt in $(seq 1 120); do
-            if curl --silent --fail http://127.0.0.1:19876/healthz > /dev/null; then break; fi
+            if curl --silent --fail http://127.0.0.1:19876/readyz > /dev/null; then break; fi
             kill -0 "$(cat "$RUNNER_TEMP/catalog-proof/gateway.pid")"
             sleep 2
           done
-          curl --fail http://127.0.0.1:19876/healthz > "$RUNNER_TEMP/catalog-proof/health.json"
+          curl --fail http://127.0.0.1:19876/readyz > "$RUNNER_TEMP/catalog-proof/health.json"
           pnpm --silent openclaw models list --json > "$RUNNER_TEMP/catalog-proof/models-list.json"
           pnpm --silent openclaw gateway call models.list --json --params '{"agentId":"main","sessionKey":"agent:main:main","view":"configured","includeDetails":true}' > "$RUNNER_TEMP/catalog-proof/session-models.json"
           pnpm --silent openclaw qr --setup-code-only --url ws://127.0.0.1:19876 > "$RUNNER_TEMP/catalog-proof/setup-code.txt"
@@ -106,6 +106,8 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/catalog-proof/catalog.xcresult" -parallel-testing-enabled NO -jobs 4 \
             -only-testing:OpenClawUITests/ChatCatalogUITests CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$RUNNER_TEMP/catalog-proof/simulator.log"
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/catalog-proof/catalog.xcresult" > "$RUNNER_TEMP/catalog-proof/simulator-summary.json"
+          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/catalog-proof/simulator-summary.json")); if(s.passedTests!==1||s.skippedTests!==0||s.failedTests!==0)throw Error("The selected simulator test must pass without skips")'
       - name: Stop task Gateway
         if: always()
         run: |
