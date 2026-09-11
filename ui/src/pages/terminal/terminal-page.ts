@@ -4,12 +4,12 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import "../../components/terminal/terminal-panel-registration.ts";
+import type { TerminalRouteTarget } from "../../components/terminal/terminal-panel-session-types.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { TerminalRouteTarget } from "./route-location.ts";
 import "./terminal-page.css";
 
 class TerminalPage extends OpenClawLightDomElement {

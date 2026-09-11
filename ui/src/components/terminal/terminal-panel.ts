@@ -12,7 +12,6 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
-import type { TerminalRouteTarget } from "../../pages/terminal/route-location.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
@@ -35,7 +34,10 @@ import {
   reattachTerminalSessionHosts,
   updateTerminalSessionTheme,
 } from "./terminal-panel-session-rendering.ts";
-import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
+import type {
+  TerminalPanelSessionTab,
+  TerminalRouteTarget,
+} from "./terminal-panel-session-types.ts";
 import { terminalPanelStyles } from "./terminal-panel-styles.ts";
 import { terminalPanelUploadStyles } from "./terminal-panel-upload-styles.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";

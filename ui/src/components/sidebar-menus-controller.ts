@@ -203,17 +203,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
-      openTerminal: (key, agentId) => {
-        if (host.onNavigate && host.sessionDataContext) {
-          openCatalogSessionInTerminal(
-            key,
-            agentId,
-            host.sessionDataContext.agentSelection,
-            host.onNavigate,
-            host.basePath,
-          );
-        }
-      },
+      openTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
       beginMutation: () => host.sessionData.beginSessionMutation(),
       isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
       archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),

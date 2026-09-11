@@ -8,15 +8,20 @@ import type { TerminalGatewayClient } from "../../components/terminal/terminal-c
 import { catalogSessionSearch, type CatalogSessionKey } from "./catalog-key.ts";
 
 export function openCatalogSessionInTerminal(
+  host: {
+    sessionDataContext?: Pick<ApplicationContext, "agentSelection"> | null;
+    onNavigate?: ApplicationContext<"terminal">["navigate"];
+    basePath: string;
+  },
   key: CatalogSessionKey,
   agentId: string,
-  selection: ApplicationContext["agentSelection"],
-  navigate: ApplicationContext<"terminal">["navigate"],
-  basePath: string,
 ): void {
-  selection.set(agentId);
-  navigate("terminal", {
-    pathname: pathForRoute("terminal", basePath),
+  if (!host.onNavigate || !host.sessionDataContext) {
+    return;
+  }
+  host.sessionDataContext.agentSelection.set(agentId);
+  host.onNavigate("terminal", {
+    pathname: pathForRoute("terminal", host.basePath),
     search: catalogSessionSearch(key),
     hash: "",
   });

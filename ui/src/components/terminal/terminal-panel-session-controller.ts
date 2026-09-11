@@ -9,6 +9,7 @@ import {
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
+import { TerminalOpenRetry } from "./terminal-open-retry.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
@@ -21,11 +22,7 @@ import {
   type TerminalPanelSessionControllerState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
-import {
-  TerminalIntentQueue,
-  TerminalOpenRetry,
-  terminalIntentQueue,
-} from "./terminal-pending-actions.ts";
+import { TerminalIntentQueue, terminalIntentQueue } from "./terminal-pending-actions.ts";
 import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
 import {
   loadPersistedTerminalSessionIds,
@@ -533,9 +530,10 @@ export class TerminalPanelSessionController
       });
       createdTab = boot.tab;
       createdConnection = boot.connection;
-      const result = prepared
-        ? (prepared.bind(boot.sink), prepared.result)
-        : await boot.connection.attach(sessionId, boot.sink);
+      if (prepared) {
+        prepared.bind(boot.sink);
+      }
+      const result = prepared?.result ?? (await boot.connection.attach(sessionId, boot.sink));
       if (!this.isTerminalOperationCurrent(operation, restore) || boot.tab.cancelled) {
         // A user close is deliberate; lifecycle cancellation leaves the existing
         // server session available for the next reconnect to reattach.

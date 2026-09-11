@@ -90,7 +90,7 @@ suite.define(() => {
       await dock.locator(".tp-host canvas").waitFor();
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
       expect(await dock.locator(".tabstrip-tab").count()).toBe(1);
-      expect(await dock.locator(".tabstrip-tab").innerText()).not.toContain("codex");
+      expect(await dock.locator(".tabstrip-tab").textContent()).not.toContain("codex");
       expect(await gateway.getRequests("terminal.attach")).toHaveLength(0);
       await page.keyboard.press("Control+Backquote");
       await dock.locator(".tp-header").waitFor({ state: "hidden" });

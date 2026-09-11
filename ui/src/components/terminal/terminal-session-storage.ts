@@ -34,19 +34,18 @@ function terminalAction(value: unknown): TerminalPanelAction | null {
   return null;
 }
 
-export function loadPersistedTerminalSessionIds(scope = ""): string[] {
+function loadPersistedArray(key: string): unknown[] {
   try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_SESSIONS_KEY + scope);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [];
+    const raw = globalThis.sessionStorage?.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+}
+
+export function loadPersistedTerminalSessionIds(scope = ""): string[] {
+  return loadPersistedArray(TERMINAL_SESSIONS_KEY + scope).filter(nonEmptyString);
 }
 
 export function persistTerminalSessionIds(ids: readonly string[], scope = ""): void {
@@ -58,21 +57,10 @@ export function persistTerminalSessionIds(ids: readonly string[], scope = ""): v
 }
 
 export function loadPersistedTerminalActions(): TerminalPanelAction[] {
-  try {
-    const raw = globalThis.sessionStorage?.getItem(TERMINAL_ACTIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.flatMap((value) => {
-          const action = terminalAction(value);
-          return action ? [action] : [];
-        })
-      : [];
-  } catch {
-    return [];
-  }
+  return loadPersistedArray(TERMINAL_ACTIONS_KEY).flatMap((value) => {
+    const action = terminalAction(value);
+    return action ? [action] : [];
+  });
 }
 
 export function persistTerminalActions(actions: readonly TerminalPanelAction[]): void {

@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
 import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { pathForTerminalSession } from "../../app-route-paths.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
@@ -62,6 +64,14 @@ export async function startNewSessionInTerminal(
     },
     isCurrent,
   );
+}
+
+export function navigateToStartedTerminal(context: ApplicationContext, sessionId: string): void {
+  context.replace("terminal", {
+    pathname: pathForTerminalSession(sessionId, context.basePath),
+    search: "",
+    hash: "",
+  });
 }
 
 export function renderNewSessionTerminalHost(params: {

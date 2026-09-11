@@ -1,5 +1,4 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { pathForTerminalSession } from "../../app-route-paths.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
@@ -54,7 +53,7 @@ import {
   resolveNewSessionSubmitBlock,
   type NewSessionSubmitBlock,
 } from "./submit-gates.ts";
-import { startNewSessionInTerminal } from "./terminal-start.ts";
+import { navigateToStartedTerminal, startNewSessionInTerminal } from "./terminal-start.ts";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -347,8 +346,7 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
     }
-    this.error = null;
-    this.callbacks.requestUpdate();
+    this.clearError();
   }
 
   clearPendingPlacementRecovery() {
@@ -708,11 +706,7 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
       this.attachmentDraft.clearAfterSubmit(true);
-      context.replace("terminal", {
-        pathname: pathForTerminalSession(result.sessionId, context.basePath),
-        search: "",
-        hash: "",
-      });
+      navigateToStartedTerminal(context, result.sessionId);
     } catch (error) {
       if (requestId === this.submitRequestToken && this.gateway.client === client) {
         this.error = error instanceof Error ? error.message : String(error);

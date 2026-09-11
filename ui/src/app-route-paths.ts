@@ -424,29 +424,29 @@ export function pathForTerminalSession(sessionId: string, basePath = ""): string
   return `${pathForRoute("terminal", basePath)}/${encodeURIComponent(sessionId)}`;
 }
 
-export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
-  const encoded = routePathSuffix(pathname, "terminal", basePath);
+function singleSegmentIdFromPath(
+  pathname: string,
+  routeId: RouteId,
+  basePath: string,
+): string | null {
+  const encoded = routePathSuffix(pathname, routeId, basePath);
   if (!encoded || encoded.includes("/")) {
     return null;
   }
   try {
-    return decodeURIComponent(encoded).trim() || null;
+    return decodeURIComponent(encoded);
   } catch {
     return null;
   }
 }
 
+export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
+  return singleSegmentIdFromPath(pathname, "terminal", basePath)?.trim() || null;
+}
+
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
-  const encodedBoardId = routePathSuffix(pathname, "workboard", basePath);
-  if (!encodedBoardId || encodedBoardId.includes("/")) {
-    return null;
-  }
-  try {
-    const boardId = decodeURIComponent(encodedBoardId);
-    return isValidWorkboardBoardId(boardId) ? boardId : null;
-  } catch {
-    return null;
-  }
+  const boardId = singleSegmentIdFromPath(pathname, "workboard", basePath);
+  return isValidWorkboardBoardId(boardId) ? boardId : null;
 }
 
 function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {

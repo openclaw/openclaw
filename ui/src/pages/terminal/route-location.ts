@@ -4,12 +4,8 @@ import {
   restoreBridgedRouteLocation,
   terminalSessionIdFromPath,
 } from "../../app-route-paths.ts";
-import {
-  catalogSessionKeyFromSearch,
-  type CatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
-
-export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
+import type { TerminalRouteTarget } from "../../components/terminal/terminal-panel-session-types.ts";
+import { catalogSessionKeyFromSearch } from "../../lib/sessions/catalog-key.ts";
 
 export function resolveTerminalRouteLocation(
   source: RouteLocation,
