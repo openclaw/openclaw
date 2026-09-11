@@ -1491,7 +1491,7 @@ packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	9
 packages/gateway-protocol/src/gateway-error-details.ts	1
-packages/gateway-protocol/src/protocol-validator.ts	3
+packages/gateway-protocol/src/protocol-validator.ts	2
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1

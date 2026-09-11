@@ -6,6 +6,58 @@ import { isRecord } from "./record-coerce.js";
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
+/** Validation details shared by the TypeBox schema and value compilers. */
+export type TypeBoxValidationError = {
+  keyword?: string;
+  instancePath?: string;
+  schemaPath?: string;
+  params?: Record<string, unknown>;
+  message?: string;
+};
+
+/** Remove complete false-schema child groups immediately preceding their aggregate. */
+export function normalizeTypeBoxValidationErrors<T extends TypeBoxValidationError>(
+  errors: T[],
+): T[] {
+  const normalized: T[] = [];
+  let consecutiveBooleanErrors = 0;
+  for (const error of errors) {
+    if (error.keyword === "boolean") {
+      normalized.push(error);
+      consecutiveBooleanErrors += 1;
+      continue;
+    }
+    const properties = error.params?.additionalProperties;
+    if (
+      error.keyword === "additionalProperties" &&
+      typeof error.schemaPath === "string" &&
+      typeof error.instancePath === "string" &&
+      Array.isArray(properties) &&
+      properties.length > 0 &&
+      properties.length <= consecutiveBooleanErrors
+    ) {
+      const children = normalized.slice(-properties.length);
+      // TypeBox emits this group immediately before its aggregate, in property order.
+      // Matching only that suffix preserves genuine errors with colliding raw paths.
+      if (
+        children.every((child, index) => {
+          const property = properties[index];
+          return (
+            typeof property === "string" &&
+            child.schemaPath === `${error.schemaPath}/additionalProperties` &&
+            child.instancePath === `${error.instancePath}/${property}`
+          );
+        })
+      ) {
+        normalized.length -= properties.length;
+      }
+    }
+    normalized.push(error);
+    consecutiveBooleanErrors = 0;
+  }
+  return normalized;
+}
+
 const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
