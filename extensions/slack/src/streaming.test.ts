@@ -6,8 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "./client.js";
 import {
   appendSlackStream,
+  discardSlackStreamPendingText,
   markSlackStreamFallbackDelivered,
   markSlackStreamsStopped,
+  SlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError,
   startSlackStream,
   stopSlackStream,
@@ -628,5 +630,67 @@ describe("stopSlackStream finalize error handling", () => {
       ts: "1700000000.500300",
       chunks: [],
     });
+  });
+});
+
+describe("msg_too_long handling", () => {
+  it("classifies a rejected append as SlackStreamMessageTooLongError and leaves the stream open", async () => {
+    const { client, append } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      chunks: [{ type: "plan_update", title: "Thinking" }],
+    });
+    append.mockRejectedValueOnce(slackApiError("msg_too_long"));
+
+    const thrown = await appendSlackStream({ session, text: "the answer", chunks: [] }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(SlackStreamMessageTooLongError);
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("msg_too_long");
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("the answer");
+    expect(session.stopped).toBe(false);
+    expect(session.delivered).toBe(true);
+  });
+
+  it("classifies a chunk-only rejection the same way with no pending text", async () => {
+    const session = makeSession({
+      appendImpl: async () => {
+        throw slackApiError("msg_too_long");
+      },
+    });
+    session.delivered = true;
+    const thrown = await appendSlackStream({
+      session,
+      chunks: [{ type: "task_update", id: "t", title: "x", status: "complete" }],
+    }).catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(SlackStreamMessageTooLongError);
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("");
+    expect(session.stopped).toBe(false);
+  });
+
+  it("discards the rejected text so a later stop does not resend it", async () => {
+    const { client, append, stop } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      chunks: [{ type: "plan_update", title: "Thinking" }],
+    });
+    append.mockRejectedValueOnce(slackApiError("msg_too_long"));
+    await expect(
+      appendSlackStream({ session, text: "the answer", chunks: [] }),
+    ).rejects.toBeInstanceOf(SlackStreamMessageTooLongError);
+    expect((session.streamer as unknown as { buffer: string }).buffer).toBe("the answer");
+
+    discardSlackStreamPendingText(session);
+    expect(session.pendingText).toBe("");
+    expect((session.streamer as unknown as { buffer: string }).buffer).toBe("");
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop.mock.calls[0]?.[0]).toMatchObject({ chunks: [] });
   });
 });

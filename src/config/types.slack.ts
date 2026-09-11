@@ -66,12 +66,19 @@ type SlackPresenceEventsConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+export type SlackStreamingProgressReasoningMode = "narration" | "cards";
 // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
   style?: "card" | "compact";
   /** Use Slack-native task cards for card-style progress. Default: true. */
   nativeTaskCards?: boolean;
+  /**
+   * Presentation of streamed reasoning (`reasoningDefault: "stream"`) on the native task card.
+   * "narration" streams one compacted line as text; "cards" renders reasoning segments as task rows.
+   * Default: "narration".
+   */
+  reasoning?: SlackStreamingProgressReasoningMode;
 };
 export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
 export type SlackExecApprovalTarget = ChannelExecApprovalTarget;

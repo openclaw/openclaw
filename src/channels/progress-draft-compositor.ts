@@ -391,7 +391,17 @@ export function createChannelProgressDraftCompositor(params: {
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
-    options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
+    options?: {
+      toolName?: string;
+      startImmediately?: boolean;
+      flush?: boolean;
+      /**
+       * The line renders the open reasoning itself (a channel projecting
+       * `mergeReasoningProgress` into its own rows), so admitting it must not
+       * close the reasoning burst the way admitted work does.
+       */
+      reasoningLine?: boolean;
+    },
   ) => {
     if (!params.active || finalReplyStarted || finalReplyDelivered) {
       return false;
@@ -432,8 +442,9 @@ export function createChannelProgressDraftCompositor(params: {
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
-    // Hidden work still delimits reasoning bursts so unrelated thoughts do not concatenate.
-    if (quietProgress || (shouldStoreLine && lineChanged)) {
+    // Hidden work still delimits reasoning bursts so unrelated thoughts do not
+    // concatenate; a row that is the reasoning's own projection does not.
+    if (!options?.reasoningLine && (quietProgress || (shouldStoreLine && lineChanged))) {
       reasoningRawText = "";
       lastReasoningLine = undefined;
     }

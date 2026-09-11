@@ -27,6 +27,7 @@ const SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS = 20_000;
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   style: z.enum(["card", "compact"]).optional(),
   nativeTaskCards: z.boolean().optional(),
+  reasoning: z.enum(["narration", "cards"]).optional(),
 }).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),

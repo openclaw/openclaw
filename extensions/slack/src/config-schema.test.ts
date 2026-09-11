@@ -46,6 +46,17 @@ describe("slack config schema", () => {
     );
   });
 
+  it("accepts the reasoning card presentation and rejects other values", () => {
+    expectSlackConfigValid({
+      streaming: { mode: "progress", progress: { toolProgress: true, reasoning: "cards" } },
+    });
+    expectSlackConfigValid({ streaming: { progress: { reasoning: "narration" } } });
+    expectSlackConfigIssue(
+      { streaming: { progress: { reasoning: "inline" } } },
+      "streaming.progress.reasoning",
+    );
+  });
+
   it("accepts capability arrays and rejects retired interactive reply objects", () => {
     expectSlackConfigValid({ capabilities: ["presentation"] });
     expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");

@@ -102,6 +102,22 @@ export class SlackStreamNotDeliveredError extends Error {
   }
 }
 
+/**
+ * Thrown when Slack rejects an append or finalize with `msg_too_long`: the
+ * message already holds as much content as Slack allows. Nothing from the
+ * rejected call landed, the stream itself is healthy, and it can still be
+ * stopped once the text the SDK kept is discarded
+ * ({@link discardSlackStreamPendingText}). Callers continue on a new message
+ * or, through the parent class, deliver the pending text normally.
+ */
+export class SlackStreamMessageTooLongError extends SlackStreamNotDeliveredError {
+  constructor(pendingText: string) {
+    super(pendingText, "msg_too_long");
+    this.name = "SlackStreamMessageTooLongError";
+    this.message = `slack-stream: Slack rejected the update with msg_too_long (${pendingText.length} chars of text pending)`;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Stream lifecycle
 // ---------------------------------------------------------------------------
@@ -415,6 +431,9 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
 
 function throwSlackStreamFailure(session: SlackStreamSession, err: unknown): never {
   const code = extractSlackErrorCode(err) ?? "unknown";
+  if (code === "msg_too_long") {
+    throw new SlackStreamMessageTooLongError(session.pendingText);
+  }
   if (
     session.pendingText &&
     (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) || code === "missing_scope")
@@ -445,15 +464,23 @@ function extractSlackErrorCode(err: unknown): string | undefined {
   return match?.[1];
 }
 
+/**
+ * Drops text Slack rejected from the session and from the SDK's private
+ * buffer (@slack/web-api retains it after a failed flush), so a later
+ * `stop()` or append cannot resend it. Leaves the stream open.
+ */
+export function discardSlackStreamPendingText(session: SlackStreamSession): void {
+  session.pendingText = "";
+  (session.streamer as unknown as { buffer: string }).buffer = "";
+}
+
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
   if (applySlackStreamStop(session)) {
     return;
   }
   const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
-  session.pendingText = "";
-  // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.
-  (session.streamer as unknown as { buffer: string }).buffer = "";
+  discardSlackStreamPendingText(session);
   // A visible native stream still needs stop() to leave streaming state. If no
   // native call succeeded, there is no Slack stream to finalize.
   session.stopped = !nativeStreamWasStarted;

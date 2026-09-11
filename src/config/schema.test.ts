@@ -652,6 +652,7 @@ describe("config schema", () => {
     };
     expect(progressPropsFor("slack")).toHaveProperty("style");
     expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("slack")).toHaveProperty("reasoning");
     expect(progressPropsFor("discord")).not.toHaveProperty("style");
     expect(progressPropsFor("telegram")).not.toHaveProperty("style");
     expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
@@ -675,6 +676,10 @@ describe("config schema", () => {
     expect(res.uiHints["channels.slack.streaming.progress.style"]?.label).toBe(
       "Slack Progress Style",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.reasoning"]?.label).toBe(
+      "Slack Progress Reasoning Presentation",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.reasoning"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(

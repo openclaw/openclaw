@@ -65,6 +65,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `progress` (default): show structured progress in one native task card when Slack supports it, with a Block Kit session-card fallback.
 - `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row (native card) or activity line (Block Kit card) per tool call, plus tool/file/time counters on the Block Kit card. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
 - `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
+- `streaming.progress.reasoning`: how streamed reasoning (`agents.defaults.reasoningDefault: "stream"`) appears on the native task card. `narration` (default) streams one compacted line as text; `cards` renders the reasoning as task rows. See [Reasoning cards](#reasoning-cards).
 
 Show the tool log while hiding raw command/exec text:
 
@@ -89,6 +90,35 @@ Show the tool log while hiding raw command/exec text:
 In `progress` mode, Slack's native agent card is the default: the whole turn is one streamed message that interleaves narration with a live plan/task card and finishes with the assistant's answer in that same message. The card shows authored plan steps when the agent publishes a plan, otherwise one stable work-summary row; approval requests and failed commands get their own row. With `progress.toolProgress: true`, it also shows per-tool task rows alongside any authored plan. Routine updates coalesce at one-second intervals; approvals, failures, and completion bypass that delay. A tool failure shows as a red attention row while the turn runs; if the turn still completes successfully, that row settles as `Recovered: …` instead of staying red. The card appears only once a turn does real work — tool or plan activity still running after a short delay — so a plain question is answered without one.
 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing title, narration, plan checklist, and authored commentary, and finalizes to success or error. With `progress.toolProgress: true` it also lists recent tool activity, tool/file totals, and elapsed time.
+
+### Reasoning cards
+
+With `agents.defaults.reasoningDefault: "stream"` (or a per-agent `reasoningDefault`), OpenClaw streams the model's reasoning while the reply is generated. On the native card the default presentation, `progress.reasoning: "narration"`, keeps one compacted reasoning line and streams it into the message text above the card. Set `progress.reasoning: "cards"` to show the reasoning as task rows instead:
+
+- The reasoning text is split into segments of at most 240 UTF-8 bytes (240 Latin characters, fewer for CJK or emoji) at word boundaries, and each segment is one row prefixed with 🧠. Finished segments are marked complete and stay put; the newest one is in progress. Row titles are capped at 250 characters because Slack allows 256 characters per `task_update` field ([chat.appendStream](https://docs.slack.dev/reference/methods/chat.appendStream/)).
+- Cards, tool rows, the plan title and the answer share one streamed message, and a message holds only so much: Slack's plan block renders at most 50 rows ([plan block](https://docs.slack.dev/reference/block-kit/blocks/plan-block/)) and `chat.appendStream` rejects further content with `msg_too_long` past a size Slack does not document. When the next card would pass either bound, the think continues in a new message (see below).
+- A tool call or the end of a reasoning phase closes the open segment, so thinking after a tool result starts a new row below the tool row.
+- When the turn finishes, the card title becomes `Thought for <n>s, <k> tool calls` unless `progress.label` sets an explicit title.
+- Commentary still streams as text; reasoning no longer appears in the text.
+
+Reasoning cards need the detailed native card (`progress.toolProgress: true` with native task cards); the quiet card keeps its single summary row and shows reasoning as narration. In `cards` mode the progress window does not roll: every row of the turn stays in the compositor until the turn ends (`progress.maxLines` does not apply), because Slack cannot remove a task row and a burst of segments must not push a row out before the paced send has delivered it; the size of each message is bounded by the rollover budget below instead. Card updates ride the same one-second coalescing as other progress updates, one `chat.appendStream` call per batch.
+
+Rollover: a long think can fill one streamed message before the answer arrives. Measured against the live API (2026-09-10), Slack rejects appends with `msg_too_long` once a message that carries text holds about 10,600 UTF-8 bytes of content, counting task titles, `details` at roughly double, and the text itself (a Latin character is one byte, a CJK character three, an emoji four; a plan block with no text was accepted well past that); the message would then stay stuck in its streaming state without the answer. In `cards` mode the plugin keeps a weighted byte count of everything it has put on the current message (task titles, details, output, plan title and streamed text) and rolls over before the next card would pass 6,000 weighted bytes or 50 rows, or before the answer would push the total past 9,000. The current message ends with the title `Thinking, continued below` and every row marked complete, and a new streamed message in the same thread continues as `Thinking, continued` with the next cards; numbering continues, later tool rows land on the newest message, and the answer and the final `Thought for …` title land on the message that is current when the turn ends. A long answer that would not fit under the last cards is streamed as its own message after the think closes with `Thought for …`. The budgets sit about 19% under the measured ceiling rather than a documented limit, so if Slack still answers `msg_too_long`, the plugin rolls once more and retries the update; if that fails too, it stops the stream and posts the answer as a normal reply. Narration mode does not roll over; it shares only that last step, so a rejected answer is posted normally instead of leaving the message in its streaming state.
+
+With `agents.defaults.reasoningDefault: "stream"` in place, the Slack side is:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: { toolProgress: true, reasoning: "cards" },
+      },
+    },
+  },
+}
+```
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset; leaving both options unset keeps the default quiet card. Set `style: "card"` to keep a card with `toolProgress: false`. Commentary appears as italic text, and authored reasoning, approval requests, and failures remain visible. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
