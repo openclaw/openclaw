@@ -28,21 +28,32 @@ export function availableComputerActions(
   actions: readonly ComputerUseV2ActionName[],
   hasCleanupOwner: boolean,
 ): readonly ComputerUseV2ActionName[] {
-  return hasCleanupOwner
+  const available = hasCleanupOwner
     ? actions
     : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
+  // Local pacing uses snapshot authority; providers need no native wait action.
+  return available.includes("screenshot") && !available.includes("wait")
+    ? [...available, "wait"]
+    : available;
 }
 
-export function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
+export function createComputerToolSchema(
+  actions: readonly ComputerUseV2ActionName[],
+  targetScope: "paired" | "session" = "paired",
+) {
   return Type.Object({
     action: stringEnum(actions),
-    ...gatewayCallOptionSchemaProperties(),
-    node: Type.Optional(
-      Type.String({
-        description:
-          "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
-      }),
-    ),
+    ...(targetScope === "paired"
+      ? {
+          ...gatewayCallOptionSchemaProperties(),
+          node: Type.Optional(
+            Type.String({
+              description:
+                "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
+            }),
+          ),
+        }
+      : {}),
     // Codex accepts a single schema in array `items`, not tuple item arrays.
     // Fixed bounds preserve the coordinate-pair contract across runtimes.
     coordinate: Type.Optional(
@@ -87,11 +98,14 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
     frameId: Type.Optional(
       Type.String({
         description:
-          "Coordinate actions: exact frame id returned by the most recent screenshot result.",
+          "Desktop coordinate actions: exact frame id returned by the most recent screenshot result.",
       }),
     ),
     windowRef: Type.Optional(
-      Type.String({ description: "Opaque window reference from observation." }),
+      Type.String({
+        description:
+          "Opaque window reference for window actions; not valid for screenshot or wait.",
+      }),
     ),
     browserRef: Type.Optional(
       Type.String({ description: "Opaque browser reference from get_browser_state." }),
@@ -103,7 +117,10 @@ export function createComputerToolSchema(actions: readonly ComputerUseV2ActionNa
       Type.String({ description: "Opaque accessibility element reference from observation." }),
     ),
     observationId: Type.Optional(
-      Type.String({ description: "Observation id that issued window or element references." }),
+      Type.String({
+        description:
+          "Window/browser input: observation id from the latest targeted observation; a desktop frameId cannot replace it.",
+      }),
     ),
     deliveryMode: optionalStringEnum(["background", "foreground"] as const),
     query: Type.Optional(Type.String()),

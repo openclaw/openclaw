@@ -1,13 +1,15 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import Module from "node:module";
+import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  clearNativeRequireJavaScriptModuleCache,
+  createPluginModuleRequireCacheOwner,
+  getPluginModuleRequireCacheEntry,
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
@@ -46,7 +48,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
   });
 
   it("declines an in-flight ESM require race for source-transform fallback", () => {
-    const modulePath = "/plugins/discord/dist/index.js";
+    const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
+    fs.writeFileSync(modulePath, "module.exports = {};\n", "utf8");
     const error = Object.assign(new Error("ESM is still loading"), {
       code: "ERR_REQUIRE_ESM_RACE_CONDITION",
     });
@@ -197,42 +200,136 @@ describe("tryNativeRequireJavaScriptModule", () => {
     ).toEqual({ ok: false });
   });
 
-  it("clears loaded JavaScript modules from the native require cache", () => {
+  it("keeps native path and file-URL modules on the process module graph", async () => {
     const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\n', "utf8");
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "before" },
+    const ownerPath = path.join(dir, "native-require.mjs");
+    // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
+    await build({
+      entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: ownerPath,
+      logLevel: "silent",
+    });
+    const modulePath = path.join(dir, "space # percent% plugin.cjs");
+    const probePath = path.join(dir, "probe.mjs");
+    fs.writeFileSync(
+      probePath,
+      `import assert from "node:assert/strict";
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+const modulePath = ${JSON.stringify(modulePath)};
+for (const target of [modulePath, pathToFileURL(modulePath).href]) {
+  fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\\n');
+  assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
+  fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\\n');
+  assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
+  assert.deepEqual(load(target, { allowWindows: true }), { ok: true, moduleExport: { marker: "before" } });
+}
+assert.deepEqual(load(pathToFileURL(modulePath + ".missing.cjs").href, { allowWindows: true }), { ok: false });
+fs.writeFileSync(modulePath + ".broken.cjs", 'require("./missing-dependency.cjs");\\n');
+assert.throws(() => load(pathToFileURL(modulePath + ".broken.cjs").href, { allowWindows: true }), /missing-dependency\\.cjs/);
+console.log("native path + file URL process identity; missing target/dependency controls passed");
+`,
+    );
+    const result = spawnSync(process.execPath, [probePath], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "" },
+      encoding: "utf8",
+      timeout: 30_000,
     });
 
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath);
-
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "after" },
-    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      "native path + file URL process identity; missing target/dependency controls passed",
+    );
   });
 
-  it("clears local dependencies loaded by a native JavaScript module", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    const helperPath = path.join(dir, "helper.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = require("./helper.cjs");\n', "utf8");
-    fs.writeFileSync(helperPath, 'module.exports = { marker: "before" };\n', "utf8");
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "before" },
+  it("retains terminal ESM failures across eviction and alias changes until a new path loads", async () => {
+    const dir = tempDirs.make("openclaw-native-failed-generation-");
+    const ownerPath = path.join(dir, "native-require.mjs");
+    await build({
+      entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: ownerPath,
+      logLevel: "silent",
+    });
+    const probePath = path.join(dir, "probe.mjs");
+    fs.writeFileSync(
+      probePath,
+      `import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+const require = createRequire(import.meta.url);
+const dir = ${JSON.stringify(dir)};
+const brokenPath = path.join(dir, "broken.mjs");
+const missingApi = path.join(dir, "missing-api.mjs");
+const currentApi = path.join(dir, "current-api.mjs");
+fs.writeFileSync(missingApi, "export const existing = 1;\\n");
+fs.writeFileSync(currentApi, "export const required = 2;\\n");
+const pluginSource = 'import { required } from "fixture-api"; export const value = required;\\n';
+fs.writeFileSync(brokenPath, pluginSource);
+const aliasDir = path.join(dir, "alias");
+fs.symlinkSync(dir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+const options = { allowWindows: true, aliasMap: { "fixture-api": missingApi } };
+let initial;
+assert.throws(() => load(brokenPath, options), error => {
+  initial = error;
+  return error instanceof SyntaxError;
+});
+for (const target of [brokenPath, pathToFileURL(brokenPath).href, "./broken.mjs", path.join(aliasDir, "broken.mjs")]) {
+  delete require.cache[require.resolve(brokenPath)];
+  assert.throws(() => load(target, {
+    ...options,
+    aliasMap: { "fixture-api": currentApi },
+    fallbackOnNativeError: true,
+  }), error => error === initial);
+}
+const newPath = path.join(dir, "new-generation.mjs");
+fs.writeFileSync(newPath, pluginSource);
+const repaired = load(newPath, { ...options, aliasMap: { "fixture-api": currentApi } });
+assert.equal(repaired.ok, true);
+assert.equal(repaired.moduleExport.value, 2);
+const retryPath = path.join(dir, "retry.cjs");
+fs.writeFileSync(retryPath, 'if (!globalThis.__pluginDependencyReady) throw new Error("dependency not ready"); module.exports = { ready: true };\\n');
+assert.throws(() => load(retryPath, { allowWindows: true }), /dependency not ready/);
+globalThis.__pluginDependencyReady = true;
+const retried = load(path.join(aliasDir, "retry.cjs"), { allowWindows: true });
+assert.equal(retried.ok, true);
+assert.equal(retried.moduleExport.ready, true);
+delete globalThis.__pluginDependencyReady;
+delete require.cache[require.resolve(retryPath)];
+fs.writeFileSync(retryPath, 'throw Object.assign(new Error("fresh race"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\\n');
+assert.deepEqual(load(retryPath, { allowWindows: true }), { ok: false });
+const aliasRequest = path.join(dir, "alias-request.cjs");
+const aliasFirst = path.join(dir, "alias-first.cjs");
+const aliasSecond = path.join(dir, "alias-second.cjs");
+fs.writeFileSync(aliasFirst, 'module.exports = "first";\\n');
+fs.writeFileSync(aliasSecond, 'module.exports = "second";\\n');
+assert.deepEqual(load(aliasRequest, {
+  allowWindows: true,
+  aliasMap: { [aliasRequest]: aliasFirst, [aliasFirst]: aliasSecond },
+}), { ok: true, moduleExport: "first" });
+console.log("terminal error retained; new generation recovered");
+`,
+    );
+    // tsx changes named-import linking, so this contract needs an unhooked Node process.
+    const result = spawnSync(process.execPath, [probePath], {
+      cwd: process.cwd(),
+      env: { ...process.env, NODE_OPTIONS: "" },
+      encoding: "utf8",
+      timeout: 30_000,
     });
 
-    fs.writeFileSync(helperPath, 'module.exports = { marker: "after" };\n', "utf8");
-    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: dir });
-
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: true,
-      moduleExport: { marker: "after" },
-    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("terminal error retained; new generation recovered");
   });
 });
 
@@ -243,4 +340,51 @@ describe("isJavaScriptModulePath", () => {
     expect(isJavaScriptModulePath("/plugin/index.cjs")).toBe(true);
     expect(isJavaScriptModulePath("/plugin/index.ts")).toBe(false);
   });
+});
+
+describe("managed native module cache ownership", () => {
+  it.each(["shared-entry", "shared-child", "replacement"] as const)(
+    "keeps %s records until their final managed owner closes",
+    (mode) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-native-owned-cache-"));
+      const child = path.join(root, "child.cjs");
+      const entry = path.join(root, "index.cjs");
+      const sibling = path.join(root, "nested", "index.cjs");
+      fs.mkdirSync(path.dirname(sibling));
+      fs.writeFileSync(child, 'module.exports = { value: "before" };');
+      fs.writeFileSync(entry, 'exports.read = () => require("./child.cjs");');
+      fs.writeFileSync(sibling, 'exports.read = () => require("../child.cjs");');
+      const require = createRequire(import.meta.url);
+      const first = createPluginModuleRequireCacheOwner(root);
+      const second = createPluginModuleRequireCacheOwner(
+        mode === "shared-child" ? path.dirname(sibling) : root,
+      );
+      try {
+        const initial = require(entry) as { read(): { value: string } };
+        first.retain(getPluginModuleRequireCacheEntry(entry));
+        const before = initial.read();
+        if (mode === "replacement") {
+          delete require.cache[entry];
+          delete require.cache[child];
+        }
+        const selected = mode === "shared-child" ? sibling : entry;
+        const current = require(selected) as typeof initial;
+        second.retain(getPluginModuleRequireCacheEntry(selected));
+        // This dependency is acquired after entry ownership, through ordinary lazy require.
+        const shared = current.read();
+        const record = require.cache[selected];
+        first.dispose();
+        expect(require.cache[selected]).toBe(record);
+        expect(current.read()).toBe(shared);
+        expect(shared === before).toBe(mode !== "replacement");
+        second.dispose();
+        fs.writeFileSync(child, 'module.exports = { value: "after" };');
+        expect(require(child)).toEqual({ value: "after" });
+      } finally {
+        first.dispose();
+        second.dispose();
+        delete require.cache[child];
+      }
+    },
+  );
 });

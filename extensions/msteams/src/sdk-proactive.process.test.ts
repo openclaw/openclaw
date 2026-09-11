@@ -16,7 +16,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
     );
     const outDir = path.join(process.cwd(), "extensions/msteams/dist");
     const proactiveArtifact = fs
-      .readdirSync(outDir)
+      .readdirSync(outDir, { recursive: true, encoding: "utf8" })
       .filter((entry) => entry.endsWith(".cjs"))
       .map((entry) => path.join(outDir, entry))
       .find((entry) =>
@@ -149,7 +149,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
-        cwd: process.cwd(),
+        cwd: path.dirname(outDir),
         env: {
           ...process.env,
           NODE_DISABLE_COMPILE_CACHE: "1",

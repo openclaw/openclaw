@@ -7,6 +7,8 @@ enum DashboardGatewaysRequest: Equatable {
     case select(DashboardGatewayTarget)
     case openWindow(DashboardGatewayTarget)
     case setPrimary(DashboardGatewayTarget)
+    case reconnect(DashboardGatewayTarget)
+    case reconnectCancel(DashboardGatewayTarget)
     case openSettings
 }
 
@@ -86,6 +88,8 @@ extension DashboardWindowController {
         case "select": .select(target)
         case "open-window": .openWindow(target)
         case "set-primary": .setPrimary(target)
+        case "reconnect": .reconnect(target)
+        case "reconnect-cancel": .reconnectCancel(target)
         default: nil
         }
     }
@@ -94,11 +98,18 @@ extension DashboardWindowController {
         guard message.name == Self.gatewaysMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
-              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               let request = Self.gatewaysRequest(from: message.body)
         else {
             return
         }
+        let isSignedOutAction = self.signedOut.map { page in
+            request == .reconnect(page.target) || request == .reconnectCancel(page.target)
+        } ?? false
+        let isSignedOutDocument = self.isShowingFailurePage && isSignedOutAction &&
+            message.frameInfo.request.url?.absoluteString == "about:blank" &&
+            self.webView.url?.absoluteString == "about:blank"
+        guard isSignedOutDocument ||
+            Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else { return }
         DashboardManager.shared.handleGatewayRequest(request, from: self)
     }
 
@@ -106,19 +117,22 @@ extension DashboardWindowController {
         self.gatewaySnapshot = snapshot
         let controller = self.webView.configuration.userContentController
         controller.removeAllUserScripts()
-        Self.installNativeChromeScript(into: controller)
-        Self.installNativeGatewaysScript(into: controller, snapshot: snapshot)
+        Self.installNativeChromeScript(into: controller, url: self.currentURL)
+        Self.installNativeGatewaysScript(into: controller, url: self.currentURL, snapshot: snapshot)
         Self.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
-        self.webView.evaluateJavaScript(Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true))
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+            Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true), url: self.currentURL))
     }
 
     static func installNativeGatewaysScript(
         into userContentController: WKUserContentController,
+        url: URL,
         snapshot: DashboardGatewaySnapshot?)
     {
         guard let snapshot else { return }
         userContentController.addUserScript(WKUserScript(
-            source: self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: false),
+            source: self.scopedDashboardScript(
+                self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: false), url: url),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true))
     }
@@ -143,7 +157,9 @@ extension DashboardWindowController {
         let alert = NSAlert()
         alert.messageText = "Set \(gatewayName) as primary?"
         alert.informativeText =
-            "This changes the Mac app's primary Gateway and resets Talk Mode, canvas, and chat connections."
+            "This changes the Mac app's primary Gateway and resets its Talk Mode, canvas, " +
+            "and native chat connection. " +
+            "Other saved Gateway windows stay open."
         alert.addButton(withTitle: "Set as Primary")
         alert.addButton(withTitle: "Cancel")
         return alert

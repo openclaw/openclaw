@@ -11,7 +11,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { tryReadJsonSync } from "../../infra/json-files.js";
 import { isPrereleaseSemverVersion, parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
@@ -26,13 +25,13 @@ import type {
   PluginPackageInstall,
 } from "../../plugins/manifest.js";
 import { listOfficialExternalChannelCatalogEntries } from "../../plugins/official-external-plugin-catalog.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
+import { readPluginCacheJsonFile } from "../../plugins/plugin-cache-files.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
-export type ChannelUiMetaEntry = {
+type ChannelUiMetaEntry = {
   id: string;
   label: string;
   detailLabel: string;
@@ -48,7 +47,7 @@ export type ChannelUiCatalog = {
   byId: Record<string, ChannelUiMetaEntry>;
 };
 
-export type ChannelPluginCatalogInstall = PluginPackageInstall &
+type ChannelPluginCatalogInstall = PluginPackageInstall &
   ({ clawhubSpec: string } | { npmSpec: string });
 
 export type ChannelPluginCatalogEntry = {
@@ -58,6 +57,8 @@ export type ChannelPluginCatalogEntry = {
   trustedSourceLinkedOfficialInstall?: boolean;
   channel?: PluginPackageChannel;
   meta: ChannelMeta;
+  /** Validated docs from the official metadata owner, never a local plugin URL. */
+  officialDocsPath?: string;
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
 };
@@ -113,10 +114,6 @@ type ExternalCatalogEntry = {
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
-const catalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
-
-registerPluginMetadataProcessMemoLifecycleClear(() => catalogEntriesByPath.clear());
-
 type ManifestKey = typeof MANIFEST_KEY;
 
 function parseCatalogEntries(raw: unknown): ExternalCatalogEntry[] {
@@ -149,20 +146,12 @@ function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
   );
 }
 
-function loadCatalogEntriesFromPaths(
-  paths: Iterable<string>,
-  cache?: Map<string, ExternalCatalogEntry[] | null>,
-): ExternalCatalogEntry[] {
+function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
   const entries: ExternalCatalogEntry[] = [];
   for (const resolvedPath of paths) {
-    let parsed = cache?.get(resolvedPath);
-    if (parsed === undefined) {
-      const payload = tryReadJsonSync(resolvedPath);
-      parsed = payload === null ? null : parseCatalogEntries(payload);
-      cache?.set(resolvedPath, parsed);
-    }
-    if (parsed !== null) {
-      entries.push(...parsed);
+    const payload = readPluginCacheJsonFile(resolvedPath);
+    if (payload.ok) {
+      entries.push(...parseCatalogEntries(payload.value));
     }
   }
   return entries;
@@ -202,7 +191,8 @@ function resolveInstallInfo(params: {
 }): ChannelPluginCatalogEntry["install"] | null {
   const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
   let npmSpec =
-    normalizeOptionalString(params.install?.npmSpec) ?? normalizeOptionalString(params.packageName);
+    normalizeOptionalString(params.install?.npmSpec) ??
+    (clawhubSpec ? undefined : normalizeOptionalString(params.packageName));
   const packageVersion = normalizeOptionalString(params.packageVersion);
   const parsedNpmSpec = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
   const expectedPackageName = normalizeOptionalString(params.packageName);
@@ -223,18 +213,8 @@ function resolveInstallInfo(params: {
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
-  const requestedDefaultChoice = params.install?.defaultChoice;
-  const availableChoices = { clawhub: clawhubSpec, npm: npmSpec, local: localPath };
   const defaultChoice: NonNullable<PluginPackageInstall["defaultChoice"]> =
-    requestedDefaultChoice &&
-    Object.hasOwn(availableChoices, requestedDefaultChoice) &&
-    availableChoices[requestedDefaultChoice]
-      ? requestedDefaultChoice
-      : clawhubSpec
-        ? "clawhub"
-        : localPath
-          ? "local"
-          : "npm";
+    params.install?.defaultChoice === "local" && localPath ? "local" : npmSpec ? "npm" : "clawhub";
   const install = {
     ...(localPath ? { localPath } : {}),
     defaultChoice,
@@ -304,7 +284,6 @@ function buildCatalogEntryFromManifest(params: {
       detailLabel: channel.detailLabel?.trim(),
       ...(systemImage ? { systemImage } : {}),
       arrayFieldMode: "defined",
-      selectionDocsPrefixMode: "truthy",
     }),
     install,
     installSource: describePluginInstallSource(install, {
@@ -326,6 +305,49 @@ function buildExternalCatalogEntry(
     channel: manifest?.channel,
     install: manifest?.install,
   });
+}
+
+function resolveOfficialCatalogDocsPath(
+  entry: ChannelPluginCatalogEntry,
+  officialEntries: ChannelPluginCatalogEntry[],
+  trustedOfficialPackageName?: string,
+): string | undefined {
+  let official: ChannelPluginCatalogEntry | undefined;
+  if (
+    entry.origin === "bundled" ||
+    (entry.origin === undefined && entry.trustedSourceLinkedOfficialInstall)
+  ) {
+    official = entry;
+  } else if (
+    (entry.origin === "global" || entry.origin === "config") &&
+    trustedOfficialPackageName
+  ) {
+    const packageName = trustedOfficialPackageName;
+    // Installed packages shadow the fallback row. Bind its official guide to both
+    // declared channel/plugin identity and the package verified by the install owner.
+    official = packageName
+      ? officialEntries.find(
+          (candidate) =>
+            candidate.id === entry.id &&
+            (candidate.pluginId ?? candidate.id) === entry.pluginId &&
+            [
+              candidate.installSource?.npm?.expectedPackageName,
+              candidate.installSource?.npm?.packageName,
+              candidate.installSource?.clawhub?.packageName,
+            ].includes(packageName),
+        )
+      : undefined;
+  }
+  const value = official?.meta.docsPath.trim();
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    return undefined;
+  }
+  const origin = "https://docs.openclaw.ai";
+  const url = new URL(value, origin);
+  // Dot-segment normalization can turn a single-slash path into a network-path reference.
+  return url.origin === origin && !url.pathname.startsWith("//")
+    ? `${url.pathname}${url.search}${url.hash}`
+    : undefined;
 }
 
 export function buildChannelUiCatalog(
@@ -375,11 +397,27 @@ export function listRawChannelPluginCatalogEntries(
     installRecords: options.installRecords,
     discovery: options.discovery,
   });
+  const officialFileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
+  const officialEntries = [...listOfficialExternalChannelCatalogEntries(), ...officialFileEntries]
+    .map((entry) => buildExternalCatalogEntry(entry, true))
+    .filter((entry): entry is ChannelPluginCatalogEntry => entry !== null);
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
-  const rememberCatalogEntry = (entry: ChannelPluginCatalogEntry, priority: number) => {
+  const rememberCatalogEntry = (
+    entry: ChannelPluginCatalogEntry,
+    priority: number,
+    trustedOfficialPackageName?: string,
+  ) => {
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
-      resolved.set(entry.id, { entry, priority });
+      const officialDocsPath = resolveOfficialCatalogDocsPath(
+        entry,
+        officialEntries,
+        trustedOfficialPackageName,
+      );
+      resolved.set(entry.id, {
+        entry: officialDocsPath ? { ...entry, officialDocsPath } : entry,
+        priority,
+      });
     }
   };
 
@@ -399,7 +437,11 @@ export function listRawChannelPluginCatalogEntries(
     if (!entry) {
       continue;
     }
-    rememberCatalogEntry(entry, ORIGIN_PRIORITY[candidate.origin] ?? 99);
+    rememberCatalogEntry(
+      entry,
+      ORIGIN_PRIORITY[candidate.origin] ?? 99,
+      candidate.trustedOfficialInstall ? candidate.packageName : undefined,
+    );
   }
 
   const rememberExternalCatalogEntries = (
@@ -414,20 +456,15 @@ export function listRawChannelPluginCatalogEntries(
       }
     }
   };
-  const officialFileEntries = loadCatalogEntriesFromPaths(
-    resolveOfficialCatalogPaths(options),
-    options.officialCatalogPaths?.length ? undefined : catalogEntriesByPath,
-  );
-  rememberExternalCatalogEntries(
-    [...listOfficialExternalChannelCatalogEntries(), ...officialFileEntries],
-    FALLBACK_CATALOG_PRIORITY,
-    true,
-  );
+
+  for (const entry of officialEntries) {
+    rememberCatalogEntry(entry, FALLBACK_CATALOG_PRIORITY);
+  }
 
   const externalCatalogPaths = resolveExternalCatalogPaths(options).map((rawPath) =>
     resolveUserPath(rawPath, options.env ?? process.env),
   );
-  const externalEntries = loadCatalogEntriesFromPaths(externalCatalogPaths, catalogEntriesByPath);
+  const externalEntries = loadCatalogEntriesFromPaths(externalCatalogPaths);
   // External catalogs are the supported override seam for shipped fallback
   // metadata, but discovered plugins should still win when they are present.
   rememberExternalCatalogEntries(externalEntries, EXTERNAL_CATALOG_PRIORITY);

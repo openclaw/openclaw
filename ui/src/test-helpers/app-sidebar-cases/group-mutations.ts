@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
@@ -9,22 +9,10 @@ import {
   type SessionGroupMutationResult,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
-
-function createDataTransferStub() {
-  const data = new Map<string, string>();
-  return {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => void data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
 
 function dispatchDragEvent(
   target: Element,
@@ -98,7 +86,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     return menu;
   }
 
-  function selectGroupMenuAction(menu: Element, value: string) {
+  async function selectGroupMenuAction(menu: Element, value: string) {
     const item = menu.querySelector(`[value="${value}"]`);
     if (!item) {
       throw new Error(`expected ${value} group action`);
@@ -110,11 +98,12 @@ describe("AppSidebar group mutation collapsed state", () => {
         detail: { item: { value } },
       }),
     );
+    await vi.dynamicImportSettled();
   }
 
   async function renameGroupThroughDialog(sidebar: SidebarLifecycleState, name: string) {
     const menu = await openGroupMenu(sidebar);
-    selectGroupMenuAction(menu, "rename-group");
+    await selectGroupMenuAction(menu, "rename-group");
     await waitForFast(() => {
       const input = document.body.querySelector('openclaw-modal-dialog input[name="value"]');
       if (!(input instanceof HTMLInputElement)) {
@@ -123,11 +112,12 @@ describe("AppSidebar group mutation collapsed state", () => {
       return input;
     });
     await submitInputDialog(name);
+    await vi.dynamicImportSettled();
   }
 
   async function deleteGroupThroughConfirm(sidebar: SidebarLifecycleState) {
     const menu = await openGroupMenu(sidebar);
-    selectGroupMenuAction(menu, "delete-group");
+    await selectGroupMenuAction(menu, "delete-group");
     const confirm = await waitForFast(() => {
       const button = document.body.querySelector<HTMLButtonElement>(
         "openclaw-modal-dialog .exec-approval-actions .btn.danger",
@@ -215,7 +205,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     await toast.updateComplete;
     const menu = await openGroupMenu(sidebar);
-    selectGroupMenuAction(menu, "delete-group");
+    await selectGroupMenuAction(menu, "delete-group");
     const confirm = await waitForFast(() => {
       const button = document.body.querySelector<HTMLButtonElement>(
         "openclaw-modal-dialog .exec-approval-actions .btn.danger",
@@ -312,7 +302,7 @@ describe("AppSidebar group mutation collapsed state", () => {
   it("leaves the catalog alone when the delete confirm is cancelled", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({});
     const menu = await openGroupMenu(sidebar);
-    selectGroupMenuAction(menu, "delete-group");
+    await selectGroupMenuAction(menu, "delete-group");
     // Cancel is the focused default; answering it must end the flow with the
     // group, its members and the collapsed key untouched.
     const cancel = await waitForFast(() => {

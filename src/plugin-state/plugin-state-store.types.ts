@@ -1,3 +1,5 @@
+import type { Result } from "@openclaw/normalization-core/result";
+
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
 export type PluginStateEntry<T> = {
@@ -11,21 +13,30 @@ export type PluginStateEntry<T> = {
 export type PluginStateKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
+  /** The updater runs synchronously in the transaction; undefined leaves the entry unchanged. */
   update?: (
     key: string,
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => Promise<boolean>;
-  /** Atomically deletes an existing entry when its current value matches. */
+  /** The synchronous predicate and conditional deletion run in one transaction. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
+  /** Positional outcomes for at most 10,000 keys; missing/expired values are undefined. */
+  lookupMany?: (
+    keys: readonly string[],
+  ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   clear(): Promise<void>;
 };
 
-/** Sync plugin state API used by trusted core/plugin bootstrap paths. */
+/**
+ * Synchronous plugin-state compatibility contract.
+ * @deprecated Use PluginStateKeyedStore from api.runtime.state.openKeyedStore
+ * and await its operations. Retained through the next Plugin SDK major.
+ */
 export type PluginStateSyncKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
@@ -37,6 +48,8 @@ export type PluginStateSyncKeyedStore<T> = {
   /** Atomically deletes an existing entry when its current value matches. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
   lookup(key: string): T | undefined;
+  /** Positional outcomes for at most 10,000 keys; missing/expired values are undefined. */
+  lookupMany?: (keys: readonly string[]) => Array<Result<T | undefined, PluginStateStoreError>>;
   consume(key: string): T | undefined;
   delete(key: string): boolean;
   entries(): PluginStateEntry<T>[];

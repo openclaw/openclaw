@@ -7,7 +7,9 @@ import type {
   CommandResult,
   GatewayHandle,
   LaneBaseParams,
+  LaneResult,
   LaneState,
+  PackagedUpgradeFallbackEvidence,
   ProviderConfig,
 } from "./config.ts";
 import {
@@ -16,6 +18,7 @@ import {
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
   normalizeRequestedRef,
+  parsePackagedUpgradeUpdateTimings,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
   shouldRunMainChannelDevUpdate,
@@ -39,6 +42,7 @@ import {
   runInstalledBrowserOverrideImportSmoke,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   verifyInstalledCandidate,
+  withNpmDiagnostics,
 } from "./install.ts";
 import {
   ensureDevUpdateGitInstall,
@@ -55,7 +59,9 @@ import {
   waitForInstalledGateway,
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
+import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
+import { runPackagedSelfUpdateTransition } from "./packaged-self-update.ts";
 import {
   reserveGatewayPortForLane,
   runCleanup,
@@ -74,45 +80,6 @@ import {
   waitForGateway,
 } from "./runtime.ts";
 import { formatError, trimForSummary } from "./shared.ts";
-
-async function installLaneCompanions(
-  params: LaneBaseParams & {
-    lane: LaneState;
-    env: NodeJS.ProcessEnv;
-    cliPath?: string;
-  },
-) {
-  if (params.companions.length === 0) {
-    return;
-  }
-  await runTimedLanePhase(params.lane, "install-companions", async () => {
-    for (const companion of params.companions) {
-      const logPath = join(
-        params.logsDir,
-        `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
-      );
-      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
-      if (params.cliPath) {
-        await runInstalledCli({
-          cliPath: params.cliPath,
-          args,
-          env: params.env,
-          cwd: params.lane.homeDir,
-          logPath,
-          timeoutMs: 10 * 60 * 1000,
-        });
-        continue;
-      }
-      await runOpenClaw({
-        lane: params.lane,
-        args,
-        env: params.env,
-        logPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
-    }
-  });
-}
 
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
@@ -156,6 +123,9 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
 
     await installLaneCompanions({ ...params, lane, env });
 
+    // Own the configured port through setup; release only when the gateway can claim it.
+    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+    cleanup.push(() => gatewayPortReservation.release());
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
         lane,
@@ -174,13 +144,14 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
       });
     });
 
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
-      startGateway({
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
+      await gatewayPortReservation.release();
+      return startGateway({
         lane,
         env,
         logPath: join(params.logsDir, "fresh-gateway.log"),
-      }),
-    );
+      });
+    });
     gatewayHolder.current = gateway;
     cleanup.push(() => stopGateway(gatewayHolder.current));
 
@@ -242,6 +213,11 @@ export async function runUpgradeLane(
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
   const gatewayHolder: { current: GatewayHandle | null } = { current: null };
+  const result: LaneResult = {
+    status: "pending",
+    phaseTimings: lane.phaseTimings,
+    updateTimings: [],
+  };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -276,6 +252,15 @@ export async function runUpgradeLane(
       version: readInstalledVersion(lane.prefixDir),
     };
 
+    if (baseline.version === "2026.9.2" && params.build.candidateVersion === "2026.9.3") {
+      return await runPackagedSelfUpdateTransition({
+        ...params,
+        lane,
+        env,
+        baselineVersion: baseline.version,
+      });
+    }
+
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
@@ -283,14 +268,16 @@ export async function runUpgradeLane(
     let usedWindowsPackagedUpgradeTimeoutFallback = false;
     await runTimedLanePhase(lane, "update", async () => {
       try {
-        updateResult = await runOpenClaw({
-          lane,
-          env: updateEnv,
-          args: updateArgs,
-          logPath: updateLogPath,
-          timeoutMs: updateTimeoutMs(),
-          check: false,
-        });
+        updateResult = await withNpmDiagnostics(lane.homeDir, updateLogPath, updateEnv, () =>
+          runOpenClaw({
+            lane,
+            env: updateEnv,
+            args: updateArgs,
+            logPath: updateLogPath,
+            timeoutMs: updateTimeoutMs(),
+            check: false,
+          }),
+        );
       } catch (error) {
         if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
           throw error;
@@ -310,9 +297,17 @@ export async function runUpgradeLane(
     if (!updateResult) {
       throw new Error("Packaged update completed without a command result.");
     }
-    const usedWindowsPackagedUpgradeFallback =
-      usedWindowsPackagedUpgradeTimeoutFallback ||
-      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+    result.updateTimings = parsePackagedUpgradeUpdateTimings(updateResult.stdout);
+    const updateFallback: PackagedUpgradeFallbackEvidence | undefined =
+      usedWindowsPackagedUpgradeTimeoutFallback
+        ? { reason: "timeout", action: "direct-candidate-install" }
+        : isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)
+          ? { reason: "swap-cleanup", action: "direct-candidate-install" }
+          : undefined;
+    if (updateFallback) {
+      result.updateFallback = updateFallback;
+    }
+    const usedWindowsPackagedUpgradeFallback = Boolean(updateFallback);
     if (usedWindowsPackagedUpgradeFallback) {
       await runTimedLanePhase(lane, "update-fallback-install", async () => {
         await installPackageSpec({
@@ -367,6 +362,9 @@ export async function runUpgradeLane(
 
     await installLaneCompanions({ ...params, lane, env });
 
+    // Own the configured port through setup; release only when the gateway can claim it.
+    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+    cleanup.push(() => gatewayPortReservation.release());
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
         lane,
@@ -385,13 +383,14 @@ export async function runUpgradeLane(
       });
     });
 
-    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
-      startGateway({
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () => {
+      await gatewayPortReservation.release();
+      return startGateway({
         lane,
         env,
         logPath: join(params.logsDir, "upgrade-gateway.log"),
-      }),
-    );
+      });
+    });
     gatewayHolder.current = gateway;
     cleanup.push(() => stopGateway(gatewayHolder.current));
 
@@ -422,6 +421,7 @@ export async function runUpgradeLane(
     );
 
     return {
+      ...result,
       status: "pass",
       baselineVersion: baseline.version,
       installedVersion: installed.version,
@@ -429,7 +429,12 @@ export async function runUpgradeLane(
       dashboardStatus: "pass",
       gatewayPort: lane.gatewayPort,
       agentOutput: trimForSummary(agent.stdout),
-      phaseTimings: lane.phaseTimings,
+    };
+  } catch (error) {
+    return {
+      ...result,
+      status: "fail",
+      error: formatError(error),
     };
   } finally {
     await runCleanup(cleanup);
@@ -804,6 +809,8 @@ export async function runDevUpdateSuite(
 
     await installLaneCompanions({ ...params, lane, env, cliPath: verifiedShell.cliPath });
 
+    const gatewayPortReservation = await reserveGatewayPortForLane(lane);
+    cleanup.push(() => gatewayPortReservation.release());
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
@@ -812,6 +819,7 @@ export async function runDevUpdateSuite(
       providerConfig: params.providerConfig,
       installDaemon: false,
       logPath: join(params.logsDir, "dev-update-onboard.log"),
+      allocateGatewayPort: false,
     });
 
     logLanePhase(lane, "models-set");
@@ -823,6 +831,7 @@ export async function runDevUpdateSuite(
       logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
+    await gatewayPortReservation.release();
     logLanePhase(lane, "gateway-start");
     const gateway = await startManualGatewayFromInstalledCli({
       lane,

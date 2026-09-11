@@ -2,12 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
+import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
+import { createWorkerEnvironmentStore } from "./store.js";
+import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
@@ -32,6 +39,11 @@ async function writeFixture(
     encoding: "utf8",
     mode: 0o755,
   });
+  await fs.writeFile(
+    path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
+    "export const launcher = true;\n",
+    { encoding: "utf8", mode: 0o755 },
+  );
   await fs.writeFile(
     path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
     "export const receiver = true;\n",
@@ -118,6 +130,7 @@ describe("worker bundle producer", () => {
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
+        "github-exec-launcher.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -162,6 +175,13 @@ describe("worker bundle producer", () => {
       );
       const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
+
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
+        "export const launcher = false;\n",
+      );
+      const launcherChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      expect(launcherChanged.bundleHash).not.toBe(receiverChanged.bundleHash);
     });
   });
 
@@ -189,6 +209,76 @@ describe("worker bundle producer", () => {
       await expect(fs.stat(retained.tarballPath)).resolves.toBeDefined();
       await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
       await expect(fs.stat(removedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("retains a persisted provisioning bundle until its environment terminates", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-provisioning-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      const databasePath = path.join(root, "state", "openclaw.sqlite");
+      await writeFixture(packageRoot, "export const value = 1;\n");
+      const admitted = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      const admittedBytes = await fs.readFile(admitted.tarballPath);
+      const project = { key: "project", root, baseCommit: "a".repeat(40) };
+      const preparation = createWorkerProjectPreparationIdentity({
+        namespace: "bundle-retention-test",
+        providerId: "fixture",
+        profileId: "test",
+        profileSnapshot: { settings: {} },
+        project,
+        target: { machineClass: "small", platform: "linux" },
+        artifacts: {
+          nodeBootstrapSha256: "b".repeat(64),
+          enabledPluginIds: [],
+          workerBundleHash: admitted.bundleHash,
+          workerArchiveSha256: admitted.tarballSha256,
+          openclawVersion: admitted.openclawVersion,
+          protocolFeatures: [...admitted.protocolFeatures],
+        },
+      });
+      try {
+        const store = createWorkerEnvironmentStore({
+          database: openOpenClawStateDatabase({ path: databasePath }),
+        });
+        store.createIntent({
+          environmentId: "preparing",
+          providerId: "fixture",
+          profileId: "test",
+          provisionOperationId: "prepare-project",
+          profileSnapshot: { settings: {}, project: { ...project, preparation } },
+        });
+        store.transition({ environmentId: "preparing", from: "requested", to: "provisioning" });
+        closeOpenClawStateDatabaseForTest();
+
+        await writeFixture(packageRoot, "export const value = 2;\n");
+        const successor = createWorkerBundleProducer({
+          packageRoot,
+          cacheDir,
+          cacheOwnership: "exclusive",
+        });
+        const current = await successor.prepare();
+        expect(current.bundleHash).not.toBe(admitted.bundleHash);
+        const reopened = createWorkerEnvironmentStore({
+          database: openOpenClawStateDatabase({ path: databasePath }),
+        });
+        expect(reopened.get("preparing")).toMatchObject({
+          state: "provisioning",
+          bootstrapReceipt: null,
+        });
+        const retained = () =>
+          listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
+
+        await successor.prune(retained());
+        await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
+
+        reopened.transition({ environmentId: "preparing", from: "provisioning", to: "failed" });
+        await successor.prune(retained());
+        await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
     });
   });
 
@@ -317,6 +407,7 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "github-exec-launcher.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -324,7 +415,11 @@ describe("worker bundle producer", () => {
   });
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
-    for (const artifactName of ["worker.mjs", "workspace-rsync-receiver.mjs"]) {
+    for (const artifactName of [
+      "github-exec-launcher.mjs",
+      "worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]) {
       await withTestDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
         const packageRoot = path.join(root, "package");
         await writeFixture(packageRoot);

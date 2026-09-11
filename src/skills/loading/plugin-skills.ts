@@ -4,45 +4,48 @@ import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
-import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "../../plugins/config-policy.js";
-import { resolveMemorySlotDecision } from "../../plugins/config-state.js";
+  pluginCacheExistsSync,
+  pluginCacheLstatSync,
+  pluginCacheRealpathSync,
+  readPluginCacheDirectory,
+} from "../../plugins/plugin-cache-files.js";
+import { getPluginMetadataSnapshotCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { hasKind } from "../../plugins/slots.js";
-import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
-import { CONFIG_DIR } from "../../utils.js";
+import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
+import { isPathInside } from "../../security/scan-paths.js";
+import type { PluginSkillRoot } from "./plugin-skill-root.js";
+import { resolvePluginSkillsDir } from "./skill-paths.js";
+import { loadSkillRootRecords } from "./skill-root-loader.js";
+
+export type { PluginSkillRoot } from "./plugin-skill-root.js";
 
 const log = createSubsystemLogger("skills");
 
 type PluginSkillLinkType = "dir" | "junction";
 
-// Plugin metadata is process-stable while the gateway runs, but this resolver sits on the
-// per-turn skills-refresh path. ACP availability changes outside that metadata lifecycle, so it
-// stays in the memo identity to prevent stale ACPX skill exposure without repeating directory IO.
-let pluginSkillDirsMemo: {
-  workspaceDir: string;
-  config: OpenClawConfig | undefined;
-  snapshot: unknown;
-  acpRuntimeAvailable: boolean;
-  dirs: string[];
+// This tracks the generated SDK links we last published, not plugin metadata.
+// Config and ACP availability can change the desired links without changing package files.
+let lastDefaultPluginSkillsPublication: {
+  directory: string;
+  targets: ReadonlyMap<string, string>;
 } | null = null;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
-  pluginSkillDirsMemo = null;
+  lastDefaultPluginSkillsPublication = null;
 });
 
-export function resolvePluginSkillDirs(params: {
+export function resolvePluginSkillRoots(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
   /** Override the plugin skills directory for testing. */
   pluginSkillsDir?: string;
-}): string[] {
+}): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     publishPluginSkills([], {
@@ -55,15 +58,23 @@ export function resolvePluginSkillDirs(params: {
     config: params.config,
     env: process.env,
   });
-  return resolvePluginSkillDirsFromMetadata({ ...params, metadataSnapshot });
+  return resolvePluginSkillRootsFromMetadata({ ...params, metadataSnapshot });
 }
 
-export function resolvePluginSkillDirsFromMetadata(params: {
+export function resolvePluginSkillRootsFromMetadata(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
   pluginSkillsDir?: string;
   metadataSnapshot: PluginMetadataSnapshot;
-}): string[] {
+}): PluginSkillRoot[] {
+  return withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () =>
+    resolvePluginSkillRootsInOwner(params),
+  );
+}
+
+function resolvePluginSkillRootsInOwner(
+  params: Parameters<typeof resolvePluginSkillRootsFromMetadata>[0],
+): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
@@ -79,67 +90,31 @@ export function resolvePluginSkillDirsFromMetadata(params: {
     return [];
   }
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
-  const canMemoize = params.pluginSkillsDir === undefined;
-  if (
-    canMemoize &&
-    pluginSkillDirsMemo &&
-    pluginSkillDirsMemo.workspaceDir === workspaceDir &&
-    pluginSkillDirsMemo.config === params.config &&
-    pluginSkillDirsMemo.snapshot === metadataSnapshot &&
-    pluginSkillDirsMemo.acpRuntimeAvailable === acpRuntimeAvailable
-  ) {
-    return pluginSkillDirsMemo.dirs;
-  }
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    config.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
-  const memorySlot = normalizedPlugins.slots.memory;
-  let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
-  const resolved: string[] = [];
+  const resolved: PluginSkillRoot[] = [];
 
-  for (const record of registry.plugins) {
-    if (!record.skills || record.skills.length === 0) {
-      continue;
-    }
-    const activationState = resolvePolicyPluginActivationState({
-      id: record.id,
-      origin: record.origin,
-      config: normalizedPlugins,
-      rootConfig: config,
-      enabledByDefault: record.enabledByDefault,
-    });
-    if (!activationState.activated) {
-      continue;
-    }
+  for (const { record, roots } of iteratePluginRootContributions({
+    metadataSnapshot,
+    config,
+    contribution: "skills",
     // ACP router skills should not be attached unless ACP can actually spawn.
-    if (!acpRuntimeAvailable && record.id === "acpx") {
-      continue;
-    }
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
+    isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
+  })) {
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
     });
-    if (!memoryDecision.enabled) {
-      continue;
-    }
-    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
-      selectedMemoryPluginId = record.id;
-    }
-    for (const raw of record.skills) {
+    for (const raw of roots) {
       const trimmed = raw.trim();
       if (!trimmed) {
         continue;
       }
       const candidate = path.resolve(record.rootDir, trimmed);
-      if (!fs.existsSync(candidate)) {
+      if (!pluginCacheExistsSync(candidate)) {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
         continue;
       }
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
+      if (!isPluginSkillPathInside(record.rootDir, candidate)) {
         log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
@@ -150,35 +125,75 @@ export function resolvePluginSkillDirsFromMetadata(params: {
           continue;
         }
         seen.add(resolvedCandidate);
-        resolved.push(resolvedCandidate);
+        resolved.push({ dir: resolvedCandidate, rejectHardlinks });
       }
     }
   }
 
-  publishPluginSkills(resolved, {
-    pluginSkillsDir: params.pluginSkillsDir,
-  });
+  publishPluginSkills(
+    resolved.map((root) => root.dir),
+    {
+      pluginSkillsDir: params.pluginSkillsDir,
+    },
+  );
 
-  if (canMemoize) {
-    pluginSkillDirsMemo = {
-      workspaceDir,
-      config: params.config,
-      snapshot: metadataSnapshot,
-      acpRuntimeAvailable,
-      dirs: resolved,
-    };
-  }
   return resolved;
+}
+
+function isPluginSkillPathInside(rootDir: string, candidate: string): boolean {
+  if (!isPathInside(rootDir, candidate)) {
+    return false;
+  }
+  const rootRealPath = pluginCacheRealpathSync(rootDir);
+  const candidateRealPath = pluginCacheRealpathSync(candidate);
+  return Boolean(
+    rootRealPath && candidateRealPath && isPathInside(rootRealPath, candidateRealPath),
+  );
+}
+
+/** Resolve manifest skill roots to the names users and agents actually see. */
+export function resolvePluginSkillNames(
+  record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "skills">,
+): string[] {
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: record.origin,
+    rootDir: record.rootDir,
+  });
+  const names = new Set<string>();
+  for (const raw of record.skills) {
+    const candidate = path.resolve(record.rootDir, raw.trim());
+    if (!raw.trim() || !pluginCacheExistsSync(candidate)) {
+      continue;
+    }
+    if (!isPluginSkillPathInside(record.rootDir, candidate)) {
+      log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
+      continue;
+    }
+    for (const loaded of loadSkillRootRecords({
+      dir: candidate,
+      source: record.origin === "bundled" ? "bundled" : "plugin",
+      mode: "audit",
+      rejectHardlinks,
+    })) {
+      names.add(loaded.skill.name);
+    }
+  }
+  return [...names].toSorted();
+}
+
+function listSkillChildDirectories(dir: string): Array<{ name: string; path: string }> {
+  try {
+    return readPluginCacheDirectory(dir)
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ name: entry.name, path: path.join(dir, entry.name) }));
+  } catch {
+    return [];
+  }
 }
 
 function collectAgentSkillTargets(skillsRoot: string): string[] {
   const targets: string[] = [];
-  const entries = walkDirectorySync(skillsRoot, {
-    maxDepth: 1,
-    symlinks: "skip",
-    include: (entry) => entry.kind === "directory",
-  }).entries;
-  for (const entry of entries) {
+  for (const entry of listSkillChildDirectories(skillsRoot)) {
     if (hasPublishableSkillFile({ skillDir: entry.path, rootDir: skillsRoot })) {
       targets.push(entry.path);
       continue;
@@ -186,10 +201,6 @@ function collectAgentSkillTargets(skillsRoot: string): string[] {
     log.warn(`agent plugin skill skipped because SKILL.md is missing or invalid: ${entry.path}`);
   }
   return targets;
-}
-
-function resolveDefaultPluginSkillsDir(): string {
-  return path.join(CONFIG_DIR, "plugin-skills");
 }
 
 function resolvePluginSkillLinkType(
@@ -218,12 +229,7 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
     return;
   }
 
-  const entries = walkDirectorySync(dir, {
-    maxDepth: 1,
-    symlinks: "skip",
-    include: (entry) => entry.kind === "directory",
-  }).entries;
-  for (const entry of entries) {
+  for (const entry of listSkillChildDirectories(dir)) {
     const childPath = entry.path;
     if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) {
       continue;
@@ -243,17 +249,15 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
 
 function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }): boolean {
   const skillMd = path.join(params.skillDir, "SKILL.md");
-  let skillMdStat: fs.Stats;
-  try {
-    skillMdStat = fs.lstatSync(skillMd);
-  } catch {
+  const skillMdStat = pluginCacheLstatSync(skillMd);
+  if (!skillMdStat) {
     return false;
   }
   if (!skillMdStat.isFile() || skillMdStat.isSymbolicLink()) {
     log.warn(`plugin skill SKILL.md is not a regular file: ${skillMd}`);
     return false;
   }
-  if (!isPathInsideWithRealpath(params.rootDir, skillMd, { requireRealpath: true })) {
+  if (!isPluginSkillPathInside(params.rootDir, skillMd)) {
     log.warn(`plugin skill SKILL.md escapes declared skill root: ${skillMd}`);
     return false;
   }
@@ -269,7 +273,7 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
  * a generated symlink. Cleanup of stale links is therefore safe.
  */
 function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
-  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolveDefaultPluginSkillsDir();
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
@@ -278,6 +282,17 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
   // directories that each contain a SKILL.md.
   for (const dir of skillDirs) {
     collectSkillTargets(dir, managedTargets);
+  }
+
+  if (
+    opts?.pluginSkillsDir === undefined &&
+    lastDefaultPluginSkillsPublication?.directory === pluginSkillsDir &&
+    lastDefaultPluginSkillsPublication.targets.size === managedTargets.size &&
+    [...managedTargets].every(
+      ([name, target]) => lastDefaultPluginSkillsPublication?.targets.get(name) === target,
+    )
+  ) {
+    return;
   }
 
   // Plugin skill symlinks are owned by OpenClaw and publish at extra-dir
@@ -334,6 +349,9 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     }
     const linkPath = path.join(pluginSkillsDir, entry.name);
     removeGeneratedPluginSkillEntry(linkPath);
+  }
+  if (opts?.pluginSkillsDir === undefined) {
+    lastDefaultPluginSkillsPublication = { directory: pluginSkillsDir, targets: managedTargets };
   }
 }
 

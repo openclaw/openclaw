@@ -7,11 +7,16 @@ import {
   acquireStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../infra/startup-migration-checkpoint.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   readPersistedInstalledPluginIndexInstallRecords,
@@ -19,23 +24,28 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
 import {
-  readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
-  resolveInstalledPluginIndexStorePath,
   restorePersistedInstalledPluginIndexIfCurrent,
   writePersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexWithLeaseSync,
+} from "./installed-plugin-index-store-write.js";
+import {
+  readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -194,31 +204,27 @@ function insertPersistedIndexRow(
     pluginsJson?: string;
     diagnosticsJson?: string;
   },
-) {
+): string {
+  // Built by string concatenation so raw JSON fixtures (including "__proto__"
+  // keys) land in value_json verbatim instead of round-tripping JS objects.
+  const valueJson =
+    `{"revision":123,"index":{"version":${values.version ?? 1},` +
+    '"hostContractVersion":"2026.4.25","compatRegistryVersion":"compat-v1",' +
+    `"migrationVersion":${values.migrationVersion ?? 1},"policyHash":"policy-hash",` +
+    `"generatedAtMs":123,"installRecords":${values.installRecordsJson ?? "{}"},` +
+    `"plugins":${values.pluginsJson ?? "[]"},"diagnostics":${values.diagnosticsJson ?? "[]"}}}`;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare(
         `
-          INSERT OR REPLACE INTO installed_plugin_index (
-            index_key, version, host_contract_version, compat_registry_version,
-            migration_version, policy_hash, generated_at_ms, refresh_reason,
-            install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-          ) VALUES (
-            'installed-plugin-index', @version, '2026.4.25', 'compat-v1',
-            @migration_version, 'policy-hash', 123, NULL,
-            @install_records_json, @plugins_json, @diagnostics_json, NULL, 123
-          )
+          INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES ('plugins.installedIndex', ?, 123)
         `,
-      ).run({
-        version: values.version ?? 1,
-        migration_version: values.migrationVersion ?? 1,
-        install_records_json: values.installRecordsJson ?? "{}",
-        plugins_json: values.pluginsJson ?? "[]",
-        diagnostics_json: values.diagnosticsJson ?? "[]",
-      });
+      ).run(valueJson);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
+  return valueJson;
 }
 
 function readPersistedIndexRevision(stateDir: string): number | null {
@@ -227,19 +233,61 @@ function readPersistedIndexRevision(stateDir: string): number | null {
       const row = db
         .prepare(
           `
-            SELECT updated_at_ms
-              FROM installed_plugin_index
-             WHERE index_key = 'installed-plugin-index'
+            SELECT value_json
+              FROM config_machine_state
+             WHERE state_key = 'plugins.installedIndex'
           `,
         )
-        .get() as { updated_at_ms: number | bigint } | undefined;
-      return row ? Number(row.updated_at_ms) : null;
+        .get() as { value_json: string } | undefined;
+      if (!row) {
+        return null;
+      }
+      const revision = (JSON.parse(row.value_json) as { revision?: unknown }).revision;
+      return typeof revision === "number" ? revision : null;
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
 }
 
 describe("installed plugin index persistence", () => {
+  it.each(["write", "leased-write", "rollback"] as const)(
+    "keeps the running Gateway inventory after an installed-index %s",
+    async (operation) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "demo");
+      fs.mkdirSync(pluginDir);
+      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+      const config = {};
+      const index = refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [createCandidate(pluginDir)],
+        config,
+        env,
+      });
+      const boot = loadPluginMetadataSnapshot({ index, config, env, allowCurrent: false });
+      setGatewayPluginMetadataSnapshot(boot, { config, env });
+      expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(boot);
+      const next = { ...index, plugins: [] };
+      const lease = { assertOwnedInTransaction: vi.fn() };
+
+      if (operation === "leased-write") {
+        writePersistedInstalledPluginIndexWithLeaseSync(next, { stateDir, lease });
+      } else if (operation === "rollback") {
+        const revision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
+        await expect(
+          restorePersistedInstalledPluginIndexIfCurrent(next, revision, { stateDir, lease }),
+        ).resolves.toBe(true);
+      } else {
+        await writePersistedInstalledPluginIndex(next, { stateDir });
+      }
+
+      expectPluginIds(requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })), []);
+      expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(boot);
+      expectPluginIds(boot.index, ["demo"]);
+    },
+  );
+
   it("resolves the persisted index path to the shared state database", () => {
     const stateDir = makeTempDir();
 
@@ -452,7 +500,7 @@ describe("installed plugin index persistence", () => {
     };
     fs.writeFileSync(contractPath, "export const legacyConfigRules = [];\n", "utf8");
 
-    const first = await refreshPersistedInstalledPluginIndex({
+    const first = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -481,7 +529,7 @@ describe("installed plugin index persistence", () => {
       "export const legacyConfigRules = [{ path: ['demo'], message: 'changed' }];\n",
       "utf8",
     );
-    const second = await refreshPersistedInstalledPluginIndex({
+    const second = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -559,9 +607,7 @@ describe("installed plugin index persistence", () => {
     });
     expectCanonicalIndexMissing();
 
-    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual(
-      {},
-    );
+    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({});
     expectCanonicalIndexMissing();
   });
 
@@ -657,7 +703,7 @@ describe("installed plugin index persistence", () => {
       VITEST: "true",
     };
     const candidate = createCandidate(pluginDir, { configPaths: ["browser"] });
-    const current = await refreshPersistedInstalledPluginIndex({
+    const current = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -676,7 +722,7 @@ describe("installed plugin index persistence", () => {
     });
     expect(inspection.source).toBe("derived");
 
-    const refreshed = await refreshPersistedInstalledPluginIndex({
+    const refreshed = refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
@@ -690,7 +736,7 @@ describe("installed plugin index persistence", () => {
   it("does not allocate a revision or rewrite an invalid predecessor", async () => {
     const stateDir = makeTempDir();
     const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
-    insertPersistedIndexRow(stateDir, { installRecordsJson });
+    const persistedValueJson = insertPersistedIndexRow(stateDir, { installRecordsJson });
 
     await expect(writePersistedInstalledPluginIndex(createIndex(), { stateDir })).rejects.toThrow(
       "Persisted plugin install records are invalid",
@@ -699,22 +745,21 @@ describe("installed plugin index persistence", () => {
       ({ db }) =>
         db
           .prepare(
-            `SELECT install_records_json, updated_at_ms
-               FROM installed_plugin_index
-              WHERE index_key = 'installed-plugin-index'`,
+            `SELECT value_json, updated_at_ms
+               FROM config_machine_state
+              WHERE state_key = 'plugins.installedIndex'`,
           )
-          .get() as { install_records_json: string; updated_at_ms: number | bigint },
+          .get() as { value_json: string; updated_at_ms: number | bigint },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
-    expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
+    expect(row).toEqual({ value_json: persistedValueJson, updated_at_ms: 123 });
   });
 
-  it("returns null for missing or invalid persisted indexes", async () => {
+  it.each(["missing", "invalid"])("returns null for %s persisted indexes", async (condition) => {
     const stateDir = makeTempDir();
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-
-    insertPersistedIndexRow(stateDir, { version: 999 });
-
+    if (condition === "invalid") {
+      insertPersistedIndexRow(stateDir, { version: 999 });
+    }
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
@@ -742,7 +787,7 @@ describe("installed plugin index persistence", () => {
     fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
 
     await expect(readPersistedInstalledPluginIndex({ filePath })).resolves.toBeNull();
-    await expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).resolves.toBeNull();
+    expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).toBeNull();
   });
 
   it("rejects pre-migration persisted indexes so update can rebuild them", async () => {
@@ -758,7 +803,7 @@ describe("installed plugin index persistence", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createCandidate(pluginDir);
 
-    const index = await refreshPersistedInstalledPluginIndex({
+    const index = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -781,18 +826,28 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
+    const candidate = recordPluginCandidateInstallOwner(createCandidate(pluginDir), "package");
+    const installRecords = {
+      package: { source: "git", installPath: pluginDir },
+      orphaned: { source: "path", installPath: path.join(stateDir, "missing") },
+    } satisfies InstalledPluginIndex["installRecords"];
     const env = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
-    const initial = await refreshPersistedInstalledPluginIndex({
+    const initial = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
+      installRecords,
       env,
     });
+    expect(
+      Object.keys(
+        requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).installRecords,
+      ),
+    ).toEqual(["orphaned", "package"]);
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -804,10 +859,11 @@ describe("installed plugin index persistence", () => {
       "utf8",
     );
 
-    const refreshed = await refreshPersistedInstalledPluginIndex({
+    const refreshed = refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
+      installRecords,
       env,
       config: {
         plugins: {
@@ -828,6 +884,19 @@ describe("installed plugin index persistence", () => {
       manifestHash: initial.plugins[0]?.manifestHash,
     });
     expect(refreshed.policyHash).not.toBe(initial.policyHash);
+
+    const changedInstallRecords = {
+      ...installRecords,
+      package: { ...installRecords.package, source: "npm" },
+    } satisfies InstalledPluginIndex["installRecords"];
+    const rebuilt = refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      installRecords: changedInstallRecords,
+      env,
+    });
+    expect(rebuilt.plugins[0]?.manifestHash).not.toBe(initial.plugins[0]?.manifestHash);
   });
 
   it("falls back to a source rebuild when a policy refresh target is missing", async () => {
@@ -843,14 +912,14 @@ describe("installed plugin index persistence", () => {
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
-    await refreshPersistedInstalledPluginIndex({
+    refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
       env,
     });
 
-    const refreshed = await refreshPersistedInstalledPluginIndex({
+    const refreshed = refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate, nextCandidate],
@@ -870,6 +939,43 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
+  it.each(["path", "npm", "archive", "git", "clawhub", "marketplace"] as const)(
+    "restores an installed %s plugin missing from a policy refresh projection",
+    async (source) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "plugins", "demo");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      const candidate = createCandidate(pluginDir);
+      const installRecords = {
+        demo: { source, installPath: pluginDir },
+      } satisfies InstalledPluginIndex["installRecords"];
+      const env = {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      };
+      const initial = refreshPersistedInstalledPluginIndex({
+        reason: "manual",
+        stateDir,
+        candidates: [candidate],
+        installRecords,
+        env,
+      });
+      await writePersistedInstalledPluginIndex({ ...initial, plugins: [] }, { stateDir });
+
+      const refreshed = refreshPersistedInstalledPluginIndex({
+        reason: "policy-changed",
+        stateDir,
+        candidates: [candidate],
+        installRecords,
+        env,
+      });
+
+      expectPluginIds(refreshed, ["demo"]);
+      await expectPersistedIndex(stateDir, { pluginIds: ["demo"] });
+    },
+  );
+
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(
@@ -886,7 +992,7 @@ describe("installed plugin index persistence", () => {
       { stateDir },
     );
 
-    const index = await refreshPersistedInstalledPluginIndex({
+    const index = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [],
@@ -918,49 +1024,7 @@ describe("installed plugin index persistence", () => {
   it("preserves ClawHub ClawPack source facts when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     const installPath = path.join(stateDir, "plugins", "clawpack-demo");
-    await writePersistedInstalledPluginIndex(
-      createIndex({
-        installRecords: {
-          "clawpack-demo": {
-            source: "clawhub",
-            spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
-            installPath,
-            version: "2026.5.1-beta.2",
-            integrity: "sha256-archive",
-            resolvedAt: "2026-05-01T00:00:00.000Z",
-            clawhubUrl: "https://clawhub.ai",
-            clawhubPackage: "clawpack-demo",
-            clawhubFamily: "code-plugin",
-            clawhubChannel: "official",
-            artifactKind: "npm-pack",
-            artifactFormat: "tgz",
-            npmIntegrity: "sha512-clawpack",
-            npmShasum: "1".repeat(40),
-            npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
-            clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            clawpackSpecVersion: 1,
-            clawpackManifestSha256:
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            clawpackSize: 4096,
-          },
-        },
-        plugins: [],
-      }),
-      { stateDir },
-    );
-
-    const index = await refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [],
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-    });
-
-    const expectedRecord = {
+    const expectedRecord: InstalledPluginIndex["installRecords"][string] = {
       source: "clawhub",
       spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
       installPath,
@@ -981,6 +1045,27 @@ describe("installed plugin index persistence", () => {
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
     };
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          "clawpack-demo": structuredClone(expectedRecord),
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const index = refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
     expectInstallRecord(index, "clawpack-demo", expectedRecord);
     expectPluginIds(index, []);
     await expectPersistedIndex(stateDir, {

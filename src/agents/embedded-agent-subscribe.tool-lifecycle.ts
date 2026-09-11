@@ -1,87 +1,103 @@
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
-  handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
-import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+import type { AgentEvent } from "./runtime/index.js";
+import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
+import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+
+type ToolTerminal = {
+  result: unknown;
+  isError: boolean;
+  executedArguments: unknown;
+  effectReceipt: ToolEffectReceipt;
+};
 
 type EmbeddedToolLifecycleParams<T> = {
   toolName: string;
   toolCallId: string;
   parentToolCallId?: string;
-  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   args: unknown;
   replaySafe?: boolean;
   hideFromChannelProgress?: boolean;
-  execute: (onImplementationStart: () => void, onUpdate: AgentToolUpdateCallback) => Promise<T>;
+  execute: (onImplementationStart: () => void) => Promise<T>;
+  onTerminal?: (terminal: ToolTerminal) => void | Promise<void>;
 };
 
-/** Bridges nested tool-search execution into the canonical embedded tool lifecycle. */
-export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
+type EmbeddedToolLifecycleRunner = <T>(toolParams: EmbeddedToolLifecycleParams<T>) => Promise<T>;
+
+export function createEmbeddedToolLifecycleRunner(
+  ctx: EmbeddedAgentSubscribeContext,
+): EmbeddedToolLifecycleRunner {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
-    await handleToolExecutionStart(ctx, {
+    ctx.flushAssistantStream();
+    const startEvent = {
       type: "tool_execution_start",
       toolName: toolParams.toolName,
       toolCallId: toolParams.toolCallId,
       parentToolCallId: toolParams.parentToolCallId,
-      codeModeControl: toolParams.codeModeControl,
       args: toolParams.args,
       replaySafe: toolParams.replaySafe,
       hideFromChannelProgress: toolParams.hideFromChannelProgress,
       lifecycleProvenance: "nested",
-    } satisfies Parameters<typeof handleToolExecutionStart>[1]);
+    } as const;
+    recordEmbeddedToolTrajectoryEvent(ctx, startEvent);
+    await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
     const onImplementationStart = () => {
       executionStarted = true;
     };
-    const onUpdate: AgentToolUpdateCallback = (partialResult) => {
-      handleToolExecutionUpdate(ctx, {
-        type: "tool_execution_update",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        parentToolCallId: toolParams.parentToolCallId,
-        args: toolParams.args,
-        partialResult,
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-      });
-    };
+    let completedResult: T;
     try {
-      const result = await toolParams.execute(onImplementationStart, onUpdate);
-      await handleToolExecutionEnd(ctx, {
-        type: "tool_execution_end",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        parentToolCallId: toolParams.parentToolCallId,
-        codeModeControl: toolParams.codeModeControl,
-        isError: false,
-        executionStarted,
-        result,
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-      } satisfies Parameters<typeof handleToolExecutionEnd>[1]);
-      return result;
+      completedResult = await toolParams.execute(onImplementationStart);
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
-      const terminal = await handleToolExecutionEnd(ctx, {
-        type: "tool_execution_end",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        parentToolCallId: toolParams.parentToolCallId,
-        codeModeControl: toolParams.codeModeControl,
-        isError: true,
-        executionStarted,
-        result: buildToolLifecycleErrorResult(error),
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-      } satisfies Parameters<typeof handleToolExecutionEnd>[1]);
-      if (trustedNoStart && !terminal.executionStarted) {
-        registerTrustedToolNoStartError(error);
+      const result = buildToolLifecycleErrorResult(error);
+      if (trustedNoStart) {
+        markToolExecutionNotStarted(result);
       }
+      const terminal = await finishToolLifecycle(ctx, toolParams, {
+        executionStarted,
+        isError: true,
+        result,
+      });
+      await toolParams.onTerminal?.(terminal);
       throw error;
     }
+    const terminal = await finishToolLifecycle(ctx, toolParams, {
+      executionStarted,
+      isError: false,
+      result: completedResult,
+    });
+    await toolParams.onTerminal?.(terminal);
+    return completedResult;
+  };
+}
+
+async function finishToolLifecycle(
+  ctx: EmbeddedAgentSubscribeContext,
+  toolParams: EmbeddedToolLifecycleParams<unknown>,
+  outcome: { executionStarted: boolean; isError: boolean; result: unknown },
+): Promise<ToolTerminal> {
+  ctx.flushAssistantStream();
+  const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
+    type: "tool_execution_end",
+    toolName: toolParams.toolName,
+    toolCallId: toolParams.toolCallId,
+    isError: outcome.isError,
+    executionStarted: outcome.executionStarted,
+    result: outcome.result,
+    hideFromChannelProgress: toolParams.hideFromChannelProgress,
+  };
+  recordEmbeddedToolTrajectoryEvent(ctx, endEvent);
+  const terminal = await handleToolExecutionEnd(ctx, endEvent);
+  return {
+    result: outcome.result,
+    isError: terminal.isError,
+    executedArguments: terminal.executedArguments ?? toolParams.args,
+    effectReceipt: terminal.effectReceipt,
   };
 }

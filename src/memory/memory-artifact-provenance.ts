@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errors.js";
-import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
 const MEMORY_ARTIFACT_PROVENANCE_NAMESPACE = "workspace-files";
@@ -14,6 +14,8 @@ export type MemoryArtifactProvenance = {
   fileHash: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 type StoredMemoryArtifactProvenance = MemoryArtifactProvenance & {
@@ -87,7 +89,7 @@ function resolveAddress(params: {
 }
 
 function openStore() {
-  return createCorePluginStateSyncKeyedStore<StoredMemoryArtifactProvenance>({
+  return createCorePluginStateKeyedStore<StoredMemoryArtifactProvenance>({
     ownerId: MEMORY_ARTIFACT_PROVENANCE_OWNER_ID,
     namespace: MEMORY_ARTIFACT_PROVENANCE_NAMESPACE,
     maxEntries: MEMORY_ARTIFACT_PROVENANCE_MAX_ENTRIES,
@@ -114,6 +116,16 @@ function normalizeStoredProvenance(
   return value;
 }
 
+function toPublicProvenance(stored: StoredMemoryArtifactProvenance): MemoryArtifactProvenance {
+  return {
+    fileHash: stored.fileHash,
+    originClass: stored.originClass,
+    observedAt: stored.observedAt,
+    ...(stored.sessionId ? { sessionId: stored.sessionId } : {}),
+    ...(stored.sessionKey ? { sessionKey: stored.sessionKey } : {}),
+  };
+}
+
 export async function recordMemoryArtifactWriteProvenance(params: {
   workspaceDir: string;
   relativePath: string;
@@ -121,18 +133,17 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   contentAfter: string;
   originClass: MemoryArtifactOriginClass;
   observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
 }): Promise<(() => Promise<void>) | undefined> {
   const address = resolveAddress(params);
   if (!address) {
     return undefined;
   }
   const store = openStore();
-  if (!store.update) {
-    throw new Error("Memory artifact provenance updates are unavailable");
-  }
   const reservationId = randomUUID();
   let previous: StoredMemoryArtifactProvenance | undefined;
-  store.update(address.storeKey, (current) => {
+  await store.update(address.storeKey, (current) => {
     previous = normalizeStoredProvenance(current, address);
     const originClass =
       params.originClass === "agent" &&
@@ -147,6 +158,8 @@ export async function recordMemoryArtifactWriteProvenance(params: {
       fileHash: sha256(params.contentAfter),
       originClass,
       observedAt: params.observedAt,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       reservationId,
     };
   });
@@ -154,12 +167,12 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   return async () => {
     const rollbackStore = openStore();
     if (previous) {
-      rollbackStore.update?.(address.storeKey, (current) =>
+      await rollbackStore.update(address.storeKey, (current) =>
         current?.reservationId === reservationId ? previous : undefined,
       );
       return;
     }
-    rollbackStore.deleteIf?.(
+    await rollbackStore.deleteIf(
       address.storeKey,
       (current) => current.reservationId === reservationId,
     );
@@ -176,7 +189,7 @@ export async function clearMemoryArtifactProvenance(params: {
     return;
   }
   const expectedHash = sha256(params.contentBefore);
-  openStore().deleteIf?.(address.storeKey, (current) => current.fileHash === expectedHash);
+  await openStore().deleteIf(address.storeKey, (current) => current.fileHash === expectedHash);
 }
 
 export async function readMemoryArtifactProvenance(params: {
@@ -187,14 +200,8 @@ export async function readMemoryArtifactProvenance(params: {
   if (!address) {
     return undefined;
   }
-  const stored = normalizeStoredProvenance(openStore().lookup(address.storeKey), address);
-  return stored
-    ? {
-        fileHash: stored.fileHash,
-        originClass: stored.originClass,
-        observedAt: stored.observedAt,
-      }
-    : undefined;
+  const stored = normalizeStoredProvenance(await openStore().lookup(address.storeKey), address);
+  return stored ? toPublicProvenance(stored) : undefined;
 }
 
 export async function listMemoryArtifactProvenance(params: {
@@ -202,8 +209,7 @@ export async function listMemoryArtifactProvenance(params: {
 }): Promise<Array<{ relativePath: string; provenance: MemoryArtifactProvenance }>> {
   const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
   const prefix = `${workspaceKey}:`;
-  return openStore()
-    .entries()
+  return (await openStore().entries())
     .filter((entry) => entry.key.startsWith(prefix))
     .flatMap((entry) => {
       const address = {
@@ -213,16 +219,7 @@ export async function listMemoryArtifactProvenance(params: {
       };
       const stored = normalizeStoredProvenance(entry.value, address);
       return stored
-        ? [
-            {
-              relativePath: stored.relativePath,
-              provenance: {
-                fileHash: stored.fileHash,
-                originClass: stored.originClass,
-                observedAt: stored.observedAt,
-              },
-            },
-          ]
+        ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];
     });
 }

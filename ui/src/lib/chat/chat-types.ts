@@ -1,11 +1,18 @@
+import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
  */
-
-import type { MediaKind } from "@openclaw/media-core/constants";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
+
+export type { HumanMention };
 
 export type BrowserAnnotationAttachment = {
   modelContext: string;
@@ -26,13 +33,37 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
 };
 
+export type ChatGoalDraftMode = { sessionId?: string } & (
+  | { action: "start" }
+  | { action: "edit"; goalId: string; previousDraft: string }
+);
+
+export type ChatGoalDraft = { sessionId?: string } & (
+  | { action: "start"; objective: string }
+  | { action: "edit"; goalId: string; objective: string }
+);
+
+export type ChatGoalAction = "pause" | "resume" | "clear";
+
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
+  goalMode?: ChatGoalDraftMode;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   storageFailed: boolean;
   draftRetry?: ChatComposerDraftRetry;
@@ -63,9 +94,13 @@ export type ToolApprovalReview = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  mentions?: readonly HumanMention[];
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
+  attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -78,6 +113,11 @@ export type ChatQueueItem = {
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */
   queueMode?: QueueMode;
+  /** Admission intent and its original issue time survive transport retries together. */
+  intent?: ChatSendIntent;
+  /** For structured admissions, preserve the originally selected session incarnation. */
+  sessionId?: string;
+  expectedLeafEntryId?: string | null;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -106,10 +146,14 @@ export type ChatItem =
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Collapse the body behind a disclosure; the label line stays visible. */
+      collapsedBody?: true;
     }
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -145,6 +189,12 @@ export type ChatStreamSegment = {
   boundaryRunId?: string;
   /** Ordering-only boundary with no renderable assistant text. */
   boundaryMarker?: true;
+  /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
+  persisted?: true;
+  /** Keyed item that consumed this cumulative occurrence; late updates cannot consume another. */
+  retiredItemId?: string;
+  /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
+  pendingCommentary?: { text: string; prefixLength: number };
   toolCallId?: string;
   itemId?: string;
 };
@@ -182,15 +232,30 @@ export function trimAccumulatedStreamPrefix(text: string, previousText: string |
   return text.slice(previousText.length).trimStart();
 }
 
+export function accumulatedStreamText(
+  segments: readonly ChatStreamSegment[],
+  normalize: (text: string) => string = (text) => text,
+): string | null {
+  let accumulated: string | null = null;
+  for (const segment of segments) {
+    if (streamSegmentUsesAccumulatedText(segment)) {
+      accumulated = advanceAccumulatedStreamText(accumulated, normalize(segment.text));
+    }
+  }
+  return accumulated;
+}
+
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
   kind: "group";
   key: string;
   role: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;
   runId?: string;
@@ -198,11 +263,23 @@ export type MessageGroup = {
 
 /** Content item types in a normalized message */
 export type MessageContentItem =
+  | ClawHubRecommendation
   | {
       type: "text" | "tool_call" | "tool_result";
       text?: string;
       name?: string;
       args?: unknown;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
+    }
+  | {
+      type: "omitted_media";
+      media: {
+        kind: "image";
+        sizeBytes?: number;
+      };
     }
   | {
       type: "attachment";
@@ -221,6 +298,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
@@ -233,6 +319,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };
@@ -251,9 +338,8 @@ export type NormalizedMessage = {
 export type ToolCard = {
   id: string;
   callId?: string;
-  /** Outer Code Mode or Tool Search call that dispatched this tool. */
-  parentCallId?: string;
-  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
+  runId?: string;
+  parentToolCallId?: string;
   name: string;
   args?: unknown;
   inputText?: string;
@@ -270,27 +356,33 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
-    boardWidgetName?: string;
-    mcpApp?: {
-      viewId: string;
-      serverName?: string;
-      toolName?: string;
-      uiResourceUri?: string;
-      toolCallId?: string;
-      originSessionKey?: string;
-    };
-  };
+  /** UI-local preview identity for results without a call or transcript id. */
+  previewRevision?: string;
+  /** Tab actions can identify a route without a previewable page URL. */
+  browserTab?: BrowserTabTarget;
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+        boardWidgetName?: string;
+        mcpApp?: {
+          viewId: string;
+          serverName?: string;
+          toolName?: string;
+          uiResourceUri?: string;
+          toolCallId?: string;
+          originSessionKey?: string;
+        };
+      }
+    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

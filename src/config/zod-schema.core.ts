@@ -3,20 +3,26 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import {
-  formatExecSecretRefIdValidationMessage,
-  isValidExecSecretRefId,
-  isValidFileSecretRefId,
-  SECRET_PROVIDER_ALIAS_PATTERN,
-} from "../secrets/ref-contract.js";
+import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
+import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
+import { SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
+import { DmConfigSchema } from "./zod-schema.messages.js";
+import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
+export {
+  DmConfigSchema,
+  GroupChatSchema,
+  MentionPatternsPolicySchema,
+  ProviderCommandsSchema,
+} from "./zod-schema.messages.js";
+export { SecretInputSchema, SecretRefSchema } from "./zod-schema.secret-input.js";
 
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -31,84 +37,6 @@ function isAbsolutePath(value: string): boolean {
   );
 }
 
-const EnvSecretRefSchema = z
-  .object({
-    source: z.literal("env"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
-    id: z
-      .string()
-      .regex(
-        ENV_SECRET_REF_ID_RE,
-        'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
-      ),
-  })
-  .strict();
-
-const FileSecretRefSchema = z
-  .object({
-    source: z.literal("file"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
-    id: z
-      .string()
-      .refine(
-        isValidFileSecretRefId,
-        'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
-      ),
-  })
-  .strict();
-
-const ExecSecretRefSchema = z
-  .object({
-    source: z.literal("exec"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
-    id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
-  })
-  .strict();
-
-const StoreSecretRefSchema = z
-  .object({
-    source: z.literal("store"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
-    id: z
-      .string()
-      .regex(
-        ENV_SECRET_REF_ID_RE,
-        'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
-      ),
-  })
-  .strict();
-
-/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
-export const SecretRefSchema = z.discriminatedUnion("source", [
-  EnvSecretRefSchema,
-  FileSecretRefSchema,
-  ExecSecretRefSchema,
-  StoreSecretRefSchema,
-]);
-
-/** Accepts either legacy inline secret strings or structured secret references. */
-export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
-
 /** Canonical operator-configurable SSRF policy shared by network-capable surfaces. */
 export const SsrFPolicyConfigSchema = z
   .object({
@@ -116,6 +44,7 @@ export const SsrFPolicyConfigSchema = z
     allowRfc2544BenchmarkRange: z.boolean().optional(),
     allowIpv6UniqueLocalRange: z.boolean().optional(),
     allowedHostnames: z.array(z.string()).optional(),
+    blockedHostnames: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -195,6 +124,24 @@ const SecretsExecProviderSchema = z.union([
 
 const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
 
+// Same exact-host contract as per-secret destination bindings: rejecting schemes,
+// ports, wildcards, and malformed hostnames here keeps invalid entries out of the
+// egress-proxy startup path, which would otherwise throw while starting the Gateway.
+const EgressProxyExactHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((host, ctx) => {
+    try {
+      normalizeExactAllowedHost(host);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Invalid allowed host",
+      });
+    }
+  });
+
 /** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
@@ -209,7 +156,8 @@ export const SecretsConfigSchema = z
     egressProxy: z
       .object({
         enabled: z.boolean().optional(),
-        bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
+        allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+        bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
       })
       .strict()
       .optional(),
@@ -243,6 +191,59 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
+const RoutingPercentileCutoffsSchema = z
+  .object({
+    p50: z.number().optional(),
+    p75: z.number().optional(),
+    p90: z.number().optional(),
+    p99: z.number().optional(),
+  })
+  .strict();
+
+const OpenRouterRoutingSchema = z
+  .object({
+    allow_fallbacks: z.boolean().optional(),
+    require_parameters: z.boolean().optional(),
+    data_collection: z.enum(["deny", "allow"]).optional(),
+    zdr: z.boolean().optional(),
+    enforce_distillable_text: z.boolean().optional(),
+    order: z.array(z.string()).optional(),
+    only: z.array(z.string()).optional(),
+    ignore: z.array(z.string()).optional(),
+    quantizations: z.array(z.string()).optional(),
+    sort: z
+      .union([
+        z.string(),
+        z
+          .object({
+            by: z.string().optional(),
+            partition: z.string().nullable().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
+    max_price: z
+      .object({
+        prompt: z.union([z.number(), z.string()]).optional(),
+        completion: z.union([z.number(), z.string()]).optional(),
+        image: z.union([z.number(), z.string()]).optional(),
+        audio: z.union([z.number(), z.string()]).optional(),
+        request: z.union([z.number(), z.string()]).optional(),
+      })
+      .strict()
+      .optional(),
+    preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+    preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+  } satisfies Record<keyof OpenRouterRouting, z.ZodType>)
+  .strict();
+
+const VercelGatewayRoutingSchema = z
+  .object({
+    only: z.array(z.string()).optional(),
+    order: z.array(z.string()).optional(),
+  } satisfies Record<keyof VercelGatewayRouting, z.ZodType>)
+  .strict();
+
 const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -250,6 +251,7 @@ const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsTemperature: z.boolean().optional(),
+    supportsInstructions: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     codeMode: z.enum(["preferred", "capable"]).optional(),
@@ -272,7 +274,15 @@ const ModelCompatSchema = z
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     toolCallArgumentsEncoding: z.string().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-  })
+    openRouterRouting: OpenRouterRoutingSchema.optional(),
+    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
+    zaiToolStream: z.boolean().optional(),
+    cacheControlFormat: z.literal("anthropic").optional(),
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
+  } satisfies Record<keyof ModelCompatConfig, z.ZodType>)
   .strict()
   .optional();
 type AssertAssignable<_Left extends _Right, _Right> = true;
@@ -539,47 +549,6 @@ export const ModelsConfigSchema = z
   .strict()
   .optional();
 
-const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
-const AmbientGroupInboundSchema = z.enum(["user_request", "room_event"]);
-
-export const VisibleRepliesSchema = z
-  .union([VisibleRepliesValueSchema, z.boolean()])
-  .overwrite((value) => {
-    if (value === true) {
-      return "automatic";
-    }
-    if (value === false) {
-      return "message_tool";
-    }
-    return value;
-  });
-
-const MentionPatternsModeSchema = z.union([z.literal("allow"), z.literal("deny")]);
-
-export const MentionPatternsPolicySchema = z
-  .object({
-    mode: MentionPatternsModeSchema.optional(),
-    allowIn: z.array(z.string()).optional(),
-    denyIn: z.array(z.string()).optional(),
-  })
-  .strict();
-
-export const GroupChatSchema = z
-  .object({
-    mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    unmentionedInbound: AmbientGroupInboundSchema.optional(),
-    visibleReplies: VisibleRepliesSchema.optional(),
-  })
-  .strict()
-  .optional();
-
-export const DmConfigSchema = z
-  .object({
-    historyLimit: z.number().int().min(0).optional(),
-  })
-  .strict();
-
 export const IdentitySchema = z
   .object({
     name: z.string().optional(),
@@ -590,13 +559,6 @@ export const IdentitySchema = z
   .strict()
   .optional();
 
-const QueueModeSchema = z.union([
-  z.literal("steer"),
-  z.literal("followup"),
-  z.literal("collect"),
-  z.literal("interrupt"),
-]);
-const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
 export const ReplyToModeSchema = z.union([
   z.literal("off"),
   z.literal("first"),
@@ -610,10 +572,6 @@ export const TypingModeSchema = z.union([
   z.literal("message"),
 ]);
 
-// GroupPolicySchema: controls how group messages are handled
-// Used with .default("allowlist").optional() pattern:
-//   - .optional() allows field omission in input config
-//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
@@ -814,45 +772,6 @@ export const requireAllowlistAllowFrom = (params: {
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
-const QueueModeBySurfaceSchema = z
-  .object({
-    whatsapp: QueueModeSchema.optional(),
-    telegram: QueueModeSchema.optional(),
-    discord: QueueModeSchema.optional(),
-    irc: QueueModeSchema.optional(),
-    googlechat: QueueModeSchema.optional(),
-    slack: QueueModeSchema.optional(),
-    mattermost: QueueModeSchema.optional(),
-    signal: QueueModeSchema.optional(),
-    imessage: QueueModeSchema.optional(),
-    msteams: QueueModeSchema.optional(),
-    webchat: QueueModeSchema.optional(),
-    matrix: QueueModeSchema.optional(),
-  })
-  .strict()
-  .optional();
-
-const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
-
-export const QueueSchema = z
-  .object({
-    mode: QueueModeSchema.optional(),
-    byChannel: QueueModeBySurfaceSchema,
-    debounceMsByChannel: DebounceMsBySurfaceSchema,
-    cap: z.number().int().positive().optional(),
-    drop: QueueDropSchema.optional(),
-  })
-  .strict()
-  .optional();
-
-export const InboundDebounceSchema = z
-  .object({
-    debounceMs: z.number().int().nonnegative().optional(),
-    byChannel: DebounceMsBySurfaceSchema,
-  })
-  .strict()
-  .optional();
-
 export const HexColorSchema = z.string().regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
 
 export const ExecutableTokenSchema = z
@@ -966,13 +885,4 @@ export const ToolsLinksSchema = z
   .strict()
   .optional();
 
-export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
-
-export const ProviderCommandsSchema = z
-  .object({
-    native: NativeCommandsSettingSchema.optional(),
-    nativeSkills: NativeCommandsSettingSchema.optional(),
-  })
-  .strict()
-  .optional();
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

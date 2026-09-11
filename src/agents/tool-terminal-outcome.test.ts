@@ -14,6 +14,36 @@ import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
+  it("retains a genuine message failure across suppression until a real send succeeds", () => {
+    const observe = createToolTerminalObserver("run-suppression");
+    const suppression = {
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "omitted" },
+      outcome: "success" as const,
+      result: { details: { status: "suppressed", reason: "cancelled_by_message_sending_hook" } },
+    };
+    expect(observe(suppression).lastToolError).toBeUndefined();
+    observe({
+      toolName: "message",
+      arguments: { action: "send", target: "123", message: "failed" },
+      outcome: "failure",
+      failure: { error: "Telegram transport failed" },
+    });
+    const afterSuppression = observe(suppression);
+    expect(afterSuppression.lastToolError).toMatchObject({ error: "Telegram transport failed" });
+    expect(buildPayloads({ lastToolError: afterSuppression.lastToolError })).toEqual([
+      expect.objectContaining({ isError: true }),
+    ]);
+    expect(
+      observe({
+        toolName: "message",
+        arguments: { action: "send", target: "123", message: "delivered" },
+        outcome: "success",
+        result: { details: { ok: true, messageId: "sent-1" } },
+      }).lastToolError,
+    ).toBeUndefined();
+  });
+
   it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
     const actionA = { action: "send", to: "channel:a", message: "A" };
@@ -112,6 +142,85 @@ describe("tool terminal outcome observer", () => {
       executionStarted: false,
       sideEffectEvidence: false,
       lastToolError: { executionStarted: false, mutatingAction: false },
+    });
+  });
+
+  it.each([
+    {
+      name: "pre-execution rejection",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked" },
+      },
+      state: "uncertain",
+    },
+    {
+      name: "completed read",
+      input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed read",
+      input: {
+        toolName: "message",
+        arguments: { action: "read" },
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "owner-declared replay-safe failure",
+      input: {
+        toolName: "plugin_read",
+        arguments: {},
+        replaySafe: true,
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed mutation",
+      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
+      state: "mutation_committed",
+    },
+    {
+      name: "completed unknown operation",
+      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
+      state: "uncertain",
+    },
+    {
+      name: "failed mutation",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        outcome: "failure",
+        failure: { error: "send failed" },
+      },
+      state: "uncertain",
+    },
+  ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
+    expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
+      state,
     });
   });
 

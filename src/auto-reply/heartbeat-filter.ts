@@ -5,16 +5,24 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
-  HEARTBEAT_TRANSCRIPT_PROMPT,
+  INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
+  isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
-  stripHeartbeatToken,
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
-const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
+  ...[HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN].map(
+    (token) => `After completing all due tasks, reply ${token}.`,
+  ),
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+];
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "functionCall",
@@ -239,7 +247,7 @@ function collectSuccessfulToolResultCallIds(message: {
   return uniqueStrings(ids);
 }
 
-export function isRealNonHeartbeatUserMessage(
+function isRealNonHeartbeatUserMessage(
   message: { role: string; content?: unknown },
   heartbeatPrompt?: string,
 ): boolean {
@@ -306,12 +314,13 @@ export function isHeartbeatUserMessage(
     return false;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
-  if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
+  const transcriptPrompts = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
+  if (transcriptPrompts.some((prompt) => trimmed === prompt)) {
     return true;
   }
   if (
     MESSAGE_TOOL_DELIVERY_HINTS.some((prefix) => trimmed.startsWith(prefix)) &&
-    trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
+    transcriptPrompts.some((prompt) => trimmed.endsWith(prompt))
   ) {
     return true;
   }
@@ -331,7 +340,8 @@ export function isHeartbeatUserMessage(
     return true;
   }
   return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) &&
+    HEARTBEAT_TASK_PROMPT_COMPLETIONS.some((completion) => trimmed.includes(completion))
   );
 }
 
@@ -350,7 +360,7 @@ export function isHeartbeatOkResponse(
   if (hasNonTextContent) {
     return false;
   }
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
+  return isHeartbeatAcknowledgementText(text, ackMaxChars);
 }
 
 function advancePastAdjacentToolResults(

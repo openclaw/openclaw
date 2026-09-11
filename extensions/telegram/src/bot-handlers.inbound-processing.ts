@@ -26,10 +26,12 @@ import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js
 import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
+  TelegramPendingInboundTarget,
 } from "./bot-handlers.types.js";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramChannelIngressResolver,
+  TelegramMediaRef,
 } from "./bot-message-context.types.js";
 import {
   isTelegramSpooledReplayUpdate,
@@ -47,6 +49,7 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export interface TelegramInboundProcessing {
+  cancelPending: (target: TelegramPendingInboundTarget) => void;
   processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
 }
 
@@ -98,12 +101,13 @@ export function createTelegramInboundProcessing({
     createSpooledReplayParticipantForBufferedWork,
   } = message;
   const {
+    cancelPending,
     inboundDebouncer,
     resolveTelegramDebounceEntryMs,
     shouldDebounceTelegramEntry,
     resolveTelegramDebounceLane,
     handleTextFragment,
-  } = createTelegramInboundBuffers({ params: { cfg, bot, runtime, opts }, message });
+  } = createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
     params: {
@@ -176,6 +180,10 @@ export function createTelegramInboundProcessing({
       return abortControlAuthorized;
     };
 
+    if (await isAuthorizedAbortControlMessage()) {
+      cancelPending({ chatId, threadSpec, senderId });
+    }
+
     if (
       await handleTextFragment({
         ctx,
@@ -184,7 +192,6 @@ export function createTelegramInboundProcessing({
         threadSpec,
         storeAllowFrom,
         isAbortControlMessage,
-        isAuthorizedAbortControlMessage,
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
@@ -240,6 +247,7 @@ export function createTelegramInboundProcessing({
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
     const mediaRuntime = resolveMediaRuntime();
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
+    let unavailable: TelegramMediaRef["unavailable"];
     try {
       media = await resolveMedia({
         ctx,
@@ -268,11 +276,12 @@ export function createTelegramInboundProcessing({
         return { kind: "ignored" };
       }
       if (isMediaSizeLimitError(mediaErr)) {
+        const limitMb =
+          mediaErr instanceof TelegramBotApiFileTooLargeError
+            ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
+            : Math.round(mediaMaxBytes / (1024 * 1024));
+        unavailable = { reason: "oversize", limitMb };
         if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
-          const limitMb =
-            mediaErr instanceof TelegramBotApiFileTooLargeError
-              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
-              : Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
@@ -295,6 +304,7 @@ export function createTelegramInboundProcessing({
           releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
           return { kind: "ignored" };
         }
+        unavailable = { reason: "download-failed" };
         if (mediaDisposition !== "silent-ingest") {
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
@@ -318,10 +328,11 @@ export function createTelegramInboundProcessing({
             ? {
                 path: media.path,
                 contentType: media.contentType,
+                ...(media.fileName ? { fileName: media.fileName } : {}),
                 kind: media.kind,
                 stickerMetadata: media.stickerMetadata,
               }
-            : { kind: nativeMedia.kind },
+            : { kind: nativeMedia.kind, unavailable },
         ]
       : [];
     const conversationKey = buildTelegramInboundDebounceConversationKey({
@@ -337,18 +348,6 @@ export function createTelegramInboundProcessing({
           debounceLane,
         })
       : null;
-    if (senderId && (await isAuthorizedAbortControlMessage())) {
-      for (const lane of ["default", "forward"] as const) {
-        inboundDebouncer.cancelKey(
-          buildTelegramInboundDebounceKey({
-            accountId,
-            conversationKey,
-            senderId,
-            debounceLane: lane,
-          }),
-        );
-      }
-    }
     const debounceEntry: TelegramDebounceEntry = {
       ctx,
       msg,
@@ -377,5 +376,5 @@ export function createTelegramInboundProcessing({
     return shouldBufferDebounce ? { kind: "buffered", buffer: "debounce" } : { kind: "processed" };
   };
 
-  return { processInboundMessage };
+  return { processInboundMessage, cancelPending };
 }

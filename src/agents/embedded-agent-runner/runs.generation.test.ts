@@ -18,15 +18,19 @@ import {
   startDiagnosticRunActivityTracking,
   type DiagnosticEmbeddedRunOwner,
 } from "../../logging/diagnostic-run-activity.js";
+import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+} from "./active-run-projections.js";
+import {
   setActiveEmbeddedRunLifecycleGeneration,
   type EmbeddedAgentQueueHandle,
 } from "./run-state.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunAbortableForRunId,
+  prepareEmbeddedAgentRunCompletionClaim,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
@@ -77,6 +81,7 @@ vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
 
 function createRunHandle(params: {
   abort?: EmbeddedAgentQueueHandle["abort"];
+  compacting?: boolean;
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
   runId: string;
@@ -92,7 +97,7 @@ function createRunHandle(params: {
     queueMessage: params.queueMessage,
     isStreaming: () => true,
     isAbortable: () => false,
-    isCompacting: () => false,
+    isCompacting: () => params.compacting === true,
     abort: params.abort ?? (() => {}),
   };
 }
@@ -104,6 +109,96 @@ describe("embedded run registry lifecycle generations", () => {
     resetDiagnosticRunActivityForTest();
     resetDiagnosticEventsForTest();
     lifecycleMock.reset();
+  });
+
+  it("revokes a completed claim when the gateway lifecycle rotates", () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "claim-session",
+      "claim-run",
+    );
+    setActiveEmbeddedRun("claim-session", handle);
+    clearActiveEmbeddedRun("claim-session", handle);
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("settles completion registration only after the exact backend is published", async () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+    let settled = false;
+    void prepared.registered.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        embeddedRunToolAuthorityBinding: () => ({
+          source: "reply",
+          project: () => "authority",
+          assertActive: () => {},
+        }),
+      },
+      () => setActiveEmbeddedRun("claim-session", handle, "agent:main:main"),
+    );
+
+    await expect(prepared.registered).resolves.toEqual({
+      toolAuthority: expect.objectContaining({ source: "reply" }),
+    });
+    expect(prepared.claimCompletion()).toBe(true);
+  });
+
+  it("does not publish completion steering readiness without a tool authority binding", async () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "claim-run",
+    });
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+
+    setActiveEmbeddedRun("claim-session", handle);
+
+    await expect(prepared.registered).resolves.toBeUndefined();
+    expect(prepared.claimCompletion()).toBe(true);
+  });
+
+  it("settles an unpublished completion registration as revoked on lifecycle rotation", async () => {
+    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+
+    rotateAgentEventLifecycleGeneration();
+
+    await expect(prepared.registered).resolves.toBeUndefined();
+    expect(prepared.claimCompletion()).toBe(false);
+  });
+
+  it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(
+      "rootless-session",
+      createRunHandle({
+        abort,
+        compacting: true,
+        queueMessage: vi.fn(async () => {}),
+        runId: "rootless-run",
+      }),
+    );
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(abort).toHaveBeenCalledWith("restart");
+    expect(listActiveEmbeddedRunSessionIds()).not.toContain("rootless-session");
   });
 
   it("rejects a delayed prior-lifecycle registration for a current session owner", async () => {

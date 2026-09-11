@@ -4,10 +4,12 @@ import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { pathname: string; method: string; body: JsonObject };
@@ -239,13 +241,13 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
     },
     async (apiRoot) =>
       await withTempDir("openclaw-telegram-emoji-list-", async (workspace) => {
-        let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+        const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           mock = await startQaMockOpenAiServer();
-          gateway = await startQaGatewayChild({
+          await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
             transport: {
@@ -354,7 +356,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
           ]);
         } finally {
           await settleCleanup(
-            async () => await gateway?.stop(),
+            async () => await stopQaGatewayFixture(gatewayOwner),
             async () => await mock?.stop(),
           );
         }

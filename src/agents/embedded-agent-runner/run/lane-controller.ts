@@ -1,21 +1,36 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { registerAgentRunCapacityWait } from "../../../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
   getAgentRunContext,
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
-import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
-import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { isBackgroundWorkLane } from "../../../process/background-work.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  isCommandLaneTaskTimeoutError,
+} from "../../../process/command-queue.js";
+import type {
+  CommandQueueEnqueueOptions,
+  CommandQueueTaskDeadline,
+} from "../../../process/command-queue.types.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
+import { createAgentRunDirectAbortError } from "../../run-termination.js";
+import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
-  resolveEmbeddedRunSessionQueuePriority,
+  resolveEmbeddedRunSessionLanePolicy,
   shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
@@ -36,18 +51,57 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   setParams: (params: TParams) => void;
 }) {
   const initialParams = options.getParams();
-  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(
+  const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
     initialParams.inputProvenance,
   );
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
+  // Queue cancellation remains authoritative before execution and during a
+  // later isolated finalizer, after the original attempt's listeners close.
+  const abortSignal = AbortSignal.any([
+    ...(initialParams.abortSignal ? [initialParams.abortSignal] : []),
+    laneTaskAbortController.signal,
+    laneTaskReleaseController.signal,
+  ]);
   let laneTaskProgressAtMs = Date.now();
+  let laneTaskDeadline: CommandQueueTaskDeadline | undefined;
+  const laneTaskDeadlineSubscribers = new Set<
+    (deadline: CommandQueueTaskDeadline | undefined) => void
+  >();
+  const setLaneTaskDeadline = (deadline: CommandQueueTaskDeadline | undefined) => {
+    laneTaskDeadline =
+      deadline?.kind === "bounded"
+        ? {
+            kind: "bounded",
+            deadlineAtMs: deadline.deadlineAtMs + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+          }
+        : deadline;
+    for (const notifyDeadline of laneTaskDeadlineSubscribers) {
+      notifyDeadline(laneTaskDeadline);
+    }
+  };
+  let pendingGlobalLaneAdmissions = 0;
   let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
   let queuedRunAbortSignal: AbortSignal | undefined;
+  let releaseCapacityWait: (() => void) | undefined;
+  const endCapacityWait = () => {
+    releaseCapacityWait?.();
+    releaseCapacityWait = undefined;
+  };
+  const noteCapacityWait = () => {
+    const params = options.getParams();
+    if (!params.abortSignal?.aborted) {
+      releaseCapacityWait = registerAgentRunCapacityWait(
+        params.runId,
+        options.getLifecycleGeneration(),
+      );
+    }
+  };
 
   const releaseQueuedContext = (outcome: "admitted" | "abandoned") => {
+    endCapacityWait();
     queuedRunAbortSignal?.removeEventListener("abort", abandonQueuedContext);
     queuedRunAbortSignal = undefined;
     releaseQueuedRunContext?.(outcome);
@@ -59,12 +113,94 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
+  let assertPlacementCurrent: (() => void) | undefined;
+  let activeAttemptOwner: object | undefined;
+  const createAttemptControls = (input: {
+    admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+    abortSignal?: AbortSignal;
+    initialTimeoutMs?: number;
+    onAbort?: () => void;
+  }) => {
+    // Awaited preflight may finish after recovery has released this lane's claim.
+    assertPlacementCurrent?.();
+    const owner = {};
+    activeAttemptOwner = owner;
+    const lifecycleGeneration = options.getLifecycleGeneration();
+    const authority = getAdmittedRunDelegatedAuthority(input.admittedRunContext);
+    const signal = input.abortSignal
+      ? AbortSignal.any([abortSignal, input.abortSignal])
+      : abortSignal;
+    let state: "active" | "aborted" | "closed" = "active";
+    let deadlineOwned = false;
+    let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const isCurrent = () =>
+      state === "active" &&
+      activeAttemptOwner === owner &&
+      !signal.aborted &&
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      authority !== undefined &&
+      getAdmittedRunDelegatedAuthority(input.admittedRunContext) === authority;
+    const onAttemptDeadlineChanged = (deadline: CommandQueueTaskDeadline) => {
+      if (isCurrent()) {
+        deadlineOwned = true;
+        setLaneTaskDeadline(deadline);
+      }
+    };
+    if (input.initialTimeoutMs !== undefined) {
+      const deadline: CommandQueueTaskDeadline =
+        input.initialTimeoutMs >= MAX_TIMER_TIMEOUT_MS
+          ? { kind: "unlimited" }
+          : { kind: "bounded", deadlineAtMs: Date.now() + input.initialTimeoutMs };
+      onAttemptDeadlineChanged(deadline);
+    }
+    return {
+      abortSignal: signal,
+      onAttemptDeadlineChanged,
+      onAttemptTimeout: (reason: Error) => {
+        if (isCurrent() && !timeoutReleaseTimer) {
+          // Provider idle expiry can precede the execution deadline. Bound an
+          // uncooperative unwind without aborting a subsequent recovery attempt.
+          timeoutReleaseTimer = setTimeout(() => {
+            if (isCurrent()) {
+              laneTaskReleaseController.abort(reason);
+            }
+          }, EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS);
+          timeoutReleaseTimer.unref?.();
+        }
+      },
+      onAttemptAbort: () => {
+        if (!isCurrent()) {
+          return;
+        }
+        state = "aborted";
+        laneTaskAbortController.abort(createAgentRunDirectAbortError());
+        input.onAbort?.();
+      },
+      close: () => {
+        if (state === "closed") {
+          return;
+        }
+        // Every retry/finalizer gets a fresh closure; retained callbacks must
+        // never change the next attempt's deadline or cancellation state.
+        state = "closed";
+        clearTimeout(timeoutReleaseTimer);
+        if (activeAttemptOwner === owner) {
+          activeAttemptOwner = undefined;
+          noteLaneTaskProgress();
+          if (deadlineOwned) {
+            setLaneTaskDeadline(undefined);
+          }
+        }
+      },
+    };
+  };
   const throwIfAborted = () => {
-    const params = options.getParams();
-    if (!params.abortSignal?.aborted) {
+    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
+    assertPlacementCurrent?.();
+    if (!abortSignal.aborted) {
       return;
     }
-    const reason = params.abortSignal.reason;
+    const reason = abortSignal.reason;
     if (reason instanceof Error) {
       throw reason;
     }
@@ -75,12 +211,26 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     abortError.name = "AbortError";
     throw abortError;
   };
-  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+  const withLaneTimeout = (
+    opts?: CommandQueueEnqueueOptions,
+    allowPendingGlobalAdmissionHeartbeat = false,
+  ) =>
     withEmbeddedRunLaneTimeout(
       {
         ...opts,
-        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
-        taskTimeoutAbortSignal: laneTaskAbortController.signal,
+        abortSignal,
+        // Only the outer session lease may count queued global admission as
+        // progress; an admitted global task must still time out when it stalls.
+        taskTimeoutProgressAtMs: () =>
+          allowPendingGlobalAdmissionHeartbeat && pendingGlobalLaneAdmissions > 0
+            ? Date.now()
+            : laneTaskProgressAtMs,
+        taskTimeoutSubscribe: (onDeadline) => {
+          laneTaskDeadlineSubscribers.add(onDeadline);
+          onDeadline(laneTaskDeadline);
+          return () => laneTaskDeadlineSubscribers.delete(onDeadline);
+        },
+        taskTimeoutAbortSignal: abortSignal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
         taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
       },
@@ -120,11 +270,26 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     // Global-lane admission is healthy waiting, not run execution. Keep reply
     // staleness and stuck recovery fenced until this queue grants capacity.
     options.getParams().replyOperation?.markWaitingForGlobalLane();
+    pendingGlobalLaneAdmissions += 1;
+    let waitingForGlobalLaneAdmission = true;
+    const finishGlobalLaneAdmission = () => {
+      if (!waitingForGlobalLaneAdmission) {
+        return;
+      }
+      waitingForGlobalLaneAdmission = false;
+      pendingGlobalLaneAdmissions -= 1;
+    };
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
-      priority: sessionQueuePriority,
+      priority: isBackgroundWorkLane(options.globalLane)
+        ? "background"
+        : sessionLanePolicy.priority,
+      onQueued: noteCapacityWait,
     };
     const taskWithCurrentLifecycle = async () => {
+      endCapacityWait();
+      finishGlobalLaneAdmission();
+      noteLaneTaskProgress();
       let params = options.getParams();
       params.replyOperation?.markGlobalLaneWaitEnded();
       throwIfAborted();
@@ -134,7 +299,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       if (lifecycleGeneration !== currentLifecycleGeneration) {
         const wasQueuedBeforeRotation =
           options.initialQueuedLifecycleGeneration === lifecycleGeneration;
-        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
+        const canResumeAcrossRotation = sessionLanePolicy.canResumeAcrossRotation;
         const newerSameIdExecutionOwnsContext =
           existingContext?.lifecycleGeneration === currentLifecycleGeneration;
         if (
@@ -172,7 +337,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          task,
+          () => {
+            assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            return task();
+          },
           () => {
             throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -193,55 +361,111 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       );
     };
     const params = options.getParams();
-    if (params.enqueue) {
-      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
-    }
-    noteLaneWaitIfBusy(options.globalLane);
-    return enqueueCommandInLane(
-      options.globalLane,
-      taskWithCurrentLifecycle,
-      withLaneTimeout(withRunLaneWait(globalOpts)),
-    );
-  };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    const params = options.getParams();
-    // Session admission, deferred maintenance, and global admission share one queue owner.
-    releaseQueuedRunContext = retainQueuedAgentRunContext(
-      params.runId,
-      options.getLifecycleGeneration(),
-    );
-    if (releaseQueuedRunContext && params.abortSignal) {
-      if (params.abortSignal.aborted) {
-        releaseQueuedContext("abandoned");
-      } else {
-        queuedRunAbortSignal = params.abortSignal;
-        queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
-      }
-    }
-    let queuedRun: Promise<T>;
+    let queuedRun: Promise<EmbeddedAgentRunResult>;
     try {
       if (params.enqueue) {
-        queuedRun = params.enqueue(task, withRunLaneWait(sessionOpts));
+        queuedRun = params.enqueue(
+          taskWithCurrentLifecycle,
+          withLaneTimeout(withRunLaneWait(globalOpts)),
+        );
       } else {
-        noteLaneWaitIfBusy(options.sessionLane);
-        queuedRun = enqueueCommandInLane(options.sessionLane, task, withRunLaneWait(sessionOpts));
+        noteLaneWaitIfBusy(options.globalLane);
+        queuedRun = enqueueCommandInLane(
+          options.globalLane,
+          taskWithCurrentLifecycle,
+          withLaneTimeout(withRunLaneWait(globalOpts)),
+        );
       }
     } catch (error) {
-      releaseQueuedContext("abandoned");
+      finishGlobalLaneAdmission();
       throw error;
     }
-    return queuedRun.finally(() => {
-      releaseQueuedContext("abandoned");
+    return queuedRun.finally(finishGlobalLaneAdmission).catch((error: unknown) => {
+      if (isCommandLaneTaskTimeoutError(error)) {
+        // Releasing the queue slot must also retire the attempt's action signal.
+        laneTaskAbortController.abort(error);
+      }
+      throw error;
     });
+  };
+  const enqueueSession = async <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const releaseForeground =
+      sessionLanePolicy.priority === "foreground"
+        ? await beginForegroundSessionMaintenance(
+            options.getParams().sessionKey ?? options.getParams().sessionId,
+          )
+        : undefined;
+    try {
+      const sessionOpts: CommandQueueEnqueueOptions = {
+        ...opts,
+        abortSignal,
+        priority: sessionLanePolicy.priority,
+        onQueued: noteCapacityWait,
+      };
+      const admittedTask = () => {
+        endCapacityWait();
+        return task();
+      };
+      const params = options.getParams();
+      // Session admission, deferred maintenance, and global admission share one queue owner.
+      releaseQueuedRunContext = retainQueuedAgentRunContext(
+        params.runId,
+        options.getLifecycleGeneration(),
+      );
+      if (releaseQueuedRunContext && params.abortSignal) {
+        if (params.abortSignal.aborted) {
+          releaseQueuedContext("abandoned");
+        } else {
+          queuedRunAbortSignal = params.abortSignal;
+          queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
+        }
+      }
+      let queuedRun: Promise<T>;
+      try {
+        if (params.enqueue) {
+          queuedRun = params.enqueue(
+            admittedTask,
+            withLaneTimeout(withRunLaneWait(sessionOpts), true),
+          );
+        } else {
+          noteLaneWaitIfBusy(options.sessionLane);
+          queuedRun = enqueueCommandInLane(
+            options.sessionLane,
+            admittedTask,
+            withLaneTimeout(withRunLaneWait(sessionOpts), true),
+          );
+        }
+      } catch (error) {
+        releaseQueuedContext("abandoned");
+        throw error;
+      }
+      return await queuedRun
+        .finally(() => {
+          releaseQueuedContext("abandoned");
+        })
+        .catch((error: unknown) => {
+          if (isCommandLaneTaskTimeoutError(error)) {
+            // The queue race releases its slot before the underlying task settles.
+            // Retire that task's run signal so deferred maintenance cannot resume
+            // into global or writer admission after a successor takes the session.
+            laneTaskAbortController.abort(error);
+          }
+          throw error;
+        });
+    } finally {
+      releaseForeground?.();
+    }
   };
 
   return {
     enqueueGlobal,
     enqueueSession,
+    abortSignal,
     laneTaskAbortController,
     laneTaskReleaseController,
     noteLaneTaskProgress,
+    setLaneTaskDeadline,
+    createAttemptControls,
     throwIfAborted,
   };
 }

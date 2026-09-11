@@ -1,19 +1,18 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
   TOOL_STREAM_TEST_NOW,
   useToolStreamFakeTimers,
 } from "./tool-stream.test-helpers.ts";
-import {
-  handleAgentEvent,
-  reconcileWaitingApprovalsFromSnapshot,
-  resetToolStream,
-  type ToolStreamEntry,
-} from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const globalWithWindow = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis;
@@ -34,6 +33,87 @@ afterAll(() => {
 });
 
 describe("app-tool-stream approval lifecycle", () => {
+  it("preserves producer parent identity through live completion without reading arguments", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "child",
+        parentToolCallId: "outer",
+        args: { command: "gh auth login", parentToolCallId: "argument-is-not-provenance" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 2, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "child",
+        isError: true,
+        result: { content: [{ type: "text", text: "gh: command not found" }] },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    expect(extractToolCardsCached(entry?.message)).toMatchObject([
+      {
+        callId: "child",
+        runId: "nested-run",
+        parentToolCallId: "outer",
+        completed: true,
+        isError: true,
+      },
+    ]);
+  });
+
+  it("carries browser tab details through the completed live result, including empty text", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 1, "tool", {
+        phase: "start",
+        name: "browser",
+        toolCallId: "browser-call",
+        args: { action: "open" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("browser-run", 2, "tool", {
+        phase: "result",
+        name: "browser",
+        toolCallId: "browser-call",
+        result: {
+          content: [],
+          details: {
+            browserTab: {
+              profile: "managed",
+              target: "host",
+              targetId: "tab-1",
+              url: "https://example.com",
+              title: "Example",
+            },
+          },
+        },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      live: true,
+      preview: {
+        kind: "browser-tab",
+        profile: "managed",
+        target: "host",
+        targetId: "tab-1",
+        title: "Example",
+      },
+    });
+    resetToolStream(host);
+  });
+
   const approval = (runId: string | undefined, sessionKey = "main") => ({
     id: "approval-1",
     kind: "exec" as const,
@@ -152,59 +232,6 @@ describe("app-tool-stream approval lifecycle", () => {
 });
 
 describe("app-tool-stream throttled projections", () => {
-  it("retains producer-recorded code-mode control identity", () => {
-    useToolStreamFakeTimers();
-    try {
-      const host = createHost();
-      handleAgentEvent(
-        host,
-        agentEvent("run-1", 1, "tool", {
-          phase: "start",
-          name: "exec",
-          toolCallId: "outer-exec",
-          codeModeControl: { kind: "exec", language: "javascript" },
-          args: { code: "return 1;" },
-        }),
-      );
-      vi.advanceTimersByTime(80);
-
-      expect(host.chatToolMessages[0]).toMatchObject({
-        content: [
-          expect.objectContaining({
-            codeModeControl: expect.objectContaining({ kind: "exec" }),
-          }),
-        ],
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retains the parent call identity for nested code-mode tools", () => {
-    useToolStreamFakeTimers();
-    try {
-      const host = createHost();
-      handleAgentEvent(
-        host,
-        agentEvent("run-1", 1, "tool", {
-          phase: "start",
-          name: "read",
-          toolCallId: "nested-read",
-          parentToolCallId: "outer-exec",
-          args: { path: "README.md" },
-        }),
-      );
-      vi.advanceTimersByTime(80);
-
-      expect(host.chatToolMessages[0]).toMatchObject({
-        toolCallId: "nested-read",
-        parentToolCallId: "outer-exec",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it.each(["start", "update"] as const)(
     "renders a deferred tool %s when its projection flushes",
     (phase) => {
@@ -542,35 +569,39 @@ describe("app-tool-stream result blocks", () => {
 
   it("emits a result block for completed tools with empty output", () => {
     useToolStreamFakeTimers();
-    const host = createHost();
+    try {
+      const host = createHost();
 
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "main",
-      data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW + 1,
-      sessionKey: "main",
-      data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
-    });
+      handleAgentEvent(host, {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: TOOL_STREAM_TEST_NOW,
+        sessionKey: "main",
+        data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
+      });
+      handleAgentEvent(host, {
+        runId: "run-1",
+        seq: 2,
+        stream: "tool",
+        ts: TOOL_STREAM_TEST_NOW + 1,
+        sessionKey: "main",
+        data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
+      });
 
-    const entry = host.toolStreamById.get(
-      buildToolStreamIdentity("run-1", "call-1"),
-    ) as ToolStreamEntry;
-    expect(entry.resultReceived).toBe(true);
-    expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
-    expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
-    const content = entry.message.content as Array<Record<string, unknown>>;
-    // The empty-output result block marks the call as finished so the UI does
-    // not keep it in a running state for the rest of the run.
-    expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+      const entry = host.toolStreamById.get(
+        buildToolStreamIdentity("run-1", "call-1"),
+      ) as ToolStreamEntry;
+      expect(entry.resultReceived).toBe(true);
+      expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
+      expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
+      const content = entry.message.content as Array<Record<string, unknown>>;
+      // The empty-output result block marks the call as finished so the UI does
+      // not keep it in a running state for the rest of the run.
+      expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -632,13 +663,15 @@ describe("app-tool-stream result blocks", () => {
             details: {
               changedModel: true,
               sessionKey: "main",
+              agentId: "main",
               modelOverride: "openai/gpt-5.6-luna",
             },
           },
         }),
       );
 
-      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+      expect(host.sessions.refreshReplacement).toHaveBeenCalledOnce();
+      expect(host.sessions.state.modelOverrides).toEqual({});
     },
   );
 

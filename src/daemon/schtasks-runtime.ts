@@ -1,24 +1,22 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   readScheduledTaskCommand,
   resolveStartupEntryPaths,
   resolveTaskName,
   resolveTaskScriptPath,
-  shouldUseHiddenWindowsTaskLauncher,
 } from "./schtasks-layout.js";
 import {
   findInstalledProcessPid,
@@ -31,80 +29,38 @@ import {
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
+import {
+  createServiceRuntimeInspectionFailure,
+  type GatewayServiceRuntime,
+} from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
-type ScheduledTaskInfo = {
-  status?: string;
-  lastRunTime?: string;
-  lastRunResult?: string;
-};
-
-function parseSchtasksQuery(output: string): ScheduledTaskInfo {
-  const entries = parseKeyValueOutput(output, ":");
-  const info: ScheduledTaskInfo = {};
-  if (entries.status) {
-    info.status = entries.status;
-  }
-  if (entries["last run time"]) {
-    info.lastRunTime = entries["last run time"];
-  }
-  // Accept the "Last Result" locale/version variant to avoid false unknown status (#47726).
-  const lastRunResult = entries["last run result"] ?? entries["last result"];
-  if (lastRunResult) {
-    info.lastRunResult = lastRunResult;
-  }
-  return info;
-}
-
-export function normalizeTaskResultCode(value?: string): string | null {
-  if (!value) {
-    return null;
-  }
-  const raw = normalizeLowercaseStringOrEmpty(value);
-  if (!raw) {
-    return null;
-  }
-  if (/^0x[0-9a-f]+$/.test(raw)) {
-    return `0x${raw.slice(2).replace(/^0+/, "") || "0"}`;
-  }
-  if (/^\d+$/.test(raw)) {
-    const numeric = Number.parseInt(raw, 10);
-    if (Number.isFinite(numeric)) {
-      return `0x${numeric.toString(16)}`;
-    }
-  }
-  return null;
-}
-
-const RUNNING_RESULT_CODES = new Set(["0x41301"]);
-export const NOT_YET_RUN_RESULT_CODES = new Set(["0x41303"]);
-const UNKNOWN_STATUS_DETAIL =
-  "Task status is locale-dependent and no numeric Last Run Result was available.";
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
-function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
-  status: GatewayServiceRuntime["status"];
-  detail?: string;
-} {
-  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
-  if (normalizedResult != null) {
-    return RUNNING_RESULT_CODES.has(normalizedResult)
-      ? { status: "running" }
-      : {
-          status: "stopped",
-          detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
-        };
+/** Read policy independently of runtime state; unavailable policy is not disabled. */
+export async function isScheduledTaskEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const observed = probeScheduledTaskState(
+    resolveTaskName(args.env ?? process.env),
+    args.timeoutMs,
+  );
+  if (observed.status !== "found" || typeof observed.enabled !== "boolean") {
+    throw new Error("Scheduled Task enable policy could not be inspected.");
   }
-  return parsed.status?.trim()
-    ? { status: "unknown", detail: UNKNOWN_STATUS_DETAIL }
-    : { status: "unknown" };
+  return observed.enabled;
 }
 
 export async function assertSchtasksAvailable(): Promise<void> {
@@ -131,6 +87,7 @@ export async function removeStartupEntries(
 ): Promise<void> {
   for (const startupEntryPath of resolveStartupEntryPaths(env)) {
     try {
+      assertGatewayServiceUpdateCurrent();
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
     } catch (error) {
@@ -151,25 +108,14 @@ function createStartupEntryRemovalError(error: unknown): Error {
   );
 }
 
-export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
-  const runtime = await readScheduledTaskRuntime(env).catch(() => null);
-  if (runtime?.status !== "running") {
-    return false;
-  }
-  const normalizedResult = normalizeTaskResultCode(runtime.lastRunResult);
-  if (normalizedResult !== null && RUNNING_RESULT_CODES.has(normalizedResult)) {
-    return true;
-  }
-  // Hidden VBS exits after spawning gateway.cmd; listener-backed success proves takeover.
-  return shouldUseHiddenWindowsTaskLauncher(env) && normalizedResult === "0x0";
-}
-
 export async function waitForScheduledTaskRunningEvidence(
   env: GatewayServiceEnv,
 ): Promise<boolean> {
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (true) {
-    if (await hasScheduledTaskRunningEvidence(env)) {
+    const probe = probeScheduledTaskState(resolveTaskName(env));
+    // Only Scheduler supervision, not an old Startup process, proves takeover.
+    if (probe.status === "found" && probe.state === 4) {
       return true;
     }
     if (Date.now() >= deadline) {
@@ -191,26 +137,75 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
 export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
+  assertCurrent?: () => void,
 ): Promise<void> {
+  if (isUpdateOwnedGatewayServiceCommand()) {
+    throw new Error(
+      "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; standalone startup fallback is unsupported.",
+    );
+  }
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
-    const [executable, ...args] = command.programArguments;
-    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
-      cwd: command.workingDirectory || undefined,
-      detached: true,
-      env: { ...process.env, ...command.environment },
-      stdio: "ignore",
-      windowsHide: true,
+    // Task inspection intentionally hides the wrapper flag so it can match the
+    // inner Gateway. Direct fallback must restore that wrapper or it loses the
+    // Job Object owner that terminates the whole Gateway process tree.
+    const programArguments =
+      command.environment?.OPENCLAW_SERVICE_KIND === "gateway"
+        ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
+        : command.programArguments;
+    const { child } = await spawnWithFallback({
+      assertCurrent,
+      argv: programArguments,
+      options: {
+        cwd: command.workingDirectory || undefined,
+        detached: true,
+        env: mergeProcessEnv([process.env, command.environment]),
+        stdio: "ignore",
+        windowsHide: true,
+      },
     });
     child.unref();
     return;
   }
-  const child = spawn(getWindowsCmdExePath(), ["/d", "/c", scriptPath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+  // Preserve native missing-script errors before testing the actual cmd.exe access contract.
+  await (await fs.open(scriptPath, "r")).close();
+  // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
+  const scriptProbe = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(
+        "$ErrorActionPreference='Stop'; [System.IO.File]::OpenRead($env:OPENCLAW_TASK_SCRIPT).Dispose()",
+        "utf16le",
+      ).toString("base64"),
+    ],
+    {
+      env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+  if (scriptProbe.error) {
+    throw scriptProbe.error;
+  }
+  if (scriptProbe.status !== 0) {
+    throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
+  }
+  const { child } = await spawnWithFallback({
+    assertCurrent,
+    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
+    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
+    options: {
+      detached: true,
+      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
+      stdio: "ignore",
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    },
   });
   child.unref();
 }
@@ -329,51 +324,6 @@ export async function resolveFallbackRuntime(
   };
 }
 
-type ScheduledTaskStateProbe =
-  | { status: "found"; state: number | null }
-  | { status: "missing" }
-  | { status: "unknown" };
-
-function probeScheduledTaskState(taskName: string): ScheduledTaskStateProbe {
-  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
-  const script = [
-    "$ErrorActionPreference='Stop'",
-    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $task=$service.GetFolder('\\').GetTask($taskName); [Console]::Out.Write([int]$task.State); exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); exit 1 }",
-  ].join("; ");
-  const probe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
-  );
-  if (probe.error) {
-    return { status: "unknown" };
-  }
-  if (probe.status === 0) {
-    const rawState = probe.stdout.trim();
-    const state = /^\d+$/.test(rawState) ? Number.parseInt(rawState, 10) : null;
-    return {
-      status: "found",
-      state,
-    };
-  }
-  const hresult = Number.parseInt(probe.stdout.trim(), 10);
-  // Only the locale-independent missing task/folder HRESULT values prove absence.
-  return hresult === -2147024894 || hresult === -2147024893
-    ? { status: "missing" }
-    : { status: "unknown" };
-}
-
-export function probeScheduledTaskExists(taskName: string): boolean | null {
-  const probe = probeScheduledTaskState(taskName);
-  return probe.status === "found" ? true : probe.status === "missing" ? false : null;
-}
-
 export function isScheduledTaskDefinitelyNotRunning(taskName: string): boolean {
   const probe = probeScheduledTaskState(taskName);
   if (probe.status !== "found") {
@@ -442,22 +392,26 @@ export async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
-export async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
+export async function terminateInstalledStartupRuntime(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
 }
 
@@ -481,8 +435,9 @@ export async function startStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  await launchFallbackTaskScript(env);
+  await launchFallbackTaskScript(env, undefined, assertCurrent);
   onMutation?.();
   stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }
@@ -496,47 +451,31 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
 
 export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSchtasksAvailable();
-  } catch (err) {
-    if (await isStartupEntryInstalled(env)) {
-      return resolveFallbackRuntime(env);
-    }
-    return { status: "unknown", detail: String(err) };
+  const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
+  if (probe.status === "missing") {
+    return (await isStartupEntryInstalled(env))
+      ? resolveFallbackRuntime(env)
+      : { status: "stopped", missingUnit: true };
   }
-  const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
-  if (res.code !== 0) {
-    if (await isStartupEntryInstalled(env)) {
-      return resolveFallbackRuntime(env);
-    }
-    const detail = (res.stderr || res.stdout).trim();
-    const missing = probeScheduledTaskExists(taskName) === false;
+  if (probe.status === "unknown") {
     return {
-      status: missing ? "stopped" : "unknown",
-      ...(!missing && detail ? { detail } : {}),
-      missingUnit: missing,
+      ...createServiceRuntimeInspectionFailure(probe.detail, probe.timeoutMs),
+      missingUnit: false,
     };
   }
-  const parsed = parseSchtasksQuery(res.stdout || "");
-  const derived = deriveScheduledTaskRuntimeStatus(parsed);
-  if (derived.status !== "running") {
-    const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env);
-    if (observedRuntime) {
-      return {
-        ...observedRuntime,
-        state: parsed.status,
-        lastRunTime: parsed.lastRunTime,
-        lastRunResult: parsed.lastRunResult,
-      };
-    }
-  }
+  // State owns current activity; LastTaskResult is history and can describe an older run.
+  const status =
+    probe.state === 4 ? "running" : probe.state === 1 || probe.state === 3 ? "stopped" : "unknown";
+  // A detached/lingering process may outlive its task. Retain exact persisted-argv ownership
+  // evidence (including PID) without treating it as proof of Scheduler supervision.
+  const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env);
   return {
-    status: derived.status,
-    state: parsed.status,
-    lastRunTime: parsed.lastRunTime,
-    lastRunResult: parsed.lastRunResult,
-    ...(derived.detail ? { detail: derived.detail } : {}),
+    ...observedRuntime,
+    status: status === "unknown" ? status : (observedRuntime?.status ?? status),
+    state: ["Unknown", "Disabled", "Queued", "Ready", "Running"][probe.state ?? 0],
+    lastRunTime: probe.lastRunTime,
+    lastRunResult: probe.lastRunResult,
   };
 }

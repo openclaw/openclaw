@@ -1,6 +1,10 @@
 // Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type {
+  ChannelDeliveryStreamingConfig,
+  MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
@@ -20,6 +24,7 @@ interface LineThreadBindingsConfig {
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
+  joinIntro?: boolean;
   channelAccessToken?: string;
   channelSecret?: string;
   tokenFile?: string;
@@ -30,7 +35,11 @@ interface LineAccountBaseConfig {
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
+  /** Nothing marks a LINE turn as coalesced, so "batched" has nothing to select. */
+  replyToMode?: Exclude<ReplyToMode, "batched">;
+  streaming?: ChannelDeliveryStreamingConfig;
   mediaMaxMb?: number;
+  historyLimit?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;
@@ -71,6 +80,20 @@ export interface LineSendResult {
   receipt: MessageReceipt;
 }
 
+/** Console-side webhook state, which decides whether LINE delivers anything at all. */
+export type LineProbeWebhookState = { status: "active" | "disabled" | "unset" };
+
+/**
+ * LINE's own view of an account's monthly message allowance.
+ *
+ * The plan decides whether a limit exists at all, so the two cases stay separate
+ * shapes instead of encoding "unlimited" as a sentinel number that every caller
+ * would have to remember to special-case.
+ */
+export type LineMessageQuota =
+  | { kind: "unlimited" }
+  | { kind: "limited"; limit: number; used: number };
+
 export type LineProbeResult = BaseProbeResult<string> & {
   elapsedMs?: number;
   bot?: {
@@ -79,6 +102,9 @@ export type LineProbeResult = BaseProbeResult<string> & {
     basicId?: string;
     pictureUrl?: string;
   };
+  /** Absent when LINE did not answer, which stays "unknown" rather than "fine". */
+  webhook?: LineProbeWebhookState;
+  quota?: LineMessageQuota;
 };
 
 type LineFlexMessagePayload = {

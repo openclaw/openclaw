@@ -1,5 +1,5 @@
 // Voice Call plugin module implements runtime behavior.
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -29,7 +29,7 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveVoiceCallRealtimeTools } from "./realtime-call-control.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
-import { resolveCallAgentId } from "./resolve-call-agent-id.js";
+import { resolveCallAgentId, resolveVoiceCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -124,20 +124,13 @@ function mapVoiceCallConsultTranscript(
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
   webhookServer: VoiceCallWebhookServer;
+  manager: CallManager;
 }): {
   setTunnelResult: (result: TunnelResult | null) => void;
   stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
 } {
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | null = null;
-
-  const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
-    if (suppressErrors) {
-      await step().catch(() => {});
-      return;
-    }
-    await step();
-  };
 
   return {
     setTunnelResult: (result) => {
@@ -149,17 +142,24 @@ function createRuntimeResourceLifecycle(params: {
       }
       const suppressErrors = opts?.suppressErrors ?? false;
       stopPromise = (async () => {
-        await runStep(async () => {
-          if (tunnelResult) {
-            await tunnelResult.stop();
+        let failure: { error: unknown } | undefined;
+        for (const step of [
+          async () => {
+            await tunnelResult?.stop();
+          },
+          () => cleanupTailscaleExposure(params.config),
+          () => params.webhookServer.stop(),
+          () => params.manager.stop(),
+        ]) {
+          try {
+            await step();
+          } catch (error) {
+            failure ??= { error };
           }
-        }, suppressErrors);
-        await runStep(async () => {
-          await cleanupTailscaleExposure(params.config);
-        }, suppressErrors);
-        await runStep(async () => {
-          await params.webhookServer.stop();
-        }, suppressErrors);
+        }
+        if (failure && !suppressErrors) {
+          throw failure.error;
+        }
       })();
       return stopPromise;
     },
@@ -308,10 +308,7 @@ export async function createVoiceCallRuntime(params: {
 
   const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const configuredAgentId = unresolvedConfig.agentId
-    ? normalizeAgentId(unresolvedConfig.agentId)
-    : resolveDefaultAgentId(cfg);
-  const config = { ...unresolvedConfig, agentId: configuredAgentId };
+  const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
@@ -465,7 +462,7 @@ export async function createVoiceCallRuntime(params: {
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }
-  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
+  const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer, manager });
 
   const localUrl = await webhookServer.start();
 

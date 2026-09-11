@@ -1,5 +1,6 @@
 {
   "id": "google-meet",
+  "categories": ["voice"],
   "doctorContract": {
     "configRepair": true
   },
@@ -12,7 +13,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://cdn.simpleicons.org/googlemeet",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {

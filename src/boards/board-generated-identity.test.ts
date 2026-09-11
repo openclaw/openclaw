@@ -7,7 +7,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { BoardStore } from "./board-store.js";
-import { createTestBoardStore } from "./board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -39,9 +39,9 @@ afterEach(() => {
 
 describe("generated BoardStore identity", () => {
   const createStore = createSqliteStore;
-  it("keeps colliding titles distinct and canonical spellings stable", () => {
+  it("keeps colliding titles distinct and canonical spellings stable", async () => {
     const store = createStore();
-    const composed = store.putWidget({
+    const composed = await store.putWidget({
       sessionKey: "agent:main:board",
       name: "cafe-menu",
       title: "Café Menu",
@@ -50,7 +50,7 @@ describe("generated BoardStore identity", () => {
     });
     expect(composed.resolvedWidgetName).toBe("cafe-menu");
 
-    const decomposed = store.putWidget({
+    const decomposed = await store.putWidget({
       sessionKey: "agent:main:board",
       name: "cafe-menu",
       title: "Cafe\u0301 Menu",
@@ -62,7 +62,7 @@ describe("generated BoardStore identity", () => {
       widgets: [{ name: "cafe-menu", revision: 2 }],
     });
 
-    const plain = store.putWidget({
+    const plain = await store.putWidget({
       sessionKey: "agent:main:board",
       name: "cafe-menu",
       title: "Cafe Menu",
@@ -71,11 +71,11 @@ describe("generated BoardStore identity", () => {
     });
     expect(plain.resolvedWidgetName).toBe("cafe-menu-bbbbbbbb");
     expect(plain.widgets.map((widget) => widget.name)).toEqual(["cafe-menu", "cafe-menu-bbbbbbbb"]);
-    expect(store.readWidgetHtml("agent:main:board", "cafe-menu")?.html).toContain(
-      "accented revised",
-    );
+    expect(
+      (await readBoardHtml(store, { sessionKey: "agent:main:board" }, "cafe-menu"))?.html,
+    ).toContain("accented revised");
 
-    const plainUpdate = store.putWidget({
+    const plainUpdate = await store.putWidget({
       sessionKey: "agent:main:board",
       name: "cafe-menu",
       title: "Cafe Menu",
@@ -91,22 +91,22 @@ describe("generated BoardStore identity", () => {
     });
   });
 
-  it("keeps same-title explicit takeovers distinct from later generated pins", () => {
+  it("keeps same-title explicit takeovers distinct from later generated pins", async () => {
     const store = createStore();
-    store.putWidget({
+    await store.putWidget({
       sessionKey: "agent:main:board",
       name: "release-status",
       title: "Release Status",
       content: { kind: "html", html: "<p>generated</p>" },
       generatedIdentity: generatedIdentity("c", "release-status-cccccccc"),
     });
-    store.putWidget({
+    await store.putWidget({
       sessionKey: "agent:main:board",
       name: "release-status",
       title: "Release Status",
       content: { kind: "html", html: "<p>manual</p>" },
     });
-    const generatedAfterTakeover = store.putWidget({
+    const generatedAfterTakeover = await store.putWidget({
       sessionKey: "agent:main:board",
       name: "release-status",
       title: "Release Status",
@@ -115,25 +115,27 @@ describe("generated BoardStore identity", () => {
     });
     expect(generatedAfterTakeover.resolvedWidgetName).toBe("release-status-cccccccc");
     expect(generatedAfterTakeover.widgets).toHaveLength(2);
-    expect(store.readWidgetHtml("agent:main:board", "release-status")?.html).toContain("manual");
+    expect(
+      (await readBoardHtml(store, { sessionKey: "agent:main:board" }, "release-status"))?.html,
+    ).toContain("manual");
   });
 
-  it("fails closed instead of overwriting an occupied deterministic fallback", () => {
+  it("fails closed instead of overwriting an occupied deterministic fallback", async () => {
     const store = createStore();
-    store.putWidget({
+    await store.putWidget({
       sessionKey: "agent:main:board",
       name: "status",
       title: "Manual",
       content: { kind: "html", html: "manual" },
     });
-    store.putWidget({
+    await store.putWidget({
       sessionKey: "agent:main:board",
       name: "status-dddddddd",
       title: "Reserved",
       content: { kind: "html", html: "reserved" },
     });
 
-    expect(() =>
+    await expect(
       store.putWidget({
         sessionKey: "agent:main:board",
         name: "status",
@@ -141,13 +143,13 @@ describe("generated BoardStore identity", () => {
         content: { kind: "html", html: "generated" },
         generatedIdentity: generatedIdentity("d", "status-dddddddd"),
       }),
-    ).toThrow("generated widget fallback name is already in use");
-    expect(store.getSnapshot("agent:main:board").widgets).toHaveLength(2);
+    ).rejects.toThrow("generated widget fallback name is already in use");
+    expect((await store.getSnapshot({ sessionKey: "agent:main:board" })).widgets).toHaveLength(2);
   });
 
-  it("rejects a fallback that is not distinct even on an empty board", () => {
+  it("rejects a fallback that is not distinct even on an empty board", async () => {
     const store = createStore();
-    expect(() =>
+    await expect(
       store.putWidget({
         sessionKey: "agent:main:board",
         name: "status",
@@ -155,11 +157,11 @@ describe("generated BoardStore identity", () => {
         content: { kind: "html", html: "generated" },
         generatedIdentity: generatedIdentity("f", "status"),
       }),
-    ).toThrow("generated widget fallback name must differ from its preferred name");
+    ).rejects.toThrow("generated widget fallback name must differ from its preferred name");
   });
 });
 
-it("preserves a beta.5-format unmarked explicit row and reuses the generated fallback", () => {
+it("preserves a beta.5-format unmarked explicit row and reuses the generated fallback", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-beta5-identity-") };
   const sessionKey = "agent:main:beta5-identity";
   seedSession(env, sessionKey);
@@ -168,27 +170,29 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     env,
   };
   const store = new SqliteBoardStore(options);
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "anchor",
     title: "Anchor",
     content: { kind: "html", html: "<p>anchor</p>" },
   });
-  const legacy = store.putWidget({
+  const legacy = await store.putWidget({
     sessionKey,
     name: "cafe-menu",
     title: "Café Menu",
     content: { kind: "html", html: "<p>approved</p>" },
     declared: { tools: ["menu.refresh"] },
   });
-  store.grant(
-    sessionKey,
+  await store.grant(
+    { sessionKey },
     "cafe-menu",
     "granted",
     1,
     legacy.widgets.find((widget) => widget.name === "cafe-menu")?.instanceId,
   );
-  store.applyOps(sessionKey, [{ kind: "widget_resize", name: "cafe-menu", sizeW: 8, sizeH: 6 }]);
+  await store.applyOps({ sessionKey }, [
+    { kind: "widget_resize", name: "cafe-menu", sizeW: 8, sizeH: 6 },
+  ]);
   const seededDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
   seededDatabase.db
     .prepare(
@@ -200,7 +204,7 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   closeOpenClawStateDatabaseForTest();
 
   const reopened = new SqliteBoardStore(options);
-  const generated = reopened.putWidget({
+  const generated = await reopened.putWidget({
     sessionKey,
     name: "cafe-menu",
     title: "Cafe\u0301 Menu",
@@ -216,13 +220,13 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     sizeH: 6,
     position: 1,
   });
-  expect(reopened.readWidgetHtml(sessionKey, "cafe-menu")?.html).toContain("approved");
+  expect((await readBoardHtml(reopened, { sessionKey }, "cafe-menu"))?.html).toContain("approved");
 
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 
   const durable = new SqliteBoardStore(options);
-  const reused = durable.putWidget({
+  const reused = await durable.putWidget({
     sessionKey,
     name: "cafe-menu",
     title: "Café Menu",
@@ -233,13 +237,13 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   expect(reused.widgets.find((widget) => widget.name === "cafe-menu-eeeeeeee")).toMatchObject({
     revision: 2,
   });
-  expect(durable.readWidgetHtml(sessionKey, "cafe-menu")?.html).toContain("approved");
+  expect((await readBoardHtml(durable, { sessionKey }, "cafe-menu"))?.html).toContain("approved");
   closeOpenClawAgentDatabasesForTest();
 
   expect(
-    new SqliteBoardStore(options)
-      .getSnapshot(sessionKey)
-      .widgets.find((widget) => widget.name === "cafe-menu"),
+    (await new SqliteBoardStore(options).getSnapshot({ sessionKey })).widgets.find(
+      (widget) => widget.name === "cafe-menu",
+    ),
   ).toMatchObject({
     name: "cafe-menu",
     revision: 1,
@@ -257,7 +261,7 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   });
 });
 
-it("does not infer generated ownership from a canonical unmarked title match", () => {
+it("does not infer generated ownership from a canonical unmarked title match", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-canonical-legacy-") };
   const sessionKey = "agent:main:canonical-legacy";
   seedSession(env, sessionKey);
@@ -266,7 +270,7 @@ it("does not infer generated ownership from a canonical unmarked title match", (
     env,
   };
   const store = new SqliteBoardStore(options);
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "widget-e3b21956",
     title: "が",
@@ -281,7 +285,7 @@ it("does not infer generated ownership from a canonical unmarked title match", (
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);
-  const generated = reopened.putWidget({
+  const generated = await reopened.putWidget({
     sessionKey,
     name: "widget-f62b28f7",
     title: "が",
@@ -290,10 +294,12 @@ it("does not infer generated ownership from a canonical unmarked title match", (
   });
   expect(generated.resolvedWidgetName).toBe("widget-f62b28f7");
   expect(generated.widgets).toHaveLength(2);
-  expect(reopened.readWidgetHtml(sessionKey, "widget-e3b21956")?.html).toContain("legacy");
+  expect((await readBoardHtml(reopened, { sessionKey }, "widget-e3b21956"))?.html).toContain(
+    "legacy",
+  );
 });
 
-it("preserves unmarked rows whose absent or capped titles are ambiguous", () => {
+it("preserves unmarked rows whose absent or capped titles are ambiguous", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-ambiguous-legacy-") };
   const sessionKey = "agent:main:ambiguous-legacy";
   seedSession(env, sessionKey);
@@ -303,12 +309,12 @@ it("preserves unmarked rows whose absent or capped titles are ambiguous", () => 
   };
   const store = new SqliteBoardStore(options);
   const cappedTitle = `${"!".repeat(79)}a`;
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "status",
     content: { kind: "html", html: "<p>manual untitled</p>" },
   });
-  store.putWidget({
+  await store.putWidget({
     sessionKey,
     name: "report",
     title: cappedTitle,
@@ -323,13 +329,13 @@ it("preserves unmarked rows whose absent or capped titles are ambiguous", () => 
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);
-  const untitled = reopened.putWidget({
+  const untitled = await reopened.putWidget({
     sessionKey,
     name: "status",
     content: { kind: "html", html: "<p>generated untitled</p>" },
     generatedIdentity: generatedIdentity("b", "status-bbbbbbbb"),
   });
-  const long = reopened.putWidget({
+  const long = await reopened.putWidget({
     sessionKey,
     name: "report",
     title: cappedTitle,
@@ -339,11 +345,13 @@ it("preserves unmarked rows whose absent or capped titles are ambiguous", () => 
 
   expect(untitled.resolvedWidgetName).toBe("status-bbbbbbbb");
   expect(long.resolvedWidgetName).toBe("report-cccccccc");
-  expect(reopened.readWidgetHtml(sessionKey, "status")?.html).toContain("manual untitled");
-  expect(reopened.readWidgetHtml(sessionKey, "report")?.html).toContain("legacy long");
+  expect((await readBoardHtml(reopened, { sessionKey }, "status"))?.html).toContain(
+    "manual untitled",
+  );
+  expect((await readBoardHtml(reopened, { sessionKey }, "report"))?.html).toContain("legacy long");
 });
 
-it("persists explicit ownership across restart", () => {
+it("persists explicit ownership across restart", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-explicit-owner-") };
   const sessionKey = "agent:main:explicit-owner";
   seedSession(env, sessionKey);
@@ -351,7 +359,7 @@ it("persists explicit ownership across restart", () => {
     resolveSession: () => ({ agentId: "main", sessionKey }),
     env,
   };
-  new SqliteBoardStore(options).putWidget({
+  await new SqliteBoardStore(options).putWidget({
     sessionKey,
     name: "status",
     title: "Status",
@@ -360,7 +368,7 @@ it("persists explicit ownership across restart", () => {
   closeOpenClawAgentDatabasesForTest();
 
   const reopened = new SqliteBoardStore(options);
-  const generated = reopened.putWidget({
+  const generated = await reopened.putWidget({
     sessionKey,
     name: "status",
     title: "Status",
@@ -368,5 +376,5 @@ it("persists explicit ownership across restart", () => {
     generatedIdentity: generatedIdentity("d", "status-dddddddd"),
   });
   expect(generated.resolvedWidgetName).toBe("status-dddddddd");
-  expect(reopened.readWidgetHtml(sessionKey, "status")?.html).toContain("manual");
+  expect((await readBoardHtml(reopened, { sessionKey }, "status"))?.html).toContain("manual");
 });

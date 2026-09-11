@@ -85,6 +85,8 @@ openclaw gateway
 Named accounts must use a configured token or token file; the shared env
 variable is intentionally limited to the default account.
 
+## Configuration
+
 ### JSON5 reference
 
 The equivalent config shape is:
@@ -157,6 +159,8 @@ uses the loopback endpoint for REST requests, setup verification, and the
 realtime WebSocket, while discussion `embedUrl` and `openUrl` links continue to
 use the public `baseUrl`. If `apiBaseUrl` is omitted, all traffic uses
 `baseUrl`, preserving existing behavior.
+
+### Plugin allowlist behavior
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -257,7 +261,8 @@ revoked-channel marker so delayed realtime events remain fail-closed. Remote
 ownership is keyed by ClickClack server and channel id, so renaming the local
 account cannot turn a managed channel into an ordinary one.
 
-Keep `tools.sessions.visibility` at its safer default `tree`. The plugin
+For narrower session access, explicitly set `tools.sessions.visibility` to
+`tree` rather than the default `all`. The plugin
 installs a host-scoped grant only between each side session and its attached
 main session, plus a tool-policy hook that blocks session discovery and
 cross-session targets. It allows `sessions_history`, `session_status`, and
@@ -300,6 +305,13 @@ safety bound can omit an older active thread.
 
 - `replyMode: "agent"` (default) dispatches inbound messages through the normal agent pipeline, including session recording and tool policy.
 - `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for direct bot replies, optionally shaped by `model` and `systemPrompt`. The selected provider and model own the completion budget.
+
+Both modes honor `responsePrefix` at the channel or account level. Account
+values win, including `""` to disable an inherited prefix. Use `"auto"` for
+the routed agent's identity name or `"[{model}]"` for the selected model.
+Explicit `message` tool and CLI text sends follow the
+[shared prefix behavior](/concepts/messages#prefixes-threading-and-replies),
+including omission of unresolved model-dependent prefixes.
 
 Model mode runs completions against the resolved bot agent id, which requires
 the explicit `plugins.entries.clickclack.llm.allowAgentIdOverride: true` trust
@@ -524,8 +536,11 @@ Explicit outbound targets may also carry the `clickclack:` or `cc:` provider pre
 
 Outbound media uses ClickClack's upload API and then attaches the durable upload
 to the created channel message, thread reply, or DM. Local files and supported
-remote media URLs follow OpenClaw's normal media-access policy, with a 64 MiB
-per-file limit. Durable queued sends use separate owner-scoped nonces for each
+remote media URLs follow OpenClaw's normal media-access policy. Set
+`channels.clickclack.mediaMaxMb` to limit each outbound attachment in MiB;
+`accounts.<id>.mediaMaxMb` overrides the root, then `agents.defaults.mediaMaxMb`
+supplies the fallback. The 64 MiB upload ceiling always applies. Images may be
+optimized before sending. Durable queued sends use separate owner-scoped nonces for each
 upload and message part, then retry attachment association with those same
 objects. See [Durable media delivery](#durable-media-delivery) for the server
 contract and recovery behavior.
@@ -557,3 +572,10 @@ OpenClaw only needs current `bot:write` for normal agent chat and command-menu s
 - No inbound replies: confirm the token has realtime read access. The bot always ignores its own messages; other bot messages are denied by default, and when `allowBots` is enabled the sender bot ID must also be listed explicitly in `allowFrom`.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
 - No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.
+
+## Related
+
+- [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Bot loop protection](/channels/bot-loop-protection)
+- [Access groups](/channels/access-groups)

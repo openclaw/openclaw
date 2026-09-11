@@ -1,3 +1,6 @@
+import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+
 export function configSnapshot(config: Record<string, unknown> = {}) {
   return {
     snapshot: {
@@ -21,20 +24,28 @@ export function metadataSnapshot(params: {
   name?: string;
   origin?: "bundled" | "global";
   installRecord?: Record<string, unknown>;
-  icon?: string;
+  packageBuild?: { bundledDist?: boolean };
+  packageDependencies?: Record<string, string>;
+  iconPath?: string;
+  categories?: PluginCategorySlug[];
+  packageVersion?: string;
+  configSchema?: PluginManifestRecord["configSchema"];
+  channels?: string[];
 }) {
   const id = params.id ?? "workboard";
   const origin = params.origin ?? "bundled";
   const installRecord =
     params.installRecord ??
     (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
-  const manifest = {
+  const manifest: PluginManifestRecord = {
     id,
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",
     catalog: { featured: true, order: 10 },
-    ...(params.icon ? { icon: params.icon } : {}),
-    channels: [],
+    ...(params.categories ? { categories: params.categories } : {}),
+    ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
+    ...(params.iconPath ? { iconPath: params.iconPath } : {}),
+    channels: params.channels ?? [],
     providers: [],
     cliBackends: [],
     skills: [],
@@ -43,6 +54,7 @@ export function metadataSnapshot(params: {
     rootDir: `/tmp/${id}`,
     source: `/tmp/${id}/index.ts`,
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
   };
   return {
     index: {
@@ -51,9 +63,11 @@ export function metadataSnapshot(params: {
           pluginId: id,
           ...(origin === "global" ? { installOwner: id } : {}),
           packageName: `@openclaw/${id}`,
+          ...(params.packageVersion ? { packageVersion: params.packageVersion } : {}),
           origin,
           enabled: params.enabled,
           rootDir: `/tmp/${id}`,
+          ...(params.packageBuild ? { packageBuild: params.packageBuild } : {}),
         },
       ],
       installRecords: installRecord ? { [id]: installRecord } : {},

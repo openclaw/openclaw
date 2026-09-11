@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import { parseOpenAIChatGptResponsesSse } from "./openai-chatgpt-responses-protocol.js";
 
 const completedEvent = {
@@ -15,8 +16,30 @@ const multilineDataLines = JSON.stringify(completedEvent, null, 2)
   .split("\n")
   .map((line) => `data: ${line}`);
 
+async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe("ChatGPT Responses SSE frame boundaries", () => {
   it.each([
+    { label: "EOF without a delimiter", chunks: [`data: ${serializedCompletedEvent}`] },
+    { label: "EOF after one LF", chunks: [`data: ${serializedCompletedEvent}\n`] },
+    { label: "EOF after one CR", chunks: [`data: ${serializedCompletedEvent}\r`] },
+    { label: "multiline EOF", chunks: [multilineDataLines.join("\r\n")] },
+    {
+      label: "chunk-split EOF",
+      chunks: ["data: ", serializedCompletedEvent.slice(0, 20), serializedCompletedEvent.slice(20)],
+    },
     { label: "LF", chunks: [`data: ${serializedCompletedEvent}\n\n`] },
     { label: "CRLF", chunks: [`data: ${serializedCompletedEvent}\r\n\r\n`] },
     { label: "lone CR", chunks: [`data: ${serializedCompletedEvent}\r\r`] },
@@ -131,5 +154,76 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     }
 
     expect(canceled).toBe(true);
+  });
+
+  it("keeps a final undelimited event after a delimited event", async () => {
+    const precedingEvent = { type: "response.output_item.done" };
+    const response = new Response(
+      `data: ${JSON.stringify(precedingEvent)}\n\ndata: ${serializedCompletedEvent}`,
+    );
+    const events = [];
+    for await (const event of parseOpenAIChatGptResponsesSse(response)) {
+      events.push(event);
+    }
+    expect(events).toEqual([precedingEvent, completedEvent]);
+  });
+
+  it("rejects a malformed EOF frame after a valid event", async () => {
+    const iterator = parseOpenAIChatGptResponsesSse(
+      new Response(`data: ${serializedCompletedEvent}\n\ndata: {not-json`),
+    );
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: completedEvent });
+    await expect(iterator.next()).rejects.toThrow(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  });
+
+  it.each(["", ": heartbeat", "data:", "data: [DONE]"])(
+    "ignores the EOF residue %j without duplicating the preceding event",
+    async (tail) => {
+      const events = [];
+      for await (const event of parseOpenAIChatGptResponsesSse(
+        new Response(`data: ${serializedCompletedEvent}\n\n${tail}`),
+      )) {
+        events.push(event);
+      }
+      expect(events).toEqual([completedEvent]);
+    },
+  );
+
+  it.each(["\n\n", ""])(
+    "preserves consumer failures after a frame ending with %j",
+    async (ending) => {
+      const response = new Response(`data: ${serializedCompletedEvent}${ending}`);
+      const iterator = parseOpenAIChatGptResponsesSse(response);
+      const failure = new SyntaxError("consumer failed");
+      await expect(iterator.next()).resolves.toEqual({ done: false, value: completedEvent });
+      await expect(iterator.throw(failure)).rejects.toBe(failure);
+      expect(response.body?.locked).toBe(false);
+    },
+  );
+
+  it("releases the response reader when upstream cancellation remains pending", async () => {
+    let cancelStarted = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${serializedCompletedEvent}\n\n`));
+      },
+      cancel() {
+        cancelStarted = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    const iterator = parseOpenAIChatGptResponsesSse(new Response(body))[Symbol.asyncIterator]();
+
+    await expect(settleWithin(iterator.next(), "first response event")).resolves.toEqual({
+      done: false,
+      value: completedEvent,
+    });
+    await expect(
+      settleWithin(iterator.return(undefined), "terminal iterator cleanup"),
+    ).resolves.toEqual({ done: true, value: undefined });
+    expect(cancelStarted).toBe(true);
+
+    const replacementReader = body.getReader();
+    replacementReader.releaseLock();
   });
 });

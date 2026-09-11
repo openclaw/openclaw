@@ -3,14 +3,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-function swapAsciiCase(value: string): string {
+export function swapAsciiCase(value: string): string {
   return value.replace(/[A-Za-z]/g, (char) => {
     const lower = char.toLowerCase();
     return char === lower ? char.toUpperCase() : lower;
   });
 }
 
-function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
+// Case probes compare dev and ino exactly; zero values are never wildcards.
+export function sameFsObject(
+  a: Pick<fs.Stats, "dev" | "ino">,
+  b: Pick<fs.Stats, "dev" | "ino">,
+): boolean {
   return a.dev === b.dev && a.ino === b.ino;
 }
 
@@ -78,17 +82,27 @@ function platformDefault(): boolean {
   return process.platform === "darwin" || process.platform === "win32";
 }
 
-function probeDirectory(dir: string): boolean | undefined {
-  return probeDirectoryContents(dir) ?? probeDirectoryWithTemporaryEntry(dir);
+function probeDirectory(dir: string, allowTemporaryProbe: boolean): boolean | undefined {
+  return (
+    probeDirectoryContents(dir) ??
+    (allowTemporaryProbe ? probeDirectoryWithTemporaryEntry(dir) : undefined)
+  );
 }
 
 /** Resolves path-local case semantics, or undefined when the filesystem cannot be probed. */
-export function tryResolvePathCaseInsensitive(value: string): boolean | undefined {
+export function tryResolvePathCaseInsensitive(
+  value: string,
+  options: { allowTemporaryProbe?: boolean } = {},
+): boolean | undefined {
+  const allowTemporaryProbe = options.allowTemporaryProbe !== false;
   const resolved = path.resolve(value);
   try {
     fs.lstatSync(resolved);
     const parent = path.dirname(resolved);
-    return probeDirectoryEntry(parent, path.basename(resolved)) ?? probeDirectory(parent);
+    return (
+      probeDirectoryEntry(parent, path.basename(resolved)) ??
+      probeDirectory(parent, allowTemporaryProbe)
+    );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
@@ -106,7 +120,7 @@ export function tryResolvePathCaseInsensitive(value: string): boolean | undefine
     }
     if (isDirectory) {
       try {
-        return probeDirectory(candidate);
+        return probeDirectory(candidate, allowTemporaryProbe);
       } catch {
         return undefined;
       }

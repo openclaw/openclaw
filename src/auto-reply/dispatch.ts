@@ -145,9 +145,9 @@ function bindReplyPayloadRunState(
   const onAgentRunStart = replyOptions?.onAgentRunStart;
   return {
     ...replyOptions,
-    onAgentRunStart: (runId, executionIdentityToken) => {
-      runState.runId = runId;
-      onAgentRunStart?.(runId, executionIdentityToken);
+    onAgentRunStart: (...args) => {
+      runState.runId = args[0];
+      return onAgentRunStart?.(...args);
     },
   };
 }
@@ -193,7 +193,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
 }
 
 type DispatchInboundResult = DispatchFromConfigResult;
-export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
+export { settleReplyDispatcher } from "./dispatch-dispatcher.js";
 
 /** Dispatches one finalized inbound message through reply resolution and queued delivery. */
 export async function dispatchInboundMessage(params: {

@@ -15,9 +15,9 @@ The hook ships disabled. Enable it first:
 openclaw hooks enable boot-md
 ```
 
-If a checklist item sends a message, use the message tool, then reply with the exact silent token `NO_REPLY` (case-insensitive).
+This hook turns off normal final-response delivery. If a checklist item sends a message, use the message tool. Name a channel and a target in each call. Then reply with the silent token `NO_REPLY`, in any letter case.
 
 ## Related
 
 - [Agent workspace](/concepts/agent-workspace)
-- [Hooks](/automation/hooks#boot-md)
+- [Hooks](/automation/hooks/bundled-hooks#boot-md)

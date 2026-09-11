@@ -295,6 +295,25 @@ describe("check-database-first-legacy-stores", () => {
     expect(copiedUriViolations).toEqual([{ kind: "legacy exec approvals reference", line: 1 }]);
   });
 
+  it("preserves boundary family order and distinct duplicate policies in migration paths", () => {
+    const content = String.raw`
+      type ApprovalPath = "exec\x2dapprovals.json";
+      const sentinels = ["restart-sentinel.json", "restart-sentinel.json"];
+      type SentinelPath = "restart\x2dsentinel.json";
+      const approvals = ["exec-approvals.json", "exec-approvals.json"];
+    `;
+
+    expect(
+      collectDatabaseFirstLegacyStoreViolations(content, "src/commands/doctor/boundaries.ts"),
+    ).toEqual([
+      { kind: "legacy restart sentinel reference", line: 3 },
+      { kind: "legacy restart sentinel reference", line: 4 },
+      { kind: "legacy exec approvals reference", line: 2 },
+      { kind: "legacy exec approvals reference", line: 5 },
+      { kind: "legacy exec approvals reference", line: 5 },
+    ]);
+  });
+
   // Legacy paths and literal propagation.
   it.each(
     namedCases({
@@ -3190,6 +3209,21 @@ describe("check-database-first-legacy-stores", () => {
       `("aliased-top-level-wrapper-closed-over-module-var.ts", []),
 
       // Object-backed wrapper discovery and alias tracking.
+      "keeps fs-safe store aliases copied into their own descendant": privateStoreCase`
+        const stores = { state: privateFileStore(stateDir) };
+        stores.child = { ...stores };
+        await stores.child.state.writeJson("thread-bindings.json", {});
+      `("descendant-fs-safe-store-spread.ts", filesystemWriteViolations(5)),
+      "keeps wrapper aliases copied into their own descendant": fsCase`
+        const writer = {
+          save(filePath) {
+            return fs.writeFile(filePath, "");
+          },
+        };
+        writer.child = { nested: writer };
+        await writer.child.nested.save("sessions.json");
+      `("descendant-wrapper-object-alias.ts", filesystemWriteViolations(9)),
+
       "flags object method wrappers": atomicCase`
         const writer = {
           persist(params: { filePath: string }) {

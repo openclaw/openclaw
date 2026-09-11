@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkboardBoardMetadata,
-  WorkboardChange,
   WorkboardCard,
   WorkboardEvent,
   WorkboardLink,
@@ -9,13 +8,11 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isWorkboardCardStore } from "./persistence-types.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
-  WorkboardBoardCardAggregate,
   WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
@@ -35,7 +32,6 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
-import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import {
   invertWorkboardCardMutation,
   invertWorkboardWorkspaceMutation,
@@ -76,6 +72,7 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
+import { WorkboardStoreRuntime } from "./store-runtime.js";
 
 type WorkboardUpdateCardOptions = {
   allowAutomationLaunch?: boolean;
@@ -95,63 +92,29 @@ type WorkboardMutationJournalEntry = {
 
 const WORKBOARD_CAS_ATTEMPTS = 3;
 
-export class WorkboardCoreStore {
-  private mutationQueue: Promise<unknown> = Promise.resolve();
+export class WorkboardCoreStore extends WorkboardStoreRuntime {
   private lastNotificationSequence = 0;
-  private readonly changes: WorkboardChangeTracker;
-  private readonly cardStore?: WorkboardCardStore;
   private compensationJournal?: WorkboardMutationJournalEntry[];
-  protected readonly store: WorkboardKeyedStore;
+  protected readonly store: WorkboardCardStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 
   constructor(
-    store: WorkboardKeyedStore,
+    store: WorkboardCardStore,
     stores: {
-      boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
-      subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
-      attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+      subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+      attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
       dataVersion?: () => number;
-    } = {},
+      close?: () => void;
+    },
   ) {
-    this.changes = new WorkboardChangeTracker(stores.dataVersion);
-    if (isWorkboardCardStore(store)) {
-      this.cardStore = this.changes.trackCardStore(store);
-      this.store = this.cardStore;
-    } else {
-      this.store = this.changes.track(store);
-    }
-    this.boardStore = this.changes.track(
-      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
-    );
-    this.subscriptionStore =
-      stores.subscriptions ??
-      (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>);
-    this.attachmentStore =
-      stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>);
-  }
-
-  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
-    return this.changes.subscribe(listener);
-  }
-
-  announceChangeEpoch(): void {
-    this.changes.announceEpoch();
-  }
-
-  reconcileExternalChanges(): boolean {
-    return this.changes.reconcileExternalChanges();
-  }
-
-  protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const runAndNotify = async () => await this.changes.runMutation(run);
-    const result = this.mutationQueue.then(runAndNotify, runAndNotify);
-    this.mutationQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await result;
+    super(stores.dataVersion, stores.close);
+    this.store = this.trackCardStore(store);
+    this.boardStore = this.track(stores.boards);
+    this.subscriptionStore = this.track(stores.subscriptions, { notifyChanges: false });
+    this.attachmentStore = this.track(stores.attachments, { notifyChanges: false });
   }
 
   protected async withCardCompensation<T>(run: () => Promise<T>): Promise<T> {
@@ -253,28 +216,11 @@ export class WorkboardCoreStore {
     card: WorkboardCard,
     expectedUpdatedAt: number,
   ): Promise<boolean> {
-    if (this.cardStore) {
-      return await this.cardStore.registerIfUpdatedAt(
-        card.id,
-        { version: 1, card },
-        expectedUpdatedAt,
-      );
-    }
-    if ((await this.get(card.id))?.updatedAt !== expectedUpdatedAt) {
-      return false;
-    }
-    await this.store.register(card.id, { version: 1, card });
-    return true;
+    return await this.store.registerIfUpdatedAt(card.id, { version: 1, card }, expectedUpdatedAt);
   }
 
   private async deleteCardIfUpdatedAt(id: string, expectedUpdatedAt: number): Promise<boolean> {
-    if (this.cardStore) {
-      return await this.cardStore.deleteIfUpdatedAt(id, expectedUpdatedAt);
-    }
-    if ((await this.get(id))?.updatedAt !== expectedUpdatedAt) {
-      return false;
-    }
-    return await this.store.delete(id);
+    return await this.store.deleteIfUpdatedAt(id, expectedUpdatedAt);
   }
 
   protected async updateLatestCard(
@@ -387,15 +333,7 @@ export class WorkboardCoreStore {
         byStatus: {},
       });
     }
-    const cardAggregates: WorkboardBoardCardAggregate[] = this.cardStore
-      ? await this.cardStore.listBoardAggregates()
-      : (await this.list()).map((card) => ({
-          boardId: cardBoardId(card),
-          status: card.status,
-          total: 1,
-          archived: card.metadata?.archivedAt ? 1 : 0,
-          updatedAt: card.updatedAt,
-        }));
+    const cardAggregates = await this.store.listBoardAggregates();
     for (const aggregate of cardAggregates) {
       const boardId = aggregate.boardId;
       const summary =
@@ -635,8 +573,8 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    if (options.insertIfAbsent && this.cardStore) {
-      const inserted = await this.cardStore.registerIfAbsent(card.id, { version: 1, card });
+    if (options.insertIfAbsent) {
+      const inserted = await this.store.registerIfAbsent(card.id, { version: 1, card });
       if (!inserted) {
         const winner = await this.get(card.id);
         if (!winner) {
@@ -891,45 +829,35 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    if (this.cardStore) {
-      const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
-      if (options.ownerSlot) {
-        const result = await this.cardStore.claimIfOwnerAvailable(
-          next.id,
-          { version: 1, card: next },
-          expectedUpdatedAt,
-          options.ownerSlot.ownerId,
-          options.ownerSlot.now,
-        );
-        if (result === "owner_busy") {
-          throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
-        }
-        if (result === "updated") {
-          this.recordCardMutation(existing, next);
-          await this.deleteDetachedAttachments(existing, next);
-          return next;
-        }
-      } else if (
-        await this.cardStore.registerIfUpdatedAt(
-          next.id,
-          { version: 1, card: next },
-          expectedUpdatedAt,
-        )
-      ) {
+    const expectedUpdatedAt = options.expectedUpdatedAt ?? existing.updatedAt;
+    if (options.ownerSlot) {
+      const result = await this.store.claimIfOwnerAvailable(
+        next.id,
+        { version: 1, card: next },
+        expectedUpdatedAt,
+        options.ownerSlot.ownerId,
+        options.ownerSlot.now,
+      );
+      if (result === "owner_busy") {
+        throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);
+      }
+      if (result === "updated") {
         this.recordCardMutation(existing, next);
         await this.deleteDetachedAttachments(existing, next);
         return next;
       }
-      const current = await this.get(next.id);
-      if (!current) {
-        throw new Error(`card not found: ${id}`);
-      }
-      throw new WorkboardCardConflictError(current);
+    } else if (
+      await this.store.registerIfUpdatedAt(next.id, { version: 1, card: next }, expectedUpdatedAt)
+    ) {
+      this.recordCardMutation(existing, next);
+      await this.deleteDetachedAttachments(existing, next);
+      return next;
     }
-    await this.store.register(next.id, { version: 1, card: next });
-    this.recordCardMutation(existing, next);
-    await this.deleteDetachedAttachments(existing, next);
-    return next;
+    const current = await this.get(next.id);
+    if (!current) {
+      throw new Error(`card not found: ${id}`);
+    }
+    throw new WorkboardCardConflictError(current);
   }
 
   private async assertActiveStatusAllowed(

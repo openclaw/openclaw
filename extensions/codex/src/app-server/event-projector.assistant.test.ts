@@ -97,7 +97,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       forCurrentTurn("model/rerouted", {
         fromModel: "gpt-5.4-codex",
         toModel: "gpt-5.4-codex-mini",
-        reason: "high_risk_cyber_activity",
+        reason: "highRiskCyberActivity",
       }),
     );
     await projector.handleNotification(
@@ -116,7 +116,18 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       data: {
         fromModel: "gpt-5.4-codex",
         toModel: "gpt-5.4-codex-mini",
-        reason: "high_risk_cyber_activity",
+        reason: "highRiskCyberActivity",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "notice",
+      data: {
+        phase: "provider_policy",
+        category: "cyber",
+        state: "fallback",
+        provider: "openai",
+        model: "gpt-5.4-codex",
+        fallbackModel: "gpt-5.4-codex-mini",
       },
     });
   });
@@ -230,7 +241,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("keeps an earlier final answer when a later coda arrives with no tool work between them", async () => {
-    const projector = await createProjector(await createParams());
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
     const summary = "Read-only; inspected actual diffs, no mutations: - #122457 — Copies";
     const coda = "The summary above already incorporates the final review results.";
 
@@ -280,6 +292,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const snapshot = JSON.stringify(result.messagesSnapshot);
 
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      { stream: "assistant", data: { itemId: "answer-1", text: summary, delta: summary } },
+      { stream: "assistant", data: { itemId: "answer-2", text: coda, delta: coda } },
+    ]);
     expect(result.assistantTexts).toEqual([summary, coda]);
     expect(result.lastAssistant?.content).toEqual([
       { type: "text", text: `${summary}\n\n${coda}` },
@@ -289,7 +309,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("drops a pre-unphased final when a later final follows the replacement", async () => {
-    const projector = await createProjector(await createParams());
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -330,6 +351,16 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       ]),
     );
 
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant")
+        .map((event) => [event.data.itemId, event.data.replace]),
+    ).toEqual([
+      ["answer-1", undefined],
+      ["answer-2", true],
+      ["answer-3", true],
+    ]);
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.assistantTexts).toEqual(["Later final"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
@@ -382,6 +413,23 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(result.assistantTexts).toEqual(["Replacement draft"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
+  });
+
+  it("omits a silent completed answer from the steering transcript boundary", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "silent-before-steer",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+
+    expect(projector.buildSteeringTranscriptPrefix()).toEqual([]);
   });
 
   it("drops a pre-sleep final after a later sleep handoff", async () => {
@@ -782,8 +830,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         .map((call) => call[0])
         .filter((event) => event.stream === "assistant"),
     ).toEqual([
-      { stream: "assistant", data: { text: "hel", delta: "hel" } },
-      { stream: "assistant", data: { text: "hello", delta: "lo" } },
+      { stream: "assistant", data: { itemId: "msg-final", text: "hel", delta: "hel" } },
+      { stream: "assistant", data: { itemId: "msg-final", text: "hello", delta: "lo" } },
     ]);
   });
 
@@ -804,8 +852,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
-      { stream: "assistant", data: { text: "hel", delta: "hel", replaceable: true } },
-      { stream: "assistant", data: { text: "hello", delta: "lo", replaceable: true } },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-final", text: "hel", delta: "hel", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-final", text: "hello", delta: "lo", replaceable: true },
+      },
     ]);
   });
 
@@ -837,17 +891,36 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     ).toEqual([
       {
         stream: "assistant",
-        data: { text: "coordination ", delta: "coordination ", replaceable: true },
+        data: {
+          itemId: "msg-intermediate",
+          text: "coordination ",
+          delta: "coordination ",
+          replaceable: true,
+        },
       },
       {
         stream: "assistant",
-        data: { text: "coordination draft", delta: "draft", replaceable: true },
+        data: {
+          itemId: "msg-intermediate",
+          text: "coordination draft",
+          delta: "draft",
+          replaceable: true,
+        },
       },
       {
         stream: "assistant",
-        data: { text: "final ", delta: "", replace: true, replaceable: true },
+        data: {
+          itemId: "msg-final",
+          text: "final ",
+          delta: "",
+          replace: true,
+          replaceable: true,
+        },
       },
-      { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-final", text: "final answer", delta: "answer", replaceable: true },
+      },
     ]);
   });
 

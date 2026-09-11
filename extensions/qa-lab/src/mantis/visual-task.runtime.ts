@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements visual task behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -10,14 +9,13 @@ import {
   type CommandRunner,
   type CrabboxInspect,
   defaultCommandRunner,
-  inspectCrabbox,
+  createMantisCrabboxSession,
   resolveCrabboxBin,
   runCommand,
-  stopCrabbox,
-  warmupCrabbox,
 } from "./crabbox-runtime.js";
+import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
-export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
+type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
 export type MantisVisualTaskOptions = {
   browserUrl?: string;
@@ -96,34 +94,16 @@ type VisionAssertion = {
   visible?: boolean;
 };
 
-type MantisVisualTaskSummary = {
-  artifacts: {
+type MantisVisualTaskSummary = MantisCrabboxReportSummary & {
+  artifacts: MantisCrabboxReportSummary["artifacts"] & {
     driverResultPath: string;
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
   };
   browserUrl: string;
-  crabbox: {
-    bin: string;
-    createdLease: boolean;
-    id: string;
-    provider: string;
-    slug?: string;
-    state?: string;
-    vncCommand: string;
-  };
   driver?: MantisVisualDriverResult;
-  error?: string;
-  finishedAt: string;
-  outputDir: string;
   recording: {
     error?: string;
     required: boolean;
   };
-  startedAt: string;
-  status: "pass" | "fail";
   visionMode: MantisVisualTaskVisionMode;
 };
 
@@ -396,53 +376,31 @@ function browserLaunchScript() {
 }
 
 function renderReport(summary: MantisVisualTaskSummary) {
-  const lines = [
-    "# Mantis Visual Task",
-    "",
-    `Status: ${summary.status}`,
-    `Browser URL: ${summary.browserUrl}`,
-    `Vision mode: ${summary.visionMode}`,
-    `Output: ${summary.outputDir}`,
-    `Started: ${summary.startedAt}`,
-    `Finished: ${summary.finishedAt}`,
-    "",
-    "## Crabbox",
-    "",
-    `- Provider: ${summary.crabbox.provider}`,
-    `- Lease: ${summary.crabbox.id}${summary.crabbox.slug ? ` (${summary.crabbox.slug})` : ""}`,
-    `- Created by run: ${summary.crabbox.createdLease}`,
-    `- State: ${summary.crabbox.state ?? "unknown"}`,
-    `- VNC: \`${summary.crabbox.vncCommand}\``,
-    "",
-    "## Artifacts",
-    "",
-    summary.artifacts.screenshotPath
-      ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
-      : "- Screenshot: missing",
-    summary.artifacts.videoPath
-      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
-      : "- Video: missing",
-    `- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``,
-    "",
-    "## Vision",
-    "",
-    summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
-    summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
-    summary.driver?.vision.assertion?.visible !== undefined
-      ? `Visible: ${summary.driver.vision.assertion.visible}`
-      : undefined,
-    summary.driver?.vision.assertion?.evidence
-      ? `Evidence: ${summary.driver.vision.assertion.evidence}`
-      : undefined,
-    summary.driver?.vision.assertion?.reason
-      ? `Reason: ${summary.driver.vision.assertion.reason}`
-      : undefined,
-    summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
-    summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
-    summary.error ? `Error: ${summary.error}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
+  return renderMantisCrabboxReport({
+    afterArtifacts: [
+      "## Vision",
+      "",
+      summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
+      summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
+      summary.driver?.vision.assertion?.visible !== undefined
+        ? `Visible: ${summary.driver.vision.assertion.visible}`
+        : undefined,
+      summary.driver?.vision.assertion?.evidence
+        ? `Evidence: ${summary.driver.vision.assertion.evidence}`
+        : undefined,
+      summary.driver?.vision.assertion?.reason
+        ? `Reason: ${summary.driver.vision.assertion.reason}`
+        : undefined,
+      summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
+      summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
+      summary.error ? `Error: ${summary.error}` : undefined,
+      "",
+    ],
+    artifactRows: [`- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``],
+    headerRows: [`Browser URL: ${summary.browserUrl}`, `Vision mode: ${summary.visionMode}`],
+    summary,
+    title: "Mantis Visual Task",
+  });
 }
 
 export async function runMantisVisualDriver(
@@ -637,37 +595,25 @@ export async function runMantisVisualTask(
   const ttl = trimToValue(opts.ttl) ?? trimToValue(env[CRABBOX_TTL_ENV]) ?? DEFAULT_TTL;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
-  const createdLease = explicitLeaseId === undefined;
   const browserUrl = trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL;
   const expectText = trimToValue(opts.expectText);
   const visionMode = normalizeVisionMode(opts.visionMode);
   const visionPrompt = buildVisionPrompt(opts.visionPrompt, expectText);
   const runner = opts.commandRunner ?? defaultCommandRunner;
-  let leaseId = explicitLeaseId;
+  const session = createMantisCrabboxSession({
+    crabboxBin,
+    cwd: repoRoot,
+    env,
+    leaseId: explicitLeaseId,
+    provider,
+    runner,
+  });
   let inspected: CrabboxInspect = {};
   let summary: MantisVisualTaskSummary | undefined;
 
   try {
-    leaseId =
-      leaseId ??
-      (await warmupCrabbox({
-        crabboxBin,
-        cwd: repoRoot,
-        env,
-        idleTimeout,
-        machineClass,
-        provider,
-        runner,
-        ttl,
-      }));
-    inspected = await inspectCrabbox({
-      crabboxBin,
-      cwd: repoRoot,
-      env,
-      leaseId,
-      provider,
-      runner,
-    });
+    const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
+    inspected = await session.inspect();
     let recordingError: string | undefined;
     const activeLeaseId = leaseId;
     if (!activeLeaseId) {
@@ -736,15 +682,7 @@ export async function runMantisVisualTask(
         videoPath: copiedVideo,
       },
       browserUrl,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId,
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`,
-      },
+      crabbox: session.describe(inspected),
       driver,
       error: recordingFailure,
       finishedAt: new Date().toISOString(),
@@ -774,17 +712,7 @@ export async function runMantisVisualTask(
         videoPath: (await pathExists(videoPath)) ? videoPath : undefined,
       },
       browserUrl,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId ?? "unallocated",
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: leaseId
-          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
-          : "unallocated",
-      },
+      crabbox: session.describe(inspected),
       error: formatErrorMessage(error),
       finishedAt: new Date().toISOString(),
       outputDir,
@@ -810,8 +738,8 @@ export async function runMantisVisualTask(
       await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
-    if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+      await session.stop();
     }
   }
 }

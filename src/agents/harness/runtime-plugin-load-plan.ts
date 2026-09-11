@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+import { normalizePluginsConfigWithResolverCore } from "../../plugins/config-normalization-shared.js";
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
@@ -19,10 +20,6 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  loadPluginRegistrySnapshot,
-  normalizePluginsConfigWithRegistry,
-} from "../../plugins/plugin-registry.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -62,19 +59,16 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
 
 function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
-  workspaceDir: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): string[] {
-  // Honor config-owned test defaults before discovery forces an implicit memory owner.
   if (isTestDefaultMemorySlotDisabled(params.config ?? {})) {
     return [];
   }
-  const registry = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.metadataSnapshot?.workspaceDir ?? params.workspaceDir,
-    ...(params.metadataSnapshot ? { index: params.metadataSnapshot.index } : {}),
-  });
-  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  // The generation owns aliases; activation still follows this call's config.
+  const plugins = normalizePluginsConfigWithResolverCore(
+    params.config?.plugins,
+    params.metadataSnapshot.normalizePluginId,
+  );
   const memorySlot = plugins.slots.memory;
   if (
     typeof memorySlot !== "string" ||
@@ -82,7 +76,9 @@ function resolveSelectedMemoryPluginIds(params: {
   ) {
     return [];
   }
-  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
+  const plugin = params.metadataSnapshot.index.plugins.find(
+    (entry) => entry.pluginId === memorySlot,
+  );
   if (!plugin?.startup.memory) {
     return [];
   }
@@ -100,9 +96,12 @@ function resolveSelectedMemoryPluginIds(params: {
 export function resolveAgentRuntimePluginSelections(
   config: OpenClawConfig | undefined,
   selections: readonly AgentHarnessPluginSelection[],
+  configuredHarnessRuntimes: readonly string[] = collectConfiguredAgentHarnessRuntimes(
+    config ?? {},
+  ),
 ): AgentHarnessPluginSelection[] {
   return [
-    ...collectConfiguredAgentHarnessRuntimes(config ?? {}).map((runtime) => ({
+    ...configuredHarnessRuntimes.map((runtime) => ({
       runtime,
       provider: "",
       modelId: "",
@@ -167,7 +166,7 @@ export function createAgentRuntimeMetadataPluginIdScope(params: {
   workspaceDir: string;
   selections: readonly AgentHarnessPluginSelection[];
   shorthandModelIds?: readonly string[];
-}): PluginMetadataSnapshotPluginIdScope {
+}): PluginMetadataSnapshotPluginIdScope & { key: string } {
   return {
     key: hashJson({
       kind: "agent-runtime",
@@ -291,7 +290,7 @@ export function resolveSelectedAgentHarnessRuntime(
 }
 
 // Returns whether a selection needs a plugin-owned harness in its prepared generation.
-function requiresAgentHarnessPluginSelection(
+export function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {
@@ -313,12 +312,11 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   workspaceDir: string;
   basePluginIds?: readonly string[];
   selections: readonly AgentHarnessPluginSelection[];
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): { config?: OpenClawConfig; pluginIds?: string[] } {
   let config = params.config;
   const memoryPluginIds = resolveSelectedMemoryPluginIds({
     config: params.config,
-    workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
   const contextEnginePluginId = resolveSelectedContextEnginePluginId(params.config);

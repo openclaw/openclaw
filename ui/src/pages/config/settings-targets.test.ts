@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
+import { loadControlUiSourceCatalog } from "../../../../scripts/lib/control-ui-i18n-catalog.ts";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
@@ -26,11 +28,23 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      [
+        "meetingCapture",
+        "/settings/communications",
+        "?section=transcripts",
+        "#settings-communications-meeting-capture",
+      ],
+      ["meetings", "/meetings", "", ""],
+      ["device", "/settings/device", "", ""],
+      ["devicePermissions", "/settings/device/permissions", "", ""],
+      ["deviceTalk", "/settings/talk", "", ""],
+      ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
       ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
+      ["githubConnections", "/settings/profile", "", "#settings-profile-github-connections"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
       [
         "appearanceLanguage",
@@ -90,9 +104,14 @@ describe("settings search target manifest", () => {
   });
 
   it("indexes only translation keys present in the English source catalog", () => {
+    const source = flattenTranslations(loadControlUiSourceCatalog());
     for (const target of targets) {
-      for (const key of [target.labelKey, ...target.searchKeys]) {
-        expect(t(key), `Missing settings search translation: ${key}`).not.toBe(key);
+      for (const key of [
+        target.labelKey,
+        ...target.searchKeys,
+        ...Object.keys(target.nativeSearchKeys ?? {}),
+      ]) {
+        expect(source.has(key), `Missing settings search translation: ${key}`).toBe(true);
       }
     }
   });
@@ -115,11 +134,11 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts"]],
-    ["appearance", ["__appearance__", "ui", "wizard"]],
+    ["communications", ["messages", "tts", "transcripts"]],
+    ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
+    ["automation", ["commands", "hooks", "bindings", "cron"]],
     ["mcp", ["mcp"]],
     ["memory", ["memory"]],
     ["talk", ["talk"]],
@@ -140,13 +159,19 @@ describe("settings config section ownership", () => {
     const sections = pages.flatMap(([, pageSections]) => pageSections);
 
     expect(new Set(sections).size).toBe(sections.length);
-    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual(sections.toSorted());
+    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
   });
 
   it("keeps uncurated sections on Advanced", () => {
+    expect(configPageForSection("wizard")).toBe("advanced");
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");
+  });
+
+  it("routes plugin policy to the dedicated plugin settings page", () => {
+    expect(configPageForSection("plugins")).toBe("plugin-settings");
+    expect(SCOPED_CONFIG_SECTION_KEYS.has("plugins")).toBe(true);
   });
 
   it("keeps Advanced free of a curated include list", () => {

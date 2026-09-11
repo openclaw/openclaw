@@ -6,7 +6,10 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMetaForEntry,
+  resolveSessionStorePathForAcp,
+} from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
@@ -15,7 +18,7 @@ import {
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
 } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -154,18 +157,11 @@ function resolveStatusModelComparisonLabel(params: {
 }
 
 function resolveSessionModelRef(
-  cfg: OpenClawConfig,
+  resolved: { provider: string; model: string },
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = resolveConfiguredStatusModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    agentId,
-  });
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
   const providerlessPersisted =
     resolveProviderlessPersistedStatusModelRef({
@@ -210,7 +206,18 @@ function resolveSessionRuntime(params: {
         sessionKey: params.sessionKey,
       })
     : params.sessionKey;
-  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
+  const { agentId: acpAgentId } = resolveSessionStorePathForAcp({
+    cfg: params.cfg,
+    sessionKey: acpSessionKey,
+  });
+  // The summary already captured the session generation. Rereading its store
+  // could pair runtime metadata with a replacement row and reopen cold history.
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg: params.cfg,
+    sessionKey: acpSessionKey,
+    agentId: acpAgentId,
+    entry: params.entry,
+  });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",

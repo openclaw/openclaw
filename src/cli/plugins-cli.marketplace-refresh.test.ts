@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
@@ -15,7 +16,7 @@ const mocks = vi.hoisted(() => {
     writeJson: vi.fn(),
   };
   return {
-    clearManagedPluginOfficialCatalogCache: vi.fn(),
+    clearManagedPluginCatalogCache: vi.fn(),
     defaultRuntime,
     getRuntimeConfig: vi.fn(),
     loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
@@ -39,8 +40,8 @@ vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
 }));
 
-vi.mock("../plugins/management-service.js", () => ({
-  clearManagedPluginOfficialCatalogCache: mocks.clearManagedPluginOfficialCatalogCache,
+vi.mock("../plugins/management-catalog.js", () => ({
+  clearManagedPluginCatalogCache: mocks.clearManagedPluginCatalogCache,
 }));
 
 vi.mock("./plugins-update-gateway-signal.js", () => ({
@@ -53,6 +54,7 @@ async function createTimelinePath(): Promise<string> {
 }
 
 async function readTimeline(pathname: string): Promise<Record<string, unknown>[]> {
+  flushDiagnosticsTimeline();
   const content = await readFile(pathname, "utf8");
   return content
     .trim()
@@ -68,12 +70,13 @@ describe("plugins marketplace refresh", () => {
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.getRuntimeConfig.mockReset();
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockReset();
-    mocks.clearManagedPluginOfficialCatalogCache.mockReset();
+    mocks.clearManagedPluginCatalogCache.mockReset();
     mocks.notifyGatewayPluginMetadataChanged.mockReset().mockResolvedValue(true);
     vi.unstubAllEnvs();
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
     vi.unstubAllEnvs();
   });
 

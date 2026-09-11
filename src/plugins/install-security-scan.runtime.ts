@@ -18,6 +18,10 @@ import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
+  InstallSecurityScanResult,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.js";
+import type {
   InstallPolicyWarningDetails,
   InstallSafetyOverrides,
 } from "./install-security-scan.types.js";
@@ -90,30 +94,6 @@ type PackageTraversalLimits = {
 type InstalledPackageScanRoot = {
   packageDir: string;
   realPath: string;
-};
-
-type SkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type InstallSecurityScanResult = {
-  blocked?: {
-    code?: "security_scan_blocked" | "security_scan_failed";
-    reason: string;
-    installPolicyWarning?: InstallPolicyWarningDetails;
-  };
 };
 
 function failOversizedInstallPolicyWarning(params: {
@@ -582,7 +562,7 @@ async function runBeforeInstallHook(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -719,7 +699,6 @@ function shouldBypassOpenClawInstallFriction(params: {
 
 async function runOperatorInstallPolicy(params: {
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
@@ -733,7 +712,7 @@ async function runOperatorInstallPolicy(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file" | "dependency-tree";
@@ -927,7 +906,6 @@ export async function scanBundleInstallSourceRuntime(
   const runPolicy = () =>
     runOperatorInstallPolicy({
       config: params.config,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: { type: "plugin-bundle", ...(params.version ? { version: params.version } : {}) },
@@ -1000,7 +978,6 @@ export async function scanPackageInstallSourceRuntime(
   const runPolicy = () =>
     runOperatorInstallPolicy({
       config: params.config,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: {
@@ -1133,7 +1110,6 @@ export async function scanFileInstallSourceRuntime(
 ): Promise<InstallSecurityScanResult | undefined> {
   const policyResult = await runOperatorInstallPolicy({
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-file" },
@@ -1177,7 +1153,6 @@ export async function scanFileInstallSourceRuntime(
 
 export async function preflightPluginNpmInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
@@ -1191,7 +1166,6 @@ export async function preflightPluginNpmInstallPolicyRuntime(params: {
   const pluginId = params.pluginId ?? params.packageName;
   return await runOperatorInstallPolicy({
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-npm", packageName: params.packageName },
@@ -1213,7 +1187,6 @@ export async function preflightPluginNpmInstallPolicyRuntime(params: {
 
 export async function preflightPluginGitInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
@@ -1224,7 +1197,6 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 }): Promise<InstallSecurityScanResult | undefined> {
   return await runOperatorInstallPolicy({
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-git" },
@@ -1246,7 +1218,7 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
-  installSpec?: SkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
   mode?: "install" | "update";
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];

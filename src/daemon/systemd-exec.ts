@@ -2,9 +2,11 @@
 import * as fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
-import { execFileUtf8 } from "./exec-file.js";
+import { execFileUtf8, type ExecResult } from "./exec-file.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
@@ -19,7 +21,7 @@ async function execSystemdCommand(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string; code: number }> {
+): Promise<ExecResult> {
   return await execFileUtf8(command, args, {
     env: env ? resolveSystemctlProcessEnv(env) : process.env,
     // A wedged systemd socket can leave manager commands blocked forever; the timeout
@@ -32,18 +34,45 @@ export async function execSystemctl(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string; code: number }> {
+): Promise<ExecResult> {
   return await execSystemdCommand("systemctl", args, env, timeoutMs);
 }
 
+/** System-manager reads never inherit user-bus routing. */
+export async function execBusctlSystem(args: string[], timeoutMs?: number): Promise<ExecResult> {
+  return await execSystemdCommand("busctl", ["--system", ...args], undefined, timeoutMs);
+}
+
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  // Concatenate both streams so pattern matchers (isSystemdUnitNotEnabled,
-  // isSystemctlMissing) can see the unit status from stdout even when
-  // execFileUtf8 populates stderr with the Node error message fallback.
+  // Unit status can be in stdout while stderr contains a launcher diagnostic.
   return `${result.stderr} ${result.stdout}`.trim();
 }
 
-export const isSystemctlMissing = isSystemctlMissingDetail;
+export function systemdInspectionError(
+  result: ExecResult,
+  fallback: string,
+  scope: SystemdUnitScope = "user",
+): Error {
+  if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
+    return new ServiceInspectionError("service-manager-access-denied");
+  }
+  if (
+    scope === "user" &&
+    result.termination === "exit" &&
+    isSystemdUserBusUnavailableDetail(readSystemctlDetail(result))
+  ) {
+    return new ServiceInspectionError("systemd-user-bus-unavailable");
+  }
+  return new Error(fallback);
+}
+
+export function isSystemctlMissing(result: ExecResult): boolean {
+  return (
+    result.errorCode === "ENOENT" ||
+    result.errorCode === "EACCES" ||
+    (result.termination === "exit" && isSystemctlMissingDetail(readSystemctlDetail(result)))
+  );
+}
 
 export function isSystemdUnitNotEnabled(detail: string): boolean {
   if (!detail) {
@@ -114,10 +143,6 @@ export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
-}
-
-function resolveSystemctlDirectUserScopeArgs(): string[] {
-  return ["--user"];
 }
 
 function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
@@ -210,6 +235,11 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/** True when root-owned paths would be paired with the sudo caller's user manager. */
+export function hasSudoToRootSystemdUserManagerMismatch(env: GatewayServiceEnv): boolean {
+  return resolveSystemctlUserScope(env).preferMachineScope;
+}
+
 /**
  * Resolves the account whose user manager owns the service operation.
  * Keep linger diagnostics on this identity so sudo never checks root while
@@ -243,10 +273,27 @@ async function execSystemdUserCommand(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string; code: number }> {
+  assertCurrent?: () => void,
+): Promise<ExecResult> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  const run = (scopeArgs: string[]) =>
-    execSystemdCommand(command, [...scopeArgs, ...args], env, timeoutMs);
+  const deadline =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? performance.now() + timeoutMs
+      : undefined;
+  const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+    assertCurrent?.();
+    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+    if (remaining !== undefined && remaining <= 0) {
+      return {
+        code: 1,
+        termination: "timeout",
+        stdout: "",
+        stderr: "systemd user manager command deadline expired",
+      };
+    }
+    // The machine fallback is part of this operation, not a fresh timeout budget.
+    return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
+  };
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
@@ -257,13 +304,17 @@ async function execSystemdUserCommand(
     }
   }
 
-  const directResult = await run(resolveSystemctlDirectUserScopeArgs());
+  const directResult = await run(["--user"]);
   if (directResult.code === 0) {
     return directResult;
   }
 
-  const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
-  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
+  const detail = readSystemctlDetail(directResult);
+  if (
+    directResult.termination !== "exit" ||
+    !machineUser ||
+    !shouldFallbackToMachineUserScope(detail)
+  ) {
     return directResult;
   }
 
@@ -278,16 +329,18 @@ export async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execSystemdUserCommand("systemctl", env, args, timeoutMs);
+  assertCurrent?: () => void,
+): Promise<ExecResult> {
+  return await execSystemdUserCommand("systemctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function execBusctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execSystemdUserCommand("busctl", env, args, timeoutMs);
+  assertCurrent?: () => void,
+): Promise<ExecResult> {
+  return await execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function disableSystemdUserUnitForRemoval(
@@ -299,14 +352,17 @@ export async function disableSystemdUserUnitForRemoval(
     return;
   }
   const detail = readSystemctlDetail(result);
-  if (isSystemdUnitAlreadyMissingOrInactive(detail, unitName)) {
+  if (result.termination === "exit" && isSystemdUnitAlreadyMissingOrInactive(detail, unitName)) {
     return;
   }
   throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
 }
 
-export async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"]);
+export async function reloadSystemdUserManager(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
@@ -318,28 +374,29 @@ export async function isSystemdUserServiceAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<boolean> {
   const res = await execSystemctlUser(env, ["status"]);
-  if (res.code === 0) {
-    return true;
-  }
-  const detail = `${res.stderr} ${res.stdout}`.trim();
-  if (!detail) {
-    return false;
-  }
-  return !isSystemdUserScopeUnavailable(detail);
+  const detail = readSystemctlDetail(res);
+  return (
+    res.termination === "exit" &&
+    (res.code === 0 || (Boolean(detail) && !isSystemdUserScopeUnavailable(detail)))
+  );
 }
 
 export async function isSystemdUnitActive(
   env: GatewayServiceEnv,
   unitName: string,
   scope: SystemdUnitScope = "user",
-): Promise<boolean> {
+): Promise<Result<boolean, string>> {
   const normalizedUnit = unitName.trim();
   if (!normalizedUnit) {
-    return false;
+    return ok(false);
   }
   const args = ["is-active", "--quiet", normalizedUnit];
   const res = scope === "system" ? await execSystemctl(args) : await execSystemctlUser(env, args);
-  return res.code === 0;
+  // is-active uses 3 for not-active and 4 for missing; query failures exit 1.
+  if (res.termination === "exit" && [0, 3, 4].includes(res.code)) {
+    return ok(res.code === 0);
+  }
+  return err(readSystemctlDetail(res) || `systemctl is-active exited with code ${res.code}`);
 }
 
 export async function assertSystemdAvailable(
@@ -351,22 +408,90 @@ export async function assertSystemdAvailable(
     return;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail)) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+  if (isSystemctlMissing(res)) {
+    throw systemdInspectionError(
+      res,
+      "systemctl not available; systemd user services are required on Linux.",
+    );
   }
-  if (!detail) {
-    throw new Error("systemctl --user unavailable: unknown error");
-  }
-  if (!isSystemdUserScopeUnavailable(detail)) {
+  if (res.termination === "exit" && detail && !isSystemdUserScopeUnavailable(detail)) {
     return;
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw systemdInspectionError(
+    res,
+    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
   const res = await execSystemctlUser(env, ["status"]);
-  if (res.code === 0) {
-    return true;
+  // Cleanup uses false to permit file-only removal. An interrupted status probe
+  // must still attempt disable before removing a potentially loaded unit.
+  return res.code === 0 || !isSystemctlMissing(res);
+}
+
+/** Authenticate the existing unique manager owner before loading a bound unit.
+ * The caller supplies its deadline- and custody-checked D-Bus query. */
+export async function bindSystemdManagerOwner(
+  query: (args: string[], signatures: string[]) => Promise<unknown[] | null>,
+  managerUid: number,
+  unavailable: () => Error,
+): Promise<{ destination: string; verify: () => Promise<void> }> {
+  const manager = "org.freedesktop.systemd1";
+  const readOwner = async () => {
+    const [value] =
+      (await query(
+        [
+          "call",
+          "org.freedesktop.DBus",
+          "/org/freedesktop/DBus",
+          "org.freedesktop.DBus",
+          "GetNameOwner",
+          "s",
+          manager,
+        ],
+        ["s"],
+      )) ?? [];
+    if (
+      !Array.isArray(value) ||
+      value.length !== 1 ||
+      typeof value[0] !== "string" ||
+      !/^:[0-9]+\.[0-9]+$/.test(value[0])
+    ) {
+      throw unavailable();
+    }
+    return value[0];
+  };
+  const destination = await readOwner();
+  const [uid] =
+    (await query(
+      [
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixUser",
+        "s",
+        destination,
+      ],
+      ["u"],
+    )) ?? [];
+  if (
+    !Number.isInteger(managerUid) ||
+    managerUid < 0 ||
+    managerUid >= 0xffffffff ||
+    !Array.isArray(uid) ||
+    uid.length !== 1 ||
+    uid[0] !== managerUid
+  ) {
+    throw unavailable();
   }
-  return !isSystemctlMissing(readSystemctlDetail(res));
+  return {
+    destination,
+    async verify() {
+      if (destination !== (await readOwner())) {
+        throw unavailable();
+      }
+    },
+  };
 }

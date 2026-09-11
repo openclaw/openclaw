@@ -131,6 +131,7 @@ internal data class WearModelList(
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
+  val refreshFailed: Boolean = false,
 )
 
 internal data class WearModelSelection(
@@ -287,14 +288,17 @@ internal class WearGatewayRepository(
   suspend fun models(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
+    sessionKey: String,
     selectedModelRef: String? = null,
     query: String? = null,
   ): WearModelList {
     capabilities.require(WearProxyCapability.ModelControls)
+    capabilities.require(WearProxyCapability.SessionScopedModelCatalog)
     val response =
       requester.request(
         WearRpcMethod.ModelsList,
         buildJsonObject {
+          put("sessionKey", sessionKey)
           selectedModelRef?.let { put("selectedModelRef", it) }
           if (WearProxyCapability.ModelCatalogSearch in capabilities) {
             query?.takeIf(String::isNotBlank)?.let { put("query", it) }
@@ -309,6 +313,7 @@ internal class WearGatewayRepository(
         (result["models"] as? JsonArray)
           .orEmpty()
           .mapNotNull(::parseModel),
+      refreshFailed = result.boolean("refreshFailed") ?: false,
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
@@ -539,8 +544,14 @@ private fun parseAgentPulseTasks(element: JsonElement?): WearAgentPulseTasks {
         recentAtLimit = source.requiredBoolean("recentAtLimit"),
       )
     }
-    "unavailable" -> WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
-    else -> invalidAgentPulse()
+
+    "unavailable" -> {
+      WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -561,12 +572,19 @@ private fun parseAgentPulseSwarm(element: JsonElement?): WearAgentPulseSwarm {
         morePhases = source.requiredBoolean("morePhases"),
       )
     }
+
     "idle" -> {
       if (source.string("scope") != "selected-session") invalidAgentPulse()
       WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Idle)
     }
-    "unavailable" -> WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Unavailable)
-    else -> invalidAgentPulse()
+
+    "unavailable" -> {
+      WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -584,14 +602,24 @@ private fun parseAgentPulsePhase(element: JsonElement): WearAgentPulsePhase {
 private fun parseAgentPulseApprovals(element: JsonElement?): WearAgentPulseApprovals {
   val source = element as? JsonObject ?: invalidAgentPulse()
   return when (source.string("state")) {
-    "ready" ->
+    "ready" -> {
       WearAgentPulseApprovals(
         state = WearAgentPulseApprovalsState.Ready,
         pending = source.nonNegativeInt("pending"),
       )
-    "refreshing" -> WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Refreshing)
-    "unavailable" -> WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Unavailable)
-    else -> invalidAgentPulse()
+    }
+
+    "refreshing" -> {
+      WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Refreshing)
+    }
+
+    "unavailable" -> {
+      WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -662,8 +690,11 @@ internal fun parseChatMessage(element: JsonElement?): WearChatMessage? {
 
 private fun contentText(element: JsonElement?): String =
   when (element) {
-    is JsonPrimitive -> element.contentOrNull.orEmpty()
-    is JsonArray ->
+    is JsonPrimitive -> {
+      element.contentOrNull.orEmpty()
+    }
+
+    is JsonArray -> {
       element
         .mapNotNull { part ->
           when (part) {
@@ -673,7 +704,11 @@ private fun contentText(element: JsonElement?): String =
           }
         }.filter { it.isNotBlank() }
         .joinToString("\n")
-    else -> ""
+    }
+
+    else -> {
+      ""
+    }
   }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyException("invalid_response", "$method returned invalid data")

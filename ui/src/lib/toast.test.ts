@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
+import { moveToastToNavDrawer, restoreToastFromNavDrawer } from "../app/navigation-surface.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -35,19 +36,33 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
+  it("keeps queued outcomes behind an unrelated replacement toast", async () => {
+    const host = await mountHost();
+
+    showToast({ message: "First completion", fifo: true });
+    showToast({ message: "Second completion", fifo: true });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("First completion");
+
+    showToast({ message: "Critical observer notice" });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Critical observer notice");
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second completion");
+  });
+
   it("uses the active modal's toast layer before the app layer", async () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");
     modal.open = true;
     document.body.append(modal);
     await modal.updateComplete;
-    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
     showToast({ message: "Above overlay" });
     await appHost.updateComplete;
 
-    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
-    expect(moveBefore.mock.contexts).toContain(modal);
+    expect(appHost.parentElement).toBe(modal);
     expect(appHost.textContent).toContain("Above overlay");
   });
 
@@ -60,14 +75,47 @@ describe("shared toast", () => {
     shadowRoot.append(modal);
     document.body.append(shadowOwner);
     await modal.updateComplete;
-    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
     showToast({ message: "Critical session notice" });
     await appHost.updateComplete;
 
-    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
-    expect(moveBefore.mock.contexts).toContain(modal);
+    expect(appHost.parentElement).toBe(modal);
     expect(appHost.textContent).toContain("Critical session notice");
+  });
+
+  it("preserves queued outcomes, placement, and the deadline across drawer handoffs", async () => {
+    vi.useFakeTimers();
+    const app = document.createElement("div");
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    const drawer = document.createElement("nav");
+    drawer.className = "shell-nav";
+    const host = document.createElement("openclaw-toast-host");
+    shell.append(drawer, host);
+    app.append(shell);
+    document.body.append(app);
+    const onDismiss = vi.fn();
+    showToast({ message: "First", durationMs: 100, onDismiss });
+    showToast({ message: "Queued", fifo: true });
+    await vi.advanceTimersByTimeAsync(40);
+
+    moveToastToNavDrawer(app);
+    await host.updateComplete;
+    expect(host.parentElement).toBe(drawer);
+    expect(host.dataset.toastPlacement).toBe("overlay");
+    expect(host.textContent).toContain("First");
+    await vi.advanceTimersByTimeAsync(40);
+    restoreToastFromNavDrawer(app);
+    await host.updateComplete;
+    expect(host.parentElement).toBe(shell);
+    expect(host.dataset.toastPlacement).toBe("shell");
+    expect(host.textContent).toContain("First");
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(20);
+    await host.updateComplete;
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
+    expect(host.textContent).toContain("Queued");
   });
 
   it("auto-dismisses after the configured duration", async () => {
@@ -87,19 +135,6 @@ describe("shared toast", () => {
     await vi.runAllTimersAsync();
     await host.updateComplete;
 
-    expect(host.querySelector(".app-toast")).toBeNull();
-  });
-
-  it("runs its action once and dismisses", async () => {
-    const host = await mountHost();
-    const onAction = vi.fn();
-    showToast({ message: "Archived", actionLabel: "Undo", onAction });
-    await host.updateComplete;
-
-    host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
-    await host.updateComplete;
-
-    expect(onAction).toHaveBeenCalledOnce();
     expect(host.querySelector(".app-toast")).toBeNull();
   });
 
@@ -134,6 +169,7 @@ describe("shared toast", () => {
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Third", onDismiss: (reason) => reasons.push(reason) });
     await host.updateComplete;

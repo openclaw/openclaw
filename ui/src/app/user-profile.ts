@@ -3,6 +3,19 @@ import type { PresenceEntry } from "../api/types.ts";
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
 export type PresencePayload = { presence: readonly PresenceEntry[] };
 
+export function sameSelfUser(
+  left: AuthenticatedUser | null | undefined,
+  right: AuthenticatedUser | null | undefined,
+): boolean {
+  return (
+    left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
+    left?.email === right?.email &&
+    left?.name === right?.name &&
+    left?.avatarUrl === right?.avatarUrl
+  );
+}
+
 export function readPresenceEntries(value: unknown): PresenceEntry[] | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -24,7 +37,7 @@ export function resolveSelfPresenceUser(
   return entry?.user?.id ? entry.user : null;
 }
 
-/** Prefers local profile edits for the current presence identity only. */
+/** Gateway state owns live identity updates and local profile edits; hello may be stale. */
 export function resolveCurrentSelfUser({
   snapshotUser,
   presenceEntries,
@@ -34,10 +47,5 @@ export function resolveCurrentSelfUser({
   presenceEntries?: readonly PresenceEntry[];
   presenceInstanceId?: string;
 }): AuthenticatedUser | null {
-  const presenceUser = resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
-  // Gateway state folds newer presence into snapshotUser, so a matching profile is
-  // either the latest presence projection or the local profile edit it should retain.
-  return snapshotUser && (!presenceUser || snapshotUser.id === presenceUser.id)
-    ? snapshotUser
-    : presenceUser;
+  return snapshotUser ?? resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
 }

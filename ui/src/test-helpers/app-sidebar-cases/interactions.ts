@@ -9,12 +9,14 @@ import {
   loadStoredHiddenSessionCatalogIds,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
+  deferred,
   mountSidebar,
+  successfulSessionPatch,
 } from "../app-sidebar.ts";
 import {
   answerConfirmDialog,
@@ -57,20 +59,20 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names session actions and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
       const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
       const tooltip = menu?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
-      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
-        `Pin session: ${label}`,
-      );
+      expect(pin?.getAttribute("aria-label")).toBe("Pin session");
+      expect(pin?.getAttribute("title")).toBe("Pin session");
       expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
       expect(menu?.hasAttribute("title")).toBe(false);
       expect(tooltip?.content).toBe("Open session menu");
@@ -217,8 +219,8 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+        { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
       ],
       { unread: true },
     );
@@ -290,6 +292,50 @@ describe("AppSidebar multi-select", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).not.toHaveBeenCalled();
+  });
+
+  it("hides an archived current thread immediately without navigating away", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKeySpy = vi.spyOn(gatewayHarness.gateway, "setSessionKey");
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:a",
+      "agent:main:b",
+    ]);
+    const pendingPatch = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockReturnValueOnce(pendingPatch.promise);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:a";
+    await sidebar.updateComplete;
+
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+    (await sessionMenu(sidebar)).querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull();
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
+
+    const result = harness.sessions.state.result;
+    harness.publishList({
+      result: result
+        ? {
+            ...result,
+            sessions: result.sessions.map((row) =>
+              row.key === "agent:main:a" ? Object.assign({}, row, { archived: true }) : row,
+            ),
+          }
+        : null,
+    });
+    pendingPatch.resolve(successfulSessionPatch("agent:main:a"));
+
+    await waitForFast(() =>
+      expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull(),
+    );
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -527,7 +573,7 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
-  it("routes terminal-preferred clicks to a typed terminal toggle", async () => {
+  it("routes terminal-preferred clicks to the main terminal page", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -538,26 +584,13 @@ describe("AppSidebar catalog session rows", () => {
       sidebar.terminalAvailable = true;
       const navigate = vi.fn();
       sidebar.onNavigate = navigate;
-      let detail: unknown;
-      const listener = (event: Event) => {
-        detail = (event as CustomEvent).detail;
-      };
-      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      try {
-        await sidebar.updateComplete;
-        // The rendered row owns this catalog even if the global selection changes
-        // before its already-rendered click handler runs.
-        (sidebar as unknown as { newSessionAgentId: string }).newSessionAgentId = "jarvis";
-        (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
-      } finally {
-        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
-      }
-      expect(detail).toEqual({
-        open: true,
-        agentId: "main",
-        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      await sidebar.updateComplete;
+      (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
+      expect(navigate).toHaveBeenCalledWith("terminal", {
+        pathname: "/terminal",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
+        hash: "",
       });
-      expect(navigate).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -595,7 +628,11 @@ describe("AppSidebar catalog session rows", () => {
       };
       await menu.updateComplete;
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
-      expect(items).toHaveLength(2);
+      expect([...items].map((item) => item.getAttribute("value"))).toEqual([
+        "viewer",
+        "terminal",
+        "delete",
+      ]);
       expect(items[1]?.disabled).toBe(true);
       const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
       expect(menuButton).not.toBeNull();
@@ -623,13 +660,13 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
       (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-      sidebar.sessionKey = "catalog:codex:gateway%3Alocal:thread-1";
+      sidebar.sessionKey = "agent:main:catalog:codex:gateway%3Alocal:thread-1";
       await sidebar.updateComplete;
 
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
       expect(active).toHaveLength(1);
       expect(active[0]?.getAttribute("data-session-key")).toBe(
-        "catalog:codex:gateway%3Alocal:thread-1",
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
       );
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
@@ -644,13 +681,13 @@ describe("AppSidebar catalog session rows", () => {
       ]
         .filter((row) => !row.closest('[data-session-section^="catalog:"]'))
         .map((row) => row.getAttribute("data-session-key"));
-      expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
+      expect(chatRows).not.toContain(sidebar.sessionKey);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("associates catalog running state with the session link description", async () => {
+  it("announces catalog running state through the leading ring", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -659,12 +696,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       const row = sidebar.querySelector('[data-session-key*="thread-running"]');
       const link = row?.querySelector("a");
-      const state = row?.querySelector(".session-row-state");
+      const ring = row?.querySelector(".sidebar-session-indicator .session-glyph__ring");
 
-      expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
+      expect(link?.hasAttribute("aria-describedby")).toBe(false);
       expect(link?.hasAttribute("title")).toBe(false);
-      expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
-      expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
+      expect(ring?.getAttribute("aria-label")).toBe("Active run");
+      expect(
+        row?.querySelector(".sidebar-recent-session__details-endcap .session-run-spinner"),
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }

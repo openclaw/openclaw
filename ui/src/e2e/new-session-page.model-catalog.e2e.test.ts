@@ -1,7 +1,9 @@
 // Covers model-catalog metadata failure and recovery on the new-session page.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -9,13 +11,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const captureCatalogRetryProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const catalogRetryProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-catalog-retry",
-);
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function catalogDiscoveryRequests(
   requests: Array<{ params?: unknown }>,
@@ -30,12 +26,202 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
-  it("selects a context window before creating a session", async () => {
+  it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
+    const page = await context.newPage();
+    const accountFitsMenu = () =>
+      page.locator("[data-chat-account-selection]").evaluate((section) => {
+        const menu = section.closest(".chat-controls__model-menu")!;
+        const bounds = menu.getBoundingClientRect();
+        const accountBounds = section.getBoundingClientRect();
+        return (
+          accountBounds.width > 0 &&
+          accountBounds.left >= bounds.left &&
+          accountBounds.right <= bounds.right
+        );
+      });
+    const account = {
+      authProfileId: "personal:person-a:anthropic:one",
+      provider: "anthropic",
+      label: "Test Person · Personal account",
+      authType: "token",
+      selected: false,
+    };
+    const model = {
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      provider: "anthropic",
+      available: true,
+    };
+    const preview = {
+      refreshFailed: true,
+      models: [model],
+      accountSelection: {
+        kind: "personal",
+        authProfileId: account.authProfileId,
+        label: account.label,
+        source: "user",
+      },
+    };
+    const gateway = await installMockGateway(page, {
+      agentModel: "anthropic/claude-haiku-4-5",
+      presenceUsers: [{ id: "person-a", name: "Test Person", self: true }],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+      methodResponses: {
+        "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
+        "models.list": {
+          cases: [
+            { match: { authProfileId: account.authProfileId }, response: preview },
+            {
+              match: {},
+              response: {
+                commands: [],
+                models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+                accountSelection: { kind: "automatic", label: "Automatic" },
+              },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:personal-account", runStarted: true },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.locator(".new-session-page__message").fill("Start with this saved account");
+      const start = page.getByRole("button", { name: "Start session" });
+      const startHint = start.locator("..");
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
+      const modelTrigger = page.locator('[data-chat-model-select="true"]');
+      await modelTrigger.click();
+      const picker = page.locator("[data-chat-account-selection]");
+      const accountTrigger = picker.locator("[data-chat-account-group-toggle]");
+      await expect.poll(() => accountTrigger.isEnabled()).toBe(true);
+      await expect
+        .poll(() => page.locator(".chat-controls__model-picker").textContent())
+        .toContain("No models available");
+      await expect.poll(accountFitsMenu).toBe(true);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "personal-account-01-no-default.png"),
+        });
+      }
+      await accountTrigger.click();
+      await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+
+      await modelTrigger.click();
+      await modelTrigger.click();
+      await expect.poll(() => accountTrigger.textContent()).toContain(account.label);
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(() => page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      await expect.poll(accountFitsMenu).toBe(true);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "personal-account-02-selected.png"),
+        });
+      }
+      await accountTrigger.click();
+      await picker.getByText("Automatic (new-chat default)", { exact: true }).click();
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
+      await expect.poll(() => accountTrigger.textContent()).toContain("Automatic");
+      await accountTrigger.click();
+      await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
+      await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await accountTrigger.click();
+      await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
+      await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
+      await page.keyboard.press("Escape");
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "Start with this saved account",
+        model: `anthropic/claude-haiku-4-5@${account.authProfileId}`,
+      });
+      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
+      expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps composer actions fixed while model metadata loads", async () => {
+    if (captureUiProof) {
+      await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
+    }
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      heldMethods: ["models.list"],
+      models: [
+        {
+          available: true,
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const modelSkeleton = page.locator(".chat-controls__model-trigger-skeleton");
+      await expect.poll(() => modelSkeleton.isVisible()).toBe(true);
+      const modelTrigger = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const actions = page.locator(".new-session-page__composer .agent-chat__composer-actions");
+      const loadingModelBox = await modelTrigger.boundingBox();
+      const loadingActionsBox = await actions.boundingBox();
+      expect(loadingModelBox).not.toBeNull();
+      expect(loadingActionsBox).not.toBeNull();
+      expect(
+        (loadingActionsBox?.x ?? 0) - ((loadingModelBox?.x ?? 0) + (loadingModelBox?.width ?? 0)),
+      ).toBeLessThan(16);
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(path.join(suite.artifactDir, "new-session-skeleton-gap"), "after.png"),
+        });
+      }
+
+      await gateway.resolveDeferred("models.list");
+      const effortPicker = page.locator(
+        ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",
+      );
+      await expect.poll(() => effortPicker.isVisible()).toBe(true);
+      const readyActionsBox = await actions.boundingBox();
+      expect(readyActionsBox).not.toBeNull();
+      expect(readyActionsBox?.x).toBeCloseTo(loadingActionsBox?.x ?? 0, 0);
+      expect(readyActionsBox?.width).toBeCloseTo(loadingActionsBox?.width ?? 0, 0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("selects a context window before creating a session", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
@@ -93,11 +279,7 @@ suite.define(() => {
   });
 
   it("shows metadata failure truthfully and recovers when the picker opens", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const models = [
       {
@@ -122,7 +304,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
       methodResponses: {
-        "chat.metadata": {
+        "models.list": {
           sequence: [
             {
               __mockError: {
@@ -139,20 +321,16 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      const errorState = page.locator('[data-chat-model-catalog-state="error"]');
-      await pollLocatorText(
-        errorState.locator(".chat-controls__model-catalog-state-label > span"),
-      ).toBe("Models unavailable");
-      expect(await errorState.count()).toBe(1);
+      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();
 
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      expect((await gateway.getRequests("chat.metadata"))[1]?.params).toMatchObject({
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      expect((await gateway.getRequests("models.list"))[1]?.params).toMatchObject({
         agentId: "main",
       });
       await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
@@ -162,12 +340,8 @@ suite.define(() => {
     }
   });
 
-  it("restores the model picker after startup-sidecars metadata becomes available", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("restores the model picker when startup publishes its catalog", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const recoveredModel = {
       available: true,
@@ -178,7 +352,7 @@ suite.define(() => {
     };
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "chat.metadata": {
+        "models.list": {
           sequence: [
             {
               __mockError: {
@@ -197,38 +371,46 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      await gateway.waitForRequest("models.list");
+      await expect
+        .poll(() => page.getByText("Models unavailable", { exact: true }).count())
+        .toBeGreaterThan(0);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
 
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
+      await expect.poll(() => modelSelect.getAttribute("aria-disabled")).toBe("false");
       await modelSelect.click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // Opening the picker consumes the recovered ready snapshot without
-      // revalidating it.
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      expect(await gateway.getRequests("chat.metadata")).toEqual([
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
-      ]);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
+      for (const request of await gateway.getRequests("models.list")) {
+        expect(request.params).toEqual({ view: "configured", agentId: "main" });
+      }
     } finally {
       await context.close();
     }
   });
 
-  it("recovers a failed CLI-agent catalog without reloading ready model metadata", async () => {
-    if (captureCatalogRetryProof) {
-      await mkdir(catalogRetryProofDir, { recursive: true });
+  it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
+    if (captureUiProof) {
+      await mkdir(path.join(suite.artifactDir, "new-session-catalog-retry"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
-      ...(captureCatalogRetryProof
-        ? { recordVideo: { dir: catalogRetryProofDir, size: { height: 900, width: 1280 } } }
+      ...(captureUiProof
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "new-session-catalog-retry"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -250,7 +432,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
       featureMethods: [
-        "chat.metadata",
+        "models.list",
         "chat.startup",
         "sessions.create",
         "sessions.dispatch",
@@ -298,13 +480,16 @@ suite.define(() => {
         ),
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
-      if (captureCatalogRetryProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(catalogRetryProofDir, "01-cli-agents-retry.png"),
-        });
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [errorState],
+          ),
+        );
       }
 
       await gateway.setMethodResponse("sessions.catalog.list", {
@@ -319,7 +504,7 @@ suite.define(() => {
                   capabilities: {
                     continueSession: false,
                     archive: false,
-                    createSession: { model: "anthropic/claude-sonnet-4-6" },
+                    startTerminal: true,
                   },
                   hosts: [],
                 },
@@ -336,7 +521,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(1);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);
@@ -349,12 +534,15 @@ suite.define(() => {
         page.locator('[data-chat-model-target="anthropic"] .chat-controls__model-option-name'),
       ).toBe("Claude Code");
       expect(await errorState.count()).toBe(0);
-      if (captureCatalogRetryProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(catalogRetryProofDir, "02-cli-agents-recovered.png"),
-        });
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "new-session-catalog-retry", "02-cli-agents-recovered.png"),
+          await takeControlUiViewportScreenshot(
+            page,
+            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            [page.locator('[data-chat-model-target="anthropic"]')],
+          ),
+        );
       }
     } finally {
       await context.close();

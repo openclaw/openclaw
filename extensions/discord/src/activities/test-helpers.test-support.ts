@@ -36,7 +36,7 @@ export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
     async update(key, updateValue) {
       const next = updateValue(values.get(key)?.value);
       if (next === undefined) {
-        return values.delete(key);
+        return false;
       }
       values.set(key, { key, value: next, createdAt: values.get(key)?.createdAt ?? Date.now() });
       return true;
@@ -51,6 +51,10 @@ export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
     },
     async delete(key) {
       return values.delete(key);
+    },
+    async deleteIf(key, predicate) {
+      const entry = values.get(key);
+      return entry !== undefined && predicate(entry.value) ? values.delete(key) : false;
     },
     async entries() {
       return [...values.values()];

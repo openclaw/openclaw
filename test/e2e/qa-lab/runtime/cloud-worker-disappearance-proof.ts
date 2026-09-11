@@ -8,9 +8,10 @@ import {
   createStaticSshWorkerProvider,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createWorkerSessionPlacementStore } from "../../../../src/gateway/worker-environments/placement-store.js";
@@ -18,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../../src/state/openclaw-state-db.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "cloud-worker-disappearance";
@@ -29,7 +31,7 @@ const INDEPENDENT_ENVIRONMENT_ID = "qa-static-worker-independent";
 const INDEPENDENT_REASON = "independent session failure";
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 type SessionIdentity = { agentId: string; sessionId: string; sessionKey: string };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -187,7 +189,17 @@ function seedUnknownWorkerState(
   const database = openOpenClawStateDatabase({ path: databasePath });
   try {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'attached', attached_session_ids_json = ? WHERE environment_id = ?",
+      )
+      .run(JSON.stringify([lost.sessionId]), ENVIRONMENT_ID);
     seedPlacement(store, lost);
+    database.db
+      .prepare(
+        "UPDATE worker_environments SET state = 'orphaned', attached_session_ids_json = '[]' WHERE environment_id = ?",
+      )
+      .run(ENVIRONMENT_ID);
     let other = store.startDispatch(isolated);
     other = store.transition({
       sessionId: isolated.sessionId,
@@ -234,9 +246,10 @@ async function runProof(options: ProducerOptions) {
   const state = createQaBusState();
   let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let verdict: Record<string, unknown> | undefined;
-  let proofError: unknown;
+  let proofError: Error | undefined;
   try {
     bus = await startQaBusServer({ state });
     mock = await startQaMockOpenAiServer();
@@ -248,7 +261,7 @@ async function runProof(options: ProducerOptions) {
     if (inspection.status !== "unknown") {
       throw new Error(`static-ssh disappearance fixture returned ${inspection.status}`);
     }
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -289,9 +302,13 @@ async function runProof(options: ProducerOptions) {
     ) {
       throw new Error("session placements did not retain their distinct environment identities");
     }
-    const firstReason = String(first.terminalReason ?? "");
-    if (!firstReason.startsWith("cloud worker disappeared:") || firstReason.length > 1_024) {
-      throw new Error(`unexpected disappearance reason: ${firstReason}`);
+    const firstReason = first.terminalReason;
+    if (
+      typeof firstReason !== "string" ||
+      !firstReason.startsWith("cloud worker disappeared:") ||
+      firstReason.length > 1_024
+    ) {
+      throw new Error(`unexpected disappearance reason: ${JSON.stringify(firstReason)}`);
     }
     if (independent.terminalReason !== INDEPENDENT_REASON || firstReason === INDEPENDENT_REASON) {
       throw new Error("independent session placements leaked terminal reasons");
@@ -359,10 +376,13 @@ async function runProof(options: ProducerOptions) {
       "utf8",
     );
   } catch (error) {
-    proofError = error;
+    proofError =
+      error instanceof Error
+        ? error
+        : new Error("cloud worker disappearance proof failed", { cause: error });
   } finally {
     const cleanup = await Promise.allSettled([
-      gateway?.stop() ?? Promise.resolve(),
+      stopQaGatewayFixture(gatewayOwner),
       bus?.stop() ?? Promise.resolve(),
       mock?.stop() ?? Promise.resolve(),
     ]);

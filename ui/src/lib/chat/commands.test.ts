@@ -2,12 +2,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
+  findInlineSlashCompletion,
   getRemoteCommandEntries,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
+  isModelIndependentChatCommand,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
@@ -16,6 +19,207 @@ import {
 
 afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("model-independent commands", () => {
+  it.each([
+    "/models",
+    "/models xai",
+    "/status",
+    "/help",
+    "/help explain this",
+    "/id",
+    "/login xai",
+    "/model",
+    "/model example/model",
+    "/model default",
+    "/model list",
+    "/model status",
+    "/model example/model -a",
+    "/model example/model --runtime native",
+    "/model example/model /think high",
+    "/clear",
+    "/export-session",
+    "/export",
+    "/new",
+    "/think high",
+    "/thinking default",
+    "/verbose full",
+    "/fast off",
+    "/usage cost",
+    "/agents",
+    "/tools verbose",
+    "/commands",
+    "/tasks",
+    "/context detail",
+    "/diagnostics",
+    "/openclaw status",
+    "/name A useful title",
+    "/allowlist",
+    "/approve sample allow-once",
+    "/export-trajectory",
+    "/subagents log 1",
+    "/session idle 1h",
+    "/config show",
+    "/debug reset",
+    "/mcp show",
+    "/plugins list",
+    "/activation mention",
+    "/send inherit",
+    "/bash echo hello",
+    "/restart",
+    "/update",
+    "/trace raw",
+    "/reasoning stream",
+    "/elevated ask",
+    "/exec host=node",
+    "/queue collect",
+    "/goal",
+    "/goal edit revised objective",
+    "/goal pause waiting",
+    "/goal done",
+    "/goal clear",
+    "/goal start",
+    "/loop",
+    "/loop help",
+    "/skill",
+    "/steer",
+    "/redirect",
+    "/btw",
+    "/acp status",
+    "/acp spawn worker",
+    "/acp cancel",
+    "/acp steer",
+    "/tts audio hello",
+  ])("admits %s without model access", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(true),
+  );
+
+  it.each([
+    "Hello",
+    "/compact",
+    "/reset",
+    "/reset soft",
+    "/unknown",
+    "Please /models",
+    "/model example/model explain this",
+    "/model example/model -a explain this",
+    "/model example/model /think high explain this",
+    "/trace raw explain this",
+    "/reasoning on explain this",
+    "/elevated ask explain this",
+    "/exec host=node explain this",
+    "/queue collect explain this",
+    "/activation mention explain this",
+    "/send on explain this",
+    "/commands explain this",
+    "/whoami explain this",
+    "/restart explain this",
+    "/goal build something",
+    "/goal start build something",
+    "/goal resume",
+    "/loop status",
+    "/loop stop",
+    "/loop 5m check status",
+    "/skill research",
+    "/dashboard",
+    "/learn",
+    "/steer continue",
+    "/redirect continue",
+    "/btw explain this",
+    "/acp steer continue",
+  ])("requires model access for %s", (command) =>
+    expect(isModelIndependentChatCommand(command)).toBe(false),
+  );
+});
+
+describe("findInlineSlashCompletion", () => {
+  it("finds slash tokens at the start or in normal prose", () => {
+    expect(findInlineSlashCompletion("/thi")).toEqual({
+      query: "thi",
+      start: 0,
+      end: 4,
+      inline: false,
+    });
+    expect(findInlineSlashCompletion("Please use /wea")).toEqual({
+      query: "wea",
+      start: 11,
+      end: 15,
+      inline: true,
+    });
+  });
+
+  it("uses the caret and replaces the complete token", () => {
+    expect(findInlineSlashCompletion("Use /weather tomorrow", 8)).toEqual({
+      query: "wea",
+      start: 4,
+      end: 12,
+      inline: true,
+    });
+    expect(findInlineSlashCompletion("/thinking please", 4)).toEqual({
+      query: "thi",
+      start: 0,
+      end: 9,
+      inline: true,
+    });
+  });
+
+  it("recognizes a trailing colon as a skill-only inline reference", () => {
+    expect(findInlineSlashCompletion("Please use /weather:")).toEqual({
+      query: "weather",
+      start: 11,
+      end: 20,
+      inline: true,
+      skillOnly: true,
+    });
+  });
+
+  it("ignores URLs, paths, and escaped double slashes", () => {
+    expect(findInlineSlashCompletion("https://example.com/wea")).toBeNull();
+    expect(findInlineSlashCompletion("Open tmp/wea")).toBeNull();
+    expect(findInlineSlashCompletion("Use //wea")).toBeNull();
+  });
+
+  it("offers every non-skill command inline and can hide them when no command owner exists", () => {
+    applyRemoteEntries([
+      {
+        name: "weather",
+        textAliases: ["/weather"],
+        description: "Weather skill",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "text",
+        acceptsArgs: true,
+      },
+    ]);
+    expect(
+      getSlashCommandCompletions("weather", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["weather"]);
+    expect(
+      getSlashCommandCompletions("reset", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["reset"]);
+    expect(
+      getSlashCommandCompletions("elevated", { inlineOnly: true }).map((entry) => entry.name),
+    ).toEqual(["elevated"]);
+    expect(
+      getSlashCommandCompletions("exec", { inlineOnly: true }).map((entry) => entry.name),
+    ).toContain("exec");
+    expect(
+      getSlashCommandCompletions("think", { inlineOnly: true }).map((entry) => entry.name),
+    ).toContain("think");
+    expect(
+      getSlashCommandCompletions("reset", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getSlashCommandCompletions("weather", {
+        inlineOnly: true,
+        allowImmediateInlineCommands: false,
+      }).map((entry) => entry.name),
+    ).toEqual(["weather"]);
+  });
 });
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -28,10 +232,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function requireCommandByName(name: string): Record<string, unknown> {
@@ -74,6 +275,17 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it("presents the first-class dashboard command with the dashboard icon", () => {
+    const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
+
+    expect(dashboard).toMatchObject({
+      category: "tools",
+      allowsInlineMultiWordArgs: true,
+      icon: "layoutDashboard",
+      source: "native",
+    });
+  });
+
   it("ranks an exact name above prefixes and description-only matches", () => {
     replaceSlashCommands([
       slashCommand("openclaw", {
@@ -237,6 +449,15 @@ describe("parseSlashCommand", () => {
     expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
   });
 
+  it("formats structured argument choices with the shared command serializer", () => {
+    expect(requireCommandByName("exec").argOptions).toEqual([
+      "host=auto",
+      "host=sandbox",
+      "host=gateway",
+      "host=node",
+    ]);
+  });
+
   it("parses slash aliases through the shared registry", () => {
     const exportCommand = requireCommandByKey("export-session");
     expectRecordFields(exportCommand, "export-session command", {
@@ -279,16 +500,16 @@ describe("parseSlashCommand", () => {
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
-  it("builds runtime commands from command entries so docks, plugins, and direct skills appear", () => {
+  it("builds runtime commands from native, plugin, and direct skill entries", () => {
     applyRemoteEntries([
       {
-        name: "dock-discord",
-        textAliases: ["/dock-discord", "/dock_discord"],
-        description: "Switch to discord for replies.",
+        name: "inspect-session",
+        textAliases: ["/inspect-session", "/inspect_session"],
+        description: "Inspect the active session.",
         source: "native",
         scope: "both",
         acceptsArgs: false,
-        category: "docks",
+        category: "tools",
       },
       {
         name: "dreaming",
@@ -309,8 +530,8 @@ describe("parseSlashCommand", () => {
       },
     ]);
 
-    expectRecordFields(requireCommandByName("dock-discord"), "dock-discord command", {
-      aliases: ["dock_discord"],
+    expectRecordFields(requireCommandByName("inspect-session"), "inspect-session command", {
+      aliases: ["inspect_session"],
       category: "tools",
       executeLocal: false,
     });
@@ -324,7 +545,7 @@ describe("parseSlashCommand", () => {
       source: "skill",
       skillModelVisible: true,
     });
-    expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
+    expectParsedSlash("/inspect_session", { name: "inspect-session" }, "");
     expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 
@@ -425,7 +646,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
       name: "safe-name",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });

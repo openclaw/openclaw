@@ -7,22 +7,10 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { createDataTransferStub } from "../drag-data.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
-
-function createDataTransferStub() {
-  const data = new Map<string, string>();
-  return {
-    get types() {
-      return [...data.keys()];
-    },
-    setData: (type: string, value: string) => void data.set(type, value),
-    getData: (type: string) => data.get(type) ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
 
 function dispatchDragEvent(
   target: Element,
@@ -164,7 +152,7 @@ describe("AppSidebar section reordering", () => {
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
-  it("does not start a section drag from a header action button", async () => {
+  it("keeps new-session link gestures separate from section dragging and menus", async () => {
     const { sidebar } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
     const newSessionButton = groupHeader(sidebar, "category:Alpha").querySelector(
@@ -173,6 +161,13 @@ describe("AppSidebar section reordering", () => {
     if (!newSessionButton) {
       throw new Error("expected new-session header action");
     }
+
+    expect(newSessionButton.getAttribute("href")).toBe("/new?agent=main&group=Alpha");
+    const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    newSessionButton.dispatchEvent(contextMenu);
+    expect(contextMenu.defaultPrevented).toBe(false);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-group-menu")).toBeNull();
 
     newSessionButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     dispatchDragEvent(groupHeader(sidebar, "category:Alpha"), "dragstart", dataTransfer);
@@ -237,7 +232,7 @@ describe("AppSidebar section reordering", () => {
       expect(harness.patch).toHaveBeenCalledWith(
         "agent:main:group-0",
         { category: null },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:group-0" },
       ),
     );
   });

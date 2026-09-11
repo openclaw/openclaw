@@ -1,6 +1,6 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,22 +41,19 @@ export function readConfigValueAtPath(
   path: string,
 ): { found: boolean; value?: unknown } {
   let current: unknown = config;
-  for (const rawSegment of path.split(".")) {
-    // Support foo[0] style array segments alongside dotted keys.
-    const parts = rawSegment.split(/[[\]]/).filter(Boolean);
-    for (const part of parts) {
-      if (current === null || typeof current !== "object") {
-        return { found: false };
-      }
-      const index = /^\d+$/.test(part) ? Number(part) : undefined;
-      if (index !== undefined && Array.isArray(current)) {
-        current = current[index];
-      } else {
-        current = (current as Record<string, unknown>)[part];
-      }
-      if (current === undefined) {
-        return { found: false };
-      }
+  for (const part of parseConfigSetPath(path)) {
+    if (current === null || typeof current !== "object") {
+      return { found: false };
+    }
+    // Reads allow array properties and indices beyond the CLI writer's sparse-write limit.
+    const index = /^\d+$/.test(part) ? Number(part) : undefined;
+    if (index !== undefined && Array.isArray(current)) {
+      current = current[index];
+    } else {
+      current = (current as Record<string, unknown>)[part];
+    }
+    if (current === undefined) {
+      return { found: false };
     }
   }
   return { found: true, value: current };
@@ -75,13 +72,7 @@ export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
 
 export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
-  surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
-  if (operation === "restart" && surface === "gateway") {
-    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
-    // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
-    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
-  }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -200,6 +191,7 @@ export function resolveTuiAgentId(params: {
 
 export type ExecuteOptions = {
   approved?: boolean;
+  operatorApprovalOnly?: boolean;
   deps?: SystemAgentCommandDeps;
   auditDetails?: Record<string, unknown>;
   /**
@@ -207,7 +199,7 @@ export type ExecuteOptions = {
    * A multi-step operation may invoke it more than once; every invocation is
    * immediately followed by the persistent effect it authorizes.
    */
-  beforePersistentApply?: () => Promise<void>;
+  beforePersistentApply?: () => void;
   /** Adopt the exact final binding after a verified model-route write commits. */
   onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
@@ -221,6 +213,8 @@ export type ExecuteOptions = {
 type PersistentApplyContext = {
   runtime: RuntimeEnv;
   deps?: SystemAgentCommandDeps;
+  /** Synchronous authority guard for the owner immediately before mutation. */
+  assertPersistentApply?: () => void;
   /** Re-check authority, then enter one persistent side-effect boundary. */
   commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
@@ -243,18 +237,24 @@ export async function applyPersistentOperation(params: {
 }): Promise<SystemAgentOperationResult> {
   const { auditOperation, runtime, opts } = params;
   if (!opts.approved) {
-    const message = formatSystemAgentPersistentPlan(params.operation);
+    const message = formatSystemAgentPersistentPlan(params.operation, opts.operatorApprovalOnly);
     runtime.log(message);
     return { applied: false, message };
   }
   runtime.log(`[openclaw] running: ${auditOperation}`);
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
+  const assertPersistentApply = opts.beforePersistentApply;
   const commit: PersistentApplyContext["commit"] = async (effect) => {
-    await opts.beforePersistentApply?.();
+    assertPersistentApply?.();
     return await effect();
   };
-  const outcome = await params.run({ runtime, deps: opts.deps, commit });
+  const outcome = await params.run({
+    runtime,
+    deps: opts.deps,
+    ...(assertPersistentApply ? { assertPersistentApply } : {}),
+    commit,
+  });
   const after = await readConfigFileSnapshot();
   try {
     await appendSystemAgentAuditEntry({
@@ -289,7 +289,12 @@ export async function runConfigSetOperation(params: {
   const { operation, ctx } = params;
   const runConfigSet =
     ctx.deps?.runConfigSet ??
-    (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
+    (async (setOpts: {
+      path?: string;
+      value?: string;
+      cliOptions: ConfigSetOptions;
+      beforePersistentApply?: () => void;
+    }) => {
       const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
       await importedRunConfigSet({
         ...setOpts,
@@ -297,27 +302,31 @@ export async function runConfigSetOperation(params: {
       });
     });
   if (operation.kind === "config-set") {
-    await ctx.commit(async () => {
-      // Conditional verdicts (per-agent routing, plugin entries) depend on the
-      // current config; a concurrent edit can flip them between the
-      // pre-approval check and this write. Re-verify at the commit boundary,
-      // like the plugin-uninstall path.
-      await assertConfigWriteDoesNotBypassInferenceVerification(operation);
-      await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
-    });
+    // Conditional verdicts (per-agent routing, plugin entries) depend on the
+    // current config; validate before the final authority guard and writer.
+    await assertConfigWriteDoesNotBypassInferenceVerification(operation);
+    await ctx.commit(() =>
+      runConfigSet({
+        path: operation.path,
+        value: operation.value,
+        cliOptions: {},
+        ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+      }),
+    );
     return;
   }
-  await ctx.commit(async () => {
-    await assertConfigWriteDoesNotBypassInferenceVerification(operation);
-    await runConfigSet({
+  await assertConfigWriteDoesNotBypassInferenceVerification(operation);
+  await ctx.commit(() =>
+    runConfigSet({
       path: operation.path,
       cliOptions: {
         refProvider: operation.provider ?? "default",
         refSource: operation.source,
         refId: operation.id,
       },
-    });
-  });
+      ...(ctx.assertPersistentApply ? { beforePersistentApply: ctx.assertPersistentApply } : {}),
+    }),
+  );
 }
 
 async function isDefaultAgentListPath(segments: readonly string[]): Promise<boolean> {
@@ -347,7 +356,6 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
 export async function assertConfigWriteDoesNotBypassInferenceVerification(
   operation: Extract<SystemAgentOperation, { kind: "config-set" | "config-set-ref" }>,
 ): Promise<void> {
-  const { parseConfigSetPath } = await import("../cli/config-cli.js");
   const segments = parseConfigSetPath(operation.path);
   const verdict: InferenceRoutePathVerdict = classifyInferenceRouteConfigPath(segments);
   if (verdict === "allowed") {
@@ -454,7 +462,7 @@ export async function executeSetup(
   }
   if (!opts.approved) {
     const message = [
-      formatSystemAgentPersistentPlan(operation),
+      formatSystemAgentPersistentPlan(operation, opts.operatorApprovalOnly),
       `Model choice: keep verified default ${defaultModel}.`,
     ].join("\n");
     runtime.log(message);
@@ -481,10 +489,8 @@ export async function executeSetup(
           : undefined;
       const workspace =
         recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
-      // The guarded setup transaction publishes the load-time injected main
-      // roster before any workspace provisioning or other follow-up effect.
-      // The outer boundary covers injected implementations. The production
-      // setup helper also uses this same seam for each of its internal writes.
+      // Cover injected implementations at entry and carry the same synchronous
+      // authority into production setup's workspace and config owners.
       const applied = await ctx.commit(() =>
         applySetup(
           {
@@ -495,7 +501,7 @@ export async function executeSetup(
             surface,
             runtime: ctx.runtime,
           },
-          { commit: (effect) => ctx.commit(effect) },
+          { beforePersistentApply: ctx.assertPersistentApply },
         ),
       );
       if (!applied.workspaceReady) {
@@ -585,6 +591,9 @@ export async function executeSetDefaultModel(
         base: "source",
         writeOptions: {
           auditOrigin: "system-agent",
+          ...(ctx.assertPersistentApply
+            ? { assertConfigPathForWrite: ctx.assertPersistentApply }
+            : {}),
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
             if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
@@ -592,7 +601,7 @@ export async function executeSetDefaultModel(
                 "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
               );
             }
-            await opts.beforePersistentApply?.();
+            ctx.assertPersistentApply?.();
             let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
               config: sourceConfig,
@@ -601,10 +610,7 @@ export async function executeSetDefaultModel(
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
               ...(opts.onVerifiedInferenceChanged
                 ? {
-                    onVerifiedExecution: (
-                      _auth: AgentExecutionAuthBinding,
-                      binding: SystemAgentVerifiedInferenceBinding,
-                    ) => {
+                    onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
                       latestBinding = binding;
                     },
                   }
@@ -627,7 +633,7 @@ export async function executeSetDefaultModel(
             }
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
-            await opts.beforePersistentApply?.();
+            ctx.assertPersistentApply?.();
             persistedVerification = latestVerification;
             persistedBinding = latestBinding;
           },

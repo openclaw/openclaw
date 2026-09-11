@@ -10,6 +10,7 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { createBundleInstallFixtureFactory } from "./test-helpers/install-fixtures.js";
 
 const installPluginFromPathMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -69,6 +70,17 @@ async function writeMarketplaceManifest(rootDir: string, manifest: unknown): Pro
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
   await fs.writeFile(manifestPath, JSON.stringify(manifest));
   return manifestPath;
+}
+
+function writeArchiveMarketplaceManifest(rootDir: string): Promise<string> {
+  return writeMarketplaceManifest(rootDir, {
+    plugins: [
+      {
+        name: "frontend-design",
+        source: "https://example.com/frontend-design.tgz",
+      },
+    ],
+  });
 }
 
 async function writeRemoteMarketplaceFixture(params: {
@@ -484,40 +496,6 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("passes dangerous force unsafe install through to marketplace path installs", async () => {
-    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
-      const manifestPath = await writeLocalMarketplaceFixture({
-        rootDir,
-        pluginDir,
-        manifest: {
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        },
-      });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
-
-      await installPluginFromMarketplace({
-        marketplace: manifestPath,
-        plugin: "frontend-design",
-        dangerouslyForceUnsafeInstall: true,
-      });
-
-      expect(installPluginInput().path).toBe(pluginDir);
-      expect(installPluginInput().dangerouslyForceUnsafeInstall).toBe(true);
-    });
-  });
-
   it("passes install policy acknowledgement through to marketplace path installs", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
@@ -545,6 +523,44 @@ describe("marketplace plugins", () => {
 
       expect(installPluginInput().path).toBe(pluginDir);
       expect(installPluginInput().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    });
+  });
+
+  it("does not publish a marketplace plugin after authority closes during artifact review", async () => {
+    await withTempDir("openclaw-marketplace-guard-", async (rootDir) => {
+      const { pluginDir, extensionsDir } = createBundleInstallFixtureFactory(() => rootDir)({
+        bundleFormat: "claude",
+        name: "Guarded Bundle",
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [{ name: "guarded-bundle", source: "./plugin-src" }],
+      });
+      const { installPluginFromPath } = await import("./install-package.js");
+      installPluginFromPathMock.mockImplementationOnce(installPluginFromPath);
+      let authorityActive = true;
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "guarded-bundle",
+        extensionsDir,
+        onBeforePluginArtifactCommit: async () => {
+          authorityActive = false;
+        },
+        beforePersistentApply: () => {
+          if (!authorityActive) {
+            throw new Error("plugin installation authority closed");
+          }
+        },
+      });
+
+      expect(authorityActive).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plugin installation authority closed"),
+      });
+      await expect(fs.stat(path.join(extensionsDir, "guarded-bundle"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(pluginDir)).resolves.toBeDefined();
     });
   });
 
@@ -944,14 +960,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://example.com/frontend-design.tgz",
         release,
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -980,14 +989,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://example.com/frontend-design.tgz",
         release,
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1038,14 +1040,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/C:plugin.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1077,14 +1072,7 @@ describe("marketplace plugins", () => {
         version: "0.1.0",
         extensions: ["index.ts"],
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1118,14 +1106,7 @@ describe("marketplace plugins", () => {
         version: "0.1.0",
         extensions: ["index.ts"],
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1167,14 +1148,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1222,14 +1196,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1270,14 +1237,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1318,14 +1278,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1367,14 +1320,7 @@ describe("marketplace plugins", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
@@ -1443,14 +1389,7 @@ describe("marketplace plugins", () => {
       fetchWithSsrFGuardMock.mockRejectedValueOnce(
         new Error("Blocked hostname (not in allowlist): 169.254.169.254"),
       );
-      const manifestPath = await writeMarketplaceManifest(rootDir, {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "https://example.com/frontend-design.tgz",
-          },
-        ],
-      });
+      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,

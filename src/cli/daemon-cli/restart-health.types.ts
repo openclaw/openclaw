@@ -7,6 +7,7 @@ export type GatewayRestartWaitOutcome =
   | "plugin-errors"
   | "channel-errors"
   | "version-mismatch"
+  | "build-id-mismatch"
   | "stale-pids"
   | "stopped-free"
   | "timeout";
@@ -17,6 +18,8 @@ export type GatewayRestartSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
+  gatewayBootId?: string;
+  gatewayBuildId?: string | null;
   probeError?: string;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
@@ -25,8 +28,14 @@ export type GatewayRestartSnapshot = {
     expected: string;
     actual: string | null;
   };
+  expectedBuildId?: string;
+  buildIdMismatch?: {
+    expected: string;
+    actual: string | null;
+  };
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
+  startupPhase?: string;
 };
 
 export type GatewayPortHealthSnapshot = {

@@ -1,4 +1,6 @@
 // Covers diagnostic event emission and metadata handling.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasInternalDiagnosticEventInterest,
@@ -49,11 +51,7 @@ describe("diagnostic-events", () => {
 
   function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
     expect(errorSpy.mock.calls).toHaveLength(1);
-    const [call] = errorSpy.mock.calls;
-    if (!call) {
-      throw new Error("expected console error call");
-    }
-    const [message] = call;
+    const [message] = expectDefined(errorSpy.mock.calls[0], "console error call");
     expect(typeof message).toBe("string");
     expect((message as string).startsWith(prefix)).toBe(true);
   }
@@ -273,9 +271,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toEqual([
       { internal: false, metadataTrusted: false, type: "message.queued" },
       { internal: true, metadataTrusted: false, type: "webhook.received" },
@@ -411,9 +407,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toEqual([false]);
     delete globalStore[Symbol.for("openclaw.diagnosticEventsState")];
   });
@@ -436,9 +430,7 @@ describe("diagnostic-events", () => {
       model: "gpt-5.4",
     });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
@@ -449,12 +441,15 @@ describe("diagnostic-events", () => {
       const skillFile = "/workspace/skills/daily-brief/SKILL.md";
       const publicEvents: DiagnosticEventPayload[] = [];
       const sharedEvents: DiagnosticEventPayload[] = [];
+      const metadataOnly = vi.fn();
+      const readSkillFile = vi.fn(() => skillFile);
       const trustedEvents: Array<{
         event: DiagnosticEventPayload;
         privateData: DiagnosticEventPrivateData;
       }> = [];
       onDiagnosticEvent((event) => publicEvents.push(event));
       onInternalDiagnosticEvent((event) => sharedEvents.push(event));
+      onTrustedInternalDiagnosticEvent(metadataOnly, undefined, { includePrivateData: false });
       onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
         trustedEvents.push({ event, privateData });
       });
@@ -467,7 +462,13 @@ describe("diagnostic-events", () => {
           skillSource: "workspace",
           activation: "read",
         },
-        { skillUsage: { skillFile } },
+        {
+          skillUsage: {
+            get skillFile() {
+              return readSkillFile();
+            },
+          },
+        },
       );
       await waitForDiagnosticEventsDrained();
 
@@ -477,6 +478,13 @@ describe("diagnostic-events", () => {
       expect(trustedEvents).toHaveLength(1);
       expect(trustedEvents[0]?.event).not.toHaveProperty("skillFile");
       expect(trustedEvents[0]?.privateData.skillUsage?.skillFile).toBe(skillFile);
+      expect(readSkillFile).toHaveBeenCalledOnce();
+      expect(metadataOnly).toHaveBeenCalledExactlyOnceWith(
+        trustedEvents[0]?.event,
+        expect.objectContaining({ trusted: true }),
+        {},
+      );
+      expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[2])).toBe(true);
     },
   );
 
@@ -597,9 +605,7 @@ describe("diagnostic-events", () => {
       trace,
     });
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
     expectConsoleErrorPrefix(
       errorSpy,
@@ -677,9 +683,7 @@ describe("diagnostic-events", () => {
     });
 
     expect(events).toStrictEqual([]);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
 
@@ -700,17 +704,11 @@ describe("diagnostic-events", () => {
     }
 
     expect(events).toStrictEqual([]);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toHaveLength(100);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toHaveLength(200);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
     expect(events).toHaveLength(250);
   });
 
@@ -951,6 +949,7 @@ describe("diagnostic-events", () => {
         model: "gpt-5.4",
       });
     }
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
 
     await waitForDiagnosticEventsDrained();
 
@@ -962,35 +961,14 @@ describe("diagnostic-events", () => {
     );
     expect(dropSummary).toMatchObject({
       type: "diagnostic.async_queue.dropped",
-      droppedEvents: 1,
+      droppedEvents: 2,
+      droppedTrustedEvents: 1,
       droppedUntrustedEvents: 1,
       maxQueueLength: 10_000,
       drainBatchSize: 100,
     });
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
-  });
-
-  it("keeps log records off the public diagnostic event stream", async () => {
-    const publicEvents: string[] = [];
-    const internalEvents: string[] = [];
-    onDiagnosticEvent((event) => {
-      publicEvents.push(event.type);
-    });
-    onInternalDiagnosticEvent((event) => {
-      internalEvents.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "log.record",
-      level: "INFO",
-      message: "private log",
-    });
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual(["log.record"]);
+    expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
   });
 
   it("emits exec approval followup suppression events on the public stream", async () => {

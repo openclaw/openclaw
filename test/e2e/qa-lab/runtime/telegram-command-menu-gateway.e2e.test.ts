@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 type BotCommand = { command: string; description: string };
 type Body = { commands?: BotCommand[]; language_code?: string; scope?: { type?: string } };
 const LOCALIZED_PLUGIN_ID = "telegram-menu-localization-e2e";
@@ -152,7 +154,7 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
     async (apiRoot) =>
       await withTempDir("openclaw-telegram-menu-", async (workspace) => {
         let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-        let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+        const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           const localizedPluginDir = await writeLocalizedCommandPlugin({ repoRoot, workspace });
@@ -181,9 +183,9 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
             customCommands: commands,
           });
           mock = await startQaMockOpenAiServer();
-          gateway = await startQaGatewayChild({
+          await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${mock.baseUrl}/v1`,
             transportBaseUrl: apiRoot,
             transport: {
@@ -316,7 +318,7 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
           ).toBe(true);
         } finally {
           await settleCleanup(
-            async () => await gateway?.stop(),
+            async () => await stopQaGatewayFixture(gatewayOwner),
             async () => await mock?.stop(),
           );
         }

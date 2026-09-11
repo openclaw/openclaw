@@ -18,6 +18,13 @@ const EnvironmentTrustSchema = Type.String({
   enum: ["persistent", "disposable"],
 });
 
+/** Operational desktop state reported by the current native node connection. */
+export const DesktopAvailabilitySchema = closedObject({
+  state: Type.Union([Type.Literal("locked"), Type.Literal("unlocked"), Type.Literal("unknown")]),
+});
+
+export type DesktopAvailability = Static<typeof DesktopAvailabilitySchema>;
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -70,8 +77,22 @@ export const WorkerSlotSummarySchema = Type.Refine(
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
 );
 
+/** Gateway-owned authority state for one runtime-required node command. */
+export const RequiredNodeCommandStateSchema = Type.Union([
+  Type.Literal("invocable"),
+  Type.Literal("pending-approval"),
+  Type.Literal("undeclared"),
+  Type.Literal("unauthorized"),
+]);
+
+export const RequiredNodeCommandSchema = closedObject({
+  command: Type.String({ minLength: 1, maxLength: 128 }),
+  state: RequiredNodeCommandStateSchema,
+});
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
@@ -86,8 +107,8 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   ),
 });
 
-function createEnvironmentSummarySchema() {
-  return closedObject({
+function createEnvironmentSummaryProperties() {
+  return {
     id: NonEmptyString,
     type: NonEmptyString,
     label: Type.Optional(NonEmptyString),
@@ -109,16 +130,32 @@ function createEnvironmentSummarySchema() {
       }),
     ),
     desktop: Type.Optional(Type.Boolean()),
+    desktopAvailability: Type.Optional(DesktopAvailabilitySchema),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
-  });
+    preparation: Type.Optional(
+      closedObject({
+        purpose: Type.Union([Type.Literal("reserve"), Type.Literal("build")]),
+        key: NonEmptyString,
+      }),
+    ),
+  };
+}
+
+function createEnvironmentSummarySchema() {
+  return closedObject(createEnvironmentSummaryProperties());
 }
 
 /** Public environment summary shown in listings and status responses. */
-export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
+export const EnvironmentSummarySchema = closedObject({
+  ...createEnvironmentSummaryProperties(),
+  requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema),
+});
 
-/** Empty request payload for listing known environments. */
-export const EnvironmentsListParamsSchema = closedObject({});
+/** Optional runtime scope for listing known environments. */
+export const EnvironmentsListParamsSchema = closedObject({
+  runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
 
 /** Provider-authored machine choice for one configured worker profile. */
 export const WorkerMachineOptionSchema = closedObject({
@@ -127,11 +164,20 @@ export const WorkerMachineOptionSchema = closedObject({
   cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   default: Type.Optional(Type.Boolean()),
+  os: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 });
 
 export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {
   minItems: 1,
-  maxItems: 32,
+  maxItems: 64,
+});
+
+/** Provider-authored operating system choice for one configured worker profile. */
+export const WorkerOperatingSystemSchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 64 }),
+  label: Type.String({ minLength: 1, maxLength: 64 }),
+  default: Type.Optional(Type.Boolean()),
+  disabledReason: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
 /** Placement execution modes shared by runtime requirements and worker providers. */
@@ -153,6 +199,9 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
     ]),
   ),
   machines: Type.Optional(WorkerMachineOptionsSchema),
+  operatingSystems: Type.Optional(
+    Type.Array(WorkerOperatingSystemSchema, { minItems: 1, maxItems: 8 }),
+  ),
 });
 
 /** List response containing all gateway-visible environment summaries. */
@@ -175,6 +224,18 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 
 /** Create result uses the same public summary shape as list and status. */
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
+
+/** Prepares a configured profile's local Git project without dispatching a session. */
+export const EnvironmentsPrepareParamsSchema = closedObject({
+  profileId: NonEmptyString,
+  projectPath: NonEmptyString,
+});
+
+export const EnvironmentsPrepareResultSchema = closedObject({
+  environmentId: NonEmptyString,
+  preparationKey: NonEmptyString,
+  reused: Type.Boolean(),
+});
 
 /** Destroys one durable worker environment by its gateway-owned id. */
 export const EnvironmentsDestroyParamsSchema = closedObject({
@@ -216,12 +277,17 @@ export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
 export type WorkerSlotSummary = Static<typeof WorkerSlotSummarySchema>;
+export type RequiredNodeCommandState = Static<typeof RequiredNodeCommandStateSchema>;
+export type RequiredNodeCommand = Static<typeof RequiredNodeCommandSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
+export type WorkerOperatingSystem = Static<typeof WorkerOperatingSystemSchema>;
 export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;
+export type EnvironmentsPrepareParams = Static<typeof EnvironmentsPrepareParamsSchema>;
+export type EnvironmentsPrepareResult = Static<typeof EnvironmentsPrepareResultSchema>;
 export type EnvironmentsDestroyParams = Static<typeof EnvironmentsDestroyParamsSchema>;
 export type EnvironmentsDestroyResult = Static<typeof EnvironmentsDestroyResultSchema>;
 export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>;

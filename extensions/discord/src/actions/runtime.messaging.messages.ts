@@ -1,12 +1,11 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-// Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-} from "../runtime-api.js";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {
@@ -127,6 +126,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       });
       const content = readStringParam(ctx.params, "content", {
         required: true,
+        allowEmpty: true,
+        trim: false,
       });
       await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(

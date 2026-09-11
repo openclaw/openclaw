@@ -5,19 +5,110 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
-function createTestRegistry(runtime: ReturnType<typeof createPluginRuntime>) {
-  return createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
-}
-
 describe("plugin registry SQLite session ownership", () => {
+  it("does not read runtime config before a logical session requires it", () => {
+    const runtime = createPluginRuntime();
+    const readConfig = vi.fn(() => {
+      throw new Error("runtime config was accessed eagerly");
+    });
+    Object.defineProperty(runtime, "config", { configurable: true, get: readConfig });
+
+    expect(() => createRuntimeTestRegistry(runtime)).not.toThrow();
+    expect(readConfig).not.toHaveBeenCalled();
+  });
+
+  it("resolves unscoped worker keys through the configured default agent", async () => {
+    await withTempHome(async () => {
+      const config = {
+        agents: { list: [{ id: "researcher", default: true }] },
+      } as OpenClawConfig;
+      const subagent = {
+        complete: vi.fn(async () => ({ text: "completed" })),
+        run: vi.fn(async () => ({ runId: "workboard-run" })),
+        waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+        getSessionMessages: vi.fn(async () => ({ messages: [] })),
+        deleteSession: vi.fn(async () => {}),
+      } satisfies PluginRuntime["subagent"];
+      const runtime = createPluginRuntime({ subagent });
+      let runtimeConfig = config;
+      runtime.config = { ...runtime.config, current: () => runtimeConfig };
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "workboard",
+        source: "/plugins/workboard/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = pluginRegistry.createApi(record, { config });
+      const ownerRecord = createPluginRecord({
+        id: "harness-owner",
+        source: "/plugins/harness-owner/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const ownerApi = pluginRegistry.createApi(ownerRecord, { config });
+      ownerApi.registerAgentHarness({
+        id: "test-harness",
+        label: "Test Harness",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      });
+
+      try {
+        const sessionKey = "subagent:workboard-default-unassigned";
+        await expect(api.runtime.subagent.run({ sessionKey, message: "start" })).resolves.toEqual({
+          runId: "workboard-run",
+        });
+        expect(subagent.run).toHaveBeenCalledWith({ sessionKey, message: "start" });
+
+        for (const invalidSessionKey of ["agent::malformed", "global", "unknown"]) {
+          await expect(
+            api.runtime.subagent.run({ sessionKey: invalidSessionKey, message: "reject" }),
+          ).rejects.toThrow("Cannot resolve SQLite session scope without an agent id");
+        }
+
+        const lockedSessionKey = "harness:test-harness:owned";
+        await replaceSessionEntry(
+          { agentId: "researcher", sessionKey: `agent:researcher:${lockedSessionKey}` },
+          {
+            sessionId: "owned-session",
+            updatedAt: 1,
+            agentHarnessId: "test-harness",
+            modelSelectionLocked: true,
+          },
+        );
+        await expect(
+          api.runtime.subagent.run({ sessionKey: lockedSessionKey, message: "continue" }),
+        ).rejects.toThrow('owned by plugin "harness-owner"');
+        expect(subagent.run).toHaveBeenCalledOnce();
+
+        await replaceSessionEntry(
+          { agentId: "replacement", sessionKey: `agent:replacement:${sessionKey}` },
+          {
+            sessionId: "replacement-owned-session",
+            updatedAt: 2,
+            agentHarnessId: "test-harness",
+            modelSelectionLocked: true,
+          },
+        );
+        const pending = api.runtime.subagent.run({ sessionKey, message: "continue" });
+        runtimeConfig = { agents: { list: [{ id: "replacement", default: true }] } };
+        await expect(pending).rejects.toThrow('owned by plugin "harness-owner"');
+        expect(subagent.run).toHaveBeenCalledOnce();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    });
+  });
+
   it("keeps embedded incognito ID scans in the key's agent store", async () => {
     await withTempHome(async (home) => {
       const sessionKey = "agent:researcher:dashboard:incognito-ownership-check";
@@ -47,7 +138,7 @@ describe("plugin registry SQLite session ownership", () => {
           configurable: true,
           value: runEmbeddedAgent,
         });
-        const pluginRegistry = createTestRegistry(runtime);
+        const pluginRegistry = createRuntimeTestRegistry(runtime);
         const ownerRecord = createPluginRecord({
           id: "harness-owner",
           source: "/plugins/harness-owner/index.js",

@@ -12,13 +12,13 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
-  getActiveCronTaskRunId,
   findCronTaskRunRecoveryInDatabase,
   tryCreateCronTaskRunHandle,
   tryFinishCronTaskRun,
@@ -106,9 +106,7 @@ describe("cron task run terminal records", () => {
           updatedAtMs: 100,
           enabled: true,
         };
-        let activeTaskRunId: string | undefined;
         const runIsolatedAgentJob = vi.fn(async ({ onExecutionStarted }) => {
-          activeTaskRunId = getActiveCronTaskRunId();
           onExecutionStarted?.({
             jobId: job.id,
             agentId: "ops",
@@ -143,13 +141,9 @@ describe("cron task run terminal records", () => {
         expect(taskRecords()).toHaveLength(1);
         expect(taskRecords()[0]?.agentId).toBe("ops");
         expect(taskRecords()[0]?.childSessionKey).toBe(testCase.initialSessionKey);
-        expect(getActiveCronTaskRunId()).toBeUndefined();
-
         const runPromise = executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         try {
           await started;
-          expect(activeTaskRunId).toBe(taskRunId);
-          expect(getActiveCronTaskRunId()).toBeUndefined();
           expect(taskRecords()[0]?.agentId).toBe("ops");
           expect(taskRecords()[0]?.childSessionKey).toBe(testCase.executionSessionKey);
           expect(runIsolatedAgentJob.mock.calls[0]?.[0]).not.toHaveProperty("taskRunId");
@@ -268,16 +262,22 @@ describe("cron task run terminal records", () => {
     );
   });
 
-  it("creates an immediately terminal task row for a skipped-only event", async () => {
+  it.each([
+    { owner: "assigned", agentId: "finn", ownerlessManualRun: undefined },
+    { owner: "ownerless manual", agentId: undefined, ownerlessManualRun: true as const },
+  ])("creates terminal history for an $owner skipped-only event", async (testCase) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-skipped-task-" },
       async () => {
         resetTaskRegistryForTests();
         const startedAt = 1_000;
+        const error = testCase.ownerlessManualRun
+          ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+          : "cron: job execution timed out";
         const job: CronJob = {
           id: "skipped-job",
           name: "skipped job",
-          agentId: "finn",
+          agentId: testCase.agentId,
           enabled: true,
           createdAtMs: 100,
           updatedAtMs: 100,
@@ -289,6 +289,8 @@ describe("cron task run terminal records", () => {
         };
         const state = createCronServiceState({
           storePath: "/tmp/jobs.json",
+          defaultAgentId: undefined,
+          resolveDefaultAgentId: () => undefined,
           cronEnabled: true,
           log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           nowMs: () => startedAt,
@@ -299,12 +301,13 @@ describe("cron task run terminal records", () => {
 
         tryFinishCronTaskRun(state, {
           job,
+          ownerlessManualRun: testCase.ownerlessManualRun,
           event: {
             jobId: job.id,
             action: "finished",
             job,
             status: "skipped",
-            error: "cron: job execution timed out",
+            error,
             runId: "manual:skipped-job:1",
             runAtMs: startedAt,
             durationMs: 0,
@@ -320,11 +323,14 @@ describe("cron task run terminal records", () => {
         expect(rows[0]).toMatchObject({
           runtime: "cron",
           sourceId: job.id,
-          agentId: "finn",
+          scopeKind: "system",
+          ownerKey: "",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
           status: "failed",
           startedAt,
           endedAt: startedAt,
-          error: "cron: job execution timed out",
+          error,
           detail: {
             kind: "cron-run",
             status: "skipped",
@@ -332,6 +338,9 @@ describe("cron task run terminal records", () => {
             nextRunAtMs: 60_000,
           },
         });
+        expect(rows[0]?.agentId).toBe(testCase.agentId);
+        expect(rows[0]?.childSessionKey).toBeUndefined();
+        expect(rows[0]?.requesterSessionKey).toBe("");
         expect(
           readCronTaskRunHistoryPage({
             storeKey: cronStoreKey(state.deps.storePath),
@@ -419,7 +428,7 @@ describe("cron task run terminal records", () => {
     );
   });
 
-  it("keeps operator cancellation while attaching terminal run history", async () => {
+  it("keeps operator cancellation reason when required delivery is interrupted", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-cancelled-task-" },
       async () => {
@@ -455,8 +464,7 @@ describe("cron task run terminal records", () => {
           runtime: "cron",
           status: "cancelled",
           endedAt: startedAt + 50,
-          error: "cancelled by operator",
-          terminalSummary: "Cancelled by operator.",
+          error: "Cancelled by operator.",
         });
 
         tryFinishCronTaskRun(state, {
@@ -467,6 +475,11 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "ok",
+            completionStatus: "failed",
+            summary: "payload complete",
+            delivered: false,
+            deliveryStatus: "not-delivered",
+            deliveryError: "cron webhook delivery cancelled: Cancelled by operator.",
             runAtMs: startedAt,
             durationMs: 100,
           },
@@ -479,9 +492,14 @@ describe("cron task run terminal records", () => {
         expect(row).toMatchObject({
           status: "cancelled",
           endedAt: startedAt + 100,
-          detail: { kind: "cron-run", status: "ok", durationMs: 100 },
+          error: "Cancelled by operator.",
+          detail: {
+            kind: "cron-run",
+            status: "ok",
+            completionStatus: "failed",
+            durationMs: 100,
+          },
         });
-        expect(row?.error).toBeUndefined();
         expect(row?.terminalSummary).toBeUndefined();
         expect(
           readCronTaskRunHistoryPage({
@@ -492,7 +510,12 @@ describe("cron task run terminal records", () => {
           expect.objectContaining({
             jobId: job.id,
             status: "ok",
+            completionStatus: "failed",
             error: undefined,
+            summary: "payload complete",
+            delivered: false,
+            deliveryStatus: "not-delivered",
+            deliveryError: "cron webhook delivery cancelled: Cancelled by operator.",
           }),
         ]);
       },

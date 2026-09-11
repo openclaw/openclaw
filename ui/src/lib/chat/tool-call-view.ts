@@ -8,8 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { resolveCodeModeSourceLanguage } from "../../../../src/agents/tool-display-common.js";
-import { t } from "../../i18n/index.ts";
+import { resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -21,30 +20,22 @@ import {
 } from "./tool-call-diff.ts";
 import { parsePatchView, type PatchFileOperation } from "./tool-call-patch.ts";
 
-export type ToolCallKind =
-  | "code"
-  | "command"
-  | "read"
-  | "edit"
-  | "write"
-  | "search"
-  | "fetch"
-  | "generic";
+export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
 
 type ToolCallViewSource = {
   name: string;
   args?: unknown;
   details?: unknown;
-  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
 };
 
 export type ToolCallView = {
   kind: ToolCallKind;
-  /** Full Code Mode source, shown only after expanding the row. */
-  code?: string;
-  language?: "JavaScript" | "TypeScript";
+  /** Agent-supplied purpose for execution tools; does not describe their outcome. */
+  title?: string;
   /** Full command text for `command` rows (first line shown collapsed). */
   command?: string;
+  /** JavaScript source for code-mode execution, rendered without shell highlighting. */
+  code?: string;
   /** File basename or primary target shown bold in the row. */
   target?: string;
   /** Dimmed secondary detail (directory, query scope, URL host…). */
@@ -203,12 +194,8 @@ function resolveInsertionDiff(
   return lines.length > 0 ? { lines } : null;
 }
 
-function resolvePatchData(args: Record<string, unknown> | null) {
-  return parsePatchView(args);
-}
-
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
-  const patch = resolvePatchData(args);
+  const patch = parsePatchView(args);
   if (!patch) {
     return null;
   }
@@ -268,7 +255,7 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
 export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
   const record = asRecord(args);
   if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return resolvePatchData(record)?.paths ?? [];
+    return parsePatchView(record)?.paths ?? [];
   }
   const path = resolvePathArg(record);
   return path ? [path] : [];
@@ -281,14 +268,10 @@ export function resolveToolCallFileOperations(
   if (!PATCH_TOOL_NAMES.has(normalizeKey(name))) {
     return undefined;
   }
-  return resolvePatchData(asRecord(args))?.fileOperations;
+  return parsePatchView(asRecord(args))?.fileOperations;
 }
 
-export function resolveToolCallKind(
-  name: string,
-  args?: unknown,
-  codeModeControl?: ToolCallViewSource["codeModeControl"],
-): ToolCallKind {
+export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
   const key = normalizeKey(name);
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
     switch (resolveTextEditorCommand(args)) {
@@ -305,15 +288,6 @@ export function resolveToolCallKind(
     }
   }
   if (COMMAND_TOOL_NAMES.has(key)) {
-    // Persisted Code Mode rows from before producer metadata still carry the
-    // canonical `exec` + `code` input shape.
-    if (
-      key === "exec" &&
-      (codeModeControl?.kind === "exec" ||
-        (!codeModeControl && resolveCodeModeSourceLanguage(args)))
-    ) {
-      return "code";
-    }
     return "command";
   }
   if (READ_TOOL_NAMES.has(key)) {
@@ -344,12 +318,7 @@ export function resolveToolCallKind(
 // diff) later on the same args identity, which must invalidate the cache.
 const toolCallViewCache = new WeakMap<
   object,
-  {
-    codeModeControl: ToolCallViewSource["codeModeControl"];
-    details: unknown;
-    name: string;
-    view: ToolCallView;
-  }
+  { details: unknown; name: string; view: ToolCallView }
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
@@ -358,23 +327,13 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const name = normalizeKey(source.name);
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
-    if (
-      cached &&
-      cached.codeModeControl === source.codeModeControl &&
-      cached.details === source.details &&
-      cached.name === name
-    ) {
+    if (cached && cached.details === source.details && cached.name === name) {
       return cached.view;
     }
   }
   const view = buildToolCallView(source, args);
   if (cacheKey) {
-    toolCallViewCache.set(cacheKey, {
-      codeModeControl: source.codeModeControl,
-      details: source.details,
-      name,
-      view,
-    });
+    toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
   return view;
 }
@@ -383,7 +342,7 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
  * Strip the `sh -lc '<command>'` wrapper harnesses add around agent commands
  * so rows show the command the model actually wrote. Display-only.
  */
-export function unwrapShellWrapperCommand(command: string): string {
+function unwrapShellWrapperCommand(command: string): string {
   const match = command.match(
     /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
   );
@@ -394,26 +353,20 @@ function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
 ): ToolCallView {
-  const kind = resolveToolCallKind(source.name, source.args, source.codeModeControl);
+  const kind = resolveToolCallKind(source.name, source.args);
   const key = normalizeKey(source.name);
   const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
     ? resolveTextEditorCommand(source.args)
     : undefined;
 
-  if (kind === "code") {
-    const language =
-      source.codeModeControl?.language === "typescript"
-        ? "TypeScript"
-        : (resolveCodeModeSourceLanguage(args) ?? "JavaScript");
-    const code = args
-      ? (readNonBlankString(args.code) ?? readNonBlankString(args.command))
-      : undefined;
-    return { kind, code, language, target: t("chat.toolCards.codeWorkflow", { language }) };
-  }
-
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
-    return { kind, command: command ? unwrapShellWrapperCommand(command) : command };
+    return {
+      kind,
+      title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
+      command: command ? unwrapShellWrapperCommand(command) : command,
+      code: args ? readNonBlankString(args.code) : undefined,
+    };
   }
 
   if (kind === "read") {
@@ -495,7 +448,7 @@ function buildToolCallView(
         readNonBlankString(args.query) ??
         readNonBlankString(args.glob))
       : undefined;
-    const path = resolvePathArg(args) ?? (args ? readNonBlankString(args.path) : undefined);
+    const path = resolvePathArg(args);
     if (!pattern && !path) {
       return { kind: "generic" };
     }

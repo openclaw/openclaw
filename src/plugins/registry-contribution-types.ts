@@ -11,10 +11,15 @@ import type {
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+} from "./embedding-provider-runtime-types.js";
+import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
@@ -57,81 +62,39 @@ export type RegisteredCompactionProvider = {
   ownerPluginId?: string;
 };
 
-export type MemoryEmbeddingBatchChunk = {
-  text: string;
+export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MemoryEmbeddingBatchOptions = {
-  agentId: string;
+export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
   chunks: MemoryEmbeddingBatchChunk[];
-  wait: boolean;
-  concurrency: number;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
 export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
 
-export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
-  sourceWideBatchEmbed?: boolean;
+export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
 export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
 
-export type MemoryEmbeddingProvider = Pick<
-  EmbeddingProvider,
-  "id" | "model" | "maxInputTokens" | "close"
-> & {
-  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    texts: string[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  embedBatchInputs?: (
-    inputs: EmbeddingInput[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-};
+export type MemoryEmbeddingProvider = EmbeddingProvider;
 
-export type MemoryEmbeddingProviderCreateOptions = Omit<
-  EmbeddingProviderCreateOptions,
-  "dimensions" | "local" | "taskType"
-> & {
+export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
+  local?: NonNullable<EmbeddingProviderCreateOptions["local"]> & {
     contextSize?: number | "auto";
   };
-  outputDimensionality?: number;
-  taskType?:
-    | "RETRIEVAL_QUERY"
-    | "RETRIEVAL_DOCUMENT"
-    | "SEMANTIC_SIMILARITY"
-    | "CLASSIFICATION"
-    | "CLUSTERING"
-    | "QUESTION_ANSWERING"
-    | "FACT_VERIFICATION";
 };
 
-export type MemoryEmbeddingProviderCreateResult = {
-  provider: MemoryEmbeddingProvider | null;
+export type MemoryEmbeddingProviderCreateResult = Omit<EmbeddingProviderCreateResult, "runtime"> & {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type MemoryEmbeddingProviderAdapter = Omit<
-  EmbeddingProviderAdapter,
-  "create" | "resolveIndexIdentity"
-> & {
+export type MemoryEmbeddingProviderAdapter = Omit<EmbeddingProviderAdapter, "create"> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
-  resolveIndexIdentity?: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => MemoryEmbeddingProviderIndexIdentity;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;
@@ -242,6 +205,7 @@ export type MemoryFlushPlan = {
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  contextWindowTokens?: number;
 }) => MemoryFlushPlan | null;
 
 export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"> & {
@@ -286,6 +250,14 @@ export type MemoryPluginRuntime = {
     workspaceDir: string;
     relativePaths: string[];
   }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
+  /** Fence and drain managers consuming these exact retiring capability objects. */
+  prepareReload?(change: {
+    retireRuntime: boolean;
+    retiringEmbeddingProviders: readonly MemoryEmbeddingProviderAdapter[];
+  }): {
+    drain(): Promise<void | { errors: readonly unknown[] }>;
+    resume(): void;
+  };
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
@@ -319,6 +291,12 @@ export type MemoryPluginCapability = {
 export type MemoryPluginCapabilityRegistration = {
   pluginId: string;
   capability: MemoryPluginCapability;
+  /**
+   * Registrar-provided memory slot ownership. Only the slot owner may displace
+   * earlier fields during resolution; undeclared registrations contribute what
+   * the owner lacks but never take over its runtime or consolidation surface.
+   */
+  memorySlotSelected?: boolean;
 };
 
 export type SessionDiscussionState = "none" | "available" | "open";

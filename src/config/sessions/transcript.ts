@@ -10,15 +10,17 @@ import {
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-  isTranscriptOnlyOpenClawAssistantModel,
+  isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
@@ -28,19 +30,24 @@ import {
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
-  loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
+  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
+  waitForSessionTranscriptProjection,
+  type SessionTranscriptTurnPersistOptions,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
 } from "./session-accessor.js";
-import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
+import type {
+  SessionLifecycleRevisionExpectation,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -53,10 +60,6 @@ import {
   readPreferredUpstreamUserText,
 } from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
@@ -98,10 +101,14 @@ type InternalSessionTranscriptDeliveryMirror =
       final: boolean;
       sourceTurnId?: string;
       toolCallId?: string;
+    }
+  | {
+      kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
+  [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
 type AssistantTranscriptText = {
@@ -120,6 +127,7 @@ export type SessionRecentConversationText = {
 
 type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
+  includeCronDirectDeliveryContext?: boolean;
   limit?: number;
   minTimestampMs?: number;
   role?: "user" | "assistant";
@@ -183,13 +191,6 @@ function parseAssistantTranscriptText(
   };
 }
 
-function isTranscriptOnlyOpenClawAssistantMessage(message: {
-  provider?: unknown;
-  model?: unknown;
-}): boolean {
-  return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
-}
-
 type SessionConversationTranscriptTarget = {
   sqliteScope?: SqliteSessionFileMarker;
 };
@@ -209,6 +210,7 @@ function parseRecentConversationText(
         provenance?: unknown;
         provider?: unknown;
         model?: unknown;
+        openclawDeliveryMirror?: unknown;
         __openclaw?: unknown;
       }
     | undefined;
@@ -219,7 +221,19 @@ function parseRecentConversationText(
   ) {
     return undefined;
   }
-  if (message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message)) {
+  const deliveryMirror = message.openclawDeliveryMirror;
+  const includeCronDirectDeliveryContext =
+    options.includeCronDirectDeliveryContext === true &&
+    deliveryMirror !== null &&
+    typeof deliveryMirror === "object" &&
+    !Array.isArray(deliveryMirror) &&
+    "kind" in deliveryMirror &&
+    deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
+  if (
+    message.role === "assistant" &&
+    isTranscriptOnlyOpenClawAssistantMessage(message) &&
+    !includeCronDirectDeliveryContext
+  ) {
     return undefined;
   }
   const upstreamUserText =
@@ -383,13 +397,14 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   text?: string;
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
+  displayContent?: Array<Record<string, unknown>>;
   eventId?: string;
   idempotencyKey?: string;
   runId?: string;
@@ -399,6 +414,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -413,7 +429,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       });
   const content =
     params.content ?? (mirrorText ? [{ type: "text" as const, text: mirrorText }] : []);
-  if (content.length === 0) {
+  const displayContent = params.displayContent?.map((block) => Object.assign({}, block));
+  if (content.length === 0 && !displayContent?.length) {
     return { ok: false, reason: "empty text" };
   }
 
@@ -421,7 +438,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     agentId: params.agentId,
     sessionKey,
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision
+    ...(params.expectedLifecycleRevision !== undefined
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
     ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
@@ -434,11 +451,13 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
+    onMessageCommitted: params.onMessageCommitted,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
     message: {
       role: "assistant" as const,
       content,
+      ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -459,7 +478,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       stopReason: "stop" as const,
       timestamp: Date.now(),
       ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
-    } as SessionTranscriptAssistantMessage,
+    },
   });
 }
 
@@ -467,7 +486,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
@@ -479,6 +498,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -513,7 +533,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
   if (
     params.expectedLifecycleRevision !== undefined &&
-    entry?.lifecycleRevision !== params.expectedLifecycleRevision
+    entry?.lifecycleRevision !== (params.expectedLifecycleRevision ?? undefined)
   ) {
     return {
       ok: false,
@@ -569,6 +589,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       sessionKey: resolved.normalizedKey,
       storePath,
     };
+    if (isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror) {
+      // Reconciliation needs the writer queue. Wait before entering it, then
+      // read the current projected tail again inside the guarded append.
+      await waitForSessionTranscriptProjection(target);
+    }
     let latestEquivalentAssistantId: string | undefined;
     // Identified delivery mirrors, including suppressed finals, dedupe only by
     // key so same-text markers from different source ids remain separate rows.
@@ -597,6 +622,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.config ? { config: params.config } : {}),
         ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
+        onMessageCommitted: params.onMessageCommitted,
         touchSessionEntry: true,
         messages: [
           {
@@ -717,29 +743,23 @@ async function readLatestVisibleTranscriptMessage(scope: {
   sessionKey?: string;
   storePath: string;
 }): Promise<{ id?: string; message: unknown } | undefined> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  const tree = scanSessionTranscriptTree(events);
-  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const visibleEvents =
-    visiblePath.length > 0
-      ? visiblePath.map((node) => node.entry)
-      : tree.hasLeafControl
-        ? []
-        : events;
-  for (const event of visibleEvents.toReversed()) {
+  try {
+    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
     if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
+      return undefined;
     }
     const record = event as { id?: unknown; message?: unknown };
     if (record.message === undefined) {
-      continue;
+      return undefined;
     }
     return {
       ...(typeof record.id === "string" ? { id: record.id } : {}),
       message: record.message,
     };
+  } catch {
+    // Mirror deduplication remains best-effort when transcript reads are unavailable.
+    return undefined;
   }
-  return undefined;
 }
 
 function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
@@ -749,7 +769,8 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
     isRedundantDeliveryMirror(message) &&
     (marker?.kind === "channel-final" ||
       marker?.kind === "channel-final-suppressed" ||
-      marker?.kind === "message-tool-source-reply")
+      marker?.kind === "message-tool-source-reply" ||
+      marker?.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND)
   );
 }
 

@@ -2,10 +2,11 @@
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
@@ -22,9 +23,8 @@ import { formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-type ChannelsCommandsModule = typeof import("../commands/channels.js");
 const optionNamesRemove = ["channel", "account", "delete"] as const;
-const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
+const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["agent", "channel"]);
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -58,12 +58,7 @@ const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   },
 ];
 
-const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
-  () => import("../commands/channels.js"),
-);
-function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
-  return channelsCommandsLoader.load();
-}
+const loadChannelsCommands = createLazyPromise(() => import("../commands/channels.js"));
 
 function runChannelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -80,26 +75,34 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
+function resolveStringOption(command: Command, name: string): string | undefined {
+  const source = command.getOptionValueSource(name);
+  const localValue = command.getOptionValue(name);
+  const value =
+    source && source !== "default"
+      ? localValue
+      : (inheritOptionFromParent<string>(command, name) ?? localValue);
+  return typeof value === "string" ? value : undefined;
+}
+
 function addChannelSetupOption(
   command: Command,
   option: ChannelSetupCliOption,
   seenFlags: Set<string>,
 ): void {
-  const optionSwitches = getChannelSetupOptionSwitches(option.flags);
+  const prepared = command.createOption(option.flags, option.description);
+  const optionSwitches = getChannelSetupOptionSwitches(prepared);
   if (optionSwitches.some((flag) => seenFlags.has(flag))) {
     return;
   }
   optionSwitches.forEach((flag) => seenFlags.add(flag));
-  if (option.defaultValue !== undefined) {
-    command.option(option.flags, option.description, option.defaultValue);
-  } else {
-    command.option(option.flags, option.description);
-  }
+  command.addOption(prepared.makeOptionMandatory(false).default(option.defaultValue));
   if (option.negatedFlags) {
-    const negatedSwitches = getChannelSetupOptionSwitches(option.negatedFlags);
+    const negated = command.createOption(option.negatedFlags, option.description);
+    const negatedSwitches = getChannelSetupOptionSwitches(negated);
     if (!negatedSwitches.some((flag) => seenFlags.has(flag))) {
       negatedSwitches.forEach((flag) => seenFlags.add(flag));
-      command.option(option.negatedFlags, option.description);
+      command.addOption(negated.makeOptionMandatory(false).default(undefined));
     }
   }
 }
@@ -130,9 +133,7 @@ async function addChannelSetupOptions(
       ? "modern"
       : "legacy"
     : "none";
-  const seenFlags = new Set(
-    command.options.flatMap((option) => getChannelSetupOptionSwitches(option.flags)),
-  );
+  const seenFlags = new Set(command.options.flatMap(getChannelSetupOptionSwitches));
   for (const option of options) {
     addChannelSetupOption(command, option, seenFlags);
   }
@@ -205,15 +206,19 @@ export async function registerChannelsCli(
   channels
     .command("capabilities")
     .description("Show provider capabilities (intents/scopes + supported features)")
+    .option("--agent <id>", "Agent owner for channel discovery")
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`)
-    .option("--account <id>", "Account id (only with --channel)")
+    .option("--account <id>", "Account id (only with --channel)", parseAccountSelector)
     .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsCapabilitiesCommand } = await loadChannelsCommands();
-        await channelsCapabilitiesCommand(opts, defaultRuntime);
+        await channelsCapabilitiesCommand(
+          { ...opts, agent: resolveStringOption(command, "agent") },
+          defaultRuntime,
+        );
       });
     });
 
@@ -222,7 +227,7 @@ export async function registerChannelsCli(
     .description("Resolve channel/user names to IDs")
     .argument("<entries...>", "Entries to resolve (names or ids)")
     .option("--channel <name>", `Channel (${channelNames})`)
-    .option("--account <id>", "Account id (accountId)")
+    .option("--account <id>", "Account id (accountId)", parseAccountSelector)
     .option("--agent <id>", "Agent owner for channel resolution")
     .addOption(
       new Option("--kind <kind>", "Target kind (auto|user|group|channel)")
@@ -233,16 +238,9 @@ export async function registerChannelsCli(
     .action(async (entries, opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsResolveCommand } = await loadChannelsCommands();
-        const agentSource = command.getOptionValueSource("agent");
-        const agent =
-          agentSource && agentSource !== "default"
-            ? typeof opts.agent === "string"
-              ? opts.agent
-              : undefined
-            : inheritOptionFromParent<string>(command, "agent");
         await channelsResolveCommand(
           {
-            agent,
+            agent: resolveStringOption(command, "agent"),
             channel: opts.channel as string | undefined,
             account: opts.account as string | undefined,
             kind: opts.kind as "auto" | "user" | "group" | "channel",
@@ -269,7 +267,8 @@ export async function registerChannelsCli(
 
   const deadLetters = channels
     .command("dead-letters")
-    .description("Inspect and resubmit failed inbound channel events");
+    .description("Inspect and resubmit failed inbound channel events")
+    .option("--account <id>", "Account id", "default");
 
   deadLetters
     .command("list")
@@ -278,11 +277,14 @@ export async function registerChannelsCli(
     .option("--account <id>", "Account id", "default")
     .option("--limit <n>", "Maximum entries", "100")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsDeadLettersListCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersListCommand(opts, defaultRuntime);
+        await channelsDeadLettersListCommand(
+          { ...opts, account: resolveStringOption(command, "account") },
+          defaultRuntime,
+        );
       });
     });
 
@@ -293,11 +295,15 @@ export async function registerChannelsCli(
     .requiredOption("--channel <name>", "Channel id")
     .option("--account <id>", "Account id", "default")
     .option("--json", "Output JSON", false)
-    .action(async (eventId, opts) => {
+    .action(async (eventId, opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersResubmitCommand(eventId, opts, defaultRuntime);
+        await channelsDeadLettersResubmitCommand(
+          eventId,
+          { ...opts, account: resolveStringOption(command, "account") },
+          defaultRuntime,
+        );
       });
     });
 
@@ -320,6 +326,7 @@ export async function registerChannelsCli(
         ])}\n`,
     )
     .option("--channel <name>", `Channel (${channelNames})`)
+    .option("--agent <id>", "Agent owner for channel setup")
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account");
 
@@ -343,11 +350,14 @@ export async function registerChannelsCli(
         getOptionNames(command).filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
       );
       await channelsAddCommand(
-        resolveChannelsAddOptions(
-          channelArg,
-          opts,
-          channelSetupOptionMode === "modern" ? command : undefined,
-        ),
+        {
+          ...resolveChannelsAddOptions(
+            channelArg,
+            opts,
+            channelSetupOptionMode === "modern" ? command : undefined,
+          ),
+          agent: resolveStringOption(command, "agent"),
+        },
         defaultRuntime,
         {
           hasFlags,
@@ -359,6 +369,7 @@ export async function registerChannelsCli(
   channels
     .command("remove")
     .description("Disable or delete a channel account")
+    .option("--agent <id>", "Agent owner for channel discovery")
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (default when omitted)")
     .option("--delete", "Delete config entries (no prompt)", false)
@@ -366,45 +377,44 @@ export async function registerChannelsCli(
       await runChannelsCommand(async () => {
         const { channelsRemoveCommand } = await loadChannelsCommands();
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
-        await channelsRemoveCommand(opts, defaultRuntime, { hasFlags });
+        await channelsRemoveCommand(
+          { ...opts, agent: resolveStringOption(command, "agent") },
+          defaultRuntime,
+          { hasFlags },
+        );
       });
     });
 
-  channels
-    .command("login")
-    .description("Link a channel account (if supported)")
-    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
-    .option("--account <id>", "Account id (accountId)")
-    .option("--verbose", "Verbose connection logs", false)
-    .action(async (opts) => {
-      await runChannelsCommandWithDanger(async () => {
-        await runChannelLogin(
-          {
-            channel: opts.channel as string | undefined,
-            account: opts.account as string | undefined,
-            verbose: Boolean(opts.verbose),
-          },
-          defaultRuntime,
-        );
-      }, "Channel login failed");
+  for (const mode of ["login", "logout"] as const) {
+    const auth = channels
+      .command(mode)
+      .description(
+        mode === "login"
+          ? "Link a channel account (if supported)"
+          : "Log out of a channel session (if supported)",
+      )
+      .option("--agent <id>", "Agent owner for channel discovery")
+      .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+      .option("--account <id>", "Account id (accountId)");
+    if (mode === "login") {
+      auth.option("--verbose", "Verbose connection logs", false);
+    }
+    auth.action(async (opts, command) => {
+      await runChannelsCommandWithDanger(
+        () =>
+          (mode === "login" ? runChannelLogin : runChannelLogout)(
+            {
+              agent: resolveStringOption(command, "agent"),
+              channel: opts.channel as string | undefined,
+              account: opts.account as string | undefined,
+              ...(mode === "login" ? { verbose: Boolean(opts.verbose) } : {}),
+            },
+            defaultRuntime,
+          ),
+        `Channel ${mode} failed`,
+      );
     });
-
-  channels
-    .command("logout")
-    .description("Log out of a channel session (if supported)")
-    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
-    .option("--account <id>", "Account id (accountId)")
-    .action(async (opts) => {
-      await runChannelsCommandWithDanger(async () => {
-        await runChannelLogout(
-          {
-            channel: opts.channel as string | undefined,
-            account: opts.account as string | undefined,
-          },
-          defaultRuntime,
-        );
-      }, "Channel logout failed");
-    });
+  }
 
   applyParentDefaultHelpAction(channels);
 }

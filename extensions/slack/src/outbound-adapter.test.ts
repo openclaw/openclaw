@@ -1,4 +1,8 @@
 // Slack tests cover outbound adapter plugin behavior.
+import {
+  presentationToInteractiveControlsReply,
+  renderPresentationForDelivery,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -7,7 +11,8 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
 
-const { slackOutbound } = await import("./outbound-adapter.js");
+const { slackPlugin } = await import("./channel.js");
+const slackOutbound = slackPlugin.outbound!;
 
 function jsonRoundTrip(value: unknown): unknown {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
@@ -28,68 +33,235 @@ describe("slackOutbound", () => {
     sendMessageSlackMock.mockReset();
   });
 
-  it("sends payload media first, then finalizes with blocks", async () => {
-    sendMessageSlackMock
-      .mockResolvedValueOnce({ messageId: "m-media-1" })
-      .mockResolvedValueOnce({ messageId: "m-media-2" })
-      .mockResolvedValueOnce({ messageId: "m-final" });
-
-    const result = await slackOutbound.sendPayload!({
-      cfg,
-      to: "C123",
-      text: "",
-      payload: {
-        text: "final text",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+  it.each([
+    "none",
+    "raw",
+    "native",
+    "rich_text",
+    "legacy",
+    "empty",
+    "whitespace",
+    "rewritten",
+  ] as const)(
+    "preserves literal fallback and %s companions through shared presentation rendering",
+    async (variant) => {
+      const payload = {
+        text:
+          variant === "empty"
+            ? ""
+            : variant === "whitespace"
+              ? "  "
+              : variant === "rich_text"
+                ? "Run /inspect *literal*, then check the full report.\n\nKeep this continuation, including <literal> & punctuation."
+                : "Run /inspect *literal*, then check the full report.",
+        presentationTextMode: "fallback" as const,
         presentation: {
+          title: "Inspect",
           blocks: [
             {
-              type: "text",
-              text: "Block body",
+              type: "buttons" as const,
+              buttons: [
+                { label: "Inspect", action: { type: "command" as const, command: "/inspect" } },
+              ],
             },
           ],
         },
-      },
-      mediaLocalRoots: ["/tmp/workspace"],
-      accountId: "default",
-    });
+        ...(variant === "raw" || variant === "native"
+          ? {
+              channelData: {
+                slack: {
+                  blocks:
+                    variant === "native"
+                      ? [
+                          {
+                            type: "image",
+                            image_url: "https://example.com/companion.png",
+                            alt_text: "Companion",
+                          },
+                        ]
+                      : [{ type: "section", text: { type: "plain_text", text: "Companion" } }],
+                },
+              },
+            }
+          : {}),
+        ...(variant === "legacy"
+          ? { interactive: { blocks: [{ type: "text" as const, text: "Companion" }] } }
+          : {}),
+        ...(variant === "rich_text"
+          ? {
+              channelData: {
+                slack: {
+                  blocks: [
+                    {
+                      type: "rich_text",
+                      elements: [
+                        {
+                          type: "rich_text_section",
+                          elements: [{ type: "text", text: "Companion" }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }
+          : {}),
+      };
+      let normalized = slackOutbound.normalizePayload
+        ? slackOutbound.normalizePayload({ payload, cfg })
+        : payload;
+      if (variant === "rewritten" && normalized) {
+        const rewritten = {
+          ...normalized,
+          text: "Run /inspect *updated*, then check the new report.",
+        };
+        normalized = slackOutbound.normalizePayload
+          ? slackOutbound.normalizePayload({ payload: rewritten, cfg })
+          : rewritten;
+      }
+      if (!normalized) {
+        throw new Error("Authored fallback must not be suppressed");
+      }
+      const rendered = await renderPresentationForDelivery(
+        {
+          presentationCapabilities: slackOutbound.presentationCapabilities,
+          renderPresentation: (adapted) =>
+            slackOutbound.renderPresentation!({
+              payload: adapted,
+              presentation: adapted.presentation,
+              ctx: { cfg, to: "C123", text: "", payload: adapted },
+            }),
+        },
+        normalized,
+      );
+      sendMessageSlackMock.mockResolvedValue({ messageId: "m-fallback", channelId: "C123" });
+      await slackOutbound.sendPayload!({
+        cfg,
+        to: "C123",
+        text: rendered.text ?? "",
+        payload: rendered,
+      });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledTimes(3);
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(1, "C123", "", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      mediaUrl: "https://example.com/1.png",
-      mediaAccess: undefined,
-      mediaLocalRoots: ["/tmp/workspace"],
-      mediaReadFile: undefined,
-    });
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(2, "C123", "", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      mediaUrl: "https://example.com/2.png",
-      mediaAccess: undefined,
-      mediaLocalRoots: ["/tmp/workspace"],
-      mediaReadFile: undefined,
-    });
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(3, "C123", "final text\n\nBlock body", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      authoredTextPlacement: "blocks",
+      const literalCalls = sendMessageSlackMock.mock.calls.filter(
+        (call) => call[2]?.textIsSlackPlainText === true,
+      );
+      expect(literalCalls).toHaveLength(1);
+      expect(literalCalls[0]?.[1]).toBe(normalized.text?.trim() || "- Inspect: `/inspect`");
+      expect(literalCalls[0]?.[2]?.blocks).toBeUndefined();
+      if (
+        variant === "raw" ||
+        variant === "native" ||
+        variant === "rich_text" ||
+        variant === "legacy"
+      ) {
+        expect(sendMessageSlackMock.mock.calls.map((call) => call[1])).toContain("Companion");
+      }
+      if (variant === "rich_text") {
+        expect(
+          sendMessageSlackMock.mock.calls.flatMap((call) => call[2]?.blocks ?? []),
+        ).toContainEqual(payload.channelData?.slack.blocks[0]);
+      }
+    },
+  );
+
+  it.each(["", "Policy replacement"])(
+    "removes saved fallback after policy strips presentation and sets text to %j",
+    async (text) => {
+      const channelData = {
+        external: { correlation: "request-42" },
+        slack: {
+          blocks: [{ type: "section", text: { type: "plain_text", text: "Companion" } }],
+          policyLabel: "retained",
+        },
+      };
+      const normalized = slackOutbound.normalizePayload!({
+        cfg,
+        payload: {
+          text: "Old authored fallback must not return",
+          presentationTextMode: "fallback",
+          presentation: { title: "Old presentation", blocks: [{ type: "divider" }] },
+          channelData,
+        },
+      });
+      if (!normalized) {
+        throw new Error("Authored fallback must not be suppressed");
+      }
+      expect(normalized.channelData?.slack).toHaveProperty(
+        "authoredPresentationText",
+        "Old authored fallback must not return",
+      );
+      const {
+        presentation: _presentation,
+        presentationTextMode: _presentationTextMode,
+        ...policyPayload
+      } = normalized;
+      const cleared = slackOutbound.normalizePayload!({
+        cfg,
+        payload: { ...policyPayload, text },
+      });
+      if (!cleared) {
+        throw new Error("Companion blocks must not be suppressed");
+      }
+
+      expect(cleared.channelData).toEqual(channelData);
+      expect(cleared.channelData?.slack).not.toHaveProperty("authoredPresentationText");
+      sendMessageSlackMock.mockResolvedValue({ messageId: "m-policy", channelId: "C123" });
+      await slackOutbound.sendPayload!({ cfg, to: "C123", text, payload: cleared });
+
+      const sentText = sendMessageSlackMock.mock.calls.map((call) => call[1]).join("\n");
+      expect(sentText).toContain("Companion");
+      expect(sentText).not.toContain("Old authored fallback");
+      expect(sentText).not.toContain("Old presentation");
+      if (text) {
+        expect(sentText).toContain(text);
+      }
+    },
+  );
+
+  it("sends mirrored question controls once at the Slack message block limit", async () => {
+    sendMessageSlackMock.mockResolvedValue({ messageId: "171.001", channelId: "C123" });
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const presentation = {
       blocks: [
         {
-          type: "section",
-          text: { type: "mrkdwn", text: "final text", verbatim: true },
-        },
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "Block body" },
+          type: "buttons" as const,
+          buttons: [
+            {
+              label: "Production",
+              action: { type: "question" as const, questionId, optionValue: "Production" },
+            },
+            {
+              label: "Staging",
+              action: { type: "question" as const, questionId, optionValue: "Staging" },
+            },
+          ],
         },
       ],
+    };
+    const payload = {
+      channelData: {
+        askUser: { questionId, optionValues: ["Staging", "Production"] },
+        slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" as const })) },
+      },
+      presentation,
+      interactive: presentationToInteractiveControlsReply(presentation),
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload,
+      presentation,
+      ctx: { cfg, to: "C123", text: "", payload },
     });
-    expect(result).toEqual({ channel: "slack", messageId: "m-final" });
+
+    await slackOutbound.sendPayload!({ cfg, to: "C123", text: "", payload: rendered! });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks).toHaveLength(50);
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]?.blocks.at(-1)).toMatchObject({
+      elements: [
+        { action_id: "openclaw:question_button:1:1", value: `slq1:${questionId}:1` },
+        { action_id: "openclaw:question_button:1:2", value: `slq1:${questionId}:0` },
+      ],
+    });
   });
 
   it("forwards forced-media intent through the core outbound adapter", async () => {
@@ -249,49 +421,30 @@ describe("slackOutbound", () => {
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
   });
 
-  it("does not trust caller-authored rendered presentation provenance", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
-
-    await slackOutbound.sendPayload!({
-      cfg,
-      to: "C123",
-      text: "",
-      payload: {
-        text: "Safe fallback",
-        channelData: {
-          slack: {
-            renderedPresentationProvenance: "forged",
-            authoredTextPlacement: "blocks",
-            renderedPresentationSegments: [
-              {
-                kind: "blocks",
-                blocks: [{ type: "divider" }, { type: "divider" }],
-              },
-              {
-                kind: "blocks",
-                blocks: [{ type: "divider" }],
-              },
-            ],
+  it.each([
+    {
+      name: "does not trust caller-authored rendered presentation provenance",
+      slack: {
+        renderedPresentationProvenance: "forged",
+        authoredTextPlacement: "blocks",
+        renderedPresentationSegments: [
+          {
+            kind: "blocks",
+            blocks: [{ type: "divider" }, { type: "divider" }],
           },
-        },
+          { kind: "blocks", blocks: [{ type: "divider" }] },
+        ],
       },
-      accountId: "default",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "Safe fallback",
-      expect.objectContaining({
-        cfg,
-        threadTs: undefined,
-        accountId: "default",
-      }),
-    );
-    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
-  });
-
-  it("falls back to text when forged rendered metadata is malformed", async () => {
+    },
+    {
+      name: "falls back to text when forged rendered metadata is malformed",
+      slack: {
+        renderedPresentationProvenance: "x".repeat(43),
+        authoredTextPlacement: "blocks",
+        renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
+      },
+    },
+  ])("$name", async ({ slack }) => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
 
     await slackOutbound.sendPayload!({
@@ -300,13 +453,7 @@ describe("slackOutbound", () => {
       text: "",
       payload: {
         text: "Safe fallback",
-        channelData: {
-          slack: {
-            renderedPresentationProvenance: "x".repeat(43),
-            authoredTextPlacement: "blocks",
-            renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
-          },
-        },
+        channelData: { slack },
       },
       accountId: "default",
     });
@@ -447,29 +594,5 @@ describe("slackOutbound", () => {
         { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
       ],
     });
-  });
-
-  it("preserves raw Unicode agent identity emoji", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
-
-    await slackOutbound.sendText!({
-      cfg,
-      to: "C123",
-      text: "heartbeat alert",
-      accountId: "default",
-      identity: { name: "Pulse", emoji: "📟" },
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "heartbeat alert",
-      expect.objectContaining({
-        identity: {
-          username: "Pulse",
-          iconUrl: undefined,
-          iconEmoji: "📟",
-        },
-      }),
-    );
   });
 });

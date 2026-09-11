@@ -4,10 +4,15 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeModelCost } from "../config/model-cost.js";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig as ProviderConfig,
+} from "../config/types.models.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export function normalizeProviderMapKeys<T>(
   providers: Record<string, T> | null | undefined,
@@ -43,22 +48,47 @@ export type ExistingProviderConfig = ProviderConfig & {
   api?: string;
 };
 
-function isPositiveFiniteTokenLimit(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
+/** Authored fields keyed by exact provider/model tuples, independent of display ref syntax. */
+export type SourceModelFields = ReadonlyMap<
+  string,
+  { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
+>;
 
-function resolvePreferredTokenLimit(params: {
-  explicitPresent: boolean;
-  explicitValue: unknown;
-  implicitValue: unknown;
-}): number | undefined {
-  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
-    return params.explicitValue;
-  }
-  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
-    return params.implicitValue;
-  }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
+export type ProviderModelCatalog = {
+  api?: string;
+  baseUrl?: string;
+  headers?: ProviderConfig["headers"];
+  compat?: ModelDefinitionConfig["compat"];
+  models?: Array<
+    Omit<Partial<ModelDefinitionConfig>, "id" | "api"> & {
+      id: string;
+      api?: string;
+      maxTokensSource?: "configured" | "discovered";
+    }
+  >;
+};
+
+type ProviderModelMergeOptions = {
+  providerId: string;
+  modelIdMatching?: "exact";
+  sourceModelFields?: SourceModelFields;
+  preserveConfiguredModelMembership?: boolean;
+};
+
+export function buildSourceModelFields(
+  sourceProviders: Record<string, ProviderConfig> | undefined,
+): SourceModelFields {
+  return new Map(
+    Object.entries(normalizeProviderMapKeys(sourceProviders)).flatMap(([providerId, provider]) =>
+      (provider.models ?? []).map(
+        (model) =>
+          [
+            JSON.stringify([providerId, model.id.trim()]),
+            { inputOmitted: !Object.hasOwn(model, "input"), cost: model.cost },
+          ] as const,
+      ),
+    ),
+  );
 }
 
 function getProviderModelId(model: unknown): string {
@@ -70,10 +100,16 @@ function getProviderModelId(model: unknown): string {
 }
 
 /** Merges implicit provider models with explicit config while preserving explicit fields. */
+export function mergeProviderModels<TProvider extends ProviderModelCatalog>(
+  implicit: TProvider,
+  explicit: TProvider,
+  options?: ProviderModelMergeOptions,
+): TProvider;
 export function mergeProviderModels(
-  implicit: ProviderConfig,
-  explicit: ProviderConfig,
-): ProviderConfig {
+  implicit: ProviderModelCatalog,
+  explicit: ProviderModelCatalog,
+  options?: ProviderModelMergeOptions,
+): ProviderModelCatalog {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
   const implicitHeaders =
@@ -99,15 +135,17 @@ export function mergeProviderModels(
     };
   }
 
+  const getModelId = (model: { id: string }) =>
+    options?.modelIdMatching === "exact" ? model.id : getProviderModelId(model);
   const implicitById = new Map(
     implicitModels
-      .map((model) => [getProviderModelId(model), model] as const)
+      .map((model) => [getModelId(model), model] as const)
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
 
   const mergedModels = explicitModels.map((explicitModel) => {
-    const id = getProviderModelId(explicitModel);
+    const id = getModelId(explicitModel);
     if (!id) {
       return explicitModel;
     }
@@ -116,22 +154,42 @@ export function mergeProviderModels(
     if (!implicitModel) {
       return explicitModel;
     }
+    const sourceFields = options?.sourceModelFields?.get(
+      JSON.stringify([normalizeProviderId(options.providerId), id]),
+    );
+    // Materialized defaults are not authored pins. Reuse raw source cost in both
+    // merge passes so the final pass cannot restore an older catalog schedule.
+    const cost = mergeModelCost(
+      implicitModel.cost,
+      sourceFields ? sourceFields.cost : explicitModel.cost,
+    );
+    const input =
+      sourceFields?.inputOmitted && implicitModel.input !== undefined
+        ? implicitModel.input
+        : "input" in explicitModel
+          ? explicitModel.input
+          : implicitModel.input;
+    if (options?.preserveConfiguredModelMembership) {
+      return Object.assign(
+        {},
+        explicitModel,
+        { cost },
+        sourceFields?.inputOmitted ? { input } : {},
+      );
+    }
 
-    const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
-      explicitValue: explicitModel.contextWindow,
-      implicitValue: implicitModel.contextWindow,
-    });
-    const contextTokens = resolvePreferredTokenLimit({
-      explicitPresent: "contextTokens" in explicitModel,
-      explicitValue: explicitModel.contextTokens,
-      implicitValue: implicitModel.contextTokens,
-    });
-    const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
-      explicitValue: explicitModel.maxTokens,
-      implicitValue: implicitModel.maxTokens,
-    });
+    const contextWindow =
+      asPositiveFiniteNumber(explicitModel.contextWindow) ??
+      asPositiveFiniteNumber(implicitModel.contextWindow);
+    const contextTokens =
+      asPositiveFiniteNumber(explicitModel.contextTokens) ??
+      asPositiveFiniteNumber(implicitModel.contextTokens);
+    const explicitMaxTokens = asPositiveFiniteNumber(explicitModel.maxTokens);
+    const maxTokens = explicitMaxTokens ?? asPositiveFiniteNumber(implicitModel.maxTokens);
+    const maxTokensSource =
+      explicitMaxTokens === undefined
+        ? implicitModel.maxTokensSource
+        : explicitModel.maxTokensSource;
     const compat = resolveCatalogOwnedModelCompat({
       catalogRoute: {
         api: implicitModel.api ?? implicit.api,
@@ -146,27 +204,39 @@ export function mergeProviderModels(
       configuredCompat: explicitModel.compat,
     });
 
+    const {
+      api: _api,
+      baseUrl: _baseUrl,
+      headers: _headers,
+      maxTokensSource: _maxTokensSource,
+      ...implicitMetadata
+    } = implicitModel;
     return Object.assign(
       {},
+      implicitMetadata,
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        input,
+        cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
+      maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
     );
   });
 
-  for (const implicitModel of implicitModels) {
-    const id = getProviderModelId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
+  if (!options?.preserveConfiguredModelMembership) {
+    for (const implicitModel of implicitModels) {
+      const id = getModelId(implicitModel);
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      mergedModels.push(implicitModel);
     }
-    seen.add(id);
-    mergedModels.push(implicitModel);
   }
 
   return {
@@ -188,11 +258,17 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceModelFields?: SourceModelFields;
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, {
+          providerId: providerKey,
+          sourceModelFields: params.sourceModelFields,
+        })
+      : explicit;
   }
   return out;
 }
@@ -263,7 +339,7 @@ function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
-  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */

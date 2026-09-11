@@ -8,7 +8,6 @@ import {
   handleDiscordMessageAction,
   requestDiscord,
 } from "@openclaw/discord/api.js";
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
@@ -16,7 +15,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
-import { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
@@ -153,23 +152,6 @@ type DiscordObservedMessage = {
   timestamp?: string;
 };
 
-type DiscordObservedMessageArtifact = {
-  messageId?: string;
-  channelId?: string;
-  guildId?: string;
-  senderId?: string;
-  senderIsBot: boolean;
-  senderUsername?: string;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  matchedScenario?: boolean;
-  text?: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
-  replyToMessageId?: string;
-  timestamp?: string;
-};
-
 type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
@@ -286,7 +268,7 @@ export const discordQaStatusReactionsToolOnlyScenario: DiscordQaScenarioImplemen
         "Think briefly, then reply with only this exact marker:",
         token,
       ].join(" "),
-      expectedSequence: ["👀", DEFAULT_EMOJIS.thinking, DEFAULT_EMOJIS.done],
+      expectedSequence: ["👀"],
     };
   },
 };
@@ -1347,10 +1329,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   }
 }
 
-async function waitForDiscordChannelRunning(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  accountId: string,
-) {
+async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   let lastStatus:
     | {
@@ -1410,49 +1389,6 @@ async function waitForDiscordChannelRunning(
   throw new Error(`discord account "${accountId}" did not become connected${details}`);
 }
 
-function buildObservedMessagesArtifact(params: {
-  observedMessages: DiscordObservedMessage[];
-  includeContent: boolean;
-  redactMetadata: boolean;
-}) {
-  return params.observedMessages.map<DiscordObservedMessageArtifact>((message) => {
-    const scenarioContext = {
-      ...(message.scenarioId ? { scenarioId: message.scenarioId } : {}),
-      ...(message.scenarioTitle ? { scenarioTitle: message.scenarioTitle } : {}),
-      ...(typeof message.matchedScenario === "boolean"
-        ? { matchedScenario: message.matchedScenario }
-        : {}),
-    };
-    const base = params.redactMetadata
-      ? {
-          ...scenarioContext,
-          senderIsBot: message.senderIsBot,
-          triggerTimestamp: message.triggerTimestamp,
-          timestamp: message.timestamp,
-        }
-      : {
-          ...scenarioContext,
-          messageId: message.messageId,
-          channelId: message.channelId,
-          guildId: message.guildId,
-          senderId: message.senderId,
-          senderIsBot: message.senderIsBot,
-          senderUsername: message.senderUsername,
-          triggerMessageId: message.triggerMessageId,
-          triggerTimestamp: message.triggerTimestamp,
-          replyToMessageId: message.replyToMessageId,
-          timestamp: message.timestamp,
-        };
-    if (!params.includeContent) {
-      return base;
-    }
-    return {
-      ...base,
-      text: message.text,
-    };
-  });
-}
-
 function matchesDiscordScenarioReply(params: {
   channelId: string;
   message: DiscordObservedMessage;
@@ -1505,7 +1441,6 @@ const testing = {
   assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
   buildDiscordWebMessageUrl,
-  buildObservedMessagesArtifact,
   computeDiscordRttMs,
   getCurrentDiscordUser,
   observeStatusReactionTimeline,

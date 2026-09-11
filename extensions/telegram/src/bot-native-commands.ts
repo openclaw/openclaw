@@ -16,6 +16,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type {
   TelegramNativeCommandCallbackDispatcher,
+  TelegramPendingInboundTarget,
   TelegramResolvedGroupConfig,
 } from "./bot-handlers.types.js";
 import {
@@ -46,6 +47,7 @@ const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
 type TelegramNativeCommandContext = Context & { match?: string };
 
 type RegisterTelegramNativeCommandsParams = {
+  cancelPendingInbound: (target: TelegramPendingInboundTarget) => void;
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -76,6 +78,7 @@ type RegisterTelegramNativeCommandsParams = {
 };
 
 export const registerTelegramNativeCommands = ({
+  cancelPendingInbound,
   bot,
   cfg,
   runtime,
@@ -266,6 +269,7 @@ export const registerTelegramNativeCommands = ({
       return await executeTelegramBuiltinCommand({
         ...buildExecutorParams({ botUser, msg, rawText }),
         commandName: command.name,
+        cancelPendingInbound,
       });
     };
     if (nativeEnabled) {
@@ -304,9 +308,6 @@ export const registerTelegramNativeCommands = ({
         candidate: pluginCommand.spec,
       });
     });
-  }
-  if (pluginCatalog.selectedCommands.length > 0) {
-    pluginCommandRuntime.retainNativeCatalog("telegram");
   }
 
   if (!handleLoginCallback) {

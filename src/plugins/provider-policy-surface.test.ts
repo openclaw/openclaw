@@ -15,9 +15,12 @@ describe("direct provider policy surface", () => {
     });
     const resolveModelRoutes = vi.fn();
     const isResponseModelEquivalent = vi.fn();
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
+    const projectRealtimeVoicePublicProjection = vi.fn();
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(() => ({
+      deprecatedProfileIds: ["demo:legacy"],
       resolveModelRoutes,
       isResponseModelEquivalent,
+      projectRealtimeVoicePublicProjection,
     }));
 
     vi.doMock("./bundled-dir.js", () => ({
@@ -25,7 +28,7 @@ describe("direct provider policy surface", () => {
     }));
     vi.doMock("./manifest-registry.js", manifestRegistryModuleFactory);
     vi.doMock("./public-surface-loader.js", () => ({
-      loadBundledPluginPublicArtifactModuleSync,
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
     }));
 
     const { resolveDirectBundledProviderPolicySurface } = await importFreshModule<
@@ -36,59 +39,39 @@ describe("direct provider policy surface", () => {
 
     expect(surface?.resolveModelRoutes).toBe(resolveModelRoutes);
     expect(surface?.isResponseModelEquivalent).toBe(isResponseModelEquivalent);
-    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+    expect(surface?.projectRealtimeVoicePublicProjection).toBe(
+      projectRealtimeVoicePublicProjection,
+    );
+    expect(surface?.deprecatedProfileIds).toEqual(["demo:legacy"]);
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
       dirName: "openai",
-      artifactBasename: "provider-policy-api.js",
+      artifactCandidates: ["provider-policy-api.js"],
     });
     expect(manifestRegistryModuleFactory).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { owner: "bundled", initial: "surface" },
-    { owner: "bundled", initial: "missing" },
-    { owner: "external", initial: "surface" },
-    { owner: "external", initial: "missing" },
-  ] as const)(
-    "drops cached $owner provider policy $initial entries when plugin metadata changes",
-    async ({ owner, initial }) => {
-      const retiredHook = vi.fn();
-      const replacementHook = vi.fn();
-      const loadArtifact = vi
-        .fn()
-        .mockReturnValueOnce(initial === "surface" ? { resolveModelRoutes: retiredHook } : {})
-        .mockReturnValueOnce({ resolveModelRoutes: replacementHook });
+  it("returns no policy for a provider without a bundled artifact", async () => {
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync: () => null,
+    }));
+    const { resolveDirectBundledProviderPolicySurface } = await importFreshModule<
+      typeof import("./provider-policy-surface.js")
+    >(import.meta.url, "./provider-policy-surface.js?scope=missing-provider-policy");
 
-      vi.doMock("./bundled-dir.js", () => ({
-        resolveBundledPluginsDir: () => "/tmp/bundled-plugins",
-      }));
-      vi.doMock("./public-surface-loader.js", () => ({
-        loadBundledPluginPublicArtifactModuleSync: loadArtifact,
-        loadPluginPublicArtifactModuleSync: loadArtifact,
-      }));
+    expect(resolveDirectBundledProviderPolicySurface("custom-provider")).toBeNull();
+  });
 
-      const policySurface = await importFreshModule<typeof import("./provider-policy-surface.js")>(
-        import.meta.url,
-        `./provider-policy-surface.js?scope=lifecycle-${owner}-${initial}`,
-      );
-      const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
-      const resolveSurface = () =>
-        owner === "bundled"
-          ? policySurface.resolveDirectBundledProviderPolicySurface("demo")
-          : policySurface.resolveTrustedExternalProviderPolicySurface({
-              pluginId: "demo",
-              pluginRoot: "/tmp/demo",
-              trustedOfficialInstall: true,
-            });
+  it("propagates errors from a present provider artifact", async () => {
+    const error = new Error("Provider artifact is outside its boundary root");
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync: () => {
+        throw error;
+      },
+    }));
+    const { resolveDirectBundledProviderPolicySurface } = await importFreshModule<
+      typeof import("./provider-policy-surface.js")
+    >(import.meta.url, "./provider-policy-surface.js?scope=invalid-provider-policy");
 
-      const expectedInitial = initial === "surface" ? retiredHook : undefined;
-      expect(resolveSurface()?.resolveModelRoutes).toBe(expectedInitial);
-      expect(resolveSurface()?.resolveModelRoutes).toBe(expectedInitial);
-      expect(loadArtifact).toHaveBeenCalledOnce();
-
-      clearPluginMetadataLifecycleCaches();
-
-      expect(resolveSurface()?.resolveModelRoutes).toBe(replacementHook);
-      expect(loadArtifact).toHaveBeenCalledTimes(2);
-    },
-  );
+    expect(() => resolveDirectBundledProviderPolicySurface("custom-provider")).toThrow(error);
+  });
 });

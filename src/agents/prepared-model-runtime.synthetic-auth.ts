@@ -1,6 +1,8 @@
 /** Synthetic-auth provider ref selection and prepared-catalog resolution for model-runtime builds. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
+import { prepareSyntheticAuthWithProvider } from "../plugins/provider-synthetic-auth.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 
 // Provider-scoped live builds must not fan ambient synthetic-auth discovery out to every
@@ -13,6 +15,10 @@ export function scopeSyntheticAuthProviderRefs(
     return [...refs];
   }
   const scoped = new Set(providerDiscoveryProviderIds.map((id) => normalizeProviderId(id)));
+  // OpenAI's native runtime has a separate auth namespace, never a bearer alias.
+  if (scoped.has("openai")) {
+    scoped.add("codex");
+  }
   return refs.filter((ref) => scoped.has(normalizeProviderId(ref)));
 }
 
@@ -22,7 +28,7 @@ export function listPreparedSyntheticAuthProviderRefs(
   return [
     ...new Set(
       providers.flatMap((provider) =>
-        typeof provider.resolveSyntheticAuth === "function"
+        provider.resolveSyntheticAuth || provider.prepareSyntheticAuth
           ? [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])]
           : [],
       ),
@@ -30,24 +36,28 @@ export function listPreparedSyntheticAuthProviderRefs(
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resolvePreparedSyntheticAuth(params: {
+export async function prepareSyntheticAuth(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  workspaceDir?: string;
   provider: string;
   providers: readonly ProviderPlugin[];
-}): { apiKey?: string } | undefined {
+}): Promise<ProviderSyntheticAuthResult | undefined> {
   const normalizedProvider = normalizeProviderId(params.provider);
   const providerPlugin = params.providers.find((candidate) =>
     [candidate.id, ...(candidate.aliases ?? []), ...(candidate.hookAliases ?? [])].some(
       (ref) => normalizeProviderId(ref) === normalizedProvider,
     ),
   );
-  return (
-    providerPlugin?.resolveSyntheticAuth?.({
-      config: params.config,
-      provider: params.provider,
-      providerConfig: Object.entries(params.config.models?.providers ?? {}).find(
-        ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
-      )?.[1],
-    }) ?? undefined
-  );
+  const context = {
+    config: params.config,
+    provider: params.provider,
+    providerConfig: Object.entries(params.config.models?.providers ?? {}).find(
+      ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
+    )?.[1],
+  };
+  return providerPlugin
+    ? await prepareSyntheticAuthWithProvider(providerPlugin, context, params)
+    : undefined;
 }

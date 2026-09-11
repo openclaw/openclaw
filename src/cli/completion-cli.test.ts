@@ -5,54 +5,24 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { afterAll, describe, expect, it } from "vitest";
-import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
+import { getCompletionScript } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
+  createCompletionProgram,
+  createDocumentedCompletionProgram,
   itWithFish,
   itWithPowerShell,
   PowerShellCompletionRunner,
   runGeneratedBashCompletion,
   runGeneratedFishCompletion,
 } from "./completion-cli.test-support.js";
+import { registerModelsCli } from "./models-cli.js";
 
 const powerShellCompletion = new PowerShellCompletionRunner();
 
 afterAll(async () => {
   await powerShellCompletion.close();
 });
-
-function createCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.description("CLI root");
-  program.option("-v, --verbose", "Verbose output");
-  program.option(
-    "--status-json",
-    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
-  );
-
-  const gateway = program.command("gateway").description("Gateway commands");
-  gateway.option("--force", "Force the action");
-  gateway.option("-t, --token <token>", "Gateway token");
-
-  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
-  gateway.command("restart").description("Restart gateway");
-  program
-    .command("agent")
-    .description("Agent commands")
-    .option("--verbose <on|off>", "Set verbosity");
-  const sessions = program.command("sessions").description("Session commands");
-  sessions.option("--verbose", "Verbose output");
-  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
-
-  return program;
-}
-
-function createDocumentedCompletionProgram(): Command {
-  const program = createCompletionProgram();
-  registerCompletionCli(program);
-  return program;
-}
 
 function createOptionalChoiceCompletionProgram(): Command {
   const program = new Command().name("openclaw");
@@ -85,6 +55,73 @@ describe("completion-cli", () => {
     );
     expect(script).not.toContain("John'\\''s");
   });
+
+  it.skipIf(process.platform === "win32").each(["built-in", "root", "nested"] as const)(
+    "keeps %s command descriptions literal through real zsh parsing",
+    (scope) => {
+      const program = new Command().name("openclaw");
+      let describedCommand: Command;
+      let completionFunction: string;
+      if (scope === "built-in") {
+        registerModelsCli(program);
+        const auth = program.commands
+          .find((command) => command.name() === "models")
+          ?.commands.find((command) => command.name() === "auth");
+        const logout = auth?.commands.find((command) => command.name() === "logout");
+        if (!logout) {
+          throw new Error("Models auth logout command is unavailable");
+        }
+        describedCommand = logout;
+        completionFunction = "_openclaw_models_auth";
+      } else {
+        const parent = scope === "nested" ? program.command("parent") : program;
+        describedCommand = parent
+          .command("inspect")
+          .alias("review")
+          .description(
+            'Show John\'s "literal" $OPENCLAW_COMPLETION_LITERAL with `models auth list`',
+          );
+        completionFunction = scope === "nested" ? "_openclaw_parent" : "_openclaw_root_completion";
+      }
+
+      const result = spawnSync(
+        "zsh",
+        [
+          "-fc",
+          `${getCompletionScript("zsh", program)}
+OPENCLAW_COMPLETION_LITERAL=expanded-value
+models() { printf '%s\\n' "OPENCLAW_COMPLETION_DESCRIPTION_EVALUATED:$*" >&2; }
+_arguments() {
+  local spec
+  for spec in "$@"; do
+    if [[ "$spec" == "1: :"* ]]; then
+      local -a action
+      eval "action=( \${spec#1: :} )"
+      printf '%s\\0' "\${action[@]}"
+    fi
+  done
+}
+${completionFunction}
+`,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      if (result.error) {
+        if ("code" in result.error && result.error.code === "ENOENT") {
+          return;
+        }
+        throw result.error;
+      }
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const action = result.stdout.split("\0").filter(Boolean);
+      expect(action.slice(0, 2)).toEqual(["_values", "command"]);
+      for (const name of [describedCommand.name(), ...describedCommand.aliases()]) {
+        expect(action).toContain(`${name}[${describedCommand.description()}]`);
+      }
+    },
+  );
 
   it("marks zsh option arguments and completes validated shell choices", () => {
     const script = getCompletionScript("zsh", createDocumentedCompletionProgram());
@@ -273,32 +310,12 @@ _openclaw_root_completion
   });
 
   itWithPowerShell.each([
-    {
-      name: "an ordinary prefix",
-      commandLine: "openclaw --value al",
-      expected: ["alpha"],
-    },
-    {
-      name: "a literal asterisk",
-      commandLine: "openclaw --value a*",
-      expected: ["'a*literal'"],
-    },
-    {
-      name: "a literal opening bracket",
-      commandLine: "openclaw --value a[",
-      expected: ["'a[bracket]'"],
-    },
-    {
-      name: "a case-insensitive literal asterisk",
-      commandLine: "openclaw --value A*",
-      expected: ["'a*literal'"],
-    },
-    {
-      name: "an inline literal asterisk",
-      commandLine: "openclaw --value=a*",
-      expected: ["--value='a*literal'"],
-    },
-  ])("matches real PowerShell choices with $name", async ({ commandLine, expected }) => {
+    ["an ordinary prefix", "openclaw --value al", ["alpha"]],
+    ["a literal asterisk", "openclaw --value a*", ["'a*literal'"]],
+    ["a literal opening bracket", "openclaw --value a[", ["'a[bracket]'"]],
+    ["a case-insensitive literal asterisk", "openclaw --value A*", ["'a*literal'"]],
+    ["an inline literal asterisk", "openclaw --value=a*", ["--value='a*literal'"]],
+  ])("matches real PowerShell choices with %s", async (_name, commandLine, expected) => {
     const program = new Command().name("openclaw");
     program.addOption(
       new Option("--value <value>", "Value").choices(["alpha", "a*literal", "a[bracket]"]),
@@ -308,25 +325,25 @@ _openclaw_root_completion
   });
 
   itWithPowerShell.each([
-    { name: "ordinary choices", value: "alpha", prefix: "al" },
-    { name: "whitespace", value: "two words", prefix: "tw" },
-    { name: "apostrophes", value: "Jane's", prefix: "Ja" },
-    {
-      name: "literal command substitution",
-      value: "literal $(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)",
-      prefix: "literal",
-    },
-    {
-      name: "literal backtick metacharacters",
-      value: "literal `$(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)",
-      prefix: "literal",
-    },
-    {
-      name: "literal statement separators",
-      value: "literal; Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED",
-      prefix: "literal",
-    },
-  ])("inserts PowerShell $name as one safe argument", async ({ value, prefix }) => {
+    ["ordinary choices", "alpha", "al"],
+    ["whitespace", "two words", "tw"],
+    ["apostrophes", "Jane's", "Ja"],
+    [
+      "literal command substitution",
+      "literal $(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)",
+      "literal",
+    ],
+    [
+      "literal backtick metacharacters",
+      "literal `$(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)",
+      "literal",
+    ],
+    [
+      "literal statement separators",
+      "literal; Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED",
+      "literal",
+    ],
+  ])("inserts PowerShell %s as one safe argument", async (_name, value, prefix) => {
     const program = new Command().name("openclaw");
     program.addOption(new Option("--value <value>", "Value").choices([value]));
     const safeValue = /^[A-Za-z0-9_./:+-]+$/.test(value)
@@ -525,20 +542,20 @@ _openclaw_root_completion
   });
 
   itWithFish.each([
-    { name: "whitespace", value: "two words", prefix: "tw" },
-    { name: "double quotes", value: 'say "hello"', prefix: "sa" },
-    { name: "apostrophes", value: "it's literal", prefix: "it" },
-    {
-      name: "literal command substitution",
-      value: "literal $(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)",
-      prefix: "literal",
-    },
-    {
-      name: "literal backtick substitution",
-      value: "literal `printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`",
-      prefix: "literal",
-    },
-  ])("preserves Fish choice $name as one inert candidate", ({ value, prefix }) => {
+    ["whitespace", "two words", "tw"],
+    ["double quotes", 'say "hello"', "sa"],
+    ["apostrophes", "it's literal", "it"],
+    [
+      "literal command substitution",
+      "literal $(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)",
+      "literal",
+    ],
+    [
+      "literal backtick substitution",
+      "literal `printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`",
+      "literal",
+    ],
+  ])("preserves Fish choice %s as one inert candidate", (_name, value, prefix) => {
     const program = new Command().name("openclaw");
     program.addOption(new Option("--value <value>", "Value").choices([value]));
 
@@ -657,86 +674,38 @@ _openclaw_root_completion
   );
 
   it.skipIf(process.platform === "win32").each([
-    {
-      name: "a long shell flag",
-      words: ["openclaw", "completion", "--shell", "f"],
-      expected: ["fish"],
-    },
-    {
-      name: "a short shell flag",
-      words: ["openclaw", "completion", "-s", "f"],
-      expected: ["fish"],
-    },
-    {
-      name: "an inline long shell flag",
-      words: ["openclaw", "completion", "--shell=f"],
-      expected: ["--shell=fish"],
-    },
-    {
-      name: "an inline short shell flag",
-      words: ["openclaw", "completion", "-s=f"],
-      expected: ["-s=fish"],
-    },
-  ])("completes validated values in real Bash after $name", ({ words, expected }) => {
+    ["a long shell flag", ["openclaw", "completion", "--shell", "f"], ["fish"]],
+    ["a short shell flag", ["openclaw", "completion", "-s", "f"], ["fish"]],
+    ["an inline long shell flag", ["openclaw", "completion", "--shell=f"], ["--shell=fish"]],
+    [
+      "an unsupported equals prefix in a short option value",
+      ["openclaw", "completion", "-s=f"],
+      [],
+    ],
+  ])("completes validated values in real Bash after %s", (_name, words, expected) => {
     expect(runGeneratedBashCompletion(createDocumentedCompletionProgram(), words)).toEqual(
       expected,
     );
   });
 
   it.skipIf(process.platform === "win32").each([
-    {
-      name: "an omitted optional value",
-      words: ["openclaw", "--mode", "--j"],
-      expected: ["--json"],
-    },
-    {
-      name: "a separate optional value",
-      words: ["openclaw", "--mode", "a"],
-      expected: ["auto"],
-    },
-    {
-      name: "an inline optional value",
-      words: ["openclaw", "--mode=a"],
-      expected: ["--mode=auto"],
-    },
-    {
-      name: "a hyphen-prefixed optional choice",
-      words: ["openclaw", "--mode", "-l"],
-      expected: ["-legacy"],
-    },
-  ])("preserves real Bash completion after $name", ({ words, expected }) => {
+    ["an omitted optional value", ["openclaw", "--mode", "--j"], ["--json"]],
+    ["a separate optional value", ["openclaw", "--mode", "a"], ["auto"]],
+    ["an inline optional value", ["openclaw", "--mode=a"], ["--mode=auto"]],
+    ["a hyphen-prefixed optional choice", ["openclaw", "--mode", "-l"], ["-legacy"]],
+  ])("preserves real Bash completion after %s", (_name, words, expected) => {
     expect(runGeneratedBashCompletion(createOptionalChoiceCompletionProgram(), words)).toEqual(
       expected,
     );
   });
 
   it.skipIf(process.platform === "win32").each([
-    {
-      name: "whitespace",
-      value: "two words",
-      prefix: "two ",
-    },
-    {
-      name: "double quotes",
-      value: 'say "hello"',
-      prefix: 'say "',
-    },
-    {
-      name: "apostrophes",
-      value: "it's literal",
-      prefix: "it's",
-    },
-    {
-      name: "literal command substitution",
-      value: "$(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)",
-      prefix: "$(",
-    },
-    {
-      name: "literal backtick substitution",
-      value: "`printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`",
-      prefix: "`",
-    },
-  ])("keeps Bash choice $name literal without executing it", ({ value, prefix }) => {
+    ["whitespace", "two words", "two "],
+    ["double quotes", 'say "hello"', 'say "'],
+    ["apostrophes", "it's literal", "it\\'s"],
+    ["literal command substitution", "$(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)", "$("],
+    ["literal backtick substitution", "`printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`", "`"],
+  ])("keeps Bash choice %s literal without executing it", (_name, value, prefix) => {
     const program = new Command().name("openclaw");
     program.addOption(new Option("--value <value>", "Value").choices([value]));
 
@@ -747,27 +716,19 @@ _openclaw_root_completion
   });
 
   it.skipIf(process.platform === "win32").each([
-    {
-      name: "a root option",
-      words: ["openclaw", "--channel", "b"],
-      expected: ["beta"],
-    },
-    {
-      name: "an inherited parent option",
-      words: ["openclaw", "cron", "create", "--channel", "pre"],
-      expected: ["preview"],
-    },
-    {
-      name: "an inline inherited parent option",
-      words: ["openclaw", "cron", "create", "--channel=pre"],
-      expected: ["--channel=preview"],
-    },
-    {
-      name: "a differently prefixed inherited parent choice",
-      words: ["openclaw", "cron", "create", "--channel", "pro"],
-      expected: ["production"],
-    },
-  ])("uses the nearest validated Bash choices for $name", ({ words, expected }) => {
+    ["a root option", ["openclaw", "--channel", "b"], ["beta"]],
+    ["an inherited parent option", ["openclaw", "cron", "create", "--channel", "pre"], ["preview"]],
+    [
+      "an inline inherited parent option",
+      ["openclaw", "cron", "create", "--channel=pre"],
+      ["--channel=preview"],
+    ],
+    [
+      "a differently prefixed inherited parent choice",
+      ["openclaw", "cron", "create", "--channel", "pro"],
+      ["production"],
+    ],
+  ])("uses the nearest validated Bash choices for %s", (_name, words, expected) => {
     const program = createAliasedCompletionProgram();
     program.addOption(
       new Option("--channel <channel>", "Update channel").choices(["stable", "beta"]),
@@ -824,7 +785,9 @@ _openclaw_root_completion
         "--shell=fish",
       ]);
       expect(
-        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"]),
+        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"], {
+          line: "openclaw completion --shell=f",
+        }),
       ).toEqual(["fish"]);
       expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-sf"])).toEqual([
         "-sfish",
@@ -841,6 +804,21 @@ _openclaw_root_completion
         "-yspowershell",
         "-ysfish",
       ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves pending short-cluster choices that start with a hyphen in real Bash",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .option("-v, --verbose", "Verbose output")
+        .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]))
+        .exitOverride();
+
+      program.parse(["-vm", "-legacy"], { from: "user" });
+      expect(program.opts()).toEqual({ verbose: true, mode: "-legacy" });
+      expect(runGeneratedBashCompletion(program, ["openclaw", "-vm", "-le"])).toEqual(["-legacy"]);
     },
   );
 

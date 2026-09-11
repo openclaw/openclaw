@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as optionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
   TasksCancelResultSchema,
@@ -12,6 +13,7 @@ import type {
   TasksRecoveryResult,
 } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { t } from "../../i18n/index.ts";
+import { formatDurationCompact } from "../format.ts";
 import { normalizeTaskSummary, type TaskStatus, type TaskSummary } from "./task-summary.ts";
 
 type TaskTimestamp = NonNullable<TaskSummary["updatedAt"]>;
@@ -53,6 +55,27 @@ export function taskTitle(task: TaskSummary): string {
   return (
     task.title ?? task.kind ?? (task.runtime ? taskRuntimeLabel(task) : t("tasksPage.untitled"))
   );
+}
+
+export function taskDisplayTitle(task: TaskSummary, detail?: TaskSummary): string {
+  if (task.title != null || task.kind != null) {
+    return taskTitle(task);
+  }
+  const prompt = (detail?.prompt ?? task.prompt)?.split(/\r?\n/).find((line) => line.trim());
+  const title = prompt?.trim() || task.progressSummary?.trim();
+  return title
+    ? title.length > 120
+      ? `${truncateUtf16Safe(title, 119)}…`
+      : title
+    : taskTitle(task);
+}
+
+export function taskFinishedDuration(task: TaskSummary): string | undefined {
+  const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
+  const endedMs = taskTimestampMs(task.endedAt);
+  return !isActiveTask(task) && endedMs > startedMs && startedMs > 0
+    ? formatDurationCompact(endedMs - startedMs)
+    : undefined;
 }
 
 export function taskDetail(task: TaskSummary): string | null {
@@ -148,11 +171,23 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
   active: TaskSummary[];
   recent: TaskSummary[];
 } {
-  const sorted = sortTasks(tasks);
+  const byId = (left: TaskSummary, right: TaskSummary) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   return {
-    active: sorted.filter((task) => task.status === "queued" || task.status === "running"),
-    recent: sorted
+    // Creation is immutable, so progress and queued-to-running transitions cannot move active rows.
+    active: tasks
+      .filter((task) => task.status === "queued" || task.status === "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(left.createdAt) - taskTimestampMs(right.createdAt) || byId(left, right),
+      ),
+    recent: tasks
       .filter((task) => task.status !== "queued" && task.status !== "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(right.endedAt ?? right.updatedAt ?? right.createdAt) -
+            taskTimestampMs(left.endedAt ?? left.updatedAt ?? left.createdAt) || byId(left, right),
+      )
       .slice(0, 50),
   };
 }

@@ -15,9 +15,11 @@ import {
   buildCommandItemTitle,
   buildToolItemId,
   buildToolItemTitle,
+  buildToolStartKey,
   emitAgentEventCallbackBestEffort,
   emitTrackedItemEvent,
   isExecToolName,
+  toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
@@ -47,16 +49,23 @@ function readChannelToolProgress(result: unknown): ChannelToolProgress | undefin
   return { text: truncateLiveExecOutput(text) };
 }
 
-function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
+function prepareLiveExecUpdate(
+  ctx: ToolHandlerContext,
+  toolCallId: string,
+  partialResult: unknown,
+): { result: unknown } | undefined {
   const now = Date.now();
   const state = ctx.state.execLiveUpdateStateById ?? new Map<string, { lastEmittedAtMs: number }>();
   ctx.state.execLiveUpdateStateById = state;
   const previous = state.get(toolCallId);
   if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
-    return false;
+    return undefined;
   }
-  state.set(toolCallId, { lastEmittedAtMs: now });
-  return true;
+  // Skip payload work inside the throttle; stamp after preparation so slow
+  // redaction cannot make the next detailed frame arrive back-to-back.
+  const result = capLiveExecResult(sanitizeToolResult(partialResult));
+  state.set(toolCallId, { lastEmittedAtMs: Date.now() });
+  return { result };
 }
 
 /** Handles partial tool output and emits throttled live UI updates. */
@@ -65,24 +74,23 @@ export function handleToolExecutionUpdate(
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
-    parentToolCallId?: string;
     partialResult?: unknown;
     hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
-  const parentToolCallId = evt.parentToolCallId;
-  const codeModeControl = ctx.state.toolMetaById.get(toolCallId)?.codeModeControl;
+  const parentToolCallId = toolStartData.get(
+    buildToolStartKey(ctx.params.runId, toolCallId),
+  )?.parentToolCallId;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
-  const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
-  const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
+  const execUpdate = isExecTool ? prepareLiveExecUpdate(ctx, toolCallId, partial) : undefined;
+  const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
-  const emitDetailedLiveUpdate =
-    !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
+  const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -92,7 +100,6 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(codeModeControl ? { codeModeControl } : {}),
         partialResult: liveResult,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -106,8 +113,6 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
-    ...(parentToolCallId ? { parentToolCallId } : {}),
-    ...(codeModeControl ? { codeModeControl } : {}),
     commandBearing: ctx.state.toolMetaById.get(toolCallId)?.commandBearing,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(ctx.state.toolMetaById.get(toolCallId)?.commandBearing && !isExecTool
@@ -126,12 +131,11 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(codeModeControl ? { codeModeControl } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
-  if (isExecTool && ctx.state.toolMetaById.get(toolCallId)?.commandBearing) {
+  if (isExecTool) {
     const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {
       itemId: buildCommandItemId(toolCallId),
@@ -142,7 +146,6 @@ export function handleToolExecutionUpdate(
       name: toolName,
       meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
       toolCallId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
       ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
     };
     emitTrackedItemEvent(ctx, commandData);
@@ -152,7 +155,6 @@ export function handleToolExecutionUpdate(
         phase: "delta",
         title: commandData.title,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: toolName,
         output,
         status: "running",

@@ -27,6 +27,7 @@ import {
   waitersFor,
 } from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -67,6 +68,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     options: { allowDraining?: boolean } = {},
   ): WorkerSessionTurnClaim => {
     const identity = normalizeIdentity(input);
+    assertSessionWorkspaceUnreserved(db, identity.sessionId);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
     const owner: WorkerSessionTurnOwner =
@@ -137,6 +139,25 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       owner,
     };
   };
+  const claimWorkspaceResult = (
+    input: WorkerTurnClaimInput,
+    purpose: "reclaim" | "mutation",
+  ): WorkerSessionTurnClaim =>
+    write((db) => {
+      if (purpose === "mutation" && getRequired(db, input.sessionId).state !== "active") {
+        throw new Error(
+          `Session ${input.sessionId} workspace mutation requires an active placement`,
+        );
+      }
+      const updatedAtMs = now();
+      const claim = claimTurnInDatabase(db, input, updatedAtMs, {
+        allowDraining: purpose === "reclaim",
+      });
+      // Mutation admission and its recovery custody must commit together: an
+      // interrupted remote operation cannot leave unowned workspace changes.
+      insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
+      return claim;
+    });
 
   return {
     claimTurn(input: WorkerTurnClaimInput): WorkerSessionTurnClaim {
@@ -147,14 +168,13 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       if (input.claimId !== input.runId || !input.claimId.startsWith("reclaim-")) {
         throw new Error(`Session ${input.sessionId} workspace result is not owned by reclaim`);
       }
-      // Admission and its recovery fence are inseparable. A crash after this
-      // transaction leaves startup recovery enough state to finish or abandon it.
-      return write((db) => {
-        const updatedAtMs = now();
-        const claim = claimTurnInDatabase(db, input, updatedAtMs, { allowDraining: true });
-        insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
-        return claim;
-      });
+      return claimWorkspaceResult(input, "reclaim");
+    },
+
+    claimWorkspaceMutationResult(
+      input: Omit<WorkerTurnClaimInput, "runId">,
+    ): WorkerSessionTurnClaim {
+      return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
 
     ...createPlacementSessionToolOperationOps(runtime),
@@ -364,14 +384,20 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     async waitForTurnClaimRelease(
       sessionIdInput: string,
-      waitOptions: { timeoutMs: number; signal?: AbortSignal },
+      waitOptions: { timeoutMs?: number; signal?: AbortSignal },
     ): Promise<void> {
       const sessionId = required(sessionIdInput, "session id");
-      if (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0) {
+      if (
+        waitOptions.timeoutMs !== undefined &&
+        (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0)
+      ) {
         throw new Error("Worker session turn claim wait timeout must be a non-negative integer");
       }
       if (!find(read(), sessionId)?.turnClaim) {
         return;
+      }
+      if (waitOptions.signal?.aborted) {
+        throw new Error(`Turn claim wait aborted for session ${sessionId}`);
       }
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -381,7 +407,9 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             return;
           }
           settled = true;
-          clearTimeout(timer);
+          if (timer) {
+            clearTimeout(timer);
+          }
           waitOptions.signal?.removeEventListener("abort", onAbort);
           removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
           if (error) {
@@ -392,10 +420,16 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         };
         const onRelease = (error?: Error) => finish(error);
         const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
-        const timer = setTimeout(
-          () => finish(new Error(`Timed out waiting for session ${sessionId} turn claim release`)),
-          waitOptions.timeoutMs,
-        );
+        const timer =
+          waitOptions.timeoutMs === undefined
+            ? undefined
+            : setTimeout(
+                () =>
+                  finish(
+                    new Error(`Timed out waiting for session ${sessionId} turn claim release`),
+                  ),
+                waitOptions.timeoutMs,
+              );
         waiters.add(onRelease);
         waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
         // Register first, then reread. This closes the release-between-check-and-wait race.

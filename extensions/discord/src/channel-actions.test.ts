@@ -4,6 +4,44 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
+function expectedScopedDiscordActionsWithoutPolls(): string[] {
+  return [
+    "send",
+    "react",
+    "reactions",
+    "emoji-list",
+    "upload-file",
+    "read",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "list-pins",
+    "permissions",
+    "thread-create",
+    "thread-list",
+    "thread-reply",
+    "search",
+    "sticker",
+    "member-info",
+    "role-info",
+    "emoji-upload",
+    "sticker-upload",
+    "channel-info",
+    "channel-list",
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "voice-status",
+    "event-list",
+    "event-create",
+  ];
+}
+
 const handleDiscordMessageActionMock = vi.hoisted(() =>
   vi.fn(async () => ({ content: [], details: { ok: true } })),
 );
@@ -13,6 +51,14 @@ vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
   handleDiscordMessageActionMock,
 );
 const { discordMessageActions } = await import("./channel-actions.js");
+
+type DiscordDiscovery = ReturnType<NonNullable<typeof discordMessageActions.describeMessageTool>>;
+function schemaForAction(discovery: DiscordDiscovery, action: string) {
+  const schema = discovery?.schema;
+  return (Array.isArray(schema) ? schema : schema ? [schema] : []).find((entry) =>
+    entry.actions?.some((candidate) => candidate === action),
+  );
+}
 
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
@@ -191,41 +237,7 @@ describe("discordMessageActions", () => {
       accountId: "ops",
     });
 
-    expect(discovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(discovery?.actions).toEqual(expectedScopedDiscordActionsWithoutPolls());
   });
 
   it("honors account-scoped action gates during discovery", () => {
@@ -292,46 +304,24 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
-    expect(workDiscovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
-    expect(defaultDiscovery?.schema).toBeUndefined();
-    expect(workDiscovery?.schema).toMatchObject({
-      actions: ["react", "reactions"],
+    expect(workDiscovery?.actions).toEqual(expectedScopedDiscordActionsWithoutPolls());
+    expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
+    expect(schemaForAction(workDiscovery, "react")).toMatchObject({
+      actions: expect.arrayContaining(["react", "reactions"]),
       properties: {
         emoji: { description: expect.stringContaining('action:"emoji-list"') },
+      },
+    });
+    expect(schemaForAction(workDiscovery, "send")).toMatchObject({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
       },
     });
   });
@@ -354,7 +344,12 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("upload-file");
     expect(discovery?.actions).not.toContain("read");
     expect(discovery?.actions).not.toContain("edit");
-    expect(discovery?.actions).not.toContain("delete");
+    expect(schemaForAction(discovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: { description: expect.stringContaining("Discord Components V2") },
+      },
+    });
   });
 
   it("describes usable custom emoji formats and available server emoji discovery", () => {
@@ -367,13 +362,25 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toMatchObject({
+    expect(schemaForAction(discovery, "react")).toMatchObject({
       actions: ["react", "reactions"],
       properties: {
         emoji: {
           description: expect.stringMatching(
             /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
           ),
+        },
+      },
+    });
+    expect(schemaForAction(discovery, "send")).toMatchObject({
+      actions: ["send"],
+      properties: {
+        components: {
+          description: expect.stringContaining("Discord Components V2"),
+          properties: {
+            blocks: { type: "array" },
+            modal: { type: "object" },
+          },
         },
       },
     });
@@ -421,6 +428,76 @@ describe("discordMessageActions", () => {
     ).toBeNull();
   });
 
+  it("proves only the exact current Discord thread-reply target", () => {
+    const spec = discordMessageActions.messageActionTargetAliases?.["thread-reply"];
+
+    expect(spec?.resolveDeliveryTarget?.({ args: { threadId: "123456" } })).toBe("channel:123456");
+    for (const args of [
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { threadId: "123456", target: "parent" },
+      { threadId: "123456", to: "parent" },
+      { threadId: "123456", channelId: "parent" },
+    ]) {
+      expect(spec?.resolveDeliveryTarget?.({ args })).toBeUndefined();
+    }
+    for (const args of [
+      { threadId: "123456" },
+      { target: "123456" },
+      { to: "123456" },
+      { channelId: "123456" },
+      { target: "channel:123456" },
+      { to: "channel:123456" },
+      { channelId: "123456" },
+    ]) {
+      expect(
+        spec?.matchesCurrentConversation?.({
+          args,
+          accountId: "default",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "123456",
+            currentMessagingTarget: "channel:123456",
+          },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "123456", target: "channel:999999", to: "channel:999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: { threadId: "999999" },
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+          currentMessagingTarget: "channel:123456",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      spec?.matchesCurrentConversation?.({
+        args: {},
+        accountId: "default",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "123456",
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("prepares Discord send payload channel data for durable core delivery", async () => {
     const prepared = await discordMessageActions.prepareSendPayload?.({
       ctx: {
@@ -428,7 +505,7 @@ describe("discordMessageActions", () => {
         action: "send",
         cfg: {} as OpenClawConfig,
         params: {
-          components: {
+          components: JSON.stringify({
             text: "Choose",
             blocks: [
               {
@@ -436,7 +513,7 @@ describe("discordMessageActions", () => {
                 buttons: [{ label: "Yes", callbackData: "yes" }],
               },
             ],
-          },
+          }),
           embeds: undefined,
           filename: "photo.png",
         },

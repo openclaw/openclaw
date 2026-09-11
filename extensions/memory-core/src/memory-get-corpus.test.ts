@@ -168,7 +168,7 @@ describe("memory_get corpus outcomes", () => {
       expected: {
         path: lookup,
         text: "",
-        disabled: true,
+        status: "error",
         corpora: [
           { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
           { corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" },
@@ -185,13 +185,12 @@ describe("memory_get corpus outcomes", () => {
       expected: {
         path: lookup,
         text: "",
-        disabled: true,
+        status: "error",
         corpora: [
           { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
           { corpus: "wiki", outcome: "not-registered" },
         ],
-        warning:
-          "Memory corpus unavailable: memory unavailable Wiki corpus is not registered; results do not cover that requested corpus.",
+        warning: "Memory corpus unavailable: memory unavailable",
         error: "memory unavailable",
       },
     },

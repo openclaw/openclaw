@@ -144,6 +144,18 @@ function buildProfileHealth(params: {
   const healthCredential = runtimeCredential ?? credential;
   const provider = normalizeProviderId(healthCredential.provider);
 
+  if (credential.setup?.replacement) {
+    return {
+      profileId,
+      provider,
+      type: credential.type,
+      status: "missing",
+      reasonCode: "setup_inactive",
+      source,
+      label: `${label} (saved, inactive)`,
+    };
+  }
+
   if (healthCredential.type === "api_key") {
     const eligibility = evaluateStoredCredentialEligibility({
       credential: healthCredential,
@@ -292,7 +304,7 @@ export function buildAuthHealthSummary(params: {
     : null;
 
   const profiles = Object.entries(params.store.profiles)
-    .filter(([_, cred]) =>
+    .filter(([, cred]) =>
       providerFilter ? providerFilter.has(normalizeProviderId(cred.provider)) : true,
     )
     .map(([profileId, credential]) =>
@@ -346,6 +358,7 @@ export function buildAuthHealthSummary(params: {
     const authProvider = resolveProviderIdForAuth(provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     });
     return (
       findNormalizedProviderValue(params.store.order, authProvider) ??

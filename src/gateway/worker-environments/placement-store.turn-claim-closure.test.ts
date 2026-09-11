@@ -3,25 +3,39 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { projectSessionMessagePayload } from "../session-transcript-message.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import {
-  bindWorkerTurnExecutionIdentity,
+  bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
+  runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-claim-close",
@@ -70,6 +84,11 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
       remoteWorkspaceDir: "/workspace/placement-claim-close",
     },
   });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: "environment-placement-claim-close",
+    sessionId: SESSION.sessionId,
+    ownerEpoch: 7,
+  });
   const active = store.transition({
     sessionId: SESSION.sessionId,
     from: "starting",
@@ -82,6 +101,45 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   }
   return active;
 }
+
+it("rejects an unbounded claim wait when its signal is already aborted", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-aborted-wait",
+    runId: "run-aborted-wait",
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    store.waitForTurnClaimRelease(SESSION.sessionId, { signal: controller.signal }),
+  ).rejects.toThrow(`Turn claim wait aborted for session ${SESSION.sessionId}`);
+  expect(store.validateTurnClaim(claim)).toBe(true);
+});
+
+it.each([
+  { executionMode: "worker-turn", visibleBeforeStaging: true },
+  { executionMode: "remote-exec", visibleBeforeStaging: false },
+] as const)(
+  "projects $executionMode workspace reconciliation at its owned boundary",
+  (scenario) => {
+    const active = advanceToActive(scenario.executionMode);
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: placementTurnOwner(active),
+      claimId: `workspace-result-${scenario.executionMode}`,
+      runId: `run-${scenario.executionMode}`,
+    });
+    store.markWorkspaceResultPending(claim);
+
+    const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
+    expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
+    store.recordStagedWorkspaceResult(claim, `refs/openclaw/worker-results/${claim.claimId}`);
+    expect(readReconciling()).toEqual(new Set([active.sessionId]));
+  },
+);
 
 it("emits exact worker claim closure after release and owner fencing", () => {
   const closed = vi.fn();
@@ -200,12 +258,13 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const placementClosedRun = createOperationalRunInstanceRef(placementClosedClaim.runId);
   const placementClosedAuthority = claimAgentRunDelegatedAuthority(placementClosedRun);
-  bindWorkerTurnExecutionIdentity(
+  bindWorkerTurnOwner(
     store,
     placementClosedClaim,
     createExecutionIdentityAdmissionToken(placementClosedClaim.runId),
     placementClosedRun,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
   if (!placementCapability) {
@@ -231,12 +290,13 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const runClosedOperational = createOperationalRunInstanceRef(runClosedClaim.runId);
   const runClosedAuthority = claimAgentRunDelegatedAuthority(runClosedOperational);
-  bindWorkerTurnExecutionIdentity(
+  bindWorkerTurnOwner(
     store,
     runClosedClaim,
     createExecutionIdentityAdmissionToken(runClosedClaim.runId),
     runClosedOperational,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
   if (!runCapability) {
@@ -251,3 +311,188 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   ).rejects.toThrow("worker turn authority changed");
   store.releaseTurn(runClosedClaim);
 });
+
+it("lets an unaudited admitted worker complete the exact turn that closes its owners", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    claimId: "claim-terminal-continuation",
+    runId: "run-terminal-continuation",
+    owner: {
+      kind: "worker",
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    },
+  });
+  const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const rootAdmission = tryBeginGatewayRootWorkAdmission();
+  if (!rootAdmission) {
+    throw new Error("expected parent worker turn root admission");
+  }
+  try {
+    await rootAdmission.run(async () =>
+      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION, () => {}),
+    );
+    await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
+      expect(owner.executionIdentityToken).toBeUndefined();
+    });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: active.environmentId,
+      credentialHash: "worker-terminal-continuation",
+      bundleHash: "a".repeat(64),
+      sessionId: claim.sessionId,
+      runId: claim.runId,
+      turnClaim: claim,
+      ownerEpoch: active.activeOwnerEpoch,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+
+    await expect(
+      runWorkerTurnAdmissionContinuation(identity, async () => {
+        store.releaseTurn(claim);
+        releaseAgentRunDelegatedAuthority(delegatedAuthority);
+        return "completed";
+      }),
+    ).resolves.toBe("completed");
+    expect(runWorkerTurnAdmissionContinuation(identity, async () => "stale")).toBeNull();
+  } finally {
+    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    rootAdmission.release();
+  }
+});
+
+it.each([
+  "root admission",
+  "no root admission",
+  "released claim",
+  "released run",
+  "replaced claim",
+  "wrong environment",
+  "wrong generation",
+] as const)(
+  "prepares worker transcript publication only for its live owner: %s",
+  async (scenario) => {
+    const active = advanceToActive();
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: placementTurnOwner(active),
+      claimId: "claim-media-publication",
+      runId: "run-media-publication",
+    });
+    const instance = createOperationalRunInstanceRef(claim.runId);
+    const authority = claimAgentRunDelegatedAuthority(instance);
+    const identity: WorkerConnectionIdentity = {
+      environmentId: active.environmentId,
+      credentialHash: "worker-media-publication",
+      bundleHash: "a".repeat(64),
+      sessionId: claim.sessionId,
+      runId: claim.runId,
+      turnClaim: claim,
+      ownerEpoch: active.activeOwnerEpoch,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+    const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
+    const prepare = vi.fn(
+      (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {
+        expect(sourceText).toBe(text);
+        return applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./owned.png"] });
+      },
+    );
+    const admission =
+      scenario === "root admission" ? tryBeginGatewayRootWorkAdmission() : undefined;
+    const target = { ...SESSION, storePath: path.join(root, "sessions.json") };
+    const published: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionId === SESSION.sessionId) {
+        published.push(
+          projectSessionMessagePayload({
+            ...update,
+            message: update.message,
+            sessionKey: SESSION.sessionKey,
+          }).payload,
+        );
+      }
+    });
+    let replacement: typeof claim | undefined;
+    try {
+      const bind = () =>
+        bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () => {}, prepare);
+      if (scenario === "root admission") {
+        if (!admission) {
+          throw new Error("expected root admission");
+        }
+        await admission.run(async () => bind());
+      } else {
+        bind();
+      }
+      if (scenario === "released claim" || scenario === "replaced claim") {
+        store.releaseTurn(claim);
+        if (scenario === "replaced claim") {
+          replacement = store.claimTurn({
+            ...SESSION,
+            owner: placementTurnOwner(active),
+            claimId: "claim-replacement",
+            runId: claim.runId,
+          });
+        }
+      } else if (scenario === "released run") {
+        releaseAgentRunDelegatedAuthority(authority);
+      } else if (scenario === "wrong environment") {
+        identity.environmentId = "different-environment";
+      } else if (scenario === "wrong generation") {
+        identity.turnClaim = { ...claim, placementGeneration: claim.placementGeneration + 1 };
+      }
+      await upsertSessionEntryCore(target, { sessionId: SESSION.sessionId, updatedAt: 1 });
+      const committer = createWorkerTranscriptCommitter({
+        getConfig: () => ({ session: { store: target.storePath } }),
+        store: createWorkerTranscriptCommitStore({ database }),
+      });
+      const userText = "Keep this example\nMEDIA:./user.png";
+      const result = await committer.commit({
+        // This suite isolates projection from the RPC-owned persistence authority.
+        assertCurrent: () => {},
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: [
+            { role: "user", content: [{ type: "text", text: userText }], timestamp: 1 },
+            makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2 }),
+          ],
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(published).toHaveLength(2);
+      expect(published[0]).toMatchObject({
+        message: { content: [{ type: "text", text: userText }] },
+      });
+      const current = scenario === "root admission" || scenario === "no root admission";
+      expect(published[1]).toMatchObject({
+        message: {
+          content: [{ type: "text", text: current ? "Prepared\nMEDIA:./unowned.png" : text }],
+        },
+      });
+      expect(prepare).toHaveBeenCalledTimes(current ? 1 : 0);
+      const rows = await loadTranscriptEvents(target);
+      expect(rows.at(-1)).toMatchObject({
+        message: {
+          content: [{ type: "text", text }],
+          ...(current ? { openclawDelivery: { mediaUrls: ["./owned.png"] } } : {}),
+        },
+      });
+    } finally {
+      unsubscribe();
+      if (store.validateTurnClaim(replacement ?? claim)) {
+        store.releaseTurn(replacement ?? claim);
+      }
+      releaseAgentRunDelegatedAuthority(authority);
+      admission?.release();
+    }
+  },
+);

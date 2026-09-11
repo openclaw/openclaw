@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AuthStorage as PublicAuthStorage,
+  ModelRegistry as PublicModelRegistry,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -20,7 +25,10 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { clearAuthProfileMigrationDiagnostics } from "../auth-profiles/legacy-source-diagnostic.js";
+import {
+  assertAuthProfileMigrationReady,
+  clearAuthProfileMigrationDiagnostics,
+} from "../auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -253,6 +261,64 @@ describe("SQLite auth storage", () => {
     expect(
       loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"],
     ).not.toMatchObject({ expires: 1 });
+  });
+
+  it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "fake-expired-access",
+            refresh: "fake-refresh",
+            expires: 1,
+            accountId: "fake-account-id",
+            email: "fake-user@example.com",
+            subscriptionType: "max",
+            rateLimitTier: "default_max_20x",
+          },
+        },
+      },
+      agentDir,
+    );
+    const storage = PublicAuthStorage.forAgent(agentDir);
+    PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
+      oauth: {
+        name: "Test OAuth",
+        async login() {
+          throw new Error("not used");
+        },
+        async refreshToken() {
+          return {
+            access: "fake-fresh-access",
+            refresh: "fake-rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        },
+        getApiKey(credentials: { access: string }) {
+          return credentials.access;
+        },
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
+      type: "oauth",
+      provider: "test-oauth",
+      access: "fake-fresh-access",
+      refresh: "fake-rotated-refresh",
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    });
+    expect(storage.get("test-oauth")).toMatchObject({
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+    });
   });
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
@@ -521,6 +587,148 @@ describe("SQLite auth storage", () => {
     expect(() => AuthStorage.forAgent(agentDir)).toThrow("requires legacy credential migration");
   });
 
+  it.each(["local", "shared"])(
+    "keeps unrelated provider fallback available with a %s migration refusal",
+    async (owner) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-session-migration-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          fs.mkdirSync(agentDir, { recursive: true });
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+          await state.writeJson(
+            `agents/${owner === "local" ? "worker" : "main"}/agent/auth-profiles.json`,
+            {
+              version: 1,
+              profiles: {
+                "anthropic:default": { type: "api_key", provider: "anthropic", key: "legacy-key" },
+              },
+            },
+          );
+          const storage = AuthStorage.forAgent(agentDir);
+          storage.setFallbackResolver(() => "fallback-key");
+          for (const reload of [false, true]) {
+            if (reload) {
+              storage.reload();
+            }
+            await expect(storage.getApiKey("litellm")).resolves.toBe("fallback-key");
+            await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+              code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+              affectedProviders: ["anthropic"],
+            });
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["inline", "unresolved-ref"])(
+    "preserves local %s credentials during an inherited migration refusal",
+    async (kind) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-local-selection-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          fs.mkdirSync(agentDir, { recursive: true });
+          const localKey = "synthetic-local-account-key";
+          vi.stubEnv("OPENAI_API_KEY", "synthetic-other-account-key");
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: {
+                "openai:default": {
+                  type: "api_key",
+                  provider: "openai",
+                  ...(kind === "inline"
+                    ? { key: localKey }
+                    : {
+                        keyRef: {
+                          source: "env",
+                          provider: "default",
+                          id: "UNRESOLVED_LOCAL_OPENAI",
+                        },
+                      }),
+                },
+              },
+            },
+            agentDir,
+          );
+          await state.writeJson("agents/main/agent/auth-profiles.json", {
+            version: 1,
+            profiles: {
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "synthetic-legacy-key",
+              },
+            },
+          });
+          if (kind === "unresolved-ref") {
+            expect(() => AuthStorage.forAgent(agentDir)).toThrow(
+              "requires the active secrets runtime to materialize SecretRef credentials",
+            );
+            return;
+          }
+          const storage = AuthStorage.forAgent(agentDir);
+          for (const reload of [false, true]) {
+            if (reload) {
+              storage.reload();
+            }
+            const credential = await storage.getApiKey("openai");
+            // Report provenance without printing credential bytes in a failing assertion.
+            expect(
+              credential === localKey,
+              "returned credential belongs to the local account",
+            ).toBe(true);
+            await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+              code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+            });
+          }
+        },
+      );
+    },
+  );
+
+  it("revalidates widened shared refusals on the next credential request without reload", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "auth-shared-refusal-" },
+      async (state) => {
+        const agentDir = state.agentDir("worker");
+        fs.mkdirSync(agentDir, { recursive: true });
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+        const profiles = {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "synthetic-legacy-key",
+          },
+        };
+        await state.writeJson("agents/main/agent/auth-profiles.json", { version: 1, profiles });
+        const storage = AuthStorage.forAgent(agentDir);
+        storage.setFallbackResolver(() => "synthetic-fallback-key");
+        await expect(storage.getApiKey("nvidia")).resolves.toBeDefined();
+        await state.writeJson("agents/main/agent/auth-profiles.json", {
+          version: 1,
+          profiles: {
+            ...profiles,
+            "nvidia:default": {
+              type: "api_key",
+              provider: "nvidia",
+              key: "synthetic-new-legacy-key",
+            },
+          },
+        });
+        expect(() => assertAuthProfileMigrationReady(undefined, undefined, "nvidia")).toThrow(
+          "requires legacy credential migration",
+        );
+        await expect(storage.getApiKey("nvidia")).rejects.toMatchObject({
+          code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+          affectedProviders: ["anthropic", "nvidia"],
+        });
+      },
+    );
+  });
+
   it("fails closed when a legacy credential source appears after construction", async () => {
     const agentDir = makeAgentDir();
     const storage = AuthStorage.forAgent(agentDir);
@@ -558,7 +766,7 @@ describe("SQLite auth storage", () => {
     );
   });
 
-  it("serializes asynchronous OAuth refreshes across SQLite-backed instances", async () => {
+  it("fails closed for an identityless SQLite peer until the owner commits its rotation", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       {
@@ -609,9 +817,10 @@ describe("SQLite auth storage", () => {
 
     await expect(
       Promise.all([left.getApiKey("test-oauth"), right.getApiKey("test-oauth")]),
-    ).resolves.toEqual(["fake-fresh-access", "fake-fresh-access"]);
+    ).resolves.toEqual(["fake-fresh-access", undefined]);
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
+    await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {

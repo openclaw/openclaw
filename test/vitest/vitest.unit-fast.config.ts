@@ -11,21 +11,22 @@ import {
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
 } from "./vitest.unit-fast-paths.mjs";
+import { unitTestIncludePatterns } from "./vitest.unit-paths.mjs";
 
 export function createUnitFastVitestConfig(
   env: Record<string, string | undefined> = process.env,
   options: { argv?: string[]; runner?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
-  const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles());
-  const unitFastTestFiles = getUnitFastTestFiles().filter(
+  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const discoveryPatterns =
+    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
+  const timerTestFiles = new Set(getUnitFastTimerTestFiles(discoveryPatterns));
+  const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles(discoveryPatterns));
+  const unitFastTestFiles = getUnitFastTestFiles(discoveryPatterns).filter(
     (file) => !timerTestFiles.has(file) && !isolatedTestFiles.has(file),
   );
-  const includeFromEnv = intersectIncludePatterns(
-    unitFastTestFiles,
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-  );
+  const includeFromEnv = intersectIncludePatterns(unitFastTestFiles, selectedPatterns);
   const cliInclude = narrowIncludePatternsForCli(unitFastTestFiles, options.argv);
 
   return defineConfig({

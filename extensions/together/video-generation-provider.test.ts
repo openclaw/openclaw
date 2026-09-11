@@ -54,25 +54,26 @@ describe("together video generation provider", () => {
   });
 
   it("creates a video, polls completion, and downloads the output", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_123",
         status: "in_progress",
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/webm" }),
-        arrayBuffer: async () => Buffer.from("webm-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("webm-bytes"), {
+          headers: new Headers({ "content-type": "video/webm" }),
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -105,14 +106,14 @@ describe("together video generation provider", () => {
     "surfaces an immediately failed Together submission before polling or validating id (%s)",
     async (videoId) => {
       const release = vi.fn(async () => {});
-      postJsonRequestMock.mockResolvedValue({
+      postJsonRequestMock.mockImplementation(async () => ({
         response: streamedJsonResponse({
           ...(videoId ? { id: videoId } : {}),
           status: "failed",
           error: { message: "Together video quota exhausted" },
         }),
         release,
-      });
+      }));
 
       await expect(
         buildTogetherVideoGenerationProvider().generateVideo({
@@ -130,10 +131,10 @@ describe("together video generation provider", () => {
 
   it("uses an actionable fallback when an immediately failed submission omits its error", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({ status: "failed", error: null }),
       release,
-    });
+    }));
 
     await expect(
       buildTogetherVideoGenerationProvider().generateVideo({
@@ -150,17 +151,17 @@ describe("together video generation provider", () => {
 
   it("surfaces provider errors from a failed poll and releases the submission", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({ id: "video_failed_later", status: "in_progress" }),
       release,
-    });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    }));
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      Response.json({
         id: "video_failed_later",
         status: "failed",
         error: { message: "Together video content policy blocked this prompt" },
       }),
-    });
+    );
 
     await expect(
       buildTogetherVideoGenerationProvider().generateVideo({
@@ -177,7 +178,7 @@ describe("together video generation provider", () => {
 
   it("downloads an immediately completed Together submission without polling it again", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_completed",
         model: "Wan-AI/Wan2.2-T2V-A14B",
@@ -185,11 +186,12 @@ describe("together video generation provider", () => {
         outputs: { video_url: "https://example.com/completed.mp4" },
       }),
       release,
-    });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      headers: new Headers({ "content-type": "video/mp4" }),
-      arrayBuffer: async () => Buffer.from("completed-video"),
-    });
+    }));
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(Buffer.from("completed-video"), {
+        headers: new Headers({ "content-type": "video/mp4" }),
+      }),
+    );
 
     const result = await buildTogetherVideoGenerationProvider().generateVideo({
       provider: "together",
@@ -208,10 +210,10 @@ describe("together video generation provider", () => {
 
   it("rejects an immediately completed submission without a generated video URL", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({ id: "video_missing_output", status: "completed" }),
       release,
-    });
+    }));
 
     await expect(
       buildTogetherVideoGenerationProvider().generateVideo({
@@ -251,21 +253,21 @@ describe("together video generation provider", () => {
 
   it("bounds downloaded videos before materializing them", async () => {
     let canceled = false;
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_oversized",
         status: "in_progress",
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "video_oversized",
           status: "completed",
           outputs: { video_url: "https://example.com/oversized.mp4" },
         }),
-      })
+      )
       .mockResolvedValueOnce(
         streamingResponse({
           body: "x".repeat(32),
@@ -288,25 +290,60 @@ describe("together video generation provider", () => {
     expect(canceled).toBe(true);
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: streamedJsonResponse({
+        id: "video_invalid_download",
+        status: "in_progress",
+      }),
+      release: vi.fn(async () => {}),
+    }));
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        Response.json({
+          id: "video_invalid_download",
+          status: "completed",
+          outputs: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(body, { headers: { "content-type": contentType } }));
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Together generated video download: malformed video response");
+  });
+
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_123",
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({
@@ -330,24 +367,25 @@ describe("together video generation provider", () => {
   });
 
   it("drops out-of-range duration values before creating videos", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_123",
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({
@@ -385,24 +423,25 @@ describe("together video generation provider", () => {
   });
 
   it("sends reference images for the Together image-to-video model", async () => {
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: streamedJsonResponse({
         id: "video_123",
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        Response.json({
           id: "video_123",
           status: "completed",
           outputs: { video_url: "https://example.com/together.mp4" },
         }),
-      })
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-bytes"), {
+          headers: new Headers({ "content-type": "video/mp4" }),
+        }),
+      );
 
     const provider = buildTogetherVideoGenerationProvider();
     await provider.generateVideo({

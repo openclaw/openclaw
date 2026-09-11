@@ -4,10 +4,10 @@
  * Harness selection uses this factory to expose the embedded OpenClaw runtime
  * through the same AgentHarness contract as external harness plugins.
  */
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
+import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -46,11 +46,16 @@ function buildRestrictedFinalizationAttempt(
     onExecutionPhase: attempt.onExecutionPhase,
     onLaneWait: attempt.onLaneWait,
     onRunProgress: attempt.onRunProgress,
+    // The caller owns terminal publication across the failed and finalizing attempts.
+    onAgentEvent: attempt.onAgentEvent,
+    deferTerminalLifecycle: attempt.deferTerminalLifecycle,
     onAttemptTimeoutArmed: attempt.onAttemptTimeoutArmed,
+    onAttemptDeadlineChanged: attempt.onAttemptDeadlineChanged,
     onAttemptTimeout: attempt.onAttemptTimeout,
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -81,37 +86,9 @@ function buildRestrictedFinalizationAttempt(
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
+    ...BUILTIN_AGENT_HARNESS_METADATA,
     runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
-    runIsolatedCompletionV2: async (params) => {
-      if (params.authorization.owner !== "host") {
-        throw new Error("The built-in OpenClaw harness requires host-prepared authorization.");
-      }
-      const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
-      const signal = params.abortSignal
-        ? AbortSignal.any([params.abortSignal, timeoutSignal])
-        : timeoutSignal;
-      const assistant = await completeWithPreparedSimpleCompletionModel({
-        model: params.authorization.model,
-        auth: params.authorization.auth,
-        cfg: params.config,
-        context: {
-          systemPrompt: params.systemPrompt,
-          messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
-          tools: [],
-        },
-        options: {
-          maxTokens: params.streamParams?.maxTokens,
-          temperature: params.streamParams?.temperature,
-          reasoning: params.thinkLevel,
-          signal,
-        },
-      });
-      return { assistant };
-    },
+    runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.

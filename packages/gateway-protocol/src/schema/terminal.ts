@@ -64,8 +64,11 @@ export type TerminalUploadParams = Static<typeof TerminalUploadParamsSchema>;
 export const TerminalUploadResultSchema = closedObject({
   path: NonEmptyString,
   size: Type.Integer({ minimum: 0, maximum: MAX_TERMINAL_UPLOAD_BYTES }),
+  /** Explicit path insertion contract for a native CLI rather than a shell. */
+  uploadPathStyle: Type.Optional(Type.Literal("native")),
 });
 export type TerminalUploadResult = Static<typeof TerminalUploadResultSchema>;
+export type TerminalUploadPathStyle = NonNullable<TerminalUploadResult["uploadPathStyle"]>;
 
 /** Resizes the PTY grid after the client viewport changes. */
 export const TerminalResizeParamsSchema = closedObject({
@@ -93,6 +96,8 @@ export const TerminalAttachResultSchema = closedObject({
   shell: NonEmptyString,
   cwd: NonEmptyString,
   confined: Type.Boolean(),
+  title: Type.Optional(NonEmptyString),
+  owner: Type.Optional(Type.Union([Type.Literal("conn"), Type.String({ pattern: "^agent:.+" })])),
   // Recent raw output from the server's bounded ring buffer, replayed into
   // the client emulator before live terminal.data resumes. Not a true screen
   // snapshot: after truncation it can start mid-escape-sequence; emulators
@@ -109,6 +114,7 @@ export const TerminalSessionInfoSchema = closedObject({
   sessionId: NonEmptyString,
   agentId: NonEmptyString,
   shell: NonEmptyString,
+  title: Type.Optional(NonEmptyString),
   cwd: NonEmptyString,
   confined: Type.Boolean(),
   /** False while the session is detached (no connection owns its stream). */

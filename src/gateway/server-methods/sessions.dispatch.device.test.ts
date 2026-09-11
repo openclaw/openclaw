@@ -49,7 +49,15 @@ function useDeviceSession(agentRuntimeOverride?: string): void {
   dispatchTestMocks.resolveTarget.mockReturnValue(
     makeSessionTarget({
       sessionId: dispatchTestSessionId,
-      ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+      ...(agentRuntimeOverride
+        ? {
+            agentHarnessId: agentRuntimeOverride,
+            agentRuntimeOverride,
+            modelSelectionLocked: true,
+            modelOverride: "gpt-test",
+            providerOverride: "openai",
+          }
+        : {}),
       worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
     }),
   );
@@ -294,7 +302,7 @@ describe("sessions.dispatch device targets", () => {
           deviceEnvironments(nodes),
         );
         let firstChecks = 0;
-        const workerEnvironmentService = {};
+        const workerEnvironmentService = { get: () => undefined };
         bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
           if (deviceId === "first" && ++firstChecks >= 2) {
             return unavailableReason === "disconnected"
@@ -343,7 +351,7 @@ describe("sessions.dispatch device targets", () => {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
         // A local row starts at generation one; failed and retried dispatches advance it twice.
-        const harness = createHarness(placements, { environmentGeneration: 3 });
+        const harness = createHarness(database, placements, { environmentGeneration: 3 });
         const nodes = [connectedNode("first", 3), connectedNode("second", 2)];
         vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
           deviceEnvironments(nodes),
@@ -745,7 +753,7 @@ describe("sessions.dispatch device targets", () => {
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(placements);
+        const harness = createHarness(database, placements);
         const runtime = createDeviceWorkerRuntime({
           getPairedDevice: async (deviceId) => pairedNode(deviceId),
         });

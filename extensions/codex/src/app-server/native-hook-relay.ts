@@ -7,12 +7,12 @@ import type {
   BeforeToolCallFailureDisposition,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   NativeHookRelayEvent,
-  NativeHookRelayRegistrationHandle,
   registerNativeHookRelay,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { registerRetainedNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+import type { NativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
@@ -62,7 +62,7 @@ export type CodexNativePreToolUseFailure = {
   durationMs: number;
 };
 
-export type CodexNativeHookRelay = NativeHookRelayRegistrationHandle & {
+export type CodexNativeHookRelay = ReturnType<typeof registerNativeHookRelayForBundledRuntime> & {
   authorizeRetentionAfterSuccessfulYield: () => void;
   hasClaimedDirectChild: () => boolean;
   claimDirectChild: (threadId: string) => () => void;
@@ -115,7 +115,7 @@ export async function assertCodexNativeHookRelayAllowed(
 
 /** Defers relay unregister so late native hook subprocesses can still resolve. */
 export function scheduleCodexNativeHookRelayUnregister(params: {
-  relay: NativeHookRelayRegistrationHandle;
+  relay: ReturnType<typeof registerNativeHookRelayForBundledRuntime>;
   hookTimeoutSec?: number;
 }): void {
   let pending: { timeout: ReturnType<typeof setTimeout>; unregister: () => void } | undefined;
@@ -129,6 +129,7 @@ export function scheduleCodexNativeHookRelayUnregister(params: {
       return;
     }
     params.relay.unregister();
+    nativeHookRelayUnregisterQueue.track(params.relay.drain());
   };
   const timeout = setTimeout(
     unregister,
@@ -197,6 +198,8 @@ export function createCodexNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: Parameters<typeof registerNativeHookRelay>[0]["projectedMcpServers"];
   runId: string;
   channelId?: string;
   requester?: NonNullable<PluginHookToolContext["requester"]>;
@@ -207,6 +210,7 @@ export function createCodexNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
+  assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
@@ -231,7 +235,7 @@ export function createCodexNativeHookRelay(params: {
     }
     pendingDirectChildAdmissions.clear();
   };
-  const relay = registerRetainedNativeHookRelayForBundledRuntime({
+  const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
@@ -246,6 +250,8 @@ export function createCodexNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    autoApproveMcpTools: params.autoApproveMcpTools,
+    projectedMcpServers: params.projectedMcpServers,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
@@ -260,7 +266,10 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
-    assertActive: params.hostCapabilities.assertActive,
+    assertActive: () => {
+      params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
+    },
     retention: {
       readClaim: readCodexNativeChildThreadId,
       // A child claim identifies the subject; successful parent finalization
@@ -353,6 +362,7 @@ export function createCodexNativeHookRelay(params: {
         directChildClaims.delete(threadId);
         if (foregroundClosed && directChildClaims.size === 0) {
           relay.unregister();
+          nativeHookRelayUnregisterQueue.track(relay.drain());
         }
       };
     },
@@ -403,7 +413,7 @@ export function resolveCodexNativeHookRelayTtlMs(params: {
 }
 
 /** Builds a stable relay id scoped to the agent and session identity. */
-function buildCodexNativeHookRelayId(params: {
+export function buildCodexNativeHookRelayId(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
@@ -438,7 +448,7 @@ const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
 
 /** Builds the Codex config overlay that installs trusted command hooks for relay events. */
 export function buildCodexNativeHookRelayConfig(params: {
-  relay: NativeHookRelayRegistrationHandle;
+  relay: NativeHookRelayCommandPlan;
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;

@@ -1,19 +1,18 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact, formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
   type ChatObserverDisplayPreference,
@@ -21,6 +20,8 @@ import {
   storeChatObserverDisplayPreference,
 } from "../chat-observer-display.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
+import { renderMessageMarkdown } from "./chat-message-text.ts";
+import { createSessionRailComposer } from "./chat-session-rail-composer.ts";
 
 export type SessionRailMode = "hidden" | "pill" | "expanded";
 
@@ -219,11 +220,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) activeRunId: string | null = null;
   @property({ attribute: false }) startedAt?: number;
   @property({ attribute: false }) lastReadAt?: number;
-  @property({ attribute: false }) progressCard: ProgressCard | null = null;
-  @property({ attribute: false }) onDismissProgressCard?: (card: ProgressCard) => void;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
     exchanges: [],
+    loading: false,
     pendingQuestion: null,
     failedQuestion: null,
     hint: null,
@@ -231,6 +231,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     draft: "",
   };
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) sendShortcut: ChatSendShortcut = "enter";
   @property({ attribute: false }) command: SessionRailCommand | null = null;
   @property({ attribute: false }) consumedCommandGeneration = 0;
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
@@ -239,6 +240,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
+  @property({ type: Boolean }) presented = false;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -246,9 +248,15 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   private renderedMode: SessionRailMode = "hidden";
   private reportedMode: SessionRailMode | null = null;
   private terminalAgeReference = Date.now();
+  private readonly composer = createSessionRailComposer({
+    submit: () => this.submit(),
+    onDraftChange: (draft) => this.onDraftChange?.(draft),
+    sendShortcut: () => this.sendShortcut,
+  });
 
   override disconnectedCallback() {
     this.stopClock();
+    this.composer.dispose();
     super.disconnectedCallback();
   }
 
@@ -295,7 +303,14 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     this.onVisibilityChange?.(true);
   }
 
-  override updated() {
+  override updated(changedProperties: PropertyValues<this>) {
+    // Retained tabs stay mounted while hidden. Only a presentation edge owns
+    // focus; history, replies, and reconnects must not interrupt another input.
+    if (changedProperties.has("presented") && this.presented) {
+      this.querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")?.focus({
+        preventScroll: true,
+      });
+    }
     if (this.running && this.startedAt != null && visibleDigest(this.input())) {
       this.scheduleClock();
     } else {
@@ -366,11 +381,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         class="chat-session-rail__status ${critical ? "chat-session-rail__status--critical" : ""}"
         data-health=${digest.health}
       >
-        ${terminal
-          ? html`<span class="chat-session-rail__status-icon" aria-hidden="true"
-              >${digest.health === "done" ? icons.check : icons.x}</span
-            >`
-          : html`<span class="chat-session-rail__status-dot" aria-hidden="true"></span>`}
+        ${
+          terminal
+            ? html`<span class="chat-session-rail__status-icon" aria-hidden="true"
+                >${digest.health === "done" ? icons.check : icons.x}</span
+              >`
+            : html`<span class="chat-session-rail__status-dot" aria-hidden="true"></span>`
+        }
         <span>${healthLabel(digest.health)}</span>
       </span>
     `;
@@ -395,9 +412,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             >
               <span>#${pullRequest.number}</span>
               <span>${prStateLabel(pullRequest.state)}</span>
-              ${checks
-                ? html`<span class="chat-session-rail__pr-checks">${checks}</span>`
-                : nothing}
+              ${
+                checks ? html`<span class="chat-session-rail__pr-checks">${checks}</span>` : nothing
+              }
             </a>
           `;
         })}
@@ -410,21 +427,43 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       return nothing;
     }
     return html`
-      ${digest.assessment
-        ? html`<p class="chat-session-rail__assessment">${digest.assessment}</p>`
-        : nothing}
+      ${
+        digest.assessment
+          ? html`<p class="chat-session-rail__assessment">${digest.assessment}</p>`
+          : nothing
+      }
       ${this.renderPullRequests()}
+    `;
+  }
+
+  private renderQuestion(question: string) {
+    return html`
+      <div class="chat-group user chat-session-rail__message">
+        <div class="chat-bubble chat-session-rail__question">
+          ${renderMessageMarkdown(
+            question,
+            question,
+            { role: "user", isStreaming: false },
+            { codeBlockChrome: "none", codeBlockInteraction: "static" },
+          )}
+        </div>
+      </div>
     `;
   }
 
   private renderExchange(question: string, answer: string, ts: number) {
     return html`
       <article class="chat-session-rail__exchange">
-        <div class="chat-session-rail__question" dir=${detectTextDirection(question)}>
-          ${question}
-        </div>
-        <div class="chat-session-rail__answer" dir=${detectTextDirection(answer)}>
-          ${unsafeHTML(toSanitizedMarkdownHtml(answer))}
+        ${this.renderQuestion(question)}
+        <div class="chat-group assistant chat-session-rail__message">
+          <div class="chat-bubble chat-session-rail__answer">
+            ${renderMessageMarkdown(
+              answer,
+              String(ts),
+              { role: "assistant", isStreaming: false },
+              { codeBlockInteraction: "interactive" },
+            )}
+          </div>
         </div>
         <time class="chat-session-rail__timestamp" datetime=${new Date(ts).toISOString()}>
           ${t("chat.rail.asOf", {
@@ -471,51 +510,74 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       element.scrollTop = element.scrollHeight;
     };
     return html`
-      <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
-        ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? renderPanelEmptyState({
-              icon: icons.bot,
-              heading: t("chat.sidePanel.companion"),
-              description: t("chat.rail.empty"),
-            })
-          : nothing}
+      <div
+        class="chat-session-rail__thread"
+        aria-live="polite"
+        @click=${handleMarkdownCodeBlockClick}
+        ${markdownBlocks()}
+        ${ref(syncScroll)}
+      >
+        ${
+          this.companion.loading && this.companion.exchanges.length === 0
+            ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+            : nothing
+        }
+        ${
+          !this.companion.loading &&
+          this.companion.exchanges.length === 0 &&
+          !this.companion.pendingQuestion &&
+          !(this.companion.failedQuestion && this.companion.hint)
+            ? renderPanelEmptyState({
+                icon: icons.bot,
+                heading: t("chat.sidePanel.companion"),
+                description: t("chat.rail.empty"),
+              })
+            : nothing
+        }
         ${this.companion.exchanges.map((exchange) =>
           this.renderExchange(exchange.question, exchange.answer, exchange.ts),
         )}
-        ${this.companion.failedQuestion && this.companion.hint
-          ? html`
-              <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
-                <div class="chat-session-rail__question">${this.companion.failedQuestion}</div>
-                <div class="chat-session-rail__hint">
-                  ${t(companionHintKey(this.companion.hint))}
-                </div>
-                ${this.companion.retryable && this.connected && this.onSubmit
-                  ? html`
-                      <button
-                        class="btn btn--secondary chat-session-rail__retry"
-                        type="button"
-                        @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
-                      >
-                        ${t("chat.rail.askRetry")}
-                      </button>
-                    `
-                  : nothing}
-              </article>
-            `
-          : nothing}
-        ${this.companion.pendingQuestion
-          ? html`
-              <article class="chat-session-rail__exchange chat-session-rail__exchange--pending">
-                <div class="chat-session-rail__question">${this.companion.pendingQuestion}</div>
-                <div class="chat-session-rail__hint">${t("chat.rail.askPending")}</div>
-              </article>
-            `
-          : nothing}
+        ${
+          this.companion.failedQuestion && this.companion.hint
+            ? html`
+                <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
+                  ${this.renderQuestion(this.companion.failedQuestion)}
+                  <div class="chat-session-rail__hint">
+                    ${t(companionHintKey(this.companion.hint))}
+                  </div>
+                  ${
+                    this.companion.retryable && this.connected && this.onSubmit
+                      ? html`
+                          <button
+                            class="btn btn--secondary chat-session-rail__retry"
+                            type="button"
+                            @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
+                          >
+                            ${t("chat.rail.askRetry")}
+                          </button>
+                        `
+                      : nothing
+                  }
+                </article>
+              `
+            : nothing
+        }
+        ${
+          this.companion.pendingQuestion
+            ? html`
+                <article class="chat-session-rail__exchange chat-session-rail__exchange--pending">
+                  ${this.renderQuestion(this.companion.pendingQuestion)}
+                  <div class="chat-session-rail__hint">${t("chat.rail.askPending")}</div>
+                </article>
+              `
+            : nothing
+        }
       </div>
     `;
   }
 
   override render() {
+    this.composer.syncDraft(this.companion.draft);
     const input = this.input();
     const mode = this.embedded ? "expanded" : this.railState.mode(input);
     this.renderedMode = mode;
@@ -571,9 +633,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     // region would announce every tick; the thread owns its own polite region.
     return html`
       <section
-        class="chat-session-rail chat-session-rail--expanded ${this.embedded
-          ? "chat-session-rail--embedded"
-          : ""}"
+        class="chat-session-rail chat-session-rail--expanded ${
+          this.embedded ? "chat-session-rail--embedded" : ""
+        }"
         role="region"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
@@ -585,87 +647,115 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           }
         }}
       >
-        ${this.embedded
-          ? nothing
-          : html`<header class="rail-header chat-session-rail__header">
-              <div class="rail-header__copy chat-session-rail__header-copy">
-                <div class="chat-session-rail__status-row">
-                  ${digest
-                    ? this.renderStatus(digest)
-                    : html`<strong>${t("chat.rail.title")}</strong>`}
-                  ${elapsed
-                    ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
-                    : finished
-                      ? html`<span class="chat-session-rail__timing">${finished}</span>`
-                      : nothing}
+        ${
+          this.embedded
+            ? nothing
+            : html`<header class="rail-header chat-session-rail__header">
+                <div class="rail-header__copy chat-session-rail__header-copy">
+                  <div class="chat-session-rail__status-row">
+                    ${
+                      digest
+                        ? this.renderStatus(digest)
+                        : html`<strong>${t("chat.rail.title")}</strong>`
+                    }
+                    ${
+                      elapsed
+                        ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
+                        : finished
+                          ? html`<span class="chat-session-rail__timing">${finished}</span>`
+                          : nothing
+                    }
+                  </div>
+                  ${
+                    digest
+                      ? html`<strong class="chat-session-rail__headline"
+                          >${digest.headline}</strong
+                        >`
+                      : html`<span class="chat-session-rail__subtitle"
+                          >${t("chat.rail.subtitle")}</span
+                        >`
+                  }
                 </div>
-                ${digest
-                  ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
-                  : html`<span class="chat-session-rail__subtitle"
-                      >${t("chat.rail.subtitle")}</span
-                    >`}
-              </div>
-              <div class="rail-header__actions chat-session-rail__actions">
-                <button
-                  class="rail-header__action chat-session-rail__hide"
-                  type="button"
-                  aria-label=${t("chat.rail.close")}
-                  @click=${() => this.hide()}
-                >
-                  ${icons.x}
-                </button>
-                <button
-                  class="rail-header__action chat-session-rail__toggle"
-                  type="button"
-                  aria-label=${t("chat.rail.collapse")}
-                  @click=${() => this.collapse()}
-                >
-                  ${icons.chevronUp}
-                </button>
-              </div>
-            </header>`}
-        ${digest
-          ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
-          : nothing}
-        ${renderSessionProgressCard(this.progressCard, "rail", this.onDismissProgressCard)}
+                <div class="rail-header__actions chat-session-rail__actions">
+                  <button
+                    class="rail-header__action chat-session-rail__hide"
+                    type="button"
+                    aria-label=${t("chat.rail.close")}
+                    @click=${() => this.hide()}
+                  >
+                    ${icons.x}
+                  </button>
+                  <button
+                    class="rail-header__action chat-session-rail__toggle"
+                    type="button"
+                    aria-label=${t("chat.rail.collapse")}
+                    @click=${() => this.collapse()}
+                  >
+                    ${icons.chevronUp}
+                  </button>
+                </div>
+              </header>`
+        }
+        ${
+          digest
+            ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
+            : nothing
+        }
         ${this.renderThread()}
-        ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? this.renderStarters()
-          : nothing}
+        ${
+          this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
+            ? this.renderStarters()
+            : nothing
+        }
         <form
-          class="chat-session-rail__composer"
+          class="agent-chat__input chat-session-rail__composer"
           @submit=${(event: SubmitEvent) => {
             event.preventDefault();
             this.submit();
           }}
         >
-          <label class="chat-session-rail__prompt">
-            <input
-              class="chat-session-rail__input"
-              type="text"
-              maxlength="400"
-              autocomplete="off"
-              aria-label=${t("chat.rail.askLabel")}
-              .value=${this.companion.draft}
-              placeholder=${this.companion.pendingQuestion
-                ? t("chat.rail.askPending")
-                : t("chat.rail.askPlaceholder")}
-              ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-              @input=${(event: InputEvent) => {
-                this.onDraftChange?.((event.currentTarget as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <button
-            class="chat-send-btn"
-            type="submit"
-            aria-label=${t("chat.rail.askSubmit")}
-            ?disabled=${!this.connected ||
-            this.companion.pendingQuestion !== null ||
-            !this.companion.draft.trim()}
-          >
-            ${icons.arrowUp}
-          </button>
+          <div class="agent-chat__composer-input-row">
+            <label class="agent-chat__composer-combobox chat-session-rail__prompt">
+              <textarea
+                class="chat-session-rail__input"
+                rows="1"
+                maxlength="400"
+                autocomplete="off"
+                aria-label=${t("chat.rail.askLabel")}
+                aria-keyshortcuts=${
+                  this.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
+                }
+                .value=${this.companion.draft}
+                placeholder=${
+                  this.companion.pendingQuestion
+                    ? t("chat.rail.askPending")
+                    : t("chat.rail.askPlaceholder")
+                }
+                ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
+                @keydown=${this.composer.handleKeydown}
+                @input=${this.composer.handleInput}
+                ${ref(this.composer.ref)}
+              ></textarea>
+            </label>
+          </div>
+          <div class="agent-chat__composer-footer">
+            <div class="agent-chat__composer-trail">
+              <div class="agent-chat__composer-actions">
+                <button
+                  class="chat-send-btn"
+                  type="submit"
+                  aria-label=${t("chat.rail.askSubmit")}
+                  ?disabled=${
+                    !this.connected ||
+                    this.companion.pendingQuestion !== null ||
+                    !this.companion.draft.trim()
+                  }
+                >
+                  ${icons.arrowUp}
+                </button>
+              </div>
+            </div>
+          </div>
         </form>
       </section>
     `;

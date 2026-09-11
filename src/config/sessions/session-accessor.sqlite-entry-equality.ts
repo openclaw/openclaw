@@ -1,9 +1,22 @@
+import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type { SessionEntry } from "./types.js";
 
-type SqliteLifecycleTargetSnapshot = {
-  primary: { entry: SessionEntry; key: string } | undefined;
-  rows: Array<{ entry: SessionEntry; sessionKey: string }>;
-};
+export type SqliteLifecycleTargetSnapshot = Array<{
+  entry: SessionEntry;
+  sessionKey: string;
+  /** Complete rows from preparation; absent snapshots require a hydrated commit read. */
+  persistedRows?: {
+    lookupKeys: readonly string[];
+    rows: readonly ResolvedSessionEntryRow["row"][];
+  };
+}>;
+
+class SqliteSessionMutationConflictError extends Error {
+  constructor(operationLabel: string) {
+    super(`SQLite session state changed while preparing ${operationLabel}`);
+    this.name = "SqliteSessionMutationConflictError";
+  }
+}
 
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,
@@ -27,9 +40,9 @@ export function sqliteSessionEntriesEqual(
   return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
 }
 
-export function sqliteSessionSnapshotRowsEqual(
-  left: Array<{ entry: SessionEntry; sessionKey: string }>,
-  right: Array<{ entry: SessionEntry; sessionKey: string }>,
+export function sqliteLifecycleTargetSnapshotsEqual(
+  left: SqliteLifecycleTargetSnapshot,
+  right: SqliteLifecycleTargetSnapshot,
 ): boolean {
   return (
     left.length === right.length &&
@@ -41,13 +54,12 @@ export function sqliteSessionSnapshotRowsEqual(
   );
 }
 
-export function sqliteLifecycleTargetSnapshotsEqual(
+export function assertLifecycleTargetSnapshotUnchanged(
   expected: SqliteLifecycleTargetSnapshot,
   current: SqliteLifecycleTargetSnapshot,
-): boolean {
-  return (
-    expected.primary?.key === current.primary?.key &&
-    sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry) &&
-    sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)
-  );
+  operationLabel: string,
+): void {
+  if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
 }

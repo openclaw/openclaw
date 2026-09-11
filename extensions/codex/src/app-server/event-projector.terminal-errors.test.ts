@@ -23,6 +23,41 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
+  it.each([
+    { codexErrorInfo: "rateLimitExceeded", status: 429 },
+    { codexErrorInfo: "serverOverloaded", status: 503, code: "OVERLOADED" },
+    { codexErrorInfo: "internalServerError", status: 500 },
+    ...[
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ].map((variant) => ({
+      codexErrorInfo: { [variant]: { httpStatusCode: 503 } },
+      status: 503,
+    })),
+    { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 404 } }, status: 404 },
+  ])(
+    "preserves terminal provider facts for $codexErrorInfo",
+    async ({ codexErrorInfo, ...facts }) => {
+      for (const method of ["error", "turn/completed"] as const) {
+        const projector = await createProjector();
+        const error = { message: "The model is not available.", codexErrorInfo };
+        await projector.handleNotification(
+          forCurrentTurn(
+            method,
+            method === "error"
+              ? { error, willRetry: false }
+              : { turn: { id: TURN_ID, status: "failed", items: [], error } },
+          ),
+        );
+        const terminal = readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry()));
+        expect(terminal.promptError).toBeInstanceOf(Error);
+        expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
+      }
+    },
+  );
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 
@@ -164,11 +199,16 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
-    const projector = await createProjector();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
     await projector.handleNotification(agentMessageDelta("still working"));
     await projector.handleNotification(
-      appServerError({ message: "stream disconnected", willRetry: true }),
+      appServerError({
+        message: "Rate limit reached",
+        willRetry: true,
+        codexErrorInfo: "rateLimitExceeded",
+      }),
     );
     await projector.handleNotification(
       turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
@@ -183,6 +223,12 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
     expect(result.lastAssistant?.stopReason).toBe("stop");
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "run_status",
+        data: { phase: "retrying", message: "Rate limited. The provider is retrying." },
+      }),
+    );
   });
 
   it("uses nested app-server error messages for terminal errors", async () => {
@@ -201,11 +247,98 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it.each(
+    [
+      {
+        label: "biological-risk",
+        message: "This content was flagged for possible biological risk. Try rephrasing it.",
+        codexErrorInfo: "other",
+        category: "bio",
+      },
+      {
+        label: "typed cyber",
+        message: "This request was blocked by the provider's cyber policy.",
+        codexErrorInfo: "cyberPolicy",
+        category: "cyber",
+      },
+      {
+        label: "typed misalignment",
+        message: "This request was blocked due to a misalignment policy violation.",
+        codexErrorInfo: "misalignmentPolicyViolation",
+        category: "misalignment",
+      },
+    ].flatMap((testCase) => [
+      { ...testCase, completionOnly: false },
+      { ...testCase, completionOnly: true },
+    ]),
+  )(
+    "keeps $label refusals terminal (completion only: $completionOnly)",
+    async ({ message, codexErrorInfo, category, completionOnly }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+      const error = { message, codexErrorInfo };
+
+      if (!completionOnly) {
+        await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      }
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: { id: TURN_ID, status: "failed", items: [], error },
+        }),
+      );
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      const terminalAssistant = result.currentAttemptAssistant;
+
+      expect(readAttemptTerminal(result)).toMatchObject({
+        promptError: null,
+        promptErrorSource: null,
+      });
+      expect(terminalAssistant).toMatchObject({
+        stopReason: "error",
+        errorMessage: message,
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            details: { provider: "openai", category },
+          },
+        ],
+      });
+      expect(result.lastAssistant).toBe(terminalAssistant);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      const policyNotices = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "notice" && event.data.phase === "provider_policy");
+      expect(policyNotices).toEqual(
+        category === "cyber"
+          ? [
+              {
+                stream: "notice",
+                data: {
+                  phase: "provider_policy",
+                  category: "cyber",
+                  state: "blocked",
+                  provider: "openai",
+                  model: "gpt-5.4-codex",
+                },
+              },
+            ]
+          : [],
+      );
+      expect(
+        result.messagesSnapshot.filter(
+          (candidate) =>
+            candidate.role === "assistant" &&
+            candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
   it.each([
     { codexErrorInfo: "serverOverloaded", expected: true },
     { codexErrorInfo: "usageLimitExceeded", expected: false },
     { codexErrorInfo: "unauthorized", expected: false },
-    { codexErrorInfo: "misalignmentPolicyViolation", expected: false },
     { codexErrorInfo: "other", expected: false },
   ])(
     "projects $codexErrorInfo terminal error recovery eligibility as $expected",

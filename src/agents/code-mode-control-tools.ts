@@ -4,7 +4,6 @@
  */
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isPlainObject } from "../utils.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -19,11 +18,6 @@ const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
 /** Source language accepted by the Code Mode exec tool. */
 type CodeModeExecToolInputKind = "javascript" | "typescript";
-type CodeModeControlPresentation = {
-  kind: "exec" | "wait";
-  language?: CodeModeExecToolInputKind;
-};
-export const CODE_MODE_CONTROL_DETAILS_KEY = "openclawCodeModeControl";
 /** Metadata attached to before-tool-call events for Code Mode exec. */
 type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
@@ -32,9 +26,13 @@ type CodeModeExecHookMetadata = {
 
 const codeModeControlTools = new WeakSet<object>();
 type CodeModeExecDescriptionTarget = Pick<AnyAgentTool, "description">;
+type CodeModeExecDescriptionState = {
+  description: string;
+  targets: Set<WeakRef<CodeModeExecDescriptionTarget>>;
+};
 const codeModeExecDescriptionTargets = new WeakMap<
   object,
-  { description: string; targets: Set<CodeModeExecDescriptionTarget> }
+  { state: CodeModeExecDescriptionState; reference: WeakRef<CodeModeExecDescriptionTarget> }
 >();
 
 /** Mark a tool as owned by code mode control flow. */
@@ -50,13 +48,16 @@ export function copyCodeModeControlToolIdentity(
 ): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
-    const descriptionState = codeModeExecDescriptionTargets.get(original);
+    const descriptionState = codeModeExecDescriptionTargets.get(original)?.state;
     if (descriptionState && descriptionState.targets.size > 0) {
       // Registry refresh recreates wrappers from retained definitions; every
       // live copy must reflect the current authorized catalog.
       wrapper.description = descriptionState.description;
-      descriptionState.targets.add(wrapper);
-      codeModeExecDescriptionTargets.set(wrapper, descriptionState);
+      // Reuse target identity across observers so duplicate copies still update once.
+      const reference =
+        codeModeExecDescriptionTargets.get(wrapper)?.reference ?? new WeakRef(wrapper);
+      descriptionState.targets.add(reference);
+      codeModeExecDescriptionTargets.set(wrapper, { state: descriptionState, reference });
     }
   }
 }
@@ -66,13 +67,22 @@ export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
   update: (description: string) => void;
   dispose: () => void;
 } {
-  const state = { description: tool.description, targets: new Set([tool]) };
-  codeModeExecDescriptionTargets.set(tool, state);
+  const initialDescription = tool.description;
+  const toolReference = codeModeExecDescriptionTargets.get(tool)?.reference ?? new WeakRef(tool);
+  const state = { description: initialDescription, targets: new Set([toolReference]) };
+  codeModeExecDescriptionTargets.set(tool, { state, reference: toolReference });
   return {
     update(description) {
       state.description = description;
-      for (const target of state.targets) {
-        target.description = description;
+      // Obsolete registry wrappers retain their old extension runner. Keep live
+      // copies synchronized without extending either lifetime until catalog disposal.
+      for (const reference of state.targets) {
+        const target = reference.deref();
+        if (target) {
+          target.description = description;
+        } else {
+          state.targets.delete(reference);
+        }
       }
     },
     dispose: () => state.targets.clear(),
@@ -84,66 +94,16 @@ export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 
-/** Resolve producer-owned presentation metadata for a marked control tool. */
-export function resolveCodeModeControlPresentation(params: {
-  tool: object & { name?: unknown };
-  args: unknown;
-}): CodeModeControlPresentation | undefined {
-  if (!isCodeModeControlTool(params.tool)) {
-    return undefined;
-  }
-  const name = normalizeToolPolicyName(
-    typeof params.tool.name === "string" ? params.tool.name : "",
-  );
-  if (name === CODE_MODE_WAIT_TOOL_NAME) {
-    return { kind: "wait" };
-  }
-  if (name !== CODE_MODE_EXEC_TOOL_NAME) {
-    return undefined;
-  }
-  const language = resolveCodeModeExecToolInputKind(params.args);
-  return { kind: "exec", ...(language ? { language } : {}) };
-}
-
-/** Attach display-only control identity without changing model-facing result text. */
-export function attachCodeModeControlPresentation<T extends object>(
-  result: AgentToolResult<T>,
-  presentation: CodeModeControlPresentation,
-): AgentToolResult<T & { openclawCodeModeControl: CodeModeControlPresentation }> {
-  const details = Object.assign(result.details, {
-    [CODE_MODE_CONTROL_DETAILS_KEY]: presentation,
-  });
-  return {
-    ...result,
-    details,
-  };
-}
-
-/** Read validated display metadata from a persisted tool result. */
-export function readCodeModeControlPresentation(
-  details: unknown,
-): CodeModeControlPresentation | undefined {
-  if (!isPlainObject(details)) {
-    return undefined;
-  }
-  const value = details[CODE_MODE_CONTROL_DETAILS_KEY];
-  if (!isPlainObject(value) || (value.kind !== "exec" && value.kind !== "wait")) {
-    return undefined;
-  }
-  const language = value.language;
-  return {
-    kind: value.kind,
-    ...(language === "javascript" || language === "typescript" ? { language } : {}),
-  };
-}
-
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
+/** Return whether a tool is the marked Code Mode `exec` control tool (not a plain shell exec). */
+export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   return (
     isCodeModeControlTool(tool) && normalizeToolPolicyName(tool.name) === CODE_MODE_EXEC_TOOL_NAME
   );
 }
 
-function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {
+export function resolveCodeModeExecToolInputKind(
+  params: unknown,
+): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }

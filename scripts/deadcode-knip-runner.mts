@@ -137,14 +137,7 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
   const killGraceMs = params.killGraceMs ?? KNIP_KILL_GRACE_MS;
   const scanName = params.scanName ?? "scan";
   const writeStatus = params.writeStatus ?? ((message) => process.stderr.write(`${message}\n`));
-  const args = [
-    "--config.minimum-release-age=0",
-    "dlx",
-    "--package",
-    `knip@${KNIP_VERSION}`,
-    "knip",
-    ...knipArgs,
-  ];
+  const args = ["dlx", "--package", `knip@${KNIP_VERSION}`, "knip", ...knipArgs];
 
   return await new Promise<KnipRunResult>((resolve) => {
     const startedAt = Date.now();
@@ -304,4 +297,20 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       });
     });
   });
+}
+
+export async function runKnipScans<T extends { name: string; args: readonly string[] }>(
+  scans: readonly T[],
+  commonArgs: readonly string[],
+  report: (scan: T, result: KnipRunResult) => boolean,
+): Promise<void> {
+  const results = await Promise.all(
+    scans.map(async (scan) => {
+      const result = await runKnip([...scan.args, ...commonArgs], { scanName: scan.name });
+      return report(scan, result);
+    }),
+  );
+  if (results.includes(false)) {
+    process.exitCode = 1;
+  }
 }

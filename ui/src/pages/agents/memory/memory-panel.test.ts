@@ -30,12 +30,6 @@ type TestMemoryPanel = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
-  resetEnabledOverride: (configured: {
-    pluginId: string;
-    enabled: boolean;
-    overridden: boolean;
-    engineOff: boolean;
-  }) => Promise<void>;
   confirmDreamingTask: (
     task: (state: DreamingState) => Promise<boolean>,
     confirmation: ConfirmDialogOptions,
@@ -260,21 +254,29 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.pendingEnabled).toBeNull();
   });
 
-  it("discards a wiki response from a replaced gateway source", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    document.body.append(page);
-    await page.updateComplete;
+  it.each([false, true])(
+    "discards a wiki response from a replaced gateway source (Lit rebound: %s)",
+    async (rebound) => {
+      const pending = deferred<unknown>();
+      const client = {
+        request: vi.fn(() => pending.promise),
+      } as unknown as GatewayBrowserClient;
+      const page = createPage(contextWithGateway(client, true));
+      document.body.append(page);
+      await page.updateComplete;
 
-    const preview = page.openWikiPage("old.md");
-    await replaceContext(page, contextWithGateway(client, false));
-    pending.resolve({ title: "Old", path: "old.md", content: "stale" });
+      const preview = page.openWikiPage("old.md");
+      const nextContext = contextWithGateway(client, false);
+      if (rebound) {
+        await replaceContext(page, nextContext);
+      } else {
+        page.context = nextContext;
+      }
+      pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
-    await expect(preview).resolves.toBeNull();
-  });
+      await expect(preview).resolves.toBeNull();
+    },
+  );
 
   it("discards a wiki response across a same-client reconnect", async () => {
     const pending = deferred<unknown>();
@@ -318,101 +320,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     });
   });
 
-  it("resets the config-only dreaming override to the enabled runtime default", async () => {
-    const client = {
-      request: vi.fn(async () => ({ dreaming: { enabled: true } })),
-    } as unknown as GatewayBrowserClient;
-    const context = contextWithGateway(client, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    await page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-
-    expect(context.runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        plugins: {
-          entries: {
-            "memory-core": { config: { dreaming: { enabled: null } } },
-          },
-        },
-      },
-      note: "Dreaming settings reset to the plugin default.",
-      canDispatch: expect.any(Function),
-    });
-    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.refresh).toHaveBeenCalledOnce();
-  });
-
-  it("does not refresh the stale override when the minimal reset patch fails", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const context = contextWithGateway(client, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    vi.mocked(context.runtimeConfig.patch).mockResolvedValue(false);
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    await page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-
-    expect(context.runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(context.runtimeConfig.removeFormValue).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.save).not.toHaveBeenCalled();
-    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
-  });
-
-  it("drops a successful reset completion after the agent scope changes", async () => {
-    const pending = deferred<boolean>();
-    const context = contextWithGateway({} as GatewayBrowserClient, true, {
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-        },
-      },
-    });
-    vi.mocked(context.runtimeConfig.patch).mockReturnValue(pending.promise);
-    const page = createPage(context);
-    document.body.append(page);
-    await page.updateComplete;
-
-    const reset = page.resetEnabledOverride({
-      pluginId: "memory-core",
-      enabled: false,
-      overridden: true,
-      engineOff: false,
-    });
-    page.agentId = "support";
-    await page.updateComplete;
-    pending.resolve(true);
-    await reset;
-
-    expect(context.runtimeConfig.refresh).not.toHaveBeenCalled();
-    expect(page.dreaming.dreamingStatusError).toBeNull();
-  });
-
-  it("renders explicit engine Off as unavailable while preserving latent override reset", () => {
+  it("renders explicit engine Off as unavailable with a latent override", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: {
         slots: { memory: "none" },
@@ -435,7 +343,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
       true,
     );
-    expect(container.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
   });
 
   it("does not present cached runtime status after the memory engine switches Off", () => {
@@ -489,7 +396,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     ).toBe(true);
   });
 
-  it("omits default provenance and reset when engine Off has no latent override", () => {
+  it("omits default provenance when engine Off has no latent override", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: { slots: { memory: "none" } },
     });
@@ -501,7 +408,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     render(page.render(), container);
 
     expect(container.textContent).not.toContain("Using default: Enabled");
-    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
     const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
     expect(toggle?.disabled).toBe(true);
     toggle?.click();

@@ -56,11 +56,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
 | Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           |                                   |
+| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
 | OpenAI            | `openai`            | Yes           | Default                           |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           |                                   |
+| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
 ## How search works
 
@@ -107,6 +107,11 @@ MMR then reorders the scored hybrid candidate set to reduce redundant
 snippets. It does not change scores, threshold eligibility, or make another
 provider call.
 
+Search preserves keyword matches when every ranked result falls below the
+configured minimum score. Hybrid search can also fill remaining result slots
+with keyword-only matches. These rules also apply in project sessions;
+semantic-only matches still need to meet the configured minimum score.
+
 ## Deterministic trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
@@ -125,7 +130,8 @@ tools or Active Memory escalation, but are never injected automatically.
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
 falls back to keyword-only ranking when embedding setup or a request fails, as
 does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
-still indexes text for keyword search, and `memory_search` includes the
+still indexes text for keyword search, including manual and background indexing
+before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
@@ -149,14 +155,19 @@ original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
 remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
 at any depth, including session-memory notes and nested dreaming reports.
 
+Session transcript hits use the source activity timestamp captured during
+indexing. Retained transcript archives use their indexed file modification
+time. Individual message timestamps remain provenance metadata and do not
+determine the source's recency weight.
+
 ### MMR (diversity)
 
 Reduces redundant results. If five notes all mention the same router config,
 MMR favors a similarly relevant result with different content instead of
 repeating near-identical snippets. The fixed relevance-biased setting uses
 lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
-`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
-most 48 unique non-exact candidates before overlap; broader project and
+`O(k²)`: ordinary defaults request 200 candidates per retrieval leg, for at
+most 400 unique non-exact candidates before overlap; broader project and
 identifier searches remain separately capped.
 
 <Tip>
@@ -183,13 +194,22 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session and sessions it spawned. When the caller is the canonical main
-session, `tree` covers every same-agent session. With `session.dmScope: "main"`,
-a multi-user DM setup shares that main session and its recall scope. Use a
-per-peer `dmScope` for DM isolation, or set visibility to `"self"` for strict
-current-session recall. Non-main callers still need `"agent"` visibility for
-unrelated same-agent sessions.
+Use `corpus: "memory"` to search only memory notes. Results containing no session
+transcripts do not load session history or perform session-visibility lookups.
+
+Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
+`memory_search` still searches the selected agent's indexed corpus; use
+[`sessions_search`](/concepts/session-search) for transcript search across agents
+on the Gateway. Visible transcripts can include other users' conversations.
+Cross-agent session access is on by default and governed by
+`tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+(requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`) or use `allow`
+to restrict agent pairs. A per-peer `session.dmScope`
+separates DM context but does not restrict transcript access through session
+tools. Choose explicit `"agent"` for same-agent recall, `"tree"` for current plus
+spawned scope (with an agent-wide exception for main), or `"self"` for strict
+current-session recall. Sandbox spawned-only clamps and
+incognito exclusions still apply.
 
 ## Troubleshooting
 
@@ -209,6 +229,8 @@ the managed server endpoints before rebuilding the index.
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Active memory](/concepts/active-memory)
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Memory configuration reference](/reference/memory-config)
+- [Memory LanceDB](/plugins/memory-lancedb)

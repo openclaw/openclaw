@@ -7,16 +7,7 @@ import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
-export const GATEWAY_SERVER_CAPS = {
-  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
-  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
-  GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
-  NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
-  NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
-  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
-  SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
-  TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
-} as const;
+export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
 
 /**
  * Top-level gateway frame schemas.
@@ -104,6 +95,8 @@ export const HelloOkSchema = closedObject({
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
   }),
   snapshot: SnapshotSchema,
+  // Public Control UI origin and mount path, independent of local SSH tunnels.
+  controlUiUrl: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(
     Type.Array(
@@ -115,6 +108,7 @@ export const HelloOkSchema = closedObject({
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
         placement: Type.Optional(Type.String()),
+        slug: Type.Optional(Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 })),
         requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
@@ -133,6 +127,17 @@ export const HelloOkSchema = closedObject({
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
+    method: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("token"),
+        Type.Literal("password"),
+        Type.Literal("tailscale"),
+        Type.Literal("device-token"),
+        Type.Literal("bootstrap-token"),
+        Type.Literal("trusted-proxy"),
+      ]),
+    ),
     deviceToken: Type.Optional(NonEmptyString),
     recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
     recoveryScope: Type.Optional(NonEmptyString),

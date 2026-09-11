@@ -10,6 +10,8 @@ import { jsonResult, readToolStringParam } from "./common.js";
 const NO_PENDING_CHILD_COMPLETION_ERROR =
   "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.";
 
+type SessionsYieldClaimResult = boolean | { error: string };
+
 const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(
     Type.String({ description: "Private context for the resumed turn; not sent to the user." }),
@@ -24,7 +26,7 @@ const SessionsYieldToolSchema = Type.Object({
 /** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
-  claimYield?: () => boolean | Promise<boolean>;
+  claimYield?: () => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 }): AnyAgentTool {
   return {
@@ -34,7 +36,7 @@ export function createSessionsYieldTool(opts?: {
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
     description:
-      "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+      "End turn for announced child completion events. Collector runs require explicit collection instead. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -46,17 +48,17 @@ export function createSessionsYieldTool(opts?: {
       if (!opts?.onYield) {
         return jsonResult({ status: "error", error: "Yield not supported in this context" });
       }
-      if (!(await opts.claimYield?.())) {
+      const claim = await opts.claimYield?.();
+      if (claim !== true) {
         return jsonResult({
           status: "error",
-          error: NO_PENDING_CHILD_COMPLETION_ERROR,
+          error: typeof claim === "object" ? claim.error : NO_PENDING_CHILD_COMPLETION_ERROR,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
       await opts.onYield(message, acknowledgment);
       return jsonResult({
         status: "yielded",
-        message,
         ...(acknowledgment ? { acknowledgment } : {}),
       });
     },

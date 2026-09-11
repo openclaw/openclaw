@@ -75,8 +75,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // A repair retry would generate another identity after the SDK already rotated local keys.
-      // Fail closed instead; the server identity and existing recovery material remain authoritative.
       allowSecretStorageRecreateWithoutRecoveryKey: forceReset
         ? false
         : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
@@ -209,40 +207,15 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     };
 
     if (options.forceResetCrossSigning) {
-      const resetCrossSigning = async (): Promise<void> => {
+      try {
         await crypto.bootstrapCrossSigning({
           setupNewCrossSigning: true,
           authUploadDeviceSigningKeys,
         });
-      };
-      try {
-        await resetCrossSigning();
         await this.trustFreshOwnIdentity(crypto);
       } catch (err) {
-        const shouldRepairSecretStorage =
-          options.allowSecretStorageRecreateWithoutRecoveryKey &&
-          isRepairableSecretStorageAccessError(err);
-        if (shouldRepairSecretStorage) {
-          LogService.warn(
-            "MatrixClientLite",
-            "Forced cross-signing reset could not unlock secret storage; recreating secret storage and retrying.",
-          );
-          try {
-            await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
-              allowSecretStorageRecreateWithoutRecoveryKey: true,
-              forceNewSecretStorage: true,
-            });
-            await resetCrossSigning();
-            await this.trustFreshOwnIdentity(crypto);
-          } catch (repairErr) {
-            LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
-            if (options.strict) {
-              throw toStringifiedError(repairErr);
-            }
-            return { ready: false, published: false };
-          }
-          return await finalize();
-        }
+        // A repair retry would generate another identity after the SDK already rotated local keys.
+        // Fail closed instead; the server identity and existing recovery material remain authoritative.
         LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", err);
         if (options.strict) {
           if (isRepairableSecretStorageAccessError(err)) {

@@ -70,6 +70,17 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const config = logbookConfigSchema.parse(api.pluginConfig);
     let service: LogbookService | null = null;
+    let opening: LogbookService | null = null;
+    let generation = 0;
+    let stopping: Promise<void> | undefined;
+    let retired = false;
+    const stopService = () => {
+      generation++;
+      const current = service ?? opening;
+      service = null;
+      opening = null;
+      return (stopping ??= current?.stop());
+    };
 
     const requireService = () => {
       if (!service) {
@@ -128,18 +139,54 @@ export default definePluginEntry({
 
     api.registerService({
       id: "logbook",
-      start: (ctx) => {
-        service = new LogbookService(config, {
+      start: async (ctx) => {
+        if (retired) {
+          throw new Error("Logbook plugin runtime has been retired");
+        }
+        const currentGeneration = ++generation;
+        await stopping;
+        if (retired || currentGeneration !== generation) {
+          return;
+        }
+        stopping = undefined;
+        const next = new LogbookService(config, {
           runtime: api.runtime,
           fullConfig: ctx.config,
           logger: ctx.logger,
           dataDir: path.join(ctx.stateDir, "logbook"),
         });
-        service.start();
+        opening = next;
+        try {
+          await next.start();
+          if (retired || currentGeneration !== generation) {
+            await next.stop();
+            return;
+          }
+          service = next;
+        } catch (error) {
+          await next.stop();
+          throw error;
+        } finally {
+          if (opening === next) {
+            opening = null;
+          }
+        }
       },
-      stop: () => {
-        service?.stop();
-        service = null;
+      stop: stopService,
+    });
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "logbook-service",
+      cleanup: ({ reason, sessionKey, runId }) => {
+        // Registry-only retirement does not run service.stop; scoped session cleanup stays local.
+        if (
+          sessionKey === undefined &&
+          runId === undefined &&
+          (reason === "restart" || reason === "disable")
+        ) {
+          retired = true;
+          return stopService();
+        }
+        return undefined;
       },
     });
 
@@ -162,26 +209,26 @@ export default definePluginEntry({
 
     // Raw frame bytes are the most sensitive payload (full screen contents),
     // so they require write scope while derived text stays readable.
-    registerRead("logbook.days", () => ({ days: requireService().listDays() }));
+    registerRead("logbook.days", async () => ({ days: await requireService().listDays() }));
 
-    registerRead("logbook.timeline", (params) => {
-      const day = readDayParam(params);
-      const svc = requireService();
-      return { day, cards: svc.cardsForDay(day), stats: svc.dayStats(day) };
-    });
+    registerRead("logbook.timeline", (params) =>
+      requireService().timelineForDay(readDayParam(params)),
+    );
 
-    registerWrite("logbook.frames", (params) => {
+    registerWrite("logbook.frames", async (params) => {
       const startMs = readNumberParam(params, "startMs");
       const endMs = readNumberParam(params, "endMs");
-      const frames = requireService()
-        .framesInRange(startMs, endMs)
-        .map((frame) => ({ id: frame.id, capturedAtMs: frame.capturedAtMs, idle: frame.idle }));
+      const frames = (await requireService().framesInRange(startMs, endMs)).map((frame) => ({
+        id: frame.id,
+        capturedAtMs: frame.capturedAtMs,
+        idle: frame.idle,
+      }));
       return { frames };
     });
 
-    registerWrite("logbook.frame", (params) => {
+    registerWrite("logbook.frame", async (params) => {
       const frameId = readNumberParam(params, "frameId");
-      const frame = requireService().frameById(frameId);
+      const frame = await requireService().frameById(frameId);
       if (!frame) {
         throw new Error(`frame ${frameId} not found`);
       }

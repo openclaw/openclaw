@@ -1,4 +1,5 @@
 // Google provider module implements model/runtime integration.
+import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
@@ -6,7 +7,6 @@ import {
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
-  type EmbeddingInput,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -21,6 +21,7 @@ import {
   createProviderHttpError,
   providerOperationRetryConfig,
   readProviderJsonObjectResponse,
+  readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -55,6 +56,11 @@ type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
+// Mirrors core's own error-body read limit (extractProviderErrorInfo in
+// provider-http-errors.ts) so the clone read below stays bounded like core's.
+const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
 const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
   RETRIEVAL_QUERY: "task: search result | query:",
   RETRIEVAL_DOCUMENT: "title: none | text:",
@@ -70,7 +76,7 @@ type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
 type GeminiPart = GeminiTextPart | GeminiInlinePart;
-type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
+type GeminiEmbeddingInputPart = NonNullable<Exclude<EmbeddingInput, string>["parts"]>[number];
 type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType?: GeminiTaskType;
@@ -131,13 +137,14 @@ export function buildGeminiEmbeddingRequest(params: {
   outputDimensionality?: number;
   modelPath?: string;
 }): GeminiEmbeddingRequest {
-  const parts = params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
+  const input = typeof params.input === "string" ? { text: params.input } : params.input;
+  const parts = input.parts?.map((part: GeminiEmbeddingInputPart) =>
     part.type === "text"
       ? ({ text: part.text } satisfies GeminiTextPart)
       : ({
           inlineData: { mimeType: part.mimeType, data: part.data },
         } satisfies GeminiInlinePart),
-  ) ?? [{ text: params.input.text }];
+  ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
   if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
@@ -206,6 +213,42 @@ function normalizeGeminiModel(model: string): string {
   return withoutPrefix;
 }
 
+/**
+ * Parses the delay hint from a `google.rpc.RetryInfo` detail inside a Gemini error
+ * body. Callers should prefer a full (bounded) body read over the 500-char
+ * `ProviderHttpError.errorBody` preview: real Gemini 429 payloads run ~1KB+ with
+ * the RetryInfo detail near the end of `error.details`, so the truncated preview
+ * regularly cuts the hint away.
+ */
+function extractGoogleRetryInfoDelayMs(errorBody: unknown): number | undefined {
+  if (typeof errorBody !== "string" || !errorBody) {
+    return undefined;
+  }
+  try {
+    const details = asOptionalRecord(asOptionalRecord(JSON.parse(errorBody))?.error)?.details;
+    if (!Array.isArray(details)) {
+      return undefined;
+    }
+    let retryAfterMs: number | undefined;
+    for (const rawDetail of details) {
+      const detail = asOptionalRecord(rawDetail);
+      const retryDelay = normalizeOptionalString(detail?.retryDelay);
+      const match = retryDelay ? GOOGLE_RETRY_DELAY_RE.exec(retryDelay) : undefined;
+      if (normalizeOptionalString(detail?.["@type"]) !== GOOGLE_RETRY_INFO_TYPE || !match) {
+        continue;
+      }
+      const delayMs =
+        Number(match[1]) * 1000 + (match[2] ? Math.ceil(Number(`0.${match[2]}`) * 1000) : 0);
+      if (Number.isSafeInteger(delayMs) && delayMs >= 0) {
+        retryAfterMs = Math.max(retryAfterMs ?? delayMs, delayMs);
+      }
+    }
+    return retryAfterMs;
+  } catch {
+    return undefined;
+  }
+}
+
 export function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
   if (expectedDimensions != null && values.length !== expectedDimensions) {
     throw unexpectedGeminiEmbeddingDimensions(expectedDimensions, values.length);
@@ -240,7 +283,44 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
-            throw await createProviderHttpError(res, "gemini embeddings failed");
+            // Clone before createProviderHttpError consumes the body: core truncates
+            // ProviderHttpError.errorBody to 500 chars, which regularly cuts off the
+            // RetryInfo detail near the end of real (~1KB+) Gemini 429 bodies.
+            let errorBodyClone: Response | undefined;
+            try {
+              errorBodyClone = res.clone();
+            } catch {
+              errorBodyClone = undefined;
+            }
+            try {
+              const error = await createProviderHttpError(res, "gemini embeddings failed", {
+                requestHeaders: headers,
+                signal: params.signal,
+              });
+              let retryInfoSource: unknown = error.errorBody;
+              if (errorBodyClone) {
+                try {
+                  retryInfoSource = await readProviderResponseErrorText(
+                    errorBodyClone,
+                    GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES,
+                    headers,
+                    params.signal,
+                  );
+                } catch {
+                  params.signal?.throwIfAborted();
+                  retryInfoSource = error.errorBody;
+                }
+              }
+              params.signal?.throwIfAborted();
+              const retryAfterMs = extractGoogleRetryInfoDelayMs(retryInfoSource);
+              if (retryAfterMs !== undefined) {
+                error.retryAfterMs = Math.max(retryAfterMs, error.retryAfterMs ?? 0);
+              }
+              throw error;
+            } finally {
+              // An early exit while reading the original must also release its tee.
+              void errorBodyClone?.body?.cancel().catch(() => undefined);
+            }
           }
           return await readProviderJsonObjectResponse(res, "gemini embeddings failed");
         },
@@ -250,39 +330,33 @@ async function fetchGeminiEmbeddingPayload(params: {
 }
 
 function normalizeGeminiBaseUrl(raw: string): string {
-  const trimmed = raw.replace(/\/+$/, "");
-  const openAiIndex = trimmed.indexOf("/openai");
-  if (openAiIndex > -1) {
-    const queryIndex = trimmed.indexOf("?", openAiIndex);
-    return normalizeGoogleApiBaseUrl(
-      `${trimmed.slice(0, openAiIndex)}${queryIndex < 0 ? "" : trimmed.slice(queryIndex)}`,
-    );
-  }
-  return normalizeGoogleApiBaseUrl(trimmed);
-}
-
-function buildGeminiModelPath(model: string): string {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function normalizeGoogleApiBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  const trimmed = raw.trim();
   if (!trimmed) {
     return DEFAULT_GOOGLE_API_BASE_URL;
   }
   try {
     const url = new URL(trimmed);
     url.hash = "";
+    // OpenAI endpoint aliases and trailing slashes belong to the path, not tenant query values.
+    const openAiIndex = url.pathname.indexOf("/openai");
+    url.pathname = (openAiIndex < 0 ? url.pathname : url.pathname.slice(0, openAiIndex)).replace(
+      /\/+$/,
+      "",
+    );
     if (
       url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
-      url.pathname.replace(/\/+$/, "") === ""
+      url.pathname === "/"
     ) {
       url.pathname = "/v1beta";
     }
-    return url.toString().replace(/\/+$/, "");
+    return url.search ? url.href : url.href.replace(/\/$/, "");
   } catch {
     return trimmed;
   }
+}
+
+function buildGeminiModelPath(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
 }
 
 export async function createGeminiEmbeddingProvider(
@@ -307,7 +381,7 @@ export async function createGeminiEmbeddingProvider(
       client,
       endpoint: embedUrl,
       body: buildGeminiEmbeddingRequest({
-        input: { text },
+        input: text,
         model: client.model,
         role: "query",
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
@@ -318,7 +392,7 @@ export async function createGeminiEmbeddingProvider(
     return sanitizeGeminiEmbedding(readGeminiSingleEmbedding(payload), outputDimensionality);
   };
 
-  const embedBatchInputs = async (
+  const embedDocuments = async (
     inputs: EmbeddingInput[],
     callOptions?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
@@ -346,26 +420,25 @@ export async function createGeminiEmbeddingProvider(
     return embeddings.map((values) => sanitizeGeminiEmbedding(values, outputDimensionality));
   };
 
-  const embedBatch = async (
-    texts: string[],
-    optionsLocal?: { signal?: AbortSignal },
-  ): Promise<number[][]> => {
-    return await embedBatchInputs(
-      texts.map((text) => ({
-        text,
-      })),
-      optionsLocal,
-    );
-  };
-
   return {
     provider: {
       id: "gemini",
       model: client.model,
       maxInputTokens: GEMINI_MAX_INPUT_TOKENS[client.model],
-      embedQuery,
-      embedBatch,
-      embedBatchInputs,
+      embed: async (input, callOptions) => {
+        if (callOptions?.inputType === "query") {
+          return await embedQuery(typeof input === "string" ? input : input.text, callOptions);
+        }
+        return (await embedDocuments([input], callOptions))[0] ?? [];
+      },
+      embedBatch: async (inputs, callOptions) =>
+        callOptions?.inputType === "query"
+          ? await Promise.all(
+              inputs.map((input) =>
+                embedQuery(typeof input === "string" ? input : input.text, callOptions),
+              ),
+            )
+          : await embedDocuments(inputs, callOptions),
     },
     client,
   };
@@ -428,10 +501,7 @@ async function resolveGeminiEmbeddingClient(
       });
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
-  const outputDimensionality = resolveGeminiOutputDimensionality(
-    model,
-    options.outputDimensionality,
-  );
+  const outputDimensionality = resolveGeminiOutputDimensionality(model, options.dimensions);
   debugEmbeddingsLog("memory embeddings: gemini client", {
     rawBaseUrl,
     baseUrl,

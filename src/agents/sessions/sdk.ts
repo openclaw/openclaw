@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -43,13 +44,7 @@ import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  type ToolName,
-} from "./tools/index.js";
+import type { ToolName } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -127,8 +122,6 @@ export type {
   ExtensionFactory,
   ToolDefinition,
 } from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 
@@ -288,7 +281,7 @@ async function createAgentSessionImpl(
 
   // Use provided or create AuthStorage and ModelRegistry
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, getRuntimeConfig());
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
@@ -466,7 +459,6 @@ async function createAgentSessionImpl(
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetries: optionsLocal?.maxRetries ?? providerRetrySettings.maxRetries,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
         headers:
           attributionHeaders || auth.headers || optionsLocal?.headers

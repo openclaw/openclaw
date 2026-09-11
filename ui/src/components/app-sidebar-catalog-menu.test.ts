@@ -13,7 +13,12 @@ describe("SidebarCatalogMenuController", () => {
       beforeOpen: () => order.push("open"),
       requestUpdate: vi.fn(),
       terminalAvailable: () => true,
+      openTerminal: vi.fn(),
       navigate: vi.fn(),
+      beginMutation: vi.fn(),
+      isMutationCurrent: vi.fn(),
+      archive: vi.fn(),
+      afterDelete: vi.fn(),
     });
 
     controller.open(
@@ -23,6 +28,8 @@ describe("SidebarCatalogMenuController", () => {
         routeId: "chat",
         navigation: {},
         canOpenTerminal: true,
+        canDelete: false,
+        name: "Shared session",
         meta: "now",
       },
       10,
@@ -31,28 +38,5 @@ describe("SidebarCatalogMenuController", () => {
     );
 
     expect(order).toEqual(["dismiss", "open"]);
-  });
-
-  it("does not schedule trigger retargeting while the menu is closed", () => {
-    const controller = new SidebarCatalogMenuController({
-      beforeOpen: vi.fn(),
-      requestUpdate: vi.fn(),
-      terminalAvailable: () => true,
-      navigate: vi.fn(),
-    });
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
-    const queueMicrotaskSpy = vi.spyOn(globalThis, "queueMicrotask");
-
-    try {
-      controller.retargetTrigger(
-        { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
-        trigger,
-      );
-      expect(queueMicrotaskSpy).not.toHaveBeenCalled();
-    } finally {
-      queueMicrotaskSpy.mockRestore();
-      trigger.remove();
-    }
   });
 });

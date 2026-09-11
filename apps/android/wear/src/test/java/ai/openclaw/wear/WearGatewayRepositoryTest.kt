@@ -155,15 +155,21 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { method, _ ->
           when (method) {
-            WearRpcMethod.SessionsList ->
+            WearRpcMethod.SessionsList -> {
               json.parseToJsonElement(
                 """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true,"hasMore":true,"nextOffset":35}""",
               )
-            WearRpcMethod.ChatHistory ->
+            }
+
+            WearRpcMethod.ChatHistory -> {
               json.parseToJsonElement(
                 """{"sessionKey":"agent:main","selectedModelRef":"openai/gpt-test","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"}],"timestamp":9}],"inFlightRun":{"runId":"run-1","text":"working"}}""",
               )
-            else -> error("unexpected $method")
+            }
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -208,16 +214,25 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { method, _ ->
           when (method) {
-            WearRpcMethod.AgentsList ->
+            WearRpcMethod.AgentsList -> {
               json.parseToJsonElement(
                 """{"agents":[{"id":"main","name":"Main","emoji":"*","selected":true}]}""",
               )
-            WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
-            WearRpcMethod.GatewayDisconnect ->
+            }
+
+            WearRpcMethod.AgentsSelect -> {
+              JsonObject(emptyMap())
+            }
+
+            WearRpcMethod.GatewayDisconnect -> {
               json.parseToJsonElement(
                 """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
               )
-            else -> error("unexpected $method")
+            }
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -236,7 +251,7 @@ class WearGatewayRepositoryTest {
       assertFalse(status.connected)
       assertEquals("main", status.activeAgentId)
       assertEquals("openai/gpt-test", status.selectedModelRef)
-      assertEquals(capabilities, status.capabilities)
+      assertEquals(capabilities - WearProxyCapability.SessionScopedModelCatalog, status.capabilities)
       assertEquals(
         listOf(WearRpcMethod.AgentsList, WearRpcMethod.AgentsSelect, WearRpcMethod.GatewayDisconnect),
         requester.calls.map(Pair<WearRpcMethod, JsonObject>::first),
@@ -268,7 +283,7 @@ class WearGatewayRepositoryTest {
             capabilities = status.capabilities,
           )
         }.exceptionOrNull()
-      val modelsFailure = runCatching { repository.models(status.phoneNodeId, status.capabilities) }.exceptionOrNull()
+      val modelsFailure = runCatching { repository.models(status.phoneNodeId, status.capabilities, "agent:main") }.exceptionOrNull()
 
       assertTrue(status.capabilities.isEmpty())
       assertEquals("unsupported_peer", (agentsFailure as? WearProxyException)?.code)
@@ -283,7 +298,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","model-catalog-search","session-scoped-model-catalog","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
           )
         }
 
@@ -296,17 +311,23 @@ class WearGatewayRepositoryTest {
   fun modelSelectionKeepsTheSelectedSessionAndUsesThePreferredPhone() =
     runTest {
       val capabilities =
-        setOf(WearProxyCapability.ModelControls, WearProxyCapability.ModelCatalogSearch)
+        setOf(
+          WearProxyCapability.ModelControls,
+          WearProxyCapability.ModelCatalogSearch,
+          WearProxyCapability.SessionScopedModelCatalog,
+        )
       val requester =
         RecordingRequester { method, params ->
           when (method) {
             WearRpcMethod.ModelsList -> {
+              assertEquals("agent:main:thread-7", params.getValue("sessionKey").jsonPrimitive.content)
               assertEquals("openai/gpt-a", params.getValue("selectedModelRef").jsonPrimitive.content)
               assertEquals("anthropic", params.getValue("query").jsonPrimitive.content)
               json.parseToJsonElement(
-                """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
+                """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}],"refreshFailed":true}""",
               )
             }
+
             WearRpcMethod.ModelsSelect -> {
               assertEquals("agent:main:thread-7", params.getValue("sessionKey").jsonPrimitive.content)
               assertEquals("openai/gpt-b", params.getValue("modelRef").jsonPrimitive.content)
@@ -314,7 +335,10 @@ class WearGatewayRepositoryTest {
                 """{"sessionKey":"agent:main:thread-7","selectedModelRef":"openai/gpt-b"}""",
               )
             }
-            else -> error("unexpected $method")
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -323,6 +347,7 @@ class WearGatewayRepositoryTest {
         repository.models(
           "phone-a",
           capabilities,
+          sessionKey = "agent:main:thread-7",
           selectedModelRef = "openai/gpt-a",
           query = "anthropic",
         )
@@ -335,6 +360,7 @@ class WearGatewayRepositoryTest {
         )
 
       assertEquals(listOf("openai/gpt-a", "openai/gpt-b"), models.models.map(WearModel::ref))
+      assertTrue(models.refreshFailed)
       assertEquals("openai/gpt-b", selected.selectedModelRef)
       assertEquals(7L, selected.eventSequence)
       assertEquals("phone-a", selected.phoneNodeId)
@@ -344,30 +370,55 @@ class WearGatewayRepositoryTest {
     }
 
   @Test
-  fun oldPhoneCapabilitiesDoNotReceivePickerSearchFields() =
+  fun scopedModelReadRejectsAnOldPhoneWithoutSendingAnUnscopedRetry() =
+    runTest {
+      val requester = RecordingRequester { _, _ -> json.parseToJsonElement("""{"models":[]}""") }
+      val failure =
+        runCatching {
+          WearGatewayRepository(requester).models(
+            expectedNodeId = "phone-a",
+            capabilities = setOf(WearProxyCapability.ModelControls),
+            sessionKey = "agent:main:watch",
+          )
+        }.exceptionOrNull()
+
+      assertEquals("unsupported_peer", (failure as? WearProxyException)?.code)
+      assertTrue(failure?.message.orEmpty().contains("Update"))
+      assertTrue(requester.calls.isEmpty())
+    }
+
+  @Test
+  fun peersWithoutSearchCapabilitiesReceiveOnlyScopedPickerFields() =
     runTest {
       val requester =
         RecordingRequester { method, params ->
           when (method) {
             WearRpcMethod.ModelsList -> {
-              assertEquals(setOf("selectedModelRef"), params.keys)
+              assertEquals(setOf("sessionKey", "selectedModelRef"), params.keys)
               json.parseToJsonElement("""{"models":[]}""")
             }
+
             WearRpcMethod.SessionsList -> {
               assertEquals(setOf("limit", "selectedSessionKey"), params.keys)
               json.parseToJsonElement("""{"sessions":[]}""")
             }
-            else -> error("unexpected $method")
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
 
-      repository.models(
-        expectedNodeId = "phone-a",
-        capabilities = setOf(WearProxyCapability.ModelControls),
-        selectedModelRef = "openai/gpt-a",
-        query = "anthropic",
-      )
+      val models =
+        repository.models(
+          expectedNodeId = "phone-a",
+          capabilities = setOf(WearProxyCapability.ModelControls, WearProxyCapability.SessionScopedModelCatalog),
+          sessionKey = "agent:main:watch",
+          selectedModelRef = "openai/gpt-a",
+          query = "anthropic",
+        )
+      assertFalse(models.refreshFailed)
       repository.sessions(
         expectedNodeId = "phone-a",
         selectedSessionKey = "agent:main",

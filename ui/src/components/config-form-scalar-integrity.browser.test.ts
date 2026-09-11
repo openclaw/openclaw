@@ -2,6 +2,19 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.node.scalar.ts";
+import {
+  analyzeConfigSchema,
+  type JsonSchema,
+  renderConfigForm as renderConfigFormBase,
+} from "./config-form.ts";
+
+function renderConfigForm(
+  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+    onShowAdvanced?: () => void;
+  },
+) {
+  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+}
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -217,7 +230,6 @@ describe("config form scalar integrity", () => {
     expect(textInput.value).toBe("");
     expect(textInput.placeholder).toBe("Default: balanced");
     expect(container.textContent).toContain("Using default: balanced");
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
@@ -252,7 +264,27 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
   });
 
-  it("restores scalar and select defaults by removing optional overrides", () => {
+  it("shows the default description without a reset button on an overridden row", () => {
+    const container = document.createElement("div");
+    render(
+      renderTextInput({
+        schema: { type: "string", default: "balanced" },
+        value: "custom",
+        path: ["mode"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Default: balanced");
+    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
+  });
+
+  it("restores scalar and select defaults through clearing and default selection", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -271,14 +303,16 @@ describe("config form scalar integrity", () => {
       container,
     );
     expect(container.textContent).toContain("Default: 3");
-    expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "number reset",
-    ).click();
-    expect(onRemove).toHaveBeenCalledWith(["retries"]);
-    expect(onPatch).not.toHaveBeenCalled();
+    const numberInput = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "number input",
+    );
+    numberInput.value = "";
+    numberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
+    expect(onRemove).not.toHaveBeenCalled();
 
-    onRemove.mockClear();
+    onPatch.mockClear();
     render(
       renderSelect({
         schema: { type: "string", default: "balanced" },
@@ -712,7 +746,7 @@ describe("config form scalar integrity", () => {
     },
   );
 
-  it("keeps restore disabled while a sensitive value is concealed", () => {
+  it("conceals the default description while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 
     render(
@@ -731,11 +765,6 @@ describe("config form scalar integrity", () => {
       container,
     );
 
-    const reset = expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "concealed sensitive reset",
-    );
-    expect(reset.disabled).toBe(true);
     expect(container.textContent).not.toContain("inherited");
   });
 
@@ -776,4 +805,99 @@ describe("config form scalar integrity", () => {
       "Stored secrets are never sent to the browser; enter a new value to replace it",
     );
   });
+
+  it("preserves string and false edits through the analyzer path", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const schema = {
+      type: "object",
+      properties: {
+        sessionRetention: {
+          anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("sessionRetention");
+
+    const renderValue = (value: string | boolean) => {
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: {},
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: { sessionRetention: value },
+          onPatch,
+        }),
+        container,
+      );
+      return expectElement(
+        container.querySelector<HTMLInputElement>("input"),
+        "string-or-false union input",
+      );
+    };
+
+    let input = renderValue("7d");
+    expect(input.value).toBe("7d");
+    input.value = "false";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["sessionRetention"], false);
+
+    input = renderValue(false);
+    expect(input.value).toBe("false");
+    input.value = "30d";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["sessionRetention"], "30d");
+  });
+
+  it.each([
+    { name: "numeric literal", variants: [{ type: "string" }, { const: 5 }], value: 5 },
+    {
+      name: "typed numeric literal",
+      variants: [{ type: "string" }, { type: "number", const: 5 }],
+      value: 5,
+    },
+    {
+      name: "object literal",
+      variants: [{ type: "string" }, { const: { enabled: true } }],
+      value: { enabled: true },
+    },
+    { name: "array literal", variants: [{ type: "string" }, { const: ["auto"] }], value: ["auto"] },
+    {
+      name: "explicit null branch",
+      variants: [{ type: "string" }, { const: false }, { type: "null" }],
+      value: null,
+    },
+    {
+      name: "nullable string branch",
+      variants: [{ type: ["string", "null"] }, { const: false }],
+      value: null,
+    },
+  ] satisfies Array<{ name: string; variants: JsonSchema[]; value: unknown }>)(
+    "keeps $name sentinels outside text editing",
+    ({ variants, value }) => {
+      const schema: JsonSchema = {
+        type: "object",
+        properties: { policy: { anyOf: variants } },
+      };
+      const analysis = analyzeConfigSchema(schema);
+      expect(analysis.unsupportedPaths).toEqual(["policy"]);
+      expect(analysis.schema?.properties?.policy).toMatchObject({ anyOf: variants });
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: {},
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: { policy: value },
+          onPatch,
+        }),
+        container,
+      );
+      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+      expect(container.querySelector("input, select, textarea")).toBeNull();
+      expect(onPatch).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,9 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import type { PluginInstallRecord } from "./types.plugins.js";
-import { PluginInstallRecordShape } from "./zod-schema.installs.js";
+import { StrictPluginInstallRecordSchema } from "./zod-schema.installs.js";
 
-export const PluginInstallRecordSchema = z.object(PluginInstallRecordShape).passthrough();
+export const PluginInstallRecordSchema = StrictPluginInstallRecordSchema.passthrough();
 
 const NORMALIZED_STRING_FIELDS = [
   "spec",
@@ -39,6 +38,9 @@ const NORMALIZED_STRING_FIELDS = [
   "marketplaceName",
   "marketplaceSource",
   "marketplacePlugin",
+  "acceptedSurfaceHash",
+  "acceptedSurfaceAt",
+  "acceptedSurfaceIntegrity",
 ] as const satisfies readonly (keyof PluginInstallRecord)[];
 
 export type PluginInstallRecordMapState =

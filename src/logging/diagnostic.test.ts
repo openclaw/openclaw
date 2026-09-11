@@ -14,20 +14,23 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
+  beginDiagnosticBackendActivity,
+  closeDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 import {
   markDiagnosticModelStartedForTest,
-  markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.test-support.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
@@ -40,7 +43,6 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   peekDiagnosticSessionState,
-  pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
@@ -102,6 +104,26 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
     }
   }
   return count;
+}
+
+/** Drives a lane that keeps receiving inbound, the traffic that refreshes lastActivity. */
+function advanceLaneWithInbound(params: {
+  sessionId: string;
+  sessionKey: string;
+  totalMs: number;
+  inboundEveryMs: number;
+  onInbound?: () => void;
+}) {
+  const ticks = Math.floor(params.totalMs / params.inboundEveryMs);
+  for (let i = 0; i < ticks; i += 1) {
+    vi.advanceTimersByTime(params.inboundEveryMs);
+    logMessageQueued({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      source: "dispatch",
+    });
+    params.onInbound?.();
+  }
 }
 
 const requireRecord = createRequireRecord("object", "label-not-object");
@@ -191,21 +213,21 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.size).toBe(1);
   });
 
-  it("caps tracked session states to a bounded max", () => {
-    const now = Date.now();
-    for (let i = 0; i < 2001; i += 1) {
-      diagnosticSessionStates.set(`session-${i}`, {
-        sessionId: `session-${i}`,
-        lastActivity: now + i,
-        generation: 0,
-        state: "idle",
-        queueDepth: 1,
-      });
-    }
-    pruneDiagnosticSessionStates(now + 2002, true);
+  it.each(["session-0", ""])(
+    "caps tracked session states when the oldest key is %j",
+    (oldestKey) => {
+      const now = Date.now();
+      for (let i = 0; i < 2001; i += 1) {
+        vi.setSystemTime(now + i);
+        getDiagnosticSessionState({
+          sessionKey: i === 0 ? oldestKey : `session-${i}`,
+        }).queueDepth = 1;
+      }
 
-    expect(diagnosticSessionStates.size).toBe(2000);
-  });
+      expect(diagnosticSessionStates.size).toBe(2000);
+      expect(diagnosticSessionStates.has(oldestKey)).toBe(false);
+    },
+  );
 
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
@@ -519,7 +541,7 @@ describe("stuck session diagnostics threshold", () => {
 
     vi.advanceTimersByTime(20_000);
     markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -552,7 +574,7 @@ describe("stuck session diagnostics threshold", () => {
 
     vi.advanceTimersByTime(15_500);
     markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -691,7 +713,7 @@ describe("stuck session diagnostics threshold", () => {
     try {
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         reason: "codex_app_server:notification:rawResponseItem/completed",
@@ -778,7 +800,7 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
     vi.advanceTimersByTime(120_000);
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -863,7 +885,7 @@ describe("stuck session diagnostics threshold", () => {
 
       for (let i = 0; i < 20; i += 1) {
         vi.advanceTimersByTime(29_000);
-        markDiagnosticRunProgressForTest({
+        markDiagnosticRunProgress({
           sessionId: "s1",
           sessionKey: "main",
           runId: "run-1",
@@ -871,6 +893,130 @@ describe("stuck session diagnostics threshold", () => {
         });
         vi.advanceTimersByTime(1_000);
       }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("reports blocked tool calls on a lane whose inbound keeps refreshing the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const stalled = requireRecord(
+      events.findLast((event) => event.type === "session.stalled"),
+      "stalled event",
+    );
+    expectRecordFields(stalled, {
+      classification: "blocked_tool_call",
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "bash",
+    });
+    // Both the report and the recovery request carry the progress clock, not the
+    // 25s-old session touch: the ownerless-lane release window measures staleness.
+    expect(stalled.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+    const recovery = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recovery.ageMs).toBeGreaterThanOrEqual(15 * 60_000);
+  });
+
+  it("keeps a lane with fresh owned progress quiet while inbound keeps arriving", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+        onInbound: () => {
+          markDiagnosticRunProgress({
+            sessionId: "s1",
+            sessionKey: "main",
+            runId: "run-1",
+            reason: "cli_live:stream_progress",
+          });
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves a busy lane with no owned work on the session clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+      // Terminal-but-unreleased state: the owner is gone, the activity row is not.
+      // Recording that fact belongs to the run lifecycle, not to this gate.
+      markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })
+          .activeWorkKind,
+      ).toBeUndefined();
+
+      advanceLaneWithInbound({
+        sessionId: "s1",
+        sessionKey: "main",
+        totalMs: 20 * 60_000,
+        inboundEveryMs: 25_000,
+      });
     } finally {
       unsubscribe();
     }
@@ -923,36 +1069,21 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("recovers repeated request attempts despite fresh mechanical activity", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
-    const stuckSessionWarnMs = 30_000;
-    const stuckSessionAbortMs = 90_000;
-    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    try {
-      startEnabledDiagnosticHeartbeat({
-        recoverStuckSession,
-        testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
-      });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main", runId: "run-1" });
-      markDiagnosticModelStartedForTest({
-        sessionId: "s1",
-        sessionKey: "main",
-        runId: "run-1",
-        provider: "mock",
-        model: "retrying-model",
-        observationUnit: "request",
-      });
-
-      for (let attempt = 2; attempt <= 6; attempt += 1) {
-        vi.advanceTimersByTime(30_000);
-        logSessionStateChange({
-          sessionId: "s1",
-          sessionKey: "main",
-          state: "processing",
-          reason: "run_started",
+  it.each(["model_call", "tool_call"] as const)(
+    "recovers repeated request attempts during %s despite fresh mechanical activity",
+    async (activeWorkKind) => {
+      const events: DiagnosticEventPayload[] = [];
+      const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+      const stuckSessionWarnMs = 30_000;
+      const stuckSessionAbortMs = 90_000;
+      const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+      try {
+        startEnabledDiagnosticHeartbeat({
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
         });
+        logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+        markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main", runId: "run-1" });
         markDiagnosticModelStartedForTest({
           sessionId: "s1",
           sessionKey: "main",
@@ -961,31 +1092,61 @@ describe("stuck session diagnostics threshold", () => {
           model: "retrying-model",
           observationUnit: "request",
         });
+        if (activeWorkKind === "tool_call") {
+          // An open tool must not hide mature repeated-request evidence.
+          markDiagnosticToolStartedForTest({
+            sessionId: "s1",
+            sessionKey: "main",
+            runId: "run-1",
+            toolName: "read",
+            toolCallId: "read-during-retries",
+          });
+        }
+
+        for (let attempt = 2; attempt <= 6; attempt += 1) {
+          vi.advanceTimersByTime(30_000);
+          logSessionStateChange({
+            sessionId: "s1",
+            sessionKey: "main",
+            state: "processing",
+            reason: "run_started",
+          });
+          markDiagnosticModelStartedForTest({
+            sessionId: "s1",
+            sessionKey: "main",
+            runId: "run-1",
+            provider: "mock",
+            model: "retrying-model",
+            observationUnit: "request",
+          });
+        }
+      } finally {
+        unsubscribe();
       }
-    } finally {
-      unsubscribe();
-    }
 
-    expectRecordFields(
-      requireRecord(
-        events.find((event) => event.type === "session.stalled"),
-        "stalled event",
-      ),
-      {
-        classification: "stalled_agent_run",
-        reason: "repeated_model_requests_without_progress",
-        repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
-      },
-    );
-    expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-    expectRecoveryCall(
-      recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
-      ["ageMs", "stateGeneration"],
-    );
-  });
+      expectRecordFields(
+        requireRecord(
+          events.find((event) => event.type === "session.stalled"),
+          "stalled event",
+        ),
+        {
+          classification: "stalled_agent_run",
+          reason: "repeated_model_requests_without_progress",
+          repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
+          activeWorkKind,
+          activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+        },
+      );
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+      expectRecoveryCall(
+        recoverStuckSession,
+        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+        ["ageMs", "stateGeneration"],
+      );
+    },
+  );
 
-  it("does not recover repeated requests after semantic output resets the clock", () => {
+  it("does not recover repeated requests after semantic output resets the clock", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionAbortMs = 90_000;
@@ -1011,18 +1172,17 @@ describe("stuck session diagnostics threshold", () => {
         model: "retrying-model",
         observationUnit: "request",
       });
-      markDiagnosticRunProgressForTest({
+      emitCoreSemanticRunProgressDiagnosticEvent({
         ...ref,
         reason: "assistant:progress",
-        progressKind: "semantic",
       });
+      await vi.advanceTimersByTimeAsync(0);
 
       for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
         vi.advanceTimersByTime(30_000);
-        markDiagnosticRunProgressForTest({
+        markDiagnosticRunProgress({
           ...ref,
           reason: "model_call:stream_progress",
-          progressKind: "liveness",
         });
       }
     } finally {
@@ -1099,7 +1259,7 @@ describe("stuck session diagnostics threshold", () => {
       });
 
       vi.advanceTimersByTime(stuckSessionAbortMs - 15_000);
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         runId: "run-1",
@@ -1342,6 +1502,35 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("defers a quiet backend until its owned silence deadline expires", () => {
+    const recoverStuckSession = vi.fn();
+    const ref = { sessionId: "backend-deadline", sessionKey: "agent:main:backend-deadline" };
+    const runId = "backend-deadline-run";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    const backend = beginDiagnosticBackendActivity({
+      owner,
+      noOutputTimeoutMs: 180_000,
+      assertCurrent: () => {},
+    });
+    try {
+      // No output has arrived: initial silence still belongs to the backend's deadline.
+      vi.advanceTimersByTime(120_000);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(60_000);
+      expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true }, [
+        "ageMs",
+        "stateGeneration",
+      ]);
+    } finally {
+      backend.close();
+      closeDiagnosticEmbeddedRunOwner(owner);
+    }
   });
 
   it("does not recover a recent native tool call just because the session is old", async () => {
@@ -2039,7 +2228,7 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         reason: terminalReason,

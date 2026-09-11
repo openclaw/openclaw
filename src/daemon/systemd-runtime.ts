@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceEnv,
@@ -21,11 +22,14 @@ import {
   isSystemdUnitMissingDetail,
   isSystemdUnitNotEnabled,
   readSystemctlDetail,
+  systemdInspectionError,
 } from "./systemd-exec.js";
+import { readLoadedSystemdServiceRuntime } from "./systemd-loaded-runtime.js";
 import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 type SystemdServiceInfo = {
+  loadState?: string;
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -43,6 +47,10 @@ type SystemdServiceInfo = {
 function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
+  const loadState = entries.loadstate;
+  if (loadState) {
+    info.loadState = loadState;
+  }
   const activeState = entries.activestate;
   if (activeState) {
     info.activeState = activeState;
@@ -126,16 +134,23 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (!isSystemctlMissing(detail) && isSystemdUnitNotEnabled(detail)) {
+  if (res.termination === "exit" && !isSystemctlMissing(res) && isSystemdUnitNotEnabled(detail)) {
     return false;
   }
-  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
+  throw systemdInspectionError(
+    res,
+    `systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim(),
+    installed.scope,
+  );
 }
 
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  if (opts?.requireLoaded) {
+    return await readLoadedSystemdServiceRuntime(env, opts.timeoutMs, opts.loadForInspection);
+  }
   const timeoutMs = opts?.timeoutMs;
   const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
   if (installed?.scope !== "system") {
@@ -145,6 +160,7 @@ export async function readSystemdServiceRuntime(
       return {
         status: "unknown",
         detail: formatErrorMessage(err),
+        ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
       };
     }
   }
@@ -154,7 +170,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ];
   const res =
     installed?.scope === "system"
@@ -162,18 +178,33 @@ export async function readSystemdServiceRuntime(
       : await execSystemctlUser(env, showArgs, timeoutMs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = !installed && isSystemdUnitMissingDetail(detail);
+    const missing = res.termination === "exit" && !installed && isSystemdUnitMissingDetail(detail);
+    const error = missing ? undefined : systemdInspectionError(res, detail, installed?.scope);
     return {
       status: missing ? "stopped" : "unknown",
       ...(!missing && detail ? { detail } : {}),
       missingUnit: missing,
+      ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  // Restart and shutdown transitions can still own or respawn the process.
+  // Only terminal native states establish that offline maintenance is safe.
+  const status =
+    activeState === "active"
+      ? "running"
+      : activeState === "inactive" || activeState === "failed"
+        ? "stopped"
+        : "unknown";
   return {
     status,
+    // `systemctl show` succeeds for absent units. Preserve stopped status for
+    // staged definitions, but only affirm absence when no definition exists.
+    ...(normalizeLowercaseStringOrEmpty(parsed.loadState) === "not-found" &&
+    activeState === "inactive"
+      ? { missingUnit: !installed }
+      : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,

@@ -18,11 +18,10 @@ import {
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
-type InlineImageCandidate =
+type InlineImageReference =
   | {
       kind: "data";
-      data: Buffer;
-      contentType?: string;
+      src: string;
       sourceId?: string;
     }
   | {
@@ -33,11 +32,6 @@ type InlineImageCandidate =
       sourceId?: string;
     }
   | { kind: "unavailable"; sourceId?: string };
-
-type InlineImageLimitOptions = {
-  maxInlineBytes?: number;
-  maxInlineTotalBytes?: number;
-};
 
 const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
@@ -103,42 +97,6 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
-
-// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
-// hot MSTeams attachment tests for one tiny estimator.
-function estimateBase64DecodedBytes(base64: string): number {
-  let effectiveLen = 0;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (code <= 0x20) {
-      continue;
-    }
-    effectiveLen += 1;
-  }
-
-  if (effectiveLen === 0) {
-    return 0;
-  }
-
-  let padding = 0;
-  let end = base64.length - 1;
-  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-    end -= 1;
-  }
-  if (end >= 0 && base64[end] === "=") {
-    padding = 1;
-    end -= 1;
-    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-      end -= 1;
-    }
-    if (end >= 0 && base64[end] === "=") {
-      padding = 2;
-    }
-  }
-
-  const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
-  return Math.max(0, estimated);
-}
 
 /**
  * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
@@ -345,76 +303,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function canonicalizeInlineBase64Payload(value: string): string | undefined {
-  let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x20) {
-      continue;
-    }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isDataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isDataChar) {
-      return undefined;
-    }
-    cleaned += value[index];
-  }
-  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
-}
-
-function decodeDataImageWithLimits(
-  src: string,
-  opts: { maxInlineBytes?: number },
-): { candidate: InlineImageCandidate | null; estimatedBytes: number } {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-
-  const estimatedBytes = estimateBase64DecodedBytes(canonicalPayload);
-  if (estimatedBytes <= 0) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  if (typeof opts.maxInlineBytes === "number" && estimatedBytes > opts.maxInlineBytes) {
-    return { candidate: null, estimatedBytes };
-  }
-
-  try {
-    const data = Buffer.from(canonicalPayload, "base64");
-    return {
-      candidate: { kind: "data", data, contentType },
-      estimatedBytes,
-    };
-  } catch {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-}
-
 function fileHintFromUrl(src: string): string | undefined {
   try {
     const url = new URL(src);
@@ -425,11 +313,10 @@ function fileHintFromUrl(src: string): string | undefined {
   }
 }
 
-export function extractInlineImageCandidates(
+export function extractInlineImageReferences(
   attachments: MSTeamsAttachmentLike[],
-  limits?: InlineImageLimitOptions,
-): InlineImageCandidate[] {
-  const out: InlineImageCandidate[] = [];
+): InlineImageReference[] {
+  const out: InlineImageReference[] = [];
   const seenReferences = new Set<string>();
   const representedAttachmentIds = new Set(
     attachments.flatMap((attachment) => {
@@ -437,7 +324,6 @@ export function extractInlineImageCandidates(
       return id && !extractHtmlFromAttachment(attachment) ? [id] : [];
     }),
   );
-  let totalEstimatedInlineBytes = 0;
   for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
@@ -449,23 +335,7 @@ export function extractInlineImageCandidates(
       const src = match[1]?.trim();
       if (src) {
         if (src.startsWith("data:")) {
-          const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
-            maxInlineBytes: limits?.maxInlineBytes,
-          });
-          if (decoded) {
-            const nextTotal = totalEstimatedInlineBytes + estimatedBytes;
-            if (
-              typeof limits?.maxInlineTotalBytes === "number" &&
-              nextTotal > limits.maxInlineTotalBytes
-            ) {
-              out.push({ kind: "unavailable" });
-            } else {
-              totalEstimatedInlineBytes = nextTotal;
-              out.push(decoded);
-            }
-          } else {
-            out.push({ kind: "unavailable" });
-          }
+          out.push({ kind: "data", src });
         } else if (!seenReferences.has(src)) {
           seenReferences.add(src);
           if (src.startsWith("cid:")) {
@@ -664,7 +534,7 @@ async function safeFetch(params: {
     "dispatcher" in (params.requestInit as Record<string, unknown>),
   );
   const currentHeaders = new Headers(params.requestInit?.headers);
-  let currentUrl = params.url;
+  const currentUrl = params.url;
 
   if (!isUrlAllowed(currentUrl, params.allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
@@ -707,70 +577,53 @@ async function safeFetch(params: {
     return responseWithRelease(guarded.response, guarded.release);
   }
 
-  if (resolveFn) {
-    try {
-      const initialHost = new URL(currentUrl).hostname;
-      await resolveAndValidateIP(initialHost, resolveFn);
-    } catch {
-      throw new Error(`Initial download URL blocked: ${currentUrl}`);
-    }
+  try {
+    const initialHost = new URL(currentUrl).hostname;
+    await resolveAndValidateIP(initialHost, resolveFn);
+  } catch {
+    throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
-  for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
-    const res = await (params.fetchFn ?? fetch)(currentUrl, {
-      ...params.requestInit,
-      headers: currentHeaders,
-      redirect: "manual",
-    });
+  const res = await (params.fetchFn ?? fetch)(currentUrl, {
+    ...params.requestInit,
+    headers: currentHeaders,
+    redirect: "manual",
+  });
 
-    if (!isRedirectStatus(res.status)) {
-      return res;
-    }
-
-    const location = res.headers.get("location");
-    if (!location) {
-      return res;
-    }
-
-    let redirectUrl: string;
-    try {
-      redirectUrl = new URL(location, currentUrl).toString();
-    } catch {
-      throw new Error(`Invalid redirect URL: ${location}`);
-    }
-
-    // Validate redirect target against hostname allowlist
-    if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
-      throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
-    }
-
-    // Prevent credential bleed: only keep Authorization on redirect hops that
-    // are explicitly auth-allowlisted.
-    if (
-      currentHeaders.has("authorization") &&
-      params.authorizationAllowHosts &&
-      !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
-    ) {
-      currentHeaders.delete("authorization");
-    }
-
-    // When a pinned dispatcher is already injected by an upstream guard
-    // (for example fetchWithSsrFGuard), let that guard own redirect handling
-    // after this allowlist validation step.
-    if (hasDispatcher) {
-      return res;
-    }
-
-    // Validate redirect target's resolved IP
-    if (resolveFn) {
-      const redirectHost = new URL(redirectUrl).hostname;
-      await resolveAndValidateIP(redirectHost, resolveFn);
-    }
-
-    currentUrl = redirectUrl;
+  if (!isRedirectStatus(res.status)) {
+    return res;
   }
 
-  throw new Error(`Too many redirects (>${MAX_SAFE_REDIRECTS})`);
+  const location = res.headers.get("location");
+  if (!location) {
+    return res;
+  }
+
+  let redirectUrl: string;
+  try {
+    redirectUrl = new URL(location, currentUrl).toString();
+  } catch {
+    throw new Error(`Invalid redirect URL: ${location}`);
+  }
+
+  // Validate redirect target against hostname allowlist
+  if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+    throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
+  }
+
+  // Prevent credential bleed: only keep Authorization on redirect hops that
+  // are explicitly auth-allowlisted.
+  if (
+    currentHeaders.has("authorization") &&
+    params.authorizationAllowHosts &&
+    !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
+  ) {
+    currentHeaders.delete("authorization");
+  }
+
+  // A pinned dispatcher is already injected by an upstream guard; let it own
+  // redirect handling after this allowlist validation step.
+  return res;
 }
 
 export async function safeFetchWithPolicy(params: {

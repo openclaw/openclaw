@@ -1,6 +1,8 @@
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type SessionMessageEnvelope = {
+  /** An unsequenced continuation follows this row; null denotes an unsequenced boundary. */
+  afterSequence?: number | null;
   messageId?: unknown;
   messageSeq?: unknown;
   clientRunId?: unknown;
@@ -13,6 +15,8 @@ export type SessionMessageIdentity = {
   id: string | null;
   sequence: number | null;
   idempotencyKey: string | null;
+  /** User submission identity stays stable when a queued turn acquires a new execution run. */
+  sendId: string | null;
   runId: string | null;
   isImported: boolean;
   externalSource: string | null;
@@ -55,6 +59,16 @@ export function readSessionMessageIdentity(
   const importedFrom = readSessionProjectionString(metadata?.importedFrom);
   const cliSessionId = readSessionProjectionString(metadata?.cliSessionId);
   const externalId = readSessionProjectionString(metadata?.externalId);
+  const position = readRecord(metadata?.transcriptPosition);
+  const positionSource = readSessionProjectionString(position?.source);
+  const hasCanonicalPosition =
+    positionSource !== null &&
+    positionSource.length <= 128 &&
+    typeof position?.rawSeq === "number" &&
+    Number.isSafeInteger(position.rawSeq) &&
+    position.rawSeq >= 0;
+  // Reader-owned placement keeps a local row native when CLI history enriches its provenance.
+  const isImported = !hasCanonicalPosition && Boolean(importedFrom || cliSessionId || externalId);
   const idempotencyKey =
     readSessionProjectionString(metadata?.idempotencyKey) ??
     readSessionProjectionString(record.idempotencyKey) ??
@@ -76,24 +90,43 @@ export function readSessionMessageIdentity(
     metadata && Object.keys(metadata).every((key) => key === "idempotencyKey")
       ? canonicalPersistedRunId
       : null;
+  const runId =
+    role === "assistant"
+      ? (metadataRunId ??
+        envelopeRunId ??
+        (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null) ??
+        optimisticRunId)
+      : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId);
   return {
     role,
     id:
       readSessionProjectionString(metadata?.id) ?? readSessionProjectionString(envelope?.messageId),
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
-    runId:
-      role === "assistant"
-        ? (metadataRunId ??
-          envelopeRunId ??
-          (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null) ??
-          optimisticRunId)
-        : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId),
-    isImported: Boolean(importedFrom || cliSessionId || externalId),
+    sendId: role === "user" ? (persistedRunId ?? runId) : null,
+    runId,
+    isImported,
     // Imported IDs belong to their provider and CLI session, never the native ID namespace.
     externalSource:
-      importedFrom && cliSessionId && externalId
+      isImported && importedFrom && cliSessionId && externalId
         ? JSON.stringify([importedFrom, cliSessionId, externalId])
         : null,
   };
+}
+
+/** A commentary item's display identity is separate from the transcript row that later owns it. */
+export function readAssistantStreamSegmentIdentity(
+  message: unknown,
+): { itemId: string; runId?: string } | undefined {
+  const record = readRecord(message);
+  if (readSessionProjectionString(record?.role)?.toLowerCase() !== "assistant") {
+    return undefined;
+  }
+  const fallback = readRecord(record?.openclawStreamFallback);
+  const itemId = readSessionProjectionString(fallback?.itemId);
+  const runId =
+    readSessionMessageIdentity(message)?.runId ??
+    readSessionProjectionString(record?.runId) ??
+    readSessionProjectionString(fallback?.runId);
+  return itemId ? { itemId, ...(runId ? { runId } : {}) } : undefined;
 }

@@ -4,6 +4,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { qaCoverageIdSchema } from "./coverage-id.js";
+import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
@@ -68,6 +69,7 @@ const qaScenarioChannelSchema = z
   });
 
 const qaScenarioTransportPolicySchema = z.object({
+  directMessageOnly: z.literal(true).optional(),
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
   topLevelReplies: z.literal(true).optional(),
@@ -120,6 +122,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
+    dockerLane: z.string().trim().min(1).optional(),
     parallelSafe: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),
@@ -291,6 +294,7 @@ const qaFlowStepSchema = z.object({
   name: z.string().trim().min(1),
   actions: z.array(qaFlowActionSchema).min(1),
   detailsExpr: z.string().trim().min(1).optional(),
+  resultExpr: z.string().trim().min(1).optional(),
 });
 
 const qaFlowSchema = z.object({
@@ -431,21 +435,6 @@ function readTextFile(relativePath: string): string {
     return "";
   }
   return fs.readFileSync(resolved, "utf8");
-}
-
-function formatZodIssuePath(pathLocal: PropertyKey[]) {
-  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
-}
-
-function parseQaYamlWithContext<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
-  const parsed = schema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
 }
 
 function parseQaYamlFileWithContext<T>(schema: z.ZodType<T>, relativePath: string): T {

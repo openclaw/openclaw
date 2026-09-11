@@ -8,10 +8,25 @@ import Testing
 struct MacNodeRuntimeTests {
     private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
         private let commands: Set<String>
+        private let supportsEntered: AsyncTestGate?
+        private let releaseSupports: AsyncTestGate?
+        private let invokeEntered: AsyncTestGate?
+        private let releaseInvoke: AsyncTestGate?
         private(set) var invokedCommands: [String] = []
+        private(set) var cancelledRequests: [String] = []
 
-        init(commands: Set<String>) {
+        init(
+            commands: Set<String>,
+            supportsEntered: AsyncTestGate? = nil,
+            releaseSupports: AsyncTestGate? = nil,
+            invokeEntered: AsyncTestGate? = nil,
+            releaseInvoke: AsyncTestGate? = nil)
+        {
             self.commands = commands
+            self.supportsEntered = supportsEntered
+            self.releaseSupports = releaseSupports
+            self.invokeEntered = invokeEntered
+            self.releaseInvoke = releaseInvoke
         }
 
         func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
@@ -22,22 +37,30 @@ struct MacNodeRuntimeTests {
                 pathEnv: "/usr/bin:/bin")
         }
 
-        func supports(_ command: String) -> Bool {
-            self.commands.contains(command)
+        func supports(_ command: String) async -> Bool {
+            self.supportsEntered?.open()
+            await self.releaseSupports?.wait()
+            return self.commands.contains(command)
         }
 
-        func invoke(_ request: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
             self.invokedCommands.append(request.command)
+            self.invokeEntered?.open()
+            await self.releaseInvoke?.wait()
             return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"owner":"worker"}"#)
         }
 
         func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) {}
-        func cancel(invokeId _: String) {}
+        func cancel(invokeId: String) {
+            self.cancelledRequests.append(invokeId)
+            self.releaseInvoke?.open()
+        }
+
         func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) -> Bool {
             true
         }
 
-        func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) {}
+        func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) {}
         func stop() {}
     }
 
@@ -158,6 +181,14 @@ struct MacNodeRuntimeTests {
     final class MainActorServicesProbe: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         typealias SnapshotInspection = (Int?, Int?, Double?, OpenClawScreenSnapshotFormat?) -> Void
 
+        let desktopPlatform = DesktopPlatformProbe()
+        lazy var desktopAvailability: MacDesktopAvailabilityCoordinator = {
+            let defaults = UserDefaults(suiteName: "MacNodeRuntimeTests.\(UUID().uuidString)")!
+            let owner = MacDesktopAvailabilityCoordinator(defaults: defaults, platform: self.desktopPlatform)
+            owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
+            return owner
+        }()
+
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
         var snapshotResult: ScreenSnapshotResult
@@ -167,6 +198,8 @@ struct MacNodeRuntimeTests {
         var actError: Error?
         var performCallCount = 0
         var releaseCallCount = 0
+        var releasedExecutionScopes: [UUID] = []
+        var receivedExecutionScopes: [UUID] = []
         var locationStatus: CLAuthorizationStatus
         var receivedLifecycleGenerations: [UInt64] = []
         var receivedReleaseGenerations: [UInt64] = []
@@ -202,8 +235,10 @@ struct MacNodeRuntimeTests {
             screenIndex: Int?,
             maxWidth: Int?,
             quality: Double?,
-            format: OpenClawScreenSnapshotFormat?) async throws -> ScreenSnapshotResult
+            format: OpenClawScreenSnapshotFormat?,
+            desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> ScreenSnapshotResult
         {
+            try self.desktopAvailability.validate(desktopPermit)
             self.snapshotCallCount += 1
             self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             self.receivedSnapshotParams = MacNodeScreenSnapshotParams(
@@ -252,13 +287,17 @@ struct MacNodeRuntimeTests {
 
         func performComputerAct(
             _ params: OpenClawComputerActParams,
-            lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+            lifecycleGeneration: UInt64,
+            desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> OpenClawComputerActResult
         {
+            try self.desktopAvailability.validate(desktopPermit)
+            self.receivedExecutionScopes.append(desktopPermit.inputScopeId)
             self.performCallCount += 1
             self.receivedParams = params
             self.receivedLifecycleGenerations.append(lifecycleGeneration)
             self.performEnteredGate?.open()
             await self.allowPerformGate?.wait()
+            try self.desktopAvailability.validate(desktopPermit)
             guard lifecycleGeneration >= self.latestLifecycleGeneration else {
                 throw ComputerActionService.ComputerActionError.lifecycleChanged
             }
@@ -268,7 +307,11 @@ struct MacNodeRuntimeTests {
             if let actError {
                 throw actError
             }
-            return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
+            return OpenClawComputerActResult(ok: true)
+        }
+
+        func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async {
+            self.releasedExecutionScopes.append(permit.inputScopeId)
         }
 
         func releaseHeldInput(lifecycleGeneration: UInt64) async {
@@ -502,6 +545,29 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test @MainActor func `cancelled notification cannot present an overlay`() async throws {
+        let overlay = NotifyOverlayController.shared
+        try #require(!overlay.model.isVisible)
+        defer { overlay.dismiss() }
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemNotifyParams(
+            title: "Cancelled notification test",
+            body: "This overlay must not appear.",
+            delivery: .overlay)
+        let request = Task { @MainActor in
+            try await self.invoke(
+                runtime,
+                "cancelled-overlay",
+                OpenClawSystemCommand.notify.rawValue,
+                params: params)
+        }
+        request.cancel()
+        let response = try await request.value
+
+        #expect(!response.ok)
+        #expect(!overlay.model.isVisible)
+    }
+
     @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let runtime = MacNodeRuntime()
@@ -514,6 +580,8 @@ struct MacNodeRuntimeTests {
     @Test func `handle location invoke applies authorization required by mode`() async throws {
         let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
         let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
+            (.off, authorizedWhenInUse, false),
+            (.off, .authorizedAlways, false),
             (.whileUsing, authorizedWhenInUse, true),
             (.always, authorizedWhenInUse, false),
             (.whileUsing, .authorizedAlways, true),
@@ -525,19 +593,26 @@ struct MacNodeRuntimeTests {
                 let services = await MainActor.run {
                     MainActorServicesProbe(locationAuthorizationStatus: testCase.status)
                 }
-                let runtime = MacNodeRuntime(makeMainActorServices: { services })
+                let runtime = await MacNodeRuntime(
+                    desktopAvailability: services.desktopAvailability,
+                    makeMainActorServices: { services })
 
                 let response = await self.invoke(
                     runtime, "req-location", OpenClawLocationCommand.get.rawValue)
 
                 #expect(response.ok == testCase.accepted)
+                if testCase.mode == .off {
+                    #expect(response.error?.message == "LOCATION_DISABLED: enable Location in Settings")
+                }
             }
         }
     }
 
     @Test func `handle invoke screen record uses injected services`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let params = MacNodeScreenRecordParams(durationMs: 250)
         let response = try await invoke(
@@ -569,7 +644,9 @@ struct MacNodeRuntimeTests {
                     #expect(quality == 0.5)
                 })
         }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let params = MacNodeScreenSnapshotParams(
             screenIndex: 0,
@@ -604,7 +681,9 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-screen-snapshot-invalid", MacNodeScreenCommand.snapshot.rawValue, #"{"screenIndex":"#)
@@ -618,7 +697,9 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke screen snapshot keeps nil params as defaults`() async {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-screen-snapshot-defaults", MacNodeScreenCommand.snapshot.rawValue)
@@ -630,7 +711,8 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke rejects computer act when control disabled`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services },
             computerControlEnabled: { false })
 
@@ -647,7 +729,8 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke routes computer act to the injected services when enabled`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
@@ -662,15 +745,17 @@ struct MacNodeRuntimeTests {
         let payloadJSON = try #require(response.payloadJSON)
         let result = try JSONDecoder().decode(OpenClawComputerActResult.self, from: Data(payloadJSON.utf8))
         #expect(result.ok == true)
-        #expect(result.cursorX == 12)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+        #expect(object.keys.sorted() == ["ok"])
     }
 
     @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {
         let commands: Set<String> = [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
         let cuaWorker = ComputerProviderWorkerProbe(commands: commands)
         let cuaServices = await MainActor.run { MainActorServicesProbe() }
-        let cuaRuntime = MacNodeRuntime(
+        let cuaRuntime = await MacNodeRuntime(
             nodeHostWorker: cuaWorker,
+            desktopAvailability: cuaServices.desktopAvailability,
             makeMainActorServices: { cuaServices },
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
@@ -693,8 +778,9 @@ struct MacNodeRuntimeTests {
 
         let peekabooWorker = ComputerProviderWorkerProbe(commands: commands)
         let peekabooServices = await MainActor.run { MainActorServicesProbe() }
-        let peekabooRuntime = MacNodeRuntime(
+        let peekabooRuntime = await MacNodeRuntime(
             nodeHostWorker: peekabooWorker,
+            desktopAvailability: peekabooServices.desktopAvailability,
             makeMainActorServices: { peekabooServices },
             computerControlEnabled: { true },
             computerControlProvider: { .peekaboo })
@@ -714,8 +800,9 @@ struct MacNodeRuntimeTests {
 
         let unavailableWorker = ComputerProviderWorkerProbe(commands: [])
         let unavailableServices = await MainActor.run { MainActorServicesProbe() }
-        let unavailableRuntime = MacNodeRuntime(
+        let unavailableRuntime = await MacNodeRuntime(
             nodeHostWorker: unavailableWorker,
+            desktopAvailability: unavailableServices.desktopAvailability,
             makeMainActorServices: { unavailableServices },
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
@@ -727,13 +814,206 @@ struct MacNodeRuntimeTests {
         #expect(await MainActor.run { unavailableServices.snapshotCallCount == 0 })
     }
 
+    @Test(arguments: [MacDesktopAvailabilityCoordinator.State.locked, .unknown])
+    @MainActor
+    func `registered Computer capture refuses an unavailable desktop before CUA dispatch`(
+        _ state: MacDesktopAvailabilityCoordinator.State) async
+    {
+        let services = MainActorServicesProbe()
+        services.desktopPlatform.state = state
+        let worker = ComputerProviderWorkerProbe(commands: ["screen.snapshot", "computer.act"])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let response = await self.invoke(
+            runtime, "desktop-unavailable", "screen.snapshot",
+            #"{"executionId":"11111111-1111-4111-8111-111111111111"}"#)
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message.contains(state == .locked ? "DESKTOP_LOCKED" : "DESKTOP_UNKNOWN") == true)
+        #expect(await worker.invokedCommands.isEmpty)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
+    @MainActor
+    @Test func `registered background Computer execution keeps one assertion until its exact close`() async {
+        let services = MainActorServicesProbe()
+        let worker = ComputerProviderWorkerProbe(commands: ["screen.snapshot", "computer.act"])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let execution = "11111111-1111-4111-8111-111111111111"
+        let first = await self.invoke(
+            runtime, "background", "computer.act",
+            "{\"executionId\":\"\(execution)\",\"action\":\"get_window_state\",\"delivery\":\"background\"}")
+        #expect(first.ok)
+        #expect(services.desktopPlatform.assertions.count == 1)
+        let second = await self.invoke(
+            runtime, "snapshot", "screen.snapshot", "{\"executionId\":\"\(execution)\"}")
+        #expect(second.ok)
+        #expect(services.desktopPlatform.assertions.count == 1)
+        let closed = await self.invoke(
+            runtime, "close", "computer.act",
+            "{\"executionId\":\"\(execution)\",\"action\":\"__close_execution\",\"reason\":\"cancellation\"}")
+        #expect(closed.ok)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
+    @MainActor
+    @Test func `exact execution close retires a Computer request waiting for worker availability`() async {
+        let services = MainActorServicesProbe()
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let worker = ComputerProviderWorkerProbe(
+            commands: ["screen.snapshot", "computer.act"], supportsEntered: entered, releaseSupports: release)
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let pending = Task {
+            await self.invoke(
+                runtime, "pending", "screen.snapshot",
+                #"{"executionId":"11111111-1111-4111-8111-111111111111"}"#)
+        }
+        await entered.wait()
+        #expect(services.desktopPlatform.assertions.count == 1)
+        let closed = await self.invoke(
+            runtime, "close", "computer.act",
+            #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"__close_execution"}"#)
+        #expect(closed.ok)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        release.open()
+        let result = await pending.value
+        #expect(!result.ok)
+        #expect(result.error?.message.contains("COMPUTER_EXECUTION_CLOSED") == true)
+        #expect(await worker.invokedCommands == ["computer.act"])
+    }
+
+    @MainActor
+    @Test func `cancelling one registered invocation preserves its Computer execution assertion`() async {
+        let services = MainActorServicesProbe()
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let worker = ComputerProviderWorkerProbe(
+            commands: ["screen.snapshot", "computer.act"], supportsEntered: entered, releaseSupports: release)
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let params = #"{"executionId":"11111111-1111-4111-8111-111111111111"}"#
+        let pending = Task { await self.invoke(runtime, "cancel-one", "screen.snapshot", params) }
+        await entered.wait()
+        pending.cancel()
+        release.open()
+        #expect(await !(pending.value).ok)
+        #expect(services.desktopPlatform.assertions.count == 1)
+        #expect(await self.invoke(runtime, "next-call", "screen.snapshot", params).ok)
+        #expect(services.desktopPlatform.assertions.count == 1)
+        let close = await self.invoke(
+            runtime, "close", "computer.act",
+            #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"__close_execution","reason":"cancellation"}"#)
+        #expect(close.ok)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
+    @MainActor
+    @Test func `manual lock cancels a registered one shot capture without an execution ID`() async {
+        let services = MainActorServicesProbe()
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let worker = ComputerProviderWorkerProbe(
+            commands: ["screen.snapshot", "computer.act"], invokeEntered: entered, releaseInvoke: release)
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let desktop = services.desktopAvailability
+        var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
+        desktop.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
+        let capture = Task { await self.invoke(runtime, "one-shot", "screen.snapshot") }
+        await entered.wait()
+        services.desktopPlatform.state = .locked
+        desktop.refresh()
+        await runtime.revokeDesktopExecutions(revoked, reason: "desktop-locked")
+        #expect(await worker.cancelledRequests == ["one-shot"])
+        #expect(services.desktopPlatform.assertions.isEmpty)
+        release.open()
+        #expect(await !(capture.value).ok)
+    }
+
+    @MainActor
+    @Test func `unknown execution close preserves another native execution and fences late admission`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let active = #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"left_click","x":2,"y":3,"refWidth":10}"#
+        #expect(await self.invoke(runtime, "active", "computer.act", active).ok)
+        let close = await self.invoke(
+            runtime, "unrelated-close", "computer.act",
+            #"{"executionId":"22222222-2222-4222-8222-222222222222","action":"__close_execution"}"#)
+        #expect(close.ok)
+        #expect(services.releaseCallCount == 0)
+        #expect(services.desktopPlatform.assertions.count == 1)
+        #expect(await self.invoke(runtime, "active-again", "computer.act", active).ok)
+        let late = await self.invoke(
+            runtime, "late", "screen.snapshot",
+            #"{"executionId":"22222222-2222-4222-8222-222222222222"}"#)
+        #expect(!late.ok)
+        #expect(late.error?.message.contains("COMPUTER_EXECUTION_CLOSED") == true)
+        #expect(services.performCallCount == 2)
+    }
+
+    @MainActor
+    @Test func `registered native execution does not resume after manual lock and unlock`() async {
+        let services = MainActorServicesProbe()
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let request = #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"left_click","x":2,"y":3,"refWidth":10}"#
+        #expect(await self.invoke(runtime, "first", "computer.act", request).ok)
+        services.desktopPlatform.state = .locked
+        services.desktopAvailability.refresh()
+        services.desktopPlatform.state = .unlocked
+        services.desktopAvailability.refresh()
+        let resumed = await self.invoke(runtime, "resumed", "computer.act", request)
+        #expect(!resumed.ok)
+        #expect(resumed.error?.message.contains("COMPUTER_EXECUTION_CLOSED") == true)
+        #expect(services.performCallCount == 1)
+        let close = await self.invoke(
+            runtime, "close", "computer.act",
+            #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"__close_execution"}"#)
+        #expect(close.ok)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
     @Test func `concurrent invokes share one main actor services initialization`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let factoryGate = AsyncTestGate()
         defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
         let admissionCalls = LockedCounter()
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: {
                 factoryCalls.increment()
                 await factoryGate.wait()
@@ -765,12 +1045,82 @@ struct MacNodeRuntimeTests {
         #expect(secondResponse.ok)
     }
 
+    @MainActor
+    @Test(arguments: [MacDesktopAvailabilityCoordinator.State.locked, .unknown])
+    func `desktop transition retires an invoke awaiting native service initialization`(
+        _ unavailable: MacDesktopAvailabilityCoordinator.State) async
+    {
+        let services = MainActorServicesProbe()
+        let factoryEntered = AsyncTestGate()
+        let factoryRelease = AsyncTestGate()
+        defer { factoryRelease.open() }
+        let runtime = MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: {
+                factoryEntered.open()
+                await factoryRelease.wait()
+                return services
+            },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        let pending = Task {
+            await self.invoke(
+                runtime,
+                "before-lock",
+                "computer.act",
+                #"{"executionId":"11111111-1111-4111-8111-111111111111","action":"left_click","x":2,"y":3,"refWidth":10}"#)
+        }
+        await factoryEntered.wait()
+        services.desktopPlatform.state = unavailable
+        services.desktopAvailability.refresh()
+        services.desktopPlatform.state = .unlocked
+        services.desktopAvailability.refresh()
+        factoryRelease.open()
+        let response = await pending.value
+        #expect(!response.ok)
+        #expect(response.error?.message.contains("COMPUTER_EXECUTION_CLOSED") == true)
+        #expect(services.performCallCount == 0)
+        #expect(services.desktopPlatform.assertions.isEmpty)
+    }
+
+    @MainActor
+    @Test func `retired route cleanup closes the old worker execution and preserves a new execution`() async {
+        let services = MainActorServicesProbe()
+        let worker = ComputerProviderWorkerProbe(commands: ["screen.snapshot", "computer.act"])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        var revoked: [MacDesktopAvailabilityCoordinator.Permit] = []
+        services.desktopAvailability.onExecutionsRevoked = { permits, _ in revoked.append(contentsOf: permits) }
+        #expect(await self.invoke(
+            runtime,
+            "old",
+            "screen.snapshot",
+            #"{"executionId":"11111111-1111-4111-8111-111111111111"}"#).ok)
+        services.desktopAvailability.revoke(generation: 1, reason: "disconnect")
+        services.desktopAvailability.setRoute(generation: 2, connected: true, hostingEnabled: false)
+        #expect(await self.invoke(
+            runtime,
+            "new",
+            "screen.snapshot",
+            #"{"executionId":"22222222-2222-4222-8222-222222222222"}"#).ok)
+        await runtime.revokeDesktopExecutions(revoked, reason: "disconnect")
+        #expect(await worker.invokedCommands == ["screen.snapshot", "screen.snapshot", "computer.act"])
+        #expect(services.releasedExecutionScopes == revoked.map(\.inputScopeId))
+        #expect(services.releaseCallCount == 0)
+        #expect(services.desktopPlatform.assertions.count == 1)
+    }
+
     @Test func `lifecycle release invalidates first invoke awaiting service initialization`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let factoryGate = AsyncTestGate()
         defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: {
                 factoryCalls.increment()
                 await factoryGate.wait()
@@ -810,7 +1160,8 @@ struct MacNodeRuntimeTests {
                 performEnteredGate: performEntered,
                 allowPerformGate: allowPerform)
         }
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services },
             computerControlEnabled: { true })
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 12, y: 34, refWidth: 1280)
@@ -844,7 +1195,8 @@ struct MacNodeRuntimeTests {
         let services = await MainActor.run {
             MainActorServicesProbe(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
         }
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
@@ -859,7 +1211,8 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke rejects malformed computer act params`() async {
         let services = await MainActor.run { MainActorServicesProbe() }
-        let runtime = MacNodeRuntime(
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
@@ -882,7 +1235,9 @@ struct MacNodeRuntimeTests {
         let services = await MainActor.run {
             MainActorServicesProbe(snapshotError: SensitiveError(detail: "TCC_DENIED display-id=ABC123"))
         }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-screen-snapshot-error", MacNodeScreenCommand.snapshot.rawValue)
@@ -897,7 +1252,9 @@ struct MacNodeRuntimeTests {
             MainActorServicesProbe(
                 snapshotError: ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(4))
         }
-        let invalidIndexRuntime = MacNodeRuntime(makeMainActorServices: { invalidIndexServices })
+        let invalidIndexRuntime = await MacNodeRuntime(
+            desktopAvailability: invalidIndexServices.desktopAvailability,
+            makeMainActorServices: { invalidIndexServices })
         let invalidIndexResponse = await invoke(
             invalidIndexRuntime, "req-screen-snapshot-bad-index", MacNodeScreenCommand.snapshot.rawValue)
 
@@ -908,7 +1265,9 @@ struct MacNodeRuntimeTests {
         let noDisplaysServices = await MainActor.run {
             MainActorServicesProbe(snapshotError: ScreenSnapshotService.ScreenSnapshotError.noDisplays)
         }
-        let noDisplaysRuntime = MacNodeRuntime(makeMainActorServices: { noDisplaysServices })
+        let noDisplaysRuntime = await MacNodeRuntime(
+            desktopAvailability: noDisplaysServices.desktopAvailability,
+            makeMainActorServices: { noDisplaysServices })
         let noDisplaysResponse = await invoke(
             noDisplaysRuntime, "req-screen-snapshot-no-displays", MacNodeScreenCommand.snapshot.rawValue)
 
@@ -929,7 +1288,9 @@ struct MacNodeRuntimeTests {
                 height: 3000,
                 displayFrameId: "display-frame-test"))
         }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-screen-snapshot-too-large", MacNodeScreenCommand.snapshot.rawValue)
@@ -952,7 +1313,9 @@ struct MacNodeRuntimeTests {
                 height: 3000,
                 displayFrameId: "display-frame-test"))
         }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-screen-snapshot-slash-heavy", MacNodeScreenCommand.snapshot.rawValue,
@@ -975,7 +1338,9 @@ struct MacNodeRuntimeTests {
                 height: 3000,
                 displayFrameId: "display-frame-test"))
         }
-        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
 
         let response = await invoke(
             runtime, "req-fit", MacNodeScreenCommand.snapshot.rawValue, nodeId: "node-fit")

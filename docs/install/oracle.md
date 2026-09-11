@@ -77,7 +77,8 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up
     source ~/.bashrc
     ```
 
-    When prompted "How do you want to hatch your bot?", select **Do this later**.
+    When the installer offers to hatch an agent, defer it — the gateway steps
+    below configure the host first.
 
   </Step>
 
@@ -177,7 +178,7 @@ Verify the architecture with `uname -m` (should print `aarch64`). For binaries w
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
+- `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots. To take a portable snapshot:

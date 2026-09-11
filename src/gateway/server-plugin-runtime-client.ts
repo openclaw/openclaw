@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -29,8 +30,10 @@ export function createSyntheticPluginRuntimeClient(params?: {
   operatorRoleActor?: GatewayOperatorRoleActor;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
+  runtimeContextFragments?: RuntimeContextFragment[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
+  nodeInvokeApprovalSessionKey?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   pluginSubagentToolsAllow?: string[];
@@ -66,6 +69,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
+      ...(params?.runtimeContextFragments
+        ? { runtimeContextFragments: params.runtimeContextFragments }
+        : {}),
       ...(params?.internalDeliveryMediaUrls
         ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
         : {}),
@@ -74,6 +80,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.nodeInvokeApprovalSessionKey
+        ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
+        : {}),
       ...(params?.pluginSubagentRequester
         ? { pluginSubagentRequester: params.pluginSubagentRequester }
         : {}),

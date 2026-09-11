@@ -5,10 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
-import {
-  readPersistedInstalledPluginIndexSync,
-  writePersistedInstalledPluginIndexSync,
-} from "../../src/plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndexSync } from "../../src/plugins/installed-plugin-index-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { writeManagedNpmPlugin } from "../../src/plugins/test-helpers/managed-npm-plugin.js";
@@ -27,6 +25,30 @@ afterEach(async () => {
 });
 
 describe("Doctor plugin index persistence built CLI proof", () => {
+  it("starts after linking an empty legacy state dir to the canonical root", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "doctor-empty-legacy-state-dir",
+      env: {
+        OPENCLAW_CONFIG_PATH: undefined,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENCLAW_TEST_FAST: "1",
+      },
+      startTimeoutMs: 90_000,
+    });
+    instances.push(instance);
+    const legacyDir = path.join(instance.homeDir, ".clawdbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+
+    await instance.startGateway();
+
+    expect(fs.realpathSync(legacyDir), instance.logs()).toBe(fs.realpathSync(instance.stateDir));
+
+    await instance.stopGateway();
+    await instance.startGateway();
+    expect(fs.realpathSync(legacyDir), instance.logs()).toBe(fs.realpathSync(instance.stateDir));
+  }, 120_000);
+
   it("starts after replacing and verifying a stale persisted Doctor index", async () => {
     const instance = await createOpenClawTestInstance({
       name: "doctor-plugin-index-persistence",
@@ -100,16 +122,6 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
-    const reread = loadPluginMetadataSnapshot({
-      config,
-      env: instance.env,
-      stateDir: instance.stateDir,
-      workspaceDir,
-      allowCurrent: false,
-    });
-    expect(reread.registrySource, instance.logs()).toBe("persisted");
-    expect(reread.registryDiagnostics, instance.logs()).toStrictEqual([]);
-
     const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
     const persistedPlugin = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
     expect(persistedPlugin, instance.logs()).toMatchObject({
@@ -121,5 +133,20 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       doctorContractHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       packageBuild: { bundledDist: false },
     });
+
+    // Source readers intentionally select different bundled Doctor contracts.
+    // Observe the repaired index through the same built host as the Gateway.
+    const listed = await instance.cli(["plugins", "list", "--json"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(listed.signal).toBeNull();
+    const reread = JSON.parse(listed.stdout) as {
+      registry: { source: string; diagnostics: unknown[] };
+    };
+    expect(reread.registry.source, instance.logs()).toBe("persisted");
+    expect(reread.registry.diagnostics, instance.logs()).toStrictEqual([]);
+
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    expect(readPersistedInstalledPluginIndexSync({ env: instance.env })).toEqual(persisted);
   }, 120_000);
 });

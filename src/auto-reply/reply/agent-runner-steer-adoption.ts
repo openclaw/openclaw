@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
+import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
@@ -37,6 +41,8 @@ type ActiveReplySteerParams = {
   runFollowup: (run: FollowupRun) => Promise<void>;
   sessionCtx: RunReplyAgentParams["sessionCtx"];
   sessionKey: string | undefined;
+  sessionEntry?: RunReplyAgentParams["sessionEntry"];
+  storePath?: string;
   touchActiveSessionEntry: () => Promise<void>;
   typing: RunReplyAgentParams["typing"];
   typingSignals: TypingSignaler;
@@ -67,7 +73,9 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   );
 }
 
-export async function runActiveReplySteer(params: ActiveReplySteerParams): Promise<"handled"> {
+export async function runActiveReplySteer(
+  params: ActiveReplySteerParams,
+): Promise<"handled" | ReplyPayload> {
   const {
     followupRun,
     queueKey,
@@ -140,6 +148,32 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (!injectionTarget) {
       return await fallback("no injectable reply operation");
     }
+    // A predecessor's admission may wait past this run's terminal delivery.
+    // Keep the parked input in the ordered queue if its target is no longer eligible.
+    let entry = params.sessionEntry;
+    if (sessionKey && params.storePath) {
+      try {
+        entry =
+          loadSessionEntry({
+            sessionKey,
+            storePath: params.storePath,
+            readConsistency: "latest",
+          }) ?? entry;
+      } catch (error) {
+        return await fallback(`session entry unavailable: ${formatErrorMessage(error)}`);
+      }
+    }
+    if (
+      isRestartRecoveryTerminalDeliveryFailClosed(
+        entry,
+        steerSessionId,
+        injectionTarget.sourceTurnId ??
+          normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ??
+          "",
+      )
+    ) {
+      return await fallback("terminal source-reply delivery is closed");
+    }
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
       steeringMode: "all",
       isInboundUserMessage: true,
@@ -167,9 +201,12 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       attempt: injectionAttempt,
       target: injectionTarget,
       inboundAudio: followupRun.currentInboundAudio === true,
-      onAccepted: () => {
+      onOutcome: (outcome) => {
         if (replyOperationRunState) {
-          replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+          replyOperationRunState.admission =
+            outcome === "indeterminate"
+              ? { status: "skipped", reason: "question-response-indeterminate" }
+              : { status: "accepted", mode: "steer" };
         }
       },
       onAdopted: () => admitFollowupRunLifecycle(followupRun),
@@ -178,7 +215,16 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (finalization.status === "rejected") {
       return await fallback(finalization.outcome.reason);
     }
-    parked.consume();
+    // Accepted or indeterminate input cannot be abandoned for replay, even
+    // when the source's later adoption callback rejects.
+    parked.consume("consumed");
+    if (finalization.status === "indeterminate") {
+      typing.cleanup();
+      return markReplyPayloadForSourceSuppressionDelivery({
+        text: finalization.outcome.errorMessage,
+        isError: true,
+      });
+    }
     const transcriptCommitUnconfirmed =
       finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {

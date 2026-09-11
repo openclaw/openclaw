@@ -99,6 +99,32 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.didStreamTerminalReply?.()).toBe(true);
   });
 
+  it.each([
+    { lane: "reasoning", payload: { text: "Same answer", isReasoning: true } },
+    { lane: "commentary", payload: { text: "Same answer", isCommentary: true } },
+  ])("keeps $lane separate from a matching visible answer", async ({ payload }) => {
+    for (const coalescing of [
+      undefined,
+      { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " },
+    ]) {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (reply) => {
+          sent.push(reply);
+        },
+        timeoutMs: 5000,
+        ...(coalescing ? { coalescing } : {}),
+      });
+
+      pipeline.enqueue(payload);
+      pipeline.enqueue({ text: "Same answer" });
+      await pipeline.flush({ force: true });
+
+      expect(sent).toEqual([payload, { text: "Same answer" }]);
+      expect(pipeline.didStreamTerminalReply?.()).toBe(true);
+    }
+  });
+
   it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({
@@ -206,6 +232,18 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         { location: { latitude: 3, longitude: 4 } },
       ],
     },
+    {
+      name: "normal and round videos sharing the same media",
+      payloads: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: false },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+      expected: [
+        { mediaUrl: "file:///reply.mp4" },
+        { mediaUrl: "file:///reply.mp4", videoAsNote: true },
+      ],
+    },
   ])("preserves streamed delivery order for $name", async ({ payloads, expected }) => {
     const sent: ReplyPayload[] = [];
     const pipeline = createBlockReplyPipeline({
@@ -233,12 +271,16 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toHaveLength(expected.length);
     expect(sent).toMatchObject(expected);
     expect(pipeline.getSentMediaUrls()).toEqual(
-      expected.flatMap((payload) =>
-        "mediaUrls" in payload
-          ? payload.mediaUrls
-          : "mediaUrl" in payload
-            ? [payload.mediaUrl]
-            : [],
+      Array.from(
+        new Set(
+          expected.flatMap((payload) =>
+            "mediaUrls" in payload
+              ? payload.mediaUrls
+              : "mediaUrl" in payload
+                ? [payload.mediaUrl]
+                : [],
+          ),
+        ),
       ),
     );
   });
@@ -316,6 +358,61 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
     expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
   });
+
+  it.each([
+    { name: "reply-to-current text", routing: { replyToCurrent: true }, media: false },
+    { name: "explicit-tag text", routing: { replyToTag: true }, media: false },
+    { name: "reply-to-current media", routing: { replyToCurrent: true }, media: true },
+    { name: "explicit-tag media", routing: { replyToTag: true }, media: true },
+  ] as const)(
+    "preserves explicit reply routing and metadata for $name",
+    async ({ routing, media }) => {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push(payload);
+        },
+        timeoutMs: 5000,
+        coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      });
+
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: "Explicit answer", replyToId: "100", ...routing },
+          { assistantMessageIndex: 7, replyToIdExplicit: true },
+        ),
+      );
+      if (media) {
+        pipeline.enqueue(
+          setReplyPayloadMetadata(
+            {
+              mediaUrls: ["file:///photo.png"],
+              replyToId: "100",
+              replyToCurrent: undefined,
+              replyToTag: undefined,
+            },
+            { assistantMessageIndex: 7, assistantTranscriptMediaUrls: ["file:///photo.png"] },
+          ),
+        );
+      }
+      await pipeline.flush({ force: true });
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        text: "Explicit answer",
+        replyToId: "100",
+        ...routing,
+        ...(media ? { mediaUrls: ["file:///photo.png"] } : {}),
+      });
+      expect(sent.map(getReplyPayloadMetadata)).toEqual([
+        expect.objectContaining({
+          assistantMessageIndex: 7,
+          replyToIdExplicit: true,
+          ...(media ? { assistantTranscriptMediaUrls: ["file:///photo.png"] } : {}),
+        }),
+      ]);
+    },
+  );
 
   it("keeps media separate across assistant message boundaries", async () => {
     const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
@@ -408,6 +505,163 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 });
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
+  it.each([false, true])(
+    "recognizes delivered source through synthetic fence wrappers (coalescing=%s)",
+    async (coalescing) => {
+      const sent: ReplyPayload[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: async (payload) => {
+          sent.push(payload);
+        },
+        timeoutMs: 5000,
+        ...(coalescing
+          ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" } }
+          : {}),
+      });
+      const first = "```ts\nconst x = \n```";
+      const second = "```ts\n1;\n```";
+      const final = setReplyPayloadMetadata(
+        { text: "```ts\nconst x = 1;\n```" },
+        { assistantMessageIndex: 7 },
+      );
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: first },
+          { assistantMessageIndex: 7, blockSourceText: "```ts\nconst x = " },
+        ),
+      );
+      pipeline.enqueue(
+        setReplyPayloadMetadata(
+          { text: second },
+          { assistantMessageIndex: 7, blockSourceText: "1;\n```" },
+        ),
+      );
+      expect(pipeline.hasSentPayload(final)).toBe(false);
+
+      await pipeline.flush({ force: true });
+
+      expect(sent.map((payload) => payload.text)).toEqual(
+        coalescing ? [`${first}\n\n${second}`] : [first, second],
+      );
+      expect(pipeline.hasSentPayload(final)).toBe(true);
+      expect(pipeline.hasSentExactPayload?.(final)).toBe(false);
+      expect(
+        pipeline.hasSentPayload(
+          setReplyPayloadMetadata({ ...final }, { assistantMessageIndex: 8 }),
+        ),
+      ).toBe(false);
+      expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 2;\n```" })).toBe(false);
+    },
+  );
+
+  it("does not acknowledge source from a rejected fenced block", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        if (payload.text === "```ts\n1;\n```") {
+          throw new Error("channel rejected the continuation");
+        }
+      },
+      timeoutMs: 5000,
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = \n```" },
+        { blockSourceText: "```ts\nconst x = " },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "```ts\n1;\n```" }, { blockSourceText: "1;\n```" }),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```" })).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = " })).toBe(true);
+  });
+
+  it("merges source coverage through ordinary text and a media continuation", async () => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+    pipeline.enqueue({ text: "Example:" });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = \n```" },
+        { blockSourceText: "```ts\nconst x = " },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\n1;\n```", mediaUrl: "file:///example.png" },
+        { blockSourceText: "1;\n```" },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      text: "Example:\n\n```ts\nconst x = \n```\n\n```ts\n1;\n```",
+      mediaUrl: "file:///example.png",
+    });
+    expect(pipeline.hasSentPayload({ text: "Example:\n```ts\nconst x = 1;\n```" })).toBe(true);
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///example.png"]);
+  });
+
+  it("does not credit removed source text when merging a media-only reply", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+      coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\nconst x = 1;\n```" },
+        { blockSourceText: "```ts\nconst x = 1;\n```" },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { mediaUrl: "file:///example.png" },
+        { blockSourceText: "withdrawn source" },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```" })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "```ts\nconst x = 1;\n```withdrawn source" })).toBe(
+      false,
+    );
+  });
+
+  it("retains source coverage when buffered audio gains voice presentation", async () => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      buffer: createAudioAsVoiceBuffer({ isAudioPayload: (payload) => Boolean(payload.mediaUrl) }),
+    });
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "```ts\n1;\n```", mediaUrl: "file:///example.ogg", audioAsVoice: true },
+        { blockSourceText: "1;\n```", assistantMessageIndex: 7 },
+      ),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent[0]).toMatchObject({ audioAsVoice: true, mediaUrl: "file:///example.ogg" });
+    expect(
+      pipeline.hasSentPayload(
+        setReplyPayloadMetadata({ text: "1;\n```" }, { assistantMessageIndex: 7 }),
+      ),
+    ).toBe(true);
+  });
+
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
     vi.useFakeTimers();
 
@@ -470,6 +724,24 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     expect(pipeline.didStream()).toBe(false);
     expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it.each([
+    { lane: "reasoning", payload: { text: "Same answer", isReasoning: true } },
+    { lane: "commentary", payload: { text: "Same answer", isCommentary: true } },
+  ])("keeps $lane out of visible final-content accounting", async ({ payload }) => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue(payload);
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.didStreamTerminalReply?.()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "Same answer" })).toBe(false);
+    expect(pipeline.hasSentExactPayload?.({ text: "Same answer" })).toBe(false);
   });
 
   it("does not let a status notice de-dupe later matching assistant content", async () => {

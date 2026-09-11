@@ -2,6 +2,7 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -215,6 +216,29 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
     readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: async (readOptions: unknown) => {
+      const result = (await mocks.readBestEffortConfigSnapshot(readOptions)) as {
+        config: OpenClawConfig;
+        sourceConfig: OpenClawConfig;
+        configDiagnostics: { path: string; issues: unknown[] } | null;
+      };
+      return {
+        snapshot: {
+          path: result.configDiagnostics?.path ?? mocks.resolveConfigPath(),
+          exists: false,
+          raw: null,
+          parsed: result.sourceConfig,
+          sourceConfig: result.sourceConfig,
+          resolved: result.sourceConfig,
+          valid: result.configDiagnostics === null,
+          runtimeConfig: result.config,
+          config: result.config,
+          issues: result.configDiagnostics?.issues ?? [],
+          warnings: [],
+          legacyIssues: [],
+        },
+      };
+    },
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
@@ -298,27 +322,7 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: {
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    },
+    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       count: 0,
       paths: [],

@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -11,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { parsePositiveInteger } from "./positive-integer.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -31,27 +31,11 @@ type OpenAIResponsesPayloadPolicyOptions = {
 
 type OpenAIResponsesEndpointClass =
   | "default"
-  | "anthropic-public"
-  | "cerebras-native"
-  | "chutes-native"
-  | "deepseek-native"
-  | "github-copilot-native"
-  | "groq-native"
-  | "mistral-public"
-  | "moonshot-native"
-  | "modelstudio-native"
   | "openai-public"
   | "openai"
-  | "opencode-native"
   | "azure-openai"
-  | "openrouter"
   | "xai-native"
-  | "zai-native"
-  | "google-generative-ai"
-  | "google-vertex"
-  | "local"
-  | "custom"
-  | "invalid";
+  | "custom";
 
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
@@ -62,6 +46,7 @@ type OpenAIResponsesPayloadPolicy = {
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
+  usesInstructionsField: boolean;
 };
 
 type OpenAIResponsesPayloadCapabilities = {
@@ -70,42 +55,10 @@ type OpenAIResponsesPayloadCapabilities = {
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
+  usesVerifiedInstructionsEndpoint: boolean;
 };
 
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
-const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
-  "https://coding-intl.dashscope.aliyuncs.com/v1",
-  "https://coding.dashscope.aliyuncs.com/v1",
-  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-]);
-const MOONSHOT_NATIVE_BASE_URLS = new Set([
-  "https://api.moonshot.ai/v1",
-  "https://api.moonshot.cn/v1",
-]);
-
-function normalizeComparableBaseUrl(value: unknown): string | undefined {
-  const trimmed = readStringValue(value)?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const parsedValue = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
-    ? `https://${trimmed}`
-    : trimmed;
-  try {
-    const url = new URL(parsedValue);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = readStringValue(value)?.trim();
   if (!trimmed) {
@@ -122,63 +75,22 @@ function resolveUrlHostname(value: unknown): string | undefined {
   }
 }
 
-function hostMatchesSuffix(host: string, suffix: string): boolean {
-  return suffix.startsWith(".") || suffix.startsWith("-")
-    ? host.endsWith(suffix)
-    : host === suffix || host.endsWith(`.${suffix}`);
-}
-
-function isLocalEndpointHost(host: string): boolean {
-  return (
-    LOCAL_ENDPOINT_HOSTS.has(host) ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host.endsWith(".internal")
-  );
-}
-
-function resolveBundledOpenAIResponsesEndpointClass(
-  baseUrl: unknown,
-): OpenAIResponsesEndpointClass {
+function resolveOpenAIResponsesEndpointClass(baseUrl: unknown): OpenAIResponsesEndpointClass {
   const trimmed = readStringValue(baseUrl)?.trim();
   if (!trimmed) {
     return "default";
   }
   const host = resolveUrlHostname(trimmed);
   if (!host) {
-    return "invalid";
+    return "custom";
   }
-  const comparableBaseUrl = normalizeComparableBaseUrl(trimmed);
-
   switch (host) {
-    case "api.anthropic.com":
-      return "anthropic-public";
-    case "api.cerebras.ai":
-      return "cerebras-native";
-    case "llm.chutes.ai":
-      return "chutes-native";
-    case "api.deepseek.com":
-      return "deepseek-native";
-    case "api.groq.com":
-      return "groq-native";
-    case "api.mistral.ai":
-      return "mistral-public";
     case "api.openai.com":
       return "openai-public";
     case "chatgpt.com":
       return "openai";
-    case "generativelanguage.googleapis.com":
-      return "google-generative-ai";
-    case "aiplatform.googleapis.com":
-      return "google-vertex";
     case "api.x.ai":
       return "xai-native";
-    case "api.z.ai":
-      return "zai-native";
-  }
-
-  if (hostMatchesSuffix(host, ".githubcopilot.com")) {
-    return "github-copilot-native";
   }
   if (
     [
@@ -186,27 +98,9 @@ function resolveBundledOpenAIResponsesEndpointClass(
       ".cognitiveservices.azure.com",
       ".services.ai.azure.com",
       ".api.cognitive.microsoft.com",
-    ].some((suffix) => hostMatchesSuffix(host, suffix))
+    ].some((suffix) => host.endsWith(suffix))
   ) {
     return "azure-openai";
-  }
-  if (hostMatchesSuffix(host, "openrouter.ai")) {
-    return "openrouter";
-  }
-  if (hostMatchesSuffix(host, "opencode.ai")) {
-    return "opencode-native";
-  }
-  if (hostMatchesSuffix(host, "-aiplatform.googleapis.com")) {
-    return "google-vertex";
-  }
-  if (comparableBaseUrl && MOONSHOT_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
-    return "moonshot-native";
-  }
-  if (comparableBaseUrl && MODELSTUDIO_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
-    return "modelstudio-native";
-  }
-  if (isLocalEndpointHost(host)) {
-    return "local";
   }
   return "custom";
 }
@@ -217,7 +111,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsPromptCacheKey" | "supportsStore",
+  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -232,7 +126,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
   const isOpenAIProvider = provider === "openai";
-  const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
+  const endpointClass = resolveOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
@@ -242,6 +136,15 @@ function resolveOpenAIResponsesPayloadCapabilities(
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
+  // Only native OpenAI and xAI's main route have verified instructions support.
+  // Azure remains distinct from native OpenAI for this capability; other routes
+  // require compat.supportsInstructions to opt in after contract verification.
+  const usesVerifiedNativeOpenAIRoute =
+    endpointClass === "default"
+      ? provider === "openai"
+      : endpointClass === "openai-public" || endpointClass === "openai";
+  const usesVerifiedInstructionsEndpoint =
+    usesVerifiedNativeOpenAIRoute || endpointClass === "xai-native";
   const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
   const shouldStripResponsesPromptCache =
     promptCacheKeySupport === true
@@ -273,17 +176,8 @@ function resolveOpenAIResponsesPayloadCapabilities(
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
+    usesVerifiedInstructionsEndpoint,
   };
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    return parseStrictPositiveInteger(value);
-  }
-  return undefined;
 }
 
 function resolveOpenAIResponsesCompactThreshold(model: {
@@ -335,7 +229,7 @@ export function resolveOpenAIResponsesCompactEndpointPlan(
       (configured === true ||
         (configured !== false &&
           (provider === "xai" || provider === "x-ai") &&
-          resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
+          resolveOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
   };
 }
 
@@ -398,6 +292,20 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
+  // Defaults on only for the two routes actually confirmed to honor
+  // `instructions` (see usesVerifiedInstructionsEndpoint above: native
+  // OpenAI, and xAI's main route by direct test). Every other route --
+  // including bundled-but-unverified named classes and arbitrary
+  // custom/local proxies -- defaults off: HTTP continuation is unreachable
+  // there anyway (openai-responses-websocket.ts requires the exact native
+  // OpenAI base URL), so there is nothing to gain from `instructions` and
+  // real risk of an unconfirmed route silently dropping the field along
+  // with the system prompt. `compat.supportsInstructions` always overrides
+  // the default in either direction -- explicit `false` opts a verified
+  // route out (confirmed necessary for xAI's compact endpoint specifically);
+  // explicit `true` opts any other route in once confirmed.
+  const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
+  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -412,6 +320,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
       isResponsesApi,
     useServerCompaction: options.enableServerCompaction === true && serverCompactionPlan.enabled,
+    usesInstructionsField,
   };
 }
 

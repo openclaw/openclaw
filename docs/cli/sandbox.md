@@ -15,6 +15,10 @@ Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, 
 
 List sandbox runtimes with status, backend, config match, age, idle time, and associated session/agent.
 
+For configured plugin-provided backends such as OpenShell, the CLI loads the
+owning backend plugin before checking live runtime status. Browser-only
+operations do not require backend plugin activation.
+
 ```bash
 openclaw sandbox list
 openclaw sandbox list --browser  # browser containers only
@@ -71,13 +75,13 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 ## Common triggers
 
-| Change                                                                                                                                                         | Command                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
-| Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
-| SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
-| OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |
-| `setupCommand`                                                                                                                                                 | `openclaw sandbox recreate --all` (or `--agent <id>` for one agent) |
+Run `openclaw sandbox recreate --all` after any of these changes:
+
+- Container sandbox image update: `agents.defaults.sandbox.docker.image`
+- Sandbox config: `agents.defaults.sandbox.*`
+- SSH target/auth: `agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`
+- OpenShell source/policy/mode: `plugins.entries.openshell.config.{from,mode,policy}`
+- `setupCommand` — `--agent <id>` recreates one agent instead of all
 
 <Note>
 Runtimes are automatically recreated when the agent is next used.
@@ -103,7 +107,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell (plugin-provided)
+        "backend": "docker", // docker, podman, ssh; openshell is plugin-provided
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
@@ -126,3 +130,4 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 - [Sandboxing](/gateway/sandboxing)
 - [Agent workspace](/concepts/agent-workspace)
 - [Doctor](/gateway/doctor): checks sandbox setup.
+- [OpenShell](/gateway/openshell) — a managed sandbox backend driven through the `openshell` CLI

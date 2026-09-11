@@ -1,13 +1,11 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
 // visible, so use the narrower delivery-mirror predicate when visibility matters.
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
+export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
 const OPENCLAW_GATEWAY_INJECTED_MODEL = "gateway-injected" as const;
-export const NESTED_TOOL_TRANSCRIPT_ARTIFACT_KIND = "nested-tool" as const;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -17,6 +15,7 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "channel-final",
   "channel-final-suppressed",
   "message-tool-source-reply",
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
@@ -27,36 +26,11 @@ function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
   return typeof kind === "string" && OPENCLAW_DELIVERY_MIRROR_KINDS.has(kind);
 }
 
-function isOpenClawNestedToolArtifactMarker(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return value.kind === NESTED_TOOL_TRANSCRIPT_ARTIFACT_KIND && value.version === 1;
-}
-
 export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model: unknown): boolean {
   return (
     provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
     typeof model === "string" &&
     TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(model)
-  );
-}
-
-/** Returns true for any OpenClaw-authored transcript artifact message. */
-export function isTranscriptOnlyOpenClawMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const role = Reflect.get(message, "role");
-  if (role !== "assistant" && role !== "toolResult") {
-    return false;
-  }
-  if (isOpenClawNestedToolArtifactMarker(Reflect.get(message, "openclawTranscriptArtifact"))) {
-    return true;
-  }
-  return isTranscriptOnlyOpenClawAssistantModel(
-    Reflect.get(message, "provider"),
-    Reflect.get(message, "model"),
   );
 }
 
@@ -93,19 +67,6 @@ export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): b
   }
   const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
   return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
-}
-
-export function isOpenClawInternalSourceReplyMirrorAssistantMessage(message: unknown): boolean {
-  if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-    return false;
-  }
-  const marker = (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror;
-  return (
-    Boolean(marker) &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    (marker as { sourceReplySink?: unknown }).sourceReplySink === "internal-ui"
-  );
 }
 
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {

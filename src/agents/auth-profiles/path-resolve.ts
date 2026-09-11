@@ -14,6 +14,18 @@ const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
 
 export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
 
+/** Pure producer facts; capturing a supplied runtime snapshot must not open SQLite. */
+export type AuthProfileOwnerScope = { stateDir: string; sharedMainDir: string };
+
+export function captureAuthProfileOwnerScope(
+  env: NodeJS.ProcessEnv = process.env,
+): AuthProfileOwnerScope {
+  return {
+    stateDir: path.resolve(resolveStateDir(env)),
+    sharedMainDir: path.resolve(resolveSharedMainAuthAgentDir(env)),
+  };
+}
+
 // Explicit env callers can address another state root in the same process.
 // Pin each root once so later row changes require an owner-controlled restart.
 const sharedAuthStoreOwnershipByDatabasePath = new Map<string, SharedAuthStoreOwnership>();
@@ -66,6 +78,19 @@ export function resolveSharedAuthStoreOwnership(
   return ownership;
 }
 
+/** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */
+export function inspectSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  return parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { env },
+      { artifactPreservingReadOnly: true },
+    ),
+  );
+}
+
 /** Update the process-stable cache after this process commits the ownership row. */
 export function noteCommittedSharedAuthStoreOwnership(
   ownership: SharedAuthStoreOwnership,
@@ -73,6 +98,18 @@ export function noteCommittedSharedAuthStoreOwnership(
 ): void {
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
   sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+}
+
+/** Reload shared auth ownership after an explicit out-of-process auth mutation. */
+export function reloadSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  const ownership = parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
+  );
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
 }
 
 /** Resolve the canonical shared auth database path. */
@@ -100,10 +137,14 @@ export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env)
  * happen to share a `profileId` across providers (operator-renamed profile,
  * test fixture, etc.) do not needlessly serialize against each other.
  */
-export function resolveOAuthRefreshLockPath(provider: string, profileId: string): string {
+export function resolveOAuthRefreshLockPath(
+  provider: string,
+  profileId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const lockKey = JSON.stringify([provider, profileId]);
   const safeId = `lock-${oauthLockPathDigest(lockKey)}`;
-  return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
+  return path.join(resolveStateDir(env), "locks", "oauth-refresh", safeId);
 }
 
 function oauthLockPathDigest(value: string): string {

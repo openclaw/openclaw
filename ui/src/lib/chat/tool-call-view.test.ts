@@ -1,11 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
-import {
-  resolveToolCallKind,
-  resolveToolCallView,
-  unwrapShellWrapperCommand,
-} from "./tool-call-view.ts";
+import { resolveToolCallKind, resolveToolCallView } from "./tool-call-view.ts";
 
 const TEXT_EDITOR_TOOL_NAMES = ["str_replace_editor", "str_replace_based_edit_tool"] as const;
 
@@ -13,14 +9,6 @@ describe("resolveToolCallKind", () => {
   it.each([
     ["bash", undefined, "command"],
     ["exec", undefined, "command"],
-    [
-      "exec",
-      {
-        code: 'return await read({ path: "src/agents/code-mode.ts" });',
-        command: 'return await read({ path: "src/agents/code-mode.ts" });',
-      },
-      "code",
-    ],
     ["Read", undefined, "read"],
     ["read_file", undefined, "read"],
     ["edit", undefined, "edit"],
@@ -57,7 +45,7 @@ describe("resolveToolCallKind", () => {
   });
 });
 
-describe("unwrapShellWrapperCommand", () => {
+describe("shell command views", () => {
   it.each([
     ["/bin/zsh -lc 'pnpm test ui'", "pnpm test ui"],
     ['/bin/bash -c "git status"', "git status"],
@@ -65,34 +53,13 @@ describe("unwrapShellWrapperCommand", () => {
     ["pnpm test ui", "pnpm test ui"],
     ["/bin/zsh -lc unquoted", "/bin/zsh -lc unquoted"],
   ])("unwraps %s", (wrapped, expected) => {
-    expect(unwrapShellWrapperCommand(wrapped)).toBe(expected);
-  });
-
-  it("unwraps the shell wrapper in command views", () => {
-    expect(
-      resolveToolCallView({ name: "bash", args: { command: "/bin/zsh -lc 'node --version'" } }),
-    ).toEqual({ kind: "command", command: "node --version" });
+    expect(resolveToolCallView({ name: "bash", args: { command: wrapped } }).command).toBe(
+      expected,
+    );
   });
 });
 
 describe("resolveToolCallView", () => {
-  it("keeps code-mode source out of the command view", () => {
-    const source = 'return await read({ path: "src/agents/code-mode.ts" });';
-
-    expect(
-      resolveToolCallView({
-        name: "exec",
-        args: { code: source, command: source, language: "typescript" },
-        codeModeControl: { kind: "exec", language: "typescript" },
-      }),
-    ).toEqual({
-      kind: "code",
-      code: source,
-      language: "TypeScript",
-      target: "TypeScript workflow",
-    });
-  });
-
   it("returns the command text for command rows", () => {
     expect(resolveToolCallView({ name: "bash", args: { command: "git status" } })).toEqual({
       kind: "command",
@@ -330,14 +297,14 @@ describe("resolveToolCallView", () => {
     expect(view.targetDetail).toBeUndefined();
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toEqual([
-      { kind: "file", text: "Update src/a.ts" },
+      { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
       { kind: "del", text: "old a" },
       { kind: "add", text: "new a" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Add src/b.ts" },
+      { kind: "file", path: "src/b.ts", text: "Add src/b.ts" },
       { kind: "add", lineNo: 1, text: "new b" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Delete src/c.ts" },
+      { kind: "file", path: "src/c.ts", text: "Delete src/c.ts" },
     ]);
   });
 
@@ -394,14 +361,14 @@ describe("resolveToolCallView", () => {
     expect(view.target).toBe("2 files");
     expect(view.stat).toEqual({ added: 3, removed: 2 });
     expect(view.diff).toEqual([
-      { kind: "file", text: "Update src/a.ts" },
+      { kind: "file", path: "src/a.ts", text: "Update src/a.ts" },
       { kind: "ctx", lineNo: 10, text: "context" },
       { kind: "del", lineNo: 11, text: "old" },
       { kind: "add", lineNo: 11, text: "new" },
       { kind: "add", lineNo: 12, text: "extra" },
       { kind: "ctx", lineNo: 13, text: "tail" },
       { kind: "skip", text: "" },
-      { kind: "file", text: "Update src/b.ts" },
+      { kind: "file", path: "src/b.ts", text: "Update src/b.ts" },
       { kind: "del", lineNo: 1, text: "before" },
       { kind: "add", lineNo: 1, text: "after" },
     ]);
@@ -447,8 +414,8 @@ describe("resolveToolCallView", () => {
       { operation: "add", path: "src/b.ts" },
     ]);
     expect(view.stat).toEqual({ added: 2, removed: 1 });
-    expect(view.diff).toContainEqual({ kind: "file", text: "Update src/a.ts" });
-    expect(view.diff).toContainEqual({ kind: "file", text: "Add src/b.ts" });
+    expect(view.diff).toContainEqual({ kind: "file", path: "src/a.ts", text: "Update src/a.ts" });
+    expect(view.diff).toContainEqual({ kind: "file", path: "src/b.ts", text: "Add src/b.ts" });
   });
 
   it("numbers structured Codex update hunks", () => {

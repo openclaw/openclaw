@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
+  createPluginRegistryOwner,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -624,9 +625,10 @@ describe("Zalo polling media replies", () => {
     },
   );
 
-  it("registers each active registry and cleans both on final release", async () => {
+  it("cleans each active registry when its own route holder stops", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
+    const firstOwner = createPluginRegistryOwner(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
 
     const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
@@ -651,12 +653,14 @@ describe("Zalo polling media replies", () => {
     const secondAbort = new AbortController();
     const secondRuntime = createRuntimeEnv();
     let secondRun: Promise<void> | undefined;
+    let secondOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
 
     try {
       await settleAsyncWork();
       expect(firstRegistry.httpRoutes).toHaveLength(1);
 
       setActivePluginRegistry(secondRegistry);
+      secondOwner = createPluginRegistryOwner(secondRegistry);
       secondRun = monitorZaloProvider({
         token: "zalo-token",
         account,
@@ -669,13 +673,16 @@ describe("Zalo polling media replies", () => {
       expect(secondRegistry.httpRoutes).toHaveLength(1);
       firstAbort.abort();
       await firstRun;
-      expect(firstRegistry.httpRoutes).toHaveLength(1);
+      expect(firstRegistry.httpRoutes).toHaveLength(0);
       expect(secondRegistry.httpRoutes).toHaveLength(1);
     } finally {
       firstAbort.abort();
       secondAbort.abort();
-      await firstRun;
-      await secondRun;
+      try {
+        await Promise.all([firstRun, secondRun]);
+      } finally {
+        await Promise.all([firstOwner.close(), secondOwner?.close()]);
+      }
     }
 
     expect(firstRegistry.httpRoutes).toHaveLength(0);

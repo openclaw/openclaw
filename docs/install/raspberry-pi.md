@@ -60,15 +60,16 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
     sudo apt update && sudo apt upgrade -y
     sudo apt install -y git curl build-essential
 
-    # Set timezone (important for cron and reminders)
+    # Set your timezone (important for cron and reminders).
+    # Replace America/Chicago with your own IANA zone (`timedatectl list-timezones`).
     sudo timedatectl set-timezone America/Chicago
     ```
 
   </Step>
 
-  <Step title="Install Node.js 26">
+  <Step title="Install Node.js 24 LTS">
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
     sudo apt install -y nodejs
     node --version
     ```
@@ -137,7 +138,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 **Enable module compile cache** -- Speeds up repeated CLI invocations on lower-power Pi hosts. `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, avoiding extra process handoffs and keeping PID tracking simple on small hosts:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF'
 export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 mkdir -p /var/tmp/openclaw-compile-cache
 export OPENCLAW_NO_RESPAWN=1
@@ -194,7 +195,7 @@ Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsAp
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
+- `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions.
 - `~/.openclaw/workspace/` -- agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots and benefit from SSD over SD card for both performance and longevity. Take a portable snapshot with:

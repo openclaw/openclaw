@@ -1,4 +1,5 @@
 import path from "node:path";
+import { NODE_SERVICE_KIND, resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const POSIX_WORKER_ENV_KEYS = new Set([
@@ -26,7 +27,10 @@ const WINDOWS_WORKER_ENV_KEYS = new Set([
 ]);
 
 /** Freeze the minimal non-secret environment inherited by node-host workers. */
-export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function snapshotNodeWorkerEnv(
+  source: NodeJS.ProcessEnv,
+  homeDir?: string,
+): NodeJS.ProcessEnv {
   const windows = process.platform === "win32";
   const snapshot: NodeJS.ProcessEnv = {};
   const retainedWindowsKeys = new Map<string, string>();
@@ -50,10 +54,29 @@ export function snapshotNodeWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.Process
     }
     snapshot[key] = value;
   }
-  if (source.NODE_DISABLE_COMPILE_CACHE === undefined) {
+  if (homeDir) {
+    for (const key of Object.keys(snapshot)) {
+      if (
+        (windows ? key.toUpperCase() : key) === "HOME" ||
+        (windows && key.toUpperCase() === "USERPROFILE")
+      ) {
+        delete snapshot[key];
+      }
+    }
+    snapshot.HOME = homeDir;
+    if (windows) {
+      snapshot.USERPROFILE = homeDir;
+    }
+  }
+  const hostCacheFenced =
+    source.NODE_DISABLE_COMPILE_CACHE !== undefined &&
+    source.OPENCLAW_SERVICE_KIND === NODE_SERVICE_KIND &&
+    source.OPENCLAW_LAUNCHD_LABEL === resolveNodeLaunchAgentLabel();
+  const workerCacheDisabled = source.NODE_DISABLE_COMPILE_CACHE !== undefined && !hostCacheFenced;
+  if (!workerCacheDisabled) {
+    const requestedCache = hostCacheFenced ? undefined : source.NODE_COMPILE_CACHE?.trim();
     snapshot.NODE_COMPILE_CACHE =
-      source.NODE_COMPILE_CACHE?.trim() ||
-      path.join(resolvePreferredOpenClawTmpDir(), "node-worker-compile-cache");
+      requestedCache || path.join(resolvePreferredOpenClawTmpDir(), "node-worker-compile-cache");
   } else {
     snapshot.NODE_DISABLE_COMPILE_CACHE = "1";
   }

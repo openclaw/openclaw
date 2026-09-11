@@ -1,21 +1,24 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
 import type {
   MemoryReadResult,
+  MemorySearchDeadlineControlOptions,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 import type { getMemorySearchManager } from "./tools.runtime.js";
 
-type SearchImpl = (opts?: {
-  maxResults?: number;
-  minScore?: number;
-  sessionKey?: string;
-  activeProjectKeys?: string[];
-  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-  signal?: AbortSignal;
-  sources?: MemorySource[];
-}) => Promise<unknown[]>;
+type SearchImpl = (
+  opts?: {
+    maxResults?: number;
+    minScore?: number;
+    sessionKey?: string;
+    activeProjectKeys?: string[];
+    onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+    signal?: AbortSignal;
+    sources?: MemorySource[];
+  } & MemorySearchDeadlineControlOptions,
+) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 type MemoryManagerParams = {
@@ -27,7 +30,7 @@ type MemoryManagerParams = {
 
 let workspaceDir = "/workspace";
 let statusDirty = false;
-let pendingSyncSources: MemorySource[] | undefined;
+let lastSyncError: string | undefined;
 let customStatus: Record<string, unknown> | undefined;
 let sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }> = [
   { source: "memory", files: 1, chunks: 1 },
@@ -57,7 +60,7 @@ const stubManager = {
     files: 1,
     chunks: 1,
     dirty: statusDirty,
-    pendingSyncSources,
+    lastSyncError,
     workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
@@ -97,8 +100,8 @@ export function setMemoryStatusDirty(next: boolean): void {
   statusDirty = next;
 }
 
-export function setMemoryPendingSyncSources(next: MemorySource[] | undefined): void {
-  pendingSyncSources = next;
+export function setMemoryLastSyncError(next: string | undefined): void {
+  lastSyncError = next;
 }
 
 export function setMemorySourceCounts(
@@ -137,7 +140,7 @@ export function resetMemoryToolMockState(overrides?: {
 }): void {
   workspaceDir = "/workspace";
   statusDirty = false;
-  pendingSyncSources = undefined;
+  lastSyncError = undefined;
   customStatus = undefined;
   sourceCounts = [{ source: "memory", files: 1, chunks: 1 }];
   getManagerImpl = undefined;

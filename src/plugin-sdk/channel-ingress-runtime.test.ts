@@ -2,10 +2,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fanInChannelIngressLifecycles,
+  meetsIdentifierAuthentication,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
+  type IdentifierAuthentication,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
+
+/** The lifecycle shape fan-in accepts, taken from the exported signature. */
+type FanInLifecycle = NonNullable<Parameters<typeof fanInChannelIngressLifecycles>[0][number]>;
 
 const identity = {
   primary: { normalize: (value) => value.trim().toLowerCase(), sensitivity: "pii" },
@@ -26,6 +31,17 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it("compares typed identifier claims through the public SDK", () => {
+    const minimum: IdentifierAuthentication = "asserted";
+    const subject = {
+      email: "verified",
+      displayName: "mutable",
+    } satisfies NonNullable<ResolveChannelMessageIngressParams["subject"]["authentication"]>;
+
+    expect(meetsIdentifierAuthentication(subject.email, minimum)).toBe(true);
+    expect(meetsIdentifierAuthentication(subject.displayName, minimum)).toBe(false);
+  });
+
   it("fans one logical turn lifecycle across every durable claim", async () => {
     const createLifecycle = () => ({
       abortSignal: new AbortController().signal,
@@ -130,7 +146,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
   });
 
   it("fans failed settlement into modern failure and legacy abandonment", async () => {
-    const failed = vi.fn(async () => {});
+    const failed = vi.fn<NonNullable<FanInLifecycle["onFailed"]>>(async () => {});
     const abandoned = vi.fn(async () => {});
     const legacyAbandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
@@ -154,12 +170,69 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     ]);
 
     await expect(combined.settle()).rejects.toThrow("adoption failed");
-    const failure = new Error("dispatch failed");
-    await combined.abandon(failure);
+    await combined.abandon(new Error("dispatch failed"));
 
-    expect(failed).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(failed.mock.calls[0]?.[0]).toHaveProperty("message", "adoption failed");
     expect(abandoned).not.toHaveBeenCalled();
     expect(legacyAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("settles each claim once when a consumer abandons after a rejected adoption", async () => {
+    const abandoned = vi.fn(async () => {});
+    const combined = fanInChannelIngressLifecycles([
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {
+          throw new Error("adoption failed");
+        },
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: abandoned,
+      },
+    ]);
+
+    await expect(combined.lifecycle?.onAdopted()).rejects.toThrow("adoption failed");
+    // A wrapper settles through the lifecycle rather than the abandon helper, so
+    // this is the call that used to consume a second retry attempt.
+    await combined.lifecycle?.onAbandoned();
+
+    expect(abandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the claims a rejected adoption never reached", async () => {
+    const order: string[] = [];
+    const lifecycleFor = (name: string, onAdopted: () => Promise<void>) => ({
+      abortSignal: new AbortController().signal,
+      onAdopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {
+        order.push(`failed:${name}`);
+      }),
+      onAbandoned: vi.fn(async () => {
+        order.push(`abandoned:${name}`);
+      }),
+    });
+    const first = lifecycleFor("first", async () => {
+      order.push("adopted:first");
+    });
+    const second = lifecycleFor("second", async () => {
+      throw new Error("claim reclaimed");
+    });
+    const third = lifecycleFor("third", async () => {
+      order.push("adopted:third");
+    });
+    const combined = fanInChannelIngressLifecycles([first, second, third]);
+
+    await expect(combined.lifecycle?.onAdopted()).rejects.toThrow("claim reclaimed");
+    // The delivery catch abandons after a failed handoff; every claim must
+    // already carry a disposition by then rather than wait for recovery.
+    await combined.abandon(new Error("delivery failed"));
+
+    expect(order).toEqual(["adopted:first", "failed:second", "failed:third"]);
+    expect(first.onFailed).not.toHaveBeenCalled();
+    expect(first.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

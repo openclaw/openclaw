@@ -54,14 +54,20 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     { name: "model reset", patch: { model: null } },
     { name: "icon set", patch: { icon: "🦞" } },
     { name: "icon reset", patch: { icon: null } },
+    { name: "automatic device name", patch: { autoLabel: "OpenClaw App · Pixel" } },
+    { name: "automatic device name reset", patch: { autoLabel: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
     },
     {
       name: "CAS envelope",
-      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
+      patch: {
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
     },
+    { name: "automatic read envelope", patch: { expectedMarkedUnreadAt: 10 } },
   ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {

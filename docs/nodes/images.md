@@ -28,11 +28,20 @@ portable formats, byte limits, and lazy transcoding, see
 - `--dry-run` — print the resolved payload and skip sending.
 - `--json` — print the result as JSON: `{ action, channel, dryRun, handledBy, messageId?, payload }` (`payload` carries the channel-specific send result, including any media reference).
 
+## Message tool attachment metadata
+
+For `buffer` attachments, `contentType` takes precedence over `mimeType`; a data URL's
+MIME type is used only when neither is supplied. For `reply`, `sendAttachment`,
+`upload-file`, and `setGroupIcon`, top-level MIME metadata also takes precedence over
+the selected `attachments[]` entry. Hydration carries that choice as `contentType`
+and uses it to infer a missing filename. Explicit filenames are preserved. This
+metadata precedence does not change MIME detection when media bytes are loaded or staged.
+
 ## WhatsApp Web channel behavior
 
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a buffer, detect media kind, then build the outbound payload per kind:
-  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed. Animated GIFs are never re-encoded, only size-checked.
+  - **Images:** optimized to fit under `channels.whatsapp.mediaMaxMb` (default 50MB). Opaque images are recompressed to JPEG (default side ladder starts at 2048px, descending on repeated size misses); images with transparency are kept as PNG. If the source is already an acceptable JPEG/PNG/WebP within the size and side-length budget, the original bytes are preserved unchanged instead of being recompressed, even when a stale `.heic` or `.heif` filename remains after conversion. Animated GIFs are never re-encoded, only size-checked.
   - **Audio/voice:** unless already native voice audio (`.ogg`/`.opus`, or `audio/ogg`/`audio/opus`), outbound audio is transcoded via `ffmpeg` to Opus/OGG (48kHz mono, 64kbps, capped at 20 minutes) before sending as a voice note (`ptt: true`).
   - **Video:** pass-through up to 16MB.
   - **Documents:** anything else, up to 100MB, with filename preserved when available.
@@ -51,6 +60,13 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 - When media is present, the web sender resolves local paths or URLs using the same pipeline as `openclaw message send`.
 - Multiple media entries are sent sequentially if provided.
 
+Generated attachments stay separate from later tool-error warnings. Image references
+in errors or reasoning do not select or discard generated attachments.
+
+When a channel converts Markdown image links into attachments, image syntax inside
+code blocks or inline code, and escaped image syntax, stays in the text. Inline
+image destinations retain their URL punctuation.
+
 ## Inbound Media To Commands
 
 - When inbound web messages include media, OpenClaw downloads it to a temp file and exposes templating variables:
@@ -60,11 +76,11 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
   - `{{AttachmentDir}}` — directory containing the local path.
   - `{{AttachmentIndex}}` — zero-based source fact index.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and the attachment path/reference is rewritten to a sandbox-relative path like `media/inbound/<filename>`.
-- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases during the plugin SDK migration window.
+- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases for the `{{Attachment*}}` names that replaced them in 2026.8.1. Their approved `removeAfter` date is 2026-10-01, gated on a clean published-plugin artifact sweep; migrate before then. See [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 - Media understanding (configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
-  - If the active primary model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image to the model instead.
+  - Native-vision models can skip the `[Image]` summary block. See [Rules and behavior](/nodes/media-understanding#rules-and-behavior) for the rule and its MiniMax exception.
 - By default only the first matching image/audio/video attachment is processed; use `tools.media.<capability>.attachments` to select multiple attachments.
 
 ## Limits and errors
@@ -74,7 +90,7 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 - Images: up to `channels.whatsapp.mediaMaxMb` (default 50MB) after optimization.
 - Audio/video: 16MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
 - Documents: 100MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
-- Oversize or unreadable media produces a clear error in logs, and the reply is skipped.
+- Oversize or unreadable media produces a clear error in logs, and the reply is skipped. Size errors use readable byte units rather than rounding fractional caps to a whole MB.
 
 **Media understanding caps (transcription/description)**
 

@@ -32,7 +32,8 @@ const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const MATRIX_USER_ID_RE = /@[A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
 const MATRIX_ROOM_ID_RE = /![A-Za-z0-9._=-]+:[A-Za-z0-9.-]+/gu;
 const MATRIX_EVENT_ID_RE = /\$[A-Za-z0-9_-]{16,}/gu;
-const HANDLE_RE = /(^|[^\w:/])@[A-Za-z0-9_]{5,}\b(?!\.)/gu;
+// Public OpenClaw package references must remain usable in repair commands.
+const HANDLE_RE = /(^|[^\w:/])@(?!openclaw\/[a-z0-9])[A-Za-z0-9_]{5,}\b(?!\.)/gu;
 const LONG_DECIMAL_ID_RE = /\b\d{9,}\b/gu;
 const MAX_SUPPORT_STRING_LENGTH = 2000;
 const MAX_SUPPORT_SNAPSHOT_DEPTH = 10;
@@ -320,10 +321,13 @@ function redactContactIdentifiersForSupport(value: string): string {
 }
 
 function redactServiceIdentifiersForSupport(value: string): string {
+  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
   return value
     .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
     .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, "<redacted-matrix-event>");
+    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+    );
 }
 
 function redactLongIdentifiersForSupport(value: string): string {

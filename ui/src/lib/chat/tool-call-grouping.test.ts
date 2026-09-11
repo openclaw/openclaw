@@ -8,59 +8,51 @@ describe("summarizeToolGroup", () => {
   it.each<[string, ToolGroupSummaryInput[], string]>([
     ["a single command", [{ name: "bash", args: { command: "ls" } }], "Ran a command"],
     [
-      "a code-mode wrapper with its child operation",
+      "the operations inside a wrapper, without counting the wrapper twice",
       [
-        {
-          name: "exec",
-          args: { code: 'return await read({ path: "/repo/a.ts" });' },
-          callId: "outer-exec",
-          codeModeControl: { kind: "exec", language: "javascript" },
-        } as ToolGroupSummaryInput & { callId: string },
+        { name: "exec", callId: "outer", runId: "run", args: { title: "Inspect project" } },
         {
           name: "read",
-          args: { path: "/repo/a.ts" },
-          parentCallId: "outer-exec",
-        } as ToolGroupSummaryInput & { parentCallId: string },
-      ],
-      "Read a file",
-    ],
-    [
-      "a suspended code-mode workflow",
-      [
-        {
-          name: "exec",
-          args: { code: 'return await read({ path: "/repo/a.ts" });' },
-          callId: "outer-exec",
-          codeModeControl: { kind: "exec", language: "javascript" },
-        },
-        {
-          name: "read",
-          args: { path: "/repo/a.ts" },
-          parentCallId: "outer-exec",
-        },
-        {
-          name: "wait",
-          args: { runId: "cm_1" },
-          codeModeControl: { kind: "wait" },
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "run",
+          args: { path: "README.md" },
         },
       ],
       "Read a file",
     ],
     [
-      "a standalone code-mode continuation",
-      [{ name: "wait", args: { runId: "cm_1" }, codeModeControl: { kind: "wait" } }],
-      "Ran a code workflow",
+      "unrelated runs that reuse a call id",
+      [
+        { name: "exec", callId: "outer", runId: "previous" },
+        {
+          name: "read",
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "current",
+          args: { path: "README.md" },
+        },
+      ],
+      "Ran a command, read a file",
     ],
     [
-      "a standalone code-mode workflow",
+      "a failed wrapper even when its child succeeded",
       [
+        { name: "exec", callId: "outer", runId: "run", isError: true },
         {
-          name: "exec",
-          args: { code: "return 42;", language: "javascript" },
-          callId: "outer-exec",
-        } as ToolGroupSummaryInput & { callId: string },
+          name: "read",
+          callId: "child",
+          parentToolCallId: "outer",
+          runId: "run",
+          args: { path: "README.md" },
+        },
       ],
-      "Ran a code workflow",
+      "Ran a command, read a file",
+    ],
+    [
+      "an ordinary exec with code-shaped arguments",
+      [{ name: "exec", args: { code: "a business value", command: "echo ok" } }],
+      "Ran a command",
     ],
     [
       "distinct paths over call count",
@@ -120,7 +112,7 @@ describe("summarizeToolGroup", () => {
         { name: "str_replace_editor", args: { path: "/repo/a.ts" } },
         { name: "str_replace_based_edit_tool", args: { command: "rename" } },
       ],
-      "Used str_replace_editor, str_replace_based_edit_tool",
+      "Used Str Replace Editor, Str Replace Based Edit Tool",
     ],
     [
       "multi-file apply_patch targets",
@@ -170,11 +162,11 @@ describe("summarizeToolGroup", () => {
       ],
       "Deleted a file",
     ],
-    ["one generic tool by name", [{ name: "mcp__linear" }], "Used mcp__linear"],
+    ["one generic tool by name", [{ name: "mcp__linear" }], "Used Mcp Linear"],
     [
       "repeat generic tool with a multiplier",
-      [{ name: "mcp__linear" }, { name: "mcp__linear" }],
-      "Used mcp__linear ×2",
+      [{ name: "heartbeat_respond" }, { name: "heartbeat_respond" }],
+      "Used Heartbeat Respond ×2",
     ],
     [
       "many distinct generic tools as a count",

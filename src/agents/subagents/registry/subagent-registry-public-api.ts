@@ -7,6 +7,7 @@ import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
+  listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
@@ -79,8 +80,15 @@ export function createSubagentRegistryPublicApi(config: {
   function getSubagentRunsByRunIds(runIds: readonly string[]): {
     entries: Map<string, SubagentRunRecord>;
   } {
+    const requested = new Set(runIds.map((runId) => runId.trim()));
     const byId = new Map<string, SubagentRunRecord>();
-    for (const entry of readRuns().values()) {
+    // Waiters need only their targets; retained results must not expand every wake's maps.
+    const selected = getSubagentRunsSnapshotForRead(
+      runs,
+      (entry) =>
+        requested.has(entry.runId) || Boolean(entry.swarmRunId && requested.has(entry.swarmRunId)),
+    );
+    for (const entry of selected.values()) {
       byId.set(entry.runId, entry);
       if (entry.swarmRunId) {
         byId.set(entry.swarmRunId, entry);
@@ -139,15 +147,11 @@ export function createSubagentRegistryPublicApi(config: {
     requesterSessionKey?: string,
     requesterAgentId?: string,
   ): SubagentRunRecord[] {
-    const key = groupId.trim();
-    const requesterKey = requesterSessionKey?.trim();
-    return [...readRuns().values()].filter(
-      (entry) =>
-        entry.collect === true &&
-        entry.groupId === key &&
-        (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+    return listSwarmRunsForGroupFromRuns(
+      readRuns(),
+      groupId,
+      requesterSessionKey,
+      requesterAgentId,
     );
   }
 

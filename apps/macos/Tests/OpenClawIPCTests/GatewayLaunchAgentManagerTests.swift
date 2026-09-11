@@ -224,6 +224,46 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test(arguments: ["failure-with-hints", "failure-hints-only", "failure-without-hints", "success"])
+    func `gateway daemon failures preserve actionable recovery hints`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+
+            let payload = switch scenario {
+            case "failure-with-hints":
+                """
+                {"ok":false,"error":"Gateway service not installed.",
+                "hints":["openclaw gateway install","openclaw gateway start","third hint"]}
+                """
+            case "failure-hints-only":
+                #"{"ok":false,"hints":["openclaw gateway install","openclaw gateway start"]}"#
+            case "failure-without-hints":
+                #"{"ok":false,"error":"Gateway service not installed."}"#
+            default:
+                #"{"ok":true,"message":"Gateway already started."}"#
+            }
+            let expected: String? = switch scenario {
+            case "failure-with-hints":
+                "Gateway service not installed. (openclaw gateway install · openclaw gateway start)"
+            case "failure-hints-only": "openclaw gateway install · openclaw gateway start"
+            case "failure-without-hints": "Gateway service not installed."
+            default: nil
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+
+            #expect(await GatewayLaunchAgentManager.kickstart() == expected)
+        }
+    }
+
     @Test func `launch agent plist snapshot parses args and env`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
@@ -324,5 +364,39 @@ struct GatewayLaunchAgentManagerTests {
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
+    }
+}
+
+@Suite(.serialized)
+struct GatewayLaunchAgentLocalRoutingTests {
+    @Test func `all daemon actions resolve locally before the execution intercept`() async {
+        await TestIsolationLock.shared.acquire()
+        do {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(
+                true, resolveCLI: { _, _ in .executable(["/fixture/managed/openclaw"]) })
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let actions = [
+                ["install", "--force", "--port", "51845", "--runtime", "node", "--allow-unconfigured"],
+                ["uninstall"],
+                ["restart"],
+                ["status", "--json", "--no-probe"],
+            ]
+            for action in actions {
+                let error = await GatewayLaunchAgentManager.runDaemonCommand(action)
+                #expect(error == nil)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == actions)
+            let prefix = ["/fixture/managed/openclaw"] + AppProfile.current.cliRootArguments + ["gateway"]
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == actions.map {
+                prefix + $0 + ($0.contains("--json") ? [] : ["--json"])
+            })
+        }
+        await TestIsolationLock.shared.release()
     }
 }

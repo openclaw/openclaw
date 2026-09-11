@@ -249,6 +249,33 @@ async function prepareMatrixQaDestructiveSetup(
   }
 }
 
+function restoreMatrixQaCliBackup(params: {
+  accountId: string;
+  allowNonZero?: boolean;
+  label: string;
+  recoveryKey?: string;
+  runtime: MatrixQaCliRuntime;
+  timeoutMs: number;
+}) {
+  return runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+    ...(params.allowNonZero === undefined ? {} : { allowNonZero: params.allowNonZero }),
+    args: [
+      "matrix",
+      "verify",
+      "backup",
+      "restore",
+      "--account",
+      params.accountId,
+      ...(params.recoveryKey === undefined ? [] : ["--recovery-key-stdin"]),
+      "--json",
+    ],
+    label: params.label,
+    runtime: params.runtime,
+    ...(params.recoveryKey === undefined ? {} : { stdin: `${params.recoveryKey}\n` }),
+    timeoutMs: params.timeoutMs,
+  });
+}
+
 export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
@@ -265,20 +292,11 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
     userId: setup.ownerUserId,
   });
   try {
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "external-key",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "external-key",
       label: "restore-with-external-key",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "external recovery-key");
@@ -352,20 +370,11 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
     userId: setup.ownerUserId,
   });
   try {
-    const initial = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "stored-key",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const initial = await restoreMatrixQaCliBackup({
+      accountId: "stored-key",
       label: "initial-restore-stores-key",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "initial stored-key");
@@ -375,8 +384,8 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       runtime: cli,
       userId: device.userId,
     });
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: ["matrix", "verify", "backup", "restore", "--account", "stored-key", "--json"],
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "stored-key",
       label: "restore-from-stored-key",
       runtime: cli,
       timeoutMs: context.timeoutMs,
@@ -431,9 +440,9 @@ export async function runMatrixQaE2eeStateLossNoRecoveryKeyScenario(
     userId: setup.ownerUserId,
   });
   try {
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "no-key",
       allowNonZero: true,
-      args: ["matrix", "verify", "backup", "restore", "--account", "no-key", "--json"],
       label: "restore-without-key",
       runtime: cli,
       timeoutMs: context.timeoutMs,
@@ -492,21 +501,12 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
     userId: setup.ownerUserId,
   });
   try {
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "stale-key",
       allowNonZero: true,
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "stale-key",
-        "--recovery-key-stdin",
-        "--json",
-      ],
       label: "restore-with-stale-key",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreFailed(restored, {
@@ -598,20 +598,11 @@ async function waitForMatrixQaNonEmptyCliBackupRestore(params: {
   let last: Awaited<ReturnType<typeof runMatrixQaCliJson<MatrixQaCliBackupStatus>>> | null = null;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = params.timeoutMs - (Date.now() - startedAt);
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        params.accountId,
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: params.accountId,
       label: params.label,
+      recoveryKey: params.recoveryKey,
       runtime: params.cli,
-      stdin: `${params.recoveryKey}\n`,
       timeoutMs: Math.max(1, remainingMs),
     });
     last = restored;
@@ -714,20 +705,11 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
     userId: setup.ownerUserId,
   });
   try {
-    const initial = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "corrupt-idb",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const initial = await restoreMatrixQaCliBackup({
+      accountId: "corrupt-idb",
       label: "initial-restore-before-corruption",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "corrupt-idb initial restore");
@@ -736,20 +718,11 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
       runtime: cli,
       userId: device.userId,
     });
-    const repaired = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "corrupt-idb",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const repaired = await restoreMatrixQaCliBackup({
+      accountId: "corrupt-idb",
       label: "restore-after-idb-corruption",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(repaired.payload, "corrupt-idb recovery");
@@ -788,20 +761,11 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     userId: setup.ownerUserId,
   });
   try {
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "deleted-device",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "deleted-device",
       label: "restore-before-device-delete",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device preflight");
@@ -885,20 +849,11 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
   });
   let replacement: Awaited<ReturnType<typeof runMatrixQaExternalKeyRestore>> | undefined;
   try {
-    const preflight = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "deleted-device-recovery",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const preflight = await restoreMatrixQaCliBackup({
+      accountId: "deleted-device-recovery",
       label: "restore-before-device-delete",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: deleted.cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(preflight.payload, "deleted-device recovery preflight");
@@ -931,20 +886,11 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
       password: setup.ownerPassword,
       userId: setup.ownerUserId,
     });
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "deleted-device-recovery-relogin",
-        "--recovery-key-stdin",
-        "--json",
-      ],
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "deleted-device-recovery-relogin",
       label: "restore-after-relogin",
+      recoveryKey: setup.encodedRecoveryKey,
       runtime: replacement.cli,
-      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device relogin recovery");
@@ -1089,6 +1035,12 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",
     );
+    // Cached client readiness does not imply that this newly created room has synced.
+    await driver.waitForJoinedMember({
+      roomId,
+      timeoutMs: context.timeoutMs,
+      userId: account.userId,
+    });
     const token = buildMatrixQaToken("MATRIX_QA_E2EE_SYNC_LOSS");
     const driverStartSince = await driver.prime();
     const rawStartSince = await rawDriver.primeRoom();
@@ -1185,21 +1137,12 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
       label: "wrong-account-recovery-key",
       userId: device.userId,
     });
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+    const restored = await restoreMatrixQaCliBackup({
+      accountId: "wrong-account",
       allowNonZero: true,
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "wrong-account",
-        "--recovery-key-stdin",
-        "--json",
-      ],
       label: "restore-with-wrong-account-key",
+      recoveryKey: sourceSetup.encodedRecoveryKey,
       runtime: cli,
-      stdin: `${sourceSetup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreFailed(restored, {

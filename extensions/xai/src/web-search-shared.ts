@@ -5,11 +5,11 @@ import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_DEFAULT_WEB_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -37,6 +37,7 @@ export function buildXaiWebSearchPayload(params: {
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
   truncated?: boolean;
+  source?: "web_search" | "x_search";
 }): Record<string, unknown> {
   return {
     query: params.query,
@@ -45,7 +46,7 @@ export function buildXaiWebSearchPayload(params: {
     tookMs: params.tookMs,
     externalContent: {
       untrusted: true,
-      source: "web_search",
+      source: params.source ?? "web_search",
       provider: params.provider,
       wrapped: true,
     },
@@ -112,7 +113,7 @@ export async function requestXaiWebSearch(params: {
       ...params,
       inputText: params.query,
       tools: [{ type: "web_search" }],
-      reasoningEffort: params.model === XAI_DEFAULT_WEB_SEARCH_MODEL ? "low" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "low"),
       errorLabel: "xAI web search failed",
     },
     (data) =>

@@ -1,6 +1,7 @@
 // Managed gateway restart inspection tests.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   classifyPortListener,
   createConfigIO,
@@ -10,7 +11,8 @@ import {
   inspectPortUsage,
   inspectUnknownListenerFallback,
   makeGatewayService,
-  probeGateway,
+  callGateway,
+  gatewayResponseError,
   readBestEffortConfig,
   resetRestartHealthMocks,
   resolveGatewayServiceProbeHosts,
@@ -21,6 +23,34 @@ import {
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it.each([{ status: "running", pid: 7000 } as const, { status: "stopped" } as const])(
+    "retains boot identity in the finalized $status service snapshot",
+    async (runtime) => {
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.9.3", buildId: "candidate-build", bootId: "candidate-boot" },
+        }),
+      );
+
+      const snapshot = await inspectGatewayRestartWithSnapshot({
+        runtime,
+        expectedBuildId: "candidate-build",
+        portUsage: {
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 7000, commandLine: "openclaw-gateway" }],
+          hints: [],
+        },
+      });
+
+      expect(snapshot).toMatchObject({
+        healthy: true,
+        gatewayBuildId: "candidate-build",
+        gatewayBootId: "candidate-boot",
+      });
+    },
+  );
 
   it("treats a gateway listener child pid as healthy ownership", async () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
@@ -119,22 +149,16 @@ describe("restart health", () => {
   });
 
   it("uses a local gateway probe when ownership is ambiguous", async () => {
-    const snapshot = await inspectAmbiguousOwnershipWithProbe({
-      ok: true,
-      close: null,
-    });
+    const snapshot = await inspectAmbiguousOwnershipWithProbe();
 
     expect(snapshot.healthy).toBe(true);
-    expect((firstCallArg(probeGateway) as { url?: string }).url).toBe("ws://127.0.0.1:18789");
+    expect(firstCallArg(callGateway)).toMatchObject({ localPortOverride: 18789, method: "health" });
   });
 
   it("treats a busy port as healthy when runtime status lags but the probe succeeds", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     classifyPortListener.mockReturnValue("gateway");
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-    });
+    callGateway.mockImplementation(gatewayHealthResponse({}));
 
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "stopped" },
@@ -161,13 +185,9 @@ describe("restart health", () => {
     "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
     "unauthorized: device token rejected (pair/repair this device, or provide gateway token)",
   ])(
-    "treats local policy-close probe reason %s as healthy gateway reachability",
+    "treats a correlated Gateway rejection with reason %s as healthy gateway reachability",
     async (reason) => {
-      const snapshot = await inspectAmbiguousOwnershipWithProbe({
-        ok: false,
-        error: reason,
-        close: { code: 1008, reason },
-      });
+      const snapshot = await inspectAmbiguousOwnershipWithProbe(gatewayResponseError(reason));
 
       expect(snapshot.healthy).toBe(true);
       expect(snapshot.probeError).toBeUndefined();
@@ -177,6 +197,8 @@ describe("restart health", () => {
   it.each([
     "",
     "repair required",
+    "pairing required",
+    "auth required",
     "device identity required",
     "connect challenge missing nonce",
     "device signature invalid",
@@ -188,21 +210,20 @@ describe("restart health", () => {
   ])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
     async (reason) => {
-      const snapshot = await inspectAmbiguousOwnershipWithProbe({
-        ok: false,
-        close: { code: 1008, reason },
-      });
+      const snapshot = await inspectAmbiguousOwnershipWithProbe(
+        new Error(`gateway closed (1008): ${reason}`),
+      );
 
       expect(snapshot.healthy).toBe(false);
     },
   );
 
   it("requires the expected gateway version when provided", async () => {
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version: "2026.4.23", connId: "old" },
-    });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.23", connId: "old" },
+      }),
+    );
 
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
@@ -223,11 +244,11 @@ describe("restart health", () => {
   });
 
   it("accepts the restarted gateway when the expected version matches", async () => {
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version: "2026.4.24", connId: "new" },
-    });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+      }),
+    );
 
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
@@ -246,6 +267,88 @@ describe("restart health", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("requires the expected gateway build identity when provided", async () => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
+      }),
+    );
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedBuildId: "new-build",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.gatewayBuildId).toBe("old-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
+
+    const { renderRestartDiagnostics } = await import("./restart-health.js");
+    expect(renderRestartDiagnostics(snapshot)).toContain(
+      "Gateway build mismatch: expected new-build, running gateway reported old-build.",
+    );
+  });
+
+  it("accepts the restarted gateway when the expected build identity matches", async () => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", buildId: "new-build", connId: "new" },
+      }),
+    );
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedBuildId: "new-build",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.gatewayBuildId).toBe("new-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
+    expect(snapshot.buildIdMismatch).toBeUndefined();
+  });
+
+  it("requires Gateway runtime build identity for a configured Control UI root", async () => {
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: {
+          version: "2026.4.24",
+          buildId: "old-build",
+          controlUiBuildSource: "configured",
+          connId: "new",
+        },
+      }),
+    );
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedBuildId: "new-build",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.gatewayBuildId).toBe("old-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
+  });
+
   it("uses configured local probe auth while waiting for a matching-version restart", async () => {
     readBestEffortConfig.mockResolvedValue({
       gateway: { auth: { mode: "token", token: "probe-token" } },
@@ -253,11 +356,11 @@ describe("restart health", () => {
     resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
       auth: { token: "probe-token" },
     });
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version: "2026.4.24", connId: "new" },
-    });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "new" },
+      }),
+    );
     const service = makeGatewayService({ status: "running", pid: 8000 });
     const serviceEnv = {
       ...process.env,
@@ -297,13 +400,16 @@ describe("restart health", () => {
         suppressFutureVersionWarning: true,
       }),
     );
-    const probeInput = firstCallArg(probeGateway) as {
-      auth?: { token?: string; password?: string };
-      env?: NodeJS.ProcessEnv;
+    const probeInput = firstCallArg(callGateway) as {
+      token?: string;
+      password?: string;
+      config?: unknown;
     };
-    expect(probeInput.auth?.token).toBe("probe-token");
-    expect(probeInput.auth?.password).toBeUndefined();
-    expect(probeInput.env).toBe(serviceEnv);
+    expect(probeInput.token).toBe("probe-token");
+    expect(probeInput.password).toBeUndefined();
+    expect(probeInput.config).toEqual({
+      gateway: { auth: { mode: "token", token: "probe-token" } },
+    });
   });
 
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
@@ -325,7 +431,7 @@ describe("restart health", () => {
     const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
     expect(snapshot.healthy).toBe(true);
-    expect(probeGateway).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
     expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith({
       env: process.env,
       command: null,

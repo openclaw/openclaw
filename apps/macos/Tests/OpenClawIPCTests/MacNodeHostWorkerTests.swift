@@ -40,7 +40,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
     func invokedCommands() -> [String] {
         self.requests.map(\.command)
@@ -95,25 +95,17 @@ struct MacNodeHostWorkerTests {
             .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
     }
 
-    @Test func `worker allows a generous cold-start window`() async throws {
+    @Test func `worker reserves five minutes for cold startup`() {
+        // Process readiness is covered below; a short shell sleep cannot prove this default policy.
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
-
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
-        let script = """
-        sleep 0.1
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
-        while IFS= read -r line; do :; done
-        """
-
-        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-        #expect(manifest.version == "test")
-        await worker.stop()
     }
 
     @Test func `worker launches in the selected checkout`() async throws {
         let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        defer { try? FileManager.default.removeItem(at: checkout) }
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
           "$(/bin/pwd -P)"
@@ -124,19 +116,178 @@ struct MacNodeHostWorkerTests {
             command: ["/bin/sh", "-c", script],
             currentDirectoryURL: checkout))
 
-        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
-        defer { free(expectedCurrentDirectory) }
         #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
         await worker.stop()
+    }
+
+    @Test(arguments: [("true", true), ("false", false), ("1", false), ("null", false)])
+    func `worker hosting readiness requires an explicit Boolean fact`(raw: String, expected: Bool) async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":\(raw),"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while IFS= read -r line; do :; done
+        """
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script]))
+        #expect(await worker.isWorkerHostingEnabled() == expected)
+        await worker.stop()
+        #expect(await worker.isWorkerHostingEnabled() == false)
+    }
+
+    @Test func `private worker hosting transitions notify once without changing its manifest`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let changes = OSAllocatedUnfairLock(initialState: 0)
+        let observer = NotificationCenter.default.addObserver(
+            forName: .openclawNodeHostHostingChanged,
+            object: worker,
+            queue: nil) { _ in changes.withLock { $0 += 1 } }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let script = """
+        printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        IFS= read -r invoke
+        printf '%s\\n' '{"type":"worker-hosting","enabled":true}'
+        printf '%s\\n' '{"type":"worker-hosting","enabled":false}'
+        printf '%s\\n' '{"type":"worker-hosting","enabled":1}'
+        printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"hosting-proof","ok":true}}'
+        while IFS= read -r line; do :; done
+        """
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script]))
+        #expect(await worker.isWorkerHostingEnabled())
+        #expect(changes.withLock { $0 } == 1)
+        let response = await worker.invoke(BridgeInvokeRequest(id: "hosting-proof", command: "system.run"))
+        #expect(response.ok)
+        #expect(await worker.isWorkerHostingEnabled() == false)
+        #expect(await worker.supports("system.run"))
+        #expect(changes.withLock { $0 } == 2)
+        await worker.stop()
+        #expect(changes.withLock { $0 } == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func `node reapproval refreshes the current worker without interrupting its invoke`(
+        retireRouteBeforeApproval: Bool) async throws
+    {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let framesFile = directory.appendingPathComponent("frames.jsonl")
+        let invokeReceived = directory.appendingPathComponent("invoke.pid")
+        let gateway = GatewayNodeSession()
+        let socketSession = GatewayTestWebSocketSession()
+        let worker = MacNodeHostWorker(session: gateway)
+        let script = #"""
+        printf '%s\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        refreshes=0
+        invoked=false
+        while IFS= read -r line; do
+          printf '%s\n' "$line" >> "$1"
+          generation=$(printf '%s' "$line" | sed -n 's/.*"generation":\([0-9][0-9]*\).*/\1/p')
+          case "$line" in
+            *'"type":"invoke"'*)
+              invoked=true
+              printf '%s\n' "$$" > "$2"
+              ;;
+            *'"type":"runner-inventory-refresh"'*)
+              refreshes=$((refreshes + 1))
+              if "$invoked"; then
+                printf '{"type":"invoke-result","generation":%s,"result":{"id":"held","ok":true,"payload":{"refreshes":%s}}}\n' "$generation" "$refreshes"
+              fi
+              ;;
+          esac
+        done
+        """#
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script, "worker", framesFile.path, invokeReceived.path]))
+        var invoking: Task<BridgeInvokeResponse, Never>?
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://worker.example.invalid")),
+                credentials: GatewayNodeSessionCredentials(),
+                connectOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: ["system"],
+                    commands: ["system.run"],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "node",
+                    clientDisplayName: "Worker Test",
+                    includeDeviceIdentity: false),
+                sessionBox: WebSocketSessionBox(session: socketSession),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { await worker.invoke($0) })
+            let socket = try #require(socketSession.latestTask())
+            let route = try #require(await gateway.currentRoute())
+            #expect(await worker.setRoute(route, authorityGeneration: 1))
+            await worker.gatewayConnected(ifCurrentRoute: route)
+            let approval = try URLSessionWebSocketTask.Message.data(JSONSerialization.data(withJSONObject: [
+                "type": "event",
+                "event": "node.pair.resolved",
+                "payload": [
+                    "nodeId": "device-identity",
+                    "requestId": "reapproval",
+                    "decision": "approved",
+                    "ts": 1,
+                ],
+            ]))
+            if retireRouteBeforeApproval {
+                #expect(await worker.setRoute(nil, authorityGeneration: 2))
+                let receives = socket.snapshotCallbackReceiveCount()
+                socket.emitReceiveSuccess(approval)
+                try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { WorkerBackpressureTimeout() }) {
+                    while socket.snapshotCallbackReceiveCount() <= receives {
+                        try Task.checkCancellation()
+                        await Task.yield()
+                    }
+                }
+                #expect(await worker.setRoute(route, authorityGeneration: 3))
+                await worker.gatewayConnected(ifCurrentRoute: route)
+            }
+            let activeInvoke = Task {
+                await worker.invoke(BridgeInvokeRequest(id: "held", command: "system.run"))
+            }
+            invoking = activeInvoke
+            let workerPID = try await TestProcessSupport.waitForPID(in: invokeReceived)
+            socket.emitReceiveSuccess(approval)
+            let response = try await AsyncTimeout.withTimeout(
+                seconds: 5,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: { await activeInvoke.value })
+            #expect(response.ok)
+            #expect(response.payload?.dictionaryValue?["refreshes"]?.intValue == 1)
+            #expect(await worker.isWorkerHostingEnabled())
+            #expect(await gateway.currentRoute() == route)
+            #expect(socketSession.snapshotMakeCount() == 1)
+            #expect(socket.snapshotCancelCount() == 0)
+            #expect(!TestProcessSupport.processIsGone(workerPID))
+
+            let frames = try String(contentsOf: framesFile, encoding: .utf8).split(separator: "\n").map {
+                try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+            }
+            let invoke = try #require(frames.first { $0["type"] as? String == "invoke" })
+            let refreshes = frames.filter { $0["type"] as? String == "runner-inventory-refresh" }
+            #expect(refreshes.count == 1)
+            #expect(refreshes.first?["generation"] as? UInt64 == invoke["generation"] as? UInt64)
+            #expect(frames.filter { $0["type"] as? String == "gateway-connection" }.count ==
+                (retireRouteBeforeApproval ? 5 : 2))
+            #expect(!frames.contains { $0["type"] as? String == "invoke-cancel" })
+            await gateway.disconnect()
+            await worker.stop()
+        } catch {
+            await gateway.disconnect()
+            await worker.stop()
+            _ = await invoking?.value
+            throw error
+        }
     }
 
     @Test(arguments: [
         OpenClawSystemCommand.run.rawValue,
         "mcp.tools.call.v1",
         "codex.terminal.resume.v1",
+        "system.worker.start",
     ])
     func `Mac runtime forwards worker-owned commands to the shared worker`(command: String) async {
-        let worker = StubMacNodeHostWorker(commands: [command])
+        let worker = StubMacNodeHostWorker(commands: command == "system.worker.start" ? [] : [command])
         let runtime = MacNodeRuntime(nodeHostWorker: worker)
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
@@ -152,8 +303,11 @@ struct MacNodeHostWorkerTests {
     @Test(arguments: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
     func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async {
         let worker = StubMacNodeHostWorker(commands: [command])
-        let runtime = MacNodeRuntime(
+        let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
             nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
 
@@ -169,8 +323,11 @@ struct MacNodeHostWorkerTests {
 
     @Test func `selected CUA provider never falls back to native snapshot`() async {
         let worker = StubMacNodeHostWorker(commands: [])
-        let runtime = MacNodeRuntime(
+        let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
             nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
             computerControlEnabled: { true },
             computerControlProvider: { .cua })
 
@@ -390,19 +547,23 @@ struct MacNodeHostWorkerTests {
         #expect(!MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 3, currentGeneration: 4))
     }
 
-    @Test func `worker forces app exec host without fallback`() async throws {
+    @Test func `worker forces app exec host without fallback or startup respawn`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
+        test "$OPENCLAW_NO_RESPAWN" = 1 || exit 46
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"chunk":"hello"},"timeoutMs":1000}'
-        IFS= read -r unavailable
-        printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
-        printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+        # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
-            *'"type":"invoke"'*) printf '%s\\n' '{"type":"invoke-result","result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}' ;;
+            *'"type":"invoke"'*)
+              printf '%s\\n' '{"type":"gateway-request","generation":0,"id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"worker-run","nodeId":"","seq":0,"chunk":"hello"},"timeoutMs":1000}'
+              IFS= read -r unavailable
+              printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
+              printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli","generations":[0,1,9007199254740993,18446744073709551615],"flags":[false,true]}}}'
+              ;;
           esac
         done
         """
@@ -414,9 +575,22 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        #expect(response.ok)
-        #expect(response.payload != nil)
         await worker.stop()
+        #expect(response.ok)
+
+        struct Response: Decodable {
+            struct Payload: Decodable {
+                let owner: String
+                let generations: [UInt64]
+                let flags: [Bool]
+            }
+
+            let payload: Payload
+        }
+        let decoded = try JSONDecoder().decode(Response.self, from: JSONEncoder().encode(response))
+        #expect(decoded.payload.owner == "cli")
+        #expect(decoded.payload.generations == [0, 1, 9_007_199_254_740_993, UInt64.max])
+        #expect(decoded.payload.flags == [false, true])
     }
 
     @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {
@@ -471,7 +645,8 @@ struct MacNodeHostWorkerTests {
         }
     }
 
-    @Test func `worker cancellation settles when the child suppresses its result`() async throws {
+    @Test(arguments: [false, true])
+    func `worker cancellation settles when the child suppresses its result`(cancelThroughTask: Bool) async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-worker-cancel-\(UUID().uuidString)")
@@ -500,6 +675,7 @@ struct MacNodeHostWorkerTests {
             command: ["/bin/sh", "-c", script, "worker", marker.path]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
+        var invoking: Task<BridgeInvokeResponse, Never>?
         do {
             let buffered = try await AsyncTimeout.withTimeout(
                 seconds: 1,
@@ -512,22 +688,86 @@ struct MacNodeHostWorkerTests {
             #expect(!buffered.ok)
             #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
-            let invoking = Task {
+            let activeInvoke = Task {
                 await worker.invoke(BridgeInvokeRequest(
                     id: "terminal-2",
                     command: "codex.terminal.resume.v1"))
             }
+            invoking = activeInvoke
             _ = try await TestProcessSupport.waitForPID(in: marker)
-            await worker.cancel(invokeId: "terminal-2")
+            if cancelThroughTask {
+                activeInvoke.cancel()
+            } else {
+                await worker.cancel(invokeId: "terminal-2")
+            }
             let active = try await AsyncTimeout.withTimeout(
                 seconds: 1,
                 onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await invoking.value })
+                operation: { await activeInvoke.value })
             await worker.stop()
             #expect(!active.ok)
             #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
         } catch {
             await worker.stop()
+            _ = await invoking?.value
+            throw error
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `pre cancelled worker caller does not dispatch or poison a reused invoke id`(
+        bufferedControls: Bool) async throws
+    {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = """
+        printf '%s\\n' '{"type":"ready","version":"test",\
+        "manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"}}'
+        for expected in shared barrier; do
+          IFS= read -r invoke
+          printf '%s' "$invoke" | grep -q '"type":"invoke"' || exit 40
+          printf '%s' "$invoke" | grep -q "\\\"id\\\":\\\"$expected\\\"" || exit 41
+          printf '{"type":"invoke-result","generation":0,"result":{"id":"%s","ok":true}}\\n' "$expected"
+        done
+        while IFS= read -r line; do :; done
+        """
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script]))
+        if bufferedControls {
+            await worker.handleInput(invokeId: "shared", seq: 7, payloadJSON: #"{"data":"x"}"#)
+            await worker.cancel(invokeId: "shared")
+            await worker.cancel(invokeId: "other")
+        }
+        let entry = AsyncTestGate()
+        let cancelled = Task {
+            await entry.wait()
+            return await worker.invoke(BridgeInvokeRequest(id: "shared", command: "system.run"))
+        }
+        cancelled.cancel()
+        do {
+            let response = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: { await cancelled.value })
+            #expect(!response.ok)
+            #expect(response.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
+            let reused = await worker.invoke(BridgeInvokeRequest(id: "shared", command: "system.run"))
+            #expect(reused.ok)
+            let barrier = await worker.invoke(BridgeInvokeRequest(id: "barrier", command: "system.run"))
+            #expect(barrier.ok)
+            if bufferedControls {
+                let other = try await AsyncTimeout.withTimeout(
+                    seconds: 1,
+                    onTimeout: { WorkerBackpressureTimeout() },
+                    operation: {
+                        await worker.invoke(BridgeInvokeRequest(id: "other", command: "system.run"))
+                    })
+                #expect(other.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
+            }
+            await worker.stop()
+        } catch {
+            entry.open()
+            cancelled.cancel()
+            await worker.stop()
+            _ = await cancelled.value
             throw error
         }
     }
@@ -542,7 +782,7 @@ struct MacNodeHostWorkerTests {
                 exitGate.open()
             }
             let script = """
-            printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+            printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
             sleep 0.05
             exit 7
             """
@@ -551,6 +791,7 @@ struct MacNodeHostWorkerTests {
                 command: ["/bin/sh", "-c", script],
                 configurationGeneration: expectedGeneration))
             await exitGate.wait()
+            #expect(await worker.isWorkerHostingEnabled() == false)
         }
     }
 
@@ -616,15 +857,17 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Shell builtins handle TERM without waiting on a sleep child. Keep cleanup
+        // pending on stdin until the owner's existing termination deadline reaps it.
         let firstScript = """
-        trap 'printf "%s\n" "$$" > "$1"; /bin/sleep 0.2; exit 0' TERM
-        printf '%s\n' '{"type":"ready","version":"first","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        trap 'printf "%s\n" "$$" > "$1"; IFS= read -r _; exit 0' TERM
+        printf '%s\n' '{"type":"ready","version":"first","workerHostingEnabled":true,"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        while IFS= read -r line; do :; done
         """
         let replacementScript = """
         printf '%s\n' "$$" > "$1"
         printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
@@ -644,6 +887,7 @@ struct MacNodeHostWorkerTests {
             ]))
         }
         _ = try await TestProcessSupport.waitForPID(in: cleanupStartedPIDFile)
+        #expect(await worker.isWorkerHostingEnabled() == false)
 
         await worker.stop()
 
@@ -651,8 +895,8 @@ struct MacNodeHostWorkerTests {
         case .success:
             Issue.record("changed launch succeeded after stop returned")
             await worker.stop()
-        case .failure:
-            break
+        case let .failure(error):
+            #expect(error.localizedDescription == "worker stopped")
         }
         #expect(TestProcessSupport.pollPID(in: replacementPIDFile) == nil)
     }
@@ -669,14 +913,16 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Keep TERM entry in shell builtins so helper scheduling cannot consume
+        // the owner's bounded shutdown grace before the marker is written.
         let script = """
         printf '%s\n' "$$" > "$1"
         /bin/sh -c 'trap "" HUP TERM; printf "%s\\n" "$$" > "$1"; while :; do /bin/sleep 1; done' \
           descendant "$2" </dev/null >/dev/null 2>&1 &
         while [ ! -s "$2" ]; do /bin/sleep 0.01; done
-        trap 'touch "$3"; /bin/sleep 0.2; exit 0' TERM
+        trap ': > "$3"; /bin/sleep 0.2; exit 0' TERM
         printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
@@ -699,35 +945,43 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `worker drains stdout while a large stdin frame is backpressured`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstReceived = directory.appendingPathComponent("first-received.pid")
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
-        printf '{"type":"invoke-result","result":{"id":"first","ok":true,"payload":{"blob":"'
+        printf '%s\\n' "$$" > "$1"
+        # Wait for the large write to begin before filling stdout. Neither pipe
+        # can finish unless the app drains output independently of its writer.
+        head -c 1 >/dev/null
+        printf '{"type":"invoke-result","generation":0,"result":{"id":"first","ok":true,"payload":{"blob":"'
         head -c 2097152 /dev/zero | tr '\\000' x
         printf '"}}}\\n'
-        IFS= read -r second
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        # Buffer the remaining frame instead of timing the shell's large-line read.
+        head -n 1 >/dev/null
+        printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        while IFS= read -r line; do :; done
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-
-        let first = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "first",
-                command: "system.run",
-                paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        }
-        try await Task.sleep(for: .milliseconds(20))
-        let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
-        let second = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "second",
-                command: "system.run",
-                paramsJSON: largeParams))
-        }
+            command: ["/bin/sh", "-c", script, "worker", firstReceived.path]))
 
         do {
+            let first = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "first",
+                    command: "system.run",
+                    paramsJSON: #"{"command":["/usr/bin/true"]}"#))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: firstReceived)
+            let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
+            let second = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "second",
+                    command: "system.run",
+                    paramsJSON: largeParams))
+            }
             let responses = try await AsyncTimeout.withTimeout(
                 seconds: 5,
                 onTimeout: { WorkerBackpressureTimeout() },
@@ -735,9 +989,54 @@ struct MacNodeHostWorkerTests {
             await worker.stop()
             let allResponsesSucceeded = responses.allSatisfy(\.ok)
             #expect(allResponsesSucceeded)
+            let firstPayload = try #require(responses[0].payload?.value as? [String: Any])
+            #expect((firstPayload["blob"] as? String)?.count == 2 * 1024 * 1024)
         } catch {
             await worker.stop()
             throw error
         }
+    }
+
+    // Regression: a worker that exits before its ready manifest must consume the
+    // crash retry budget and carry its stderr into the start error. Before this,
+    // startup-time CLI refusals (for example a state database schema mismatch)
+    // never notified the retry policy, so the coordinator respawned the broken
+    // CLI forever and the operator only ever saw "exited(1)" in os_log.
+    @Test func `startup exit consumes retry budget and surfaces worker stderr`() async throws {
+        let exitGate = AsyncTestGate()
+        let exitGeneration = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
+        let worker = MacNodeHostWorker(
+            session: GatewayNodeSession(),
+            startupTimeout: 5,
+            onUnexpectedExit: { generation in
+                exitGeneration.withLock { $0 = generation }
+                exitGate.open()
+            })
+        let script = """
+        echo 'refused: state database uses newer schema version' >&2
+        sleep 0.2
+        exit 7
+        """
+
+        do {
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: 3))
+            Issue.record("worker start unexpectedly succeeded")
+        } catch {
+            let workerError = try #require(error as? MacNodeHostWorker.WorkerError)
+            guard case let .unavailable(reason, diagnostic) = workerError else {
+                Issue.record("worker start did not report an unavailable error")
+                return
+            }
+            #expect(reason.contains("exited"))
+            #expect(!reason.contains("state database"))
+            #expect(diagnostic?.contains("state database uses newer schema version") == true)
+            #expect(error.localizedDescription.contains("state database uses newer schema version"))
+        }
+
+        await exitGate.wait()
+        #expect(exitGeneration.withLock { $0 } == 3)
+        await worker.stop()
     }
 }

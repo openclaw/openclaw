@@ -1,8 +1,10 @@
+import { normalizeModelCostConfig } from "@openclaw/llm-core";
 // Verifies default config values and environment-sensitive overrides.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
+import { estimateUsageCost } from "../utils/usage-format.js";
 import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
@@ -14,6 +16,7 @@ import {
   applyMessageDefaults,
 } from "./defaults.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
+import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,8 +27,9 @@ vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (
     ...args: Parameters<typeof mocks.applyProviderConfigDefaultsForConfig>
   ) => mocks.applyProviderConfigDefaultsForConfig(...args),
-  normalizeProviderConfigForConfigDefaults: (_params: { providerConfig: unknown }) =>
-    _params.providerConfig,
+  normalizeProviderConfigForConfigDefaults: vi.fn(
+    (_params: { providerConfig: unknown }) => _params.providerConfig,
+  ),
 }));
 
 describe("config defaults", () => {
@@ -151,7 +155,7 @@ describe("applyModelDefaults catalog seeding", () => {
         id: "openai",
         modelCatalog: {
           providers: {
-            openai: {
+            " OpenAI ": {
               models: [
                 {
                   id: "gpt-5.6-sol",
@@ -167,6 +171,9 @@ describe("applyModelDefaults catalog seeding", () => {
                 },
               ],
             },
+            openai: {
+              models: [{ id: "gpt-5.6-sol", reasoning: false, input: ["text"] }],
+            },
           },
         },
       },
@@ -177,43 +184,54 @@ describe("applyModelDefaults catalog seeding", () => {
   // Regression: an override entry pinning only sizing fields materialized as a
   // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
   // tools (like `computer`) for that model downstream.
-  it("fills omitted fields from the owning catalog row before generic defaults", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
-    const cfg = applyModelDefaults(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                // SAFETY: mirrors a real operator config entry that omits input/reasoning/cost.
-                {
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6",
-                  contextWindow: 1_050_000,
-                  contextTokens: 922_000,
-                } as never,
-              ],
+  it.each([
+    { providerId: "openai", generatedRows: false },
+    { providerId: " OpenAI ", generatedRows: true },
+  ])(
+    "seeds $providerId models (normalizer supplies rows: $generatedRows)",
+    async ({ providerId, generatedRows }) => {
+      const { applyModelDefaults } = await import("./defaults.js");
+      const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
+      // SAFETY: config schema accepts omitted model metadata before materialization.
+      const models = [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6",
+          contextWindow: 1_050_000,
+          contextTokens: 922_000,
+        },
+      ] as ModelProviderConfig["models"];
+      vi.mocked(normalizeProviderConfigForConfigDefaults).mockImplementationOnce((params) =>
+        generatedRows ? { ...params.providerConfig, models } : params.providerConfig,
+      );
+      const cfg = applyModelDefaults(
+        {
+          models: {
+            providers: {
+              [providerId]: {
+                baseUrl: "https://api.openai.com/v1",
+                models: generatedRows ? [] : models,
+              },
             },
           },
         },
-      },
-      { manifestRegistry: catalogRegistry },
-    );
-    const model = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0],
-      "materialized model entry",
-    );
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.reasoning).toBe(true);
-    expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
-    expect(model.maxTokens).toBe(128_000);
-    expect(model.thinkingLevelMap).toEqual({ off: "none" });
-    // Authored fields stay authoritative.
-    expect(model.contextWindow).toBe(1_050_000);
-    expect(model.contextTokens).toBe(922_000);
-    expect(model.name).toBe("GPT-5.6");
-  });
+        { manifestRegistry: catalogRegistry },
+      );
+      const model = expectDefined(
+        cfg.models?.providers?.[providerId]?.models?.[0],
+        "materialized model entry",
+      );
+      expect(model.input).toEqual(["text", "image"]);
+      expect(model.reasoning).toBe(true);
+      expect(model.cost).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+      expect(model.maxTokens).toBe(128_000);
+      expect(model.thinkingLevelMap).toEqual({ off: "none" });
+      // Authored fields stay authoritative.
+      expect(model.contextWindow).toBe(1_050_000);
+      expect(model.contextTokens).toBe(922_000);
+      expect(model.name).toBe("GPT-5.6");
+    },
+  );
 
   it("keeps authored metadata authoritative over the catalog row", async () => {
     const { applyModelDefaults } = await import("./defaults.js");
@@ -289,37 +307,73 @@ describe("applyModelDefaults catalog seeding", () => {
     });
   });
 
-  it("preserves catalog tiered pricing when flat cost fields are authored", async () => {
+  const catalogFlatCost = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
+  const authoredFlatCost = { input: 4, output: 24, cacheRead: 0.4, cacheWrite: 5 };
+  const authoredTieredCost = {
+    ...authoredFlatCost,
+    tieredPricing: [{ ...authoredFlatCost, range: [0] as [number] }],
+  };
+  const catalogTieredCost = {
+    ...catalogFlatCost,
+    tieredPricing: [
+      { ...catalogFlatCost, range: [0, 101] as [number, number] },
+      { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5, range: [101] as [number] },
+    ],
+  };
+
+  it.each([
+    {
+      name: "omitted cost inherits catalog tiers",
+      authoredCost: undefined,
+      expectedCost: catalogTieredCost,
+      expectedUsd: 0.006675,
+    },
+    {
+      name: "empty cost inherits catalog tiers",
+      authoredCost: {},
+      expectedCost: catalogTieredCost,
+      expectedUsd: 0.006675,
+    },
+    {
+      name: "partial flat cost inherits missing rates but not catalog tiers",
+      authoredCost: { input: 4 },
+      expectedCost: { ...catalogFlatCost, input: 4 },
+      expectedUsd: 0.0038875,
+    },
+    {
+      name: "authored flat cost excludes catalog tiers",
+      authoredCost: authoredFlatCost,
+      expectedCost: authoredFlatCost,
+      expectedUsd: 0.00327,
+    },
+    {
+      name: "authored zero cost remains free",
+      authoredCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expectedUsd: 0,
+    },
+    {
+      name: "authored tiers replace catalog tiers",
+      authoredCost: authoredTieredCost,
+      expectedCost: authoredTieredCost,
+      expectedUsd: 0.00327,
+    },
+    {
+      name: "authored empty tiers retain flat pricing",
+      authoredCost: { ...authoredFlatCost, tieredPricing: [] },
+      expectedCost: { ...authoredFlatCost, tieredPricing: [] },
+      expectedUsd: 0.00327,
+    },
+  ])("$name", async ({ authoredCost, expectedCost, expectedUsd }) => {
     const { applyModelDefaults } = await import("./defaults.js");
     const tieredRegistry = {
       plugins: [
         {
-          id: "openai",
+          id: "pricing-fixture",
           modelCatalog: {
             providers: {
-              openai: {
-                models: [
-                  {
-                    id: "gpt-5.6-sol",
-                    name: "GPT-5.6 Sol",
-                    input: ["text", "image"],
-                    cost: {
-                      input: 5,
-                      output: 30,
-                      cacheRead: 0.5,
-                      cacheWrite: 6.25,
-                      tieredPricing: [
-                        {
-                          input: 2.5,
-                          output: 15,
-                          cacheRead: 0.25,
-                          cacheWrite: 3,
-                          maxInputTokens: 200_000,
-                        },
-                      ],
-                    },
-                  },
-                ],
+              "pricing-fixture": {
+                models: [{ id: "fixture", cost: catalogTieredCost }],
               },
             },
           },
@@ -331,16 +385,10 @@ describe("applyModelDefaults catalog seeding", () => {
       {
         models: {
           providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                // SAFETY: mirrors an operator override with explicit flat cost only.
-                {
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6",
-                  cost: { input: 4, output: 24, cacheRead: 0.4, cacheWrite: 5 },
-                } as never,
-              ],
+            "pricing-fixture": {
+              baseUrl: "https://pricing.example/v1",
+              // SAFETY: config schema accepts omitted or partial cost before materialization.
+              models: [{ id: "fixture", name: "Fixture", cost: authoredCost } as never],
             },
           },
         },
@@ -348,12 +396,17 @@ describe("applyModelDefaults catalog seeding", () => {
       { manifestRegistry: tieredRegistry },
     );
     const model = expectDefined(
-      cfg.models?.providers?.openai?.models?.[0],
-      "materialized model entry",
+      cfg.models?.providers?.["pricing-fixture"]?.models?.[0],
+      "materialized pricing model",
     );
-    expect(model.cost?.input).toBe(4);
-    expect(model.cost?.tieredPricing).toHaveLength(1);
-    expect(model.input).toEqual(["text", "image"]);
+
+    expect(model.cost).toEqual(expectedCost);
+    expect(
+      estimateUsageCost({
+        usage: { input: 200, output: 100, cacheRead: 50, cacheWrite: 10 },
+        cost: normalizeModelCostConfig(model.cost),
+      }),
+    ).toBeCloseTo(expectedUsd, 10);
   });
 
   it("copies frozen catalog metadata before downstream normalization", async () => {

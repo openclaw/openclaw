@@ -4,17 +4,20 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/geolocation/**"
           - "docs/plugins/geolocation.md"
+          - "docs/plugins/reference/geolocation.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+          - "docs/plugins/sdk-runtime/**"
 "plugin: linux-node":
   - changed-files:
       - any-glob-to-any-file:
@@ -31,11 +34,17 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"channel: a2a":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/a2a/**"
+          - "docs/channels/a2a.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+          - "docs/channels/discord/**"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:
@@ -51,6 +60,7 @@
       - any-glob-to-any-file:
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
+          - "docs/channels/feishu/**"
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:
@@ -61,11 +71,19 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+          - "docs/plugins/reference/logbook.md"
+"plugin: imap":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imap/**"
+          - "docs/automation/imap.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+          - "docs/plugins/google-meet/**"
+          - "docs/plugins/reference/google-meet.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:
@@ -84,6 +102,12 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: team-reports":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/team-reports/**"
+          - "docs/plugins/team-reports.md"
+          - "docs/plugins/reference/team-reports.md"
 "plugin: beam":
   - changed-files:
       - any-glob-to-any-file:
@@ -110,11 +134,16 @@
       - any-glob-to-any-file:
           - "extensions/bonjour/**"
           - "docs/gateway/bonjour.md"
+"plugin: visitor-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/visitor-access/**"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+          - "docs/channels/imessage/**"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
@@ -125,6 +154,7 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+          - "docs/channels/matrix/**"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:
@@ -135,6 +165,7 @@
       - any-glob-to-any-file:
           - "extensions/msteams/**"
           - "docs/channels/msteams.md"
+          - "docs/channels/msteams/**"
 "channel: nextcloud-talk":
   - changed-files:
       - any-glob-to-any-file:
@@ -171,6 +202,7 @@
           - "qa/scenarios/**"
           - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/qa-e2e-automation/**"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
@@ -183,6 +215,7 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+          - "docs/channels/slack/**"
 "channel: sms":
   - changed-files:
       - any-glob-to-any-file:
@@ -198,6 +231,7 @@
       - any-glob-to-any-file:
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
+          - "docs/channels/telegram/**"
 "channel: tlon":
   - changed-files:
       - any-glob-to-any-file:
@@ -262,6 +296,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "ui/**"
+          - "extensions/*/browser/**"
+          - "src/plugin-sdk/control-ui*.ts"
+          - "src/gateway/control-ui-plugin-assets*.ts"
+          - "docs/plugins/feature-plugins.md"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
           - "packages/gateway-protocol/src/**"
@@ -288,16 +326,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-
-"r: skill":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "custodian-skills/**"
-          - "skills/**"
-          - "src/skills/**"
-          - "docs/tools/custodian-skills.md"
-          - "docs/tools/skills-config.md"
-          - "docs/tools/skills.md"
+          - ".agents/skills/openclaw-update/**"
+          - ".agents/skills/update-team-server/**"
 
 "cli":
   - changed-files:
@@ -334,7 +364,9 @@
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
+          - "docs/gateway/sandboxing/**"
           - "docs/install/docker.md"
+          - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "deploy: cloudflare":
@@ -559,6 +591,7 @@
           - "extensions/fish-audio-speech/**"
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -581,8 +614,10 @@
       - any-glob-to-any-file:
           - "extensions/codex/**"
           - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-harness-runtime/**"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
 "extensions: copilot":
@@ -590,6 +625,7 @@
       - any-glob-to-any-file:
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
+          - "docs/plugins/reference/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -668,6 +704,7 @@
       - any-glob-to-any-file:
           - "extensions/tts-local-cli/**"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:

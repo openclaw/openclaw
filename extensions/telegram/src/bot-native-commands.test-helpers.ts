@@ -94,6 +94,7 @@ const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChan
                 const providerInfo = {
                   ...info,
                   onPlatformSendDispatch: async () => undefined,
+                  assertPlatformSendAuthorized: () => undefined,
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               }
@@ -198,6 +199,7 @@ export function createNativeCommandsHarness(params?: {
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
 
   registerTelegramNativeCommands({
+    cancelPendingInbound: vi.fn(),
     bot,
     cfg,
     runtime: params?.runtime ?? ({ log } as unknown as RuntimeEnv),

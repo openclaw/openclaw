@@ -1,10 +1,10 @@
 import {
+  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
-  buildHarnessVisibleReplyGuidance,
+  buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -18,18 +18,38 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
+>;
+
 export function buildDeveloperInstructions(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadPromptContext,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
+  let showWidgetToolName: string | undefined;
+  let dashboardToolName: string | undefined;
+  let portalToolName: string | undefined;
+  let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
+  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
-  let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
       spec.type === "namespace" &&
@@ -40,15 +60,28 @@ export function buildDeveloperInstructions(
     }
     for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
       const name = tool.name.trim();
+      const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
+      }
+      if (name === "show_widget") {
+        showWidgetToolName ??= qualifiedName;
+      }
+      if (name === "dashboard") {
+        dashboardToolName ??= qualifiedName;
+      }
+      if (name === "portal") {
+        portalToolName ??= qualifiedName;
+      }
+      if (name === "message") {
+        messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
-      messageToolAvailable ||= name === "message";
+      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -105,12 +138,19 @@ export function buildDeveloperInstructions(
           hasSessionsSend,
         }).join("\n")
       : undefined,
-    buildHarnessVisibleReplyGuidance({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      messageToolAvailable,
+    params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
+      ? buildUiPresentationPrompt({
+          showWidgetToolName,
+          dashboardToolName,
+          portalToolName,
+          messageTool,
+        })
+      : undefined,
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: params.disableTools !== true && hasControlTools,
     }),
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     nativeCommandGuidance,
+    params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");

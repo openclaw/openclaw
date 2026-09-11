@@ -9,6 +9,7 @@ struct ChatSessionSidebarModelTests {
         key: String,
         displayName: String? = nil,
         label: String? = nil,
+        autoLabel: String? = nil,
         subject: String? = nil,
         sessionId: String? = nil,
         updatedAt: Double? = nil,
@@ -51,6 +52,7 @@ struct ChatSessionSidebarModelTests {
             model: nil,
             contextTokens: nil,
             label: label,
+            autoLabel: autoLabel,
             category: category,
             pinned: pinned,
             pinnedAt: pinnedAt,
@@ -307,7 +309,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
@@ -315,7 +317,8 @@ struct ChatSessionSidebarModelTests {
             label: "Summer holiday",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "Team Planning")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
@@ -365,6 +368,40 @@ struct ChatSessionSidebarModelTests {
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
+
+        let androidStamp = self.entry(
+            key: "agent:main:node-1234567890ab",
+            displayName: "Generated title",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(ChatSessionSidebarModel.displayName(for: androidStamp) == "Generated title")
+        let unnamedAndroidSession = self.entry(
+            key: "agent:main:node-1234567890ab",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: unnamedAndroidSession)
+                == "OpenClaw App · Pixel · 1234567890ab")
+
+        for label in [
+            "OpenClaw App",
+            "OpenClaw App · 1234567890ab",
+            "OpenClaw App · Pixel · 1234567890ab",
+            "OpenClaw App · Release planning · 1234567890ab",
+        ] {
+            let manuallyNamed = self.entry(
+                key: "agent:main:node-1234567890ab",
+                displayName: "Generated title",
+                label: label,
+                autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+            #expect(ChatSessionSidebarModel.displayName(for: manuallyNamed) == label)
+        }
+
+        let manualPrefix = self.entry(
+            key: "agent:main:dashboard:fresh",
+            displayName: "Generated title",
+            label: "OpenClaw App · Release planning")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: manualPrefix)
+                == "OpenClaw App · Release planning")
     }
 
     @Test func `delete excludes main aliases and allows ordinary or selected global sessions`() {
@@ -671,7 +708,7 @@ struct ChatSessionSidebarModelTests {
                     agentId: "work",
                     runId: "run-work",
                     revision: 3,
-                    updatedAt: 1_000,
+                    updatedAt: 1000,
                     headline: "Replayed work status",
                     health: "on-track")),
             to: foreign,
@@ -679,6 +716,39 @@ struct ChatSessionSidebarModelTests {
 
         #expect(replayed[0].observerDigest?.headline == "Current work status")
         #expect(replayed[0].observerDigest?.revision == 4)
+    }
+
+    @Test func `global observer events require the active agent owner`() {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "work",
+                runid: "run-work",
+                revision: 1,
+                updatedat: 100,
+                headline: "Work status",
+                health: .onTrack),
+            to: [running],
+            activeAgentId: "work")
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "main",
+                runid: "run-work",
+                revision: 2,
+                updatedat: 200,
+                headline: "Foreign status",
+                health: .stuck),
+            to: accepted,
+            activeAgentId: "work")
+
+        #expect(accepted[0].observerDigest?.headline == "Work status")
+        #expect(rejected[0].observerDigest?.headline == "Work status")
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {
@@ -774,6 +844,30 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.observerDigest == nil)
         #expect(cleared.status == nil)
         #expect(cleared.lastRunError == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `session color survives coding and partial events but clears on tombstone`(nested: Bool) throws {
+        let decoder = JSONDecoder()
+        let entry = try decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: Data(#"{"key":"agent:main:work","color":"red"}"#.utf8))
+        var sessions = try [decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: JSONEncoder().encode(entry))]
+        #expect(sessions[0].color == "red")
+        for (field, expected) in [
+            ("", "red"),
+            (#", "color":"blue""#, "blue"),
+            (#", "color":null"#, nil),
+            ("", nil),
+        ] as [(String, String?)] {
+            let row = #"{"key":"agent:main:work"\#(field)}"#
+            let payload = nested ? #"{"reason":"patch","session":\#(row)}"# : row
+            let change = try decoder.decode(OpenClawChatSessionsChangedEvent.self, from: Data(payload.utf8))
+            sessions = try #require(ChatSessionSidebarModel.applying(sessionChange: change, to: sessions))
+            #expect(sessions[0].color == expected)
+        }
     }
 
     @Test func `active run id tombstone clears exact ids while omission is inert`() throws {

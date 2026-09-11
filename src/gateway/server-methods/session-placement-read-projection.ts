@@ -2,18 +2,30 @@ import type { WorkerPlacementMoveIntent } from "../worker-environments/placement
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
 function projectSessionPlacementFields(params: {
   context: GatewayRequestContext;
   sessionId: string | undefined;
   placements?: ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  workspaceResultReconcilingSessionIds?: ReadonlySet<string>;
   moves?: ReadonlyMap<string, WorkerPlacementMoveIntent>;
 }) {
   const placement = params.sessionId ? params.placements?.get(params.sessionId) : undefined;
   const move = params.sessionId ? params.moves?.get(params.sessionId) : undefined;
+  const failedRecoveryAction =
+    placement?.state === "failed"
+      ? isFailedWorkerPlacementEnvironmentGone({
+          environmentService: params.context.workerEnvironmentService,
+          placement,
+        })
+        ? "restart"
+        : "stop-first"
+      : undefined;
   return {
     ...(placement
       ? {
@@ -21,6 +33,9 @@ function projectSessionPlacementFields(params: {
             placement,
             params.context.workerPlacementDiskSpaceReader?.read(placement),
             params.context.workerPlacementRunnerAvailabilityReader?.read(placement),
+            readWorkerPlacementIdentity(placement, params.context.workerEnvironmentService),
+            failedRecoveryAction,
+            params.workspaceResultReconcilingSessionIds?.has(placement.sessionId) ?? false,
           ),
         }
       : {}),
@@ -34,9 +49,17 @@ export function createSessionPlacementBatchProjector(
 ) {
   const sessionIds = sessions.flatMap((session) => (session.sessionId ? [session.sessionId] : []));
   const placements = context.workerSessionPlacementService?.getMany(sessionIds);
+  const workspaceResultReconcilingSessionIds =
+    context.workerSessionPlacementService?.getWorkspaceResultReconcilingSessionIds?.(sessionIds);
   const moves = context.workerSessionPlacementService?.getPlacementMoves?.(sessionIds);
   return (sessionId: string | undefined) =>
-    projectSessionPlacementFields({ context, sessionId, placements, moves });
+    projectSessionPlacementFields({
+      context,
+      sessionId,
+      placements,
+      workspaceResultReconcilingSessionIds,
+      moves,
+    });
 }
 
 export function readSessionPlacementFields(

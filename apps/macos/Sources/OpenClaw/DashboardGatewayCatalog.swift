@@ -3,11 +3,16 @@ import OpenClawKit
 
 enum DashboardGatewayTarget: Equatable, Hashable, Sendable {
     case primary
+    case local
     case profile(String)
 
     init?(bridgeID: String) {
         if bridgeID == "primary" {
             self = .primary
+            return
+        }
+        if bridgeID == "local" {
+            self = .local
             return
         }
         guard bridgeID.hasPrefix("profile:"), bridgeID.count > "profile:".count else { return nil }
@@ -18,6 +23,8 @@ enum DashboardGatewayTarget: Equatable, Hashable, Sendable {
         switch self {
         case .primary:
             "primary"
+        case .local:
+            "local"
         case let .profile(profileID):
             "profile:\(profileID)"
         }
@@ -45,18 +52,41 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 }
 
 struct MacGatewayCatalogProfile: Equatable, Sendable {
+    enum AuthKind: Equatable, Sendable {
+        case token
+        case password
+        case browser
+    }
+
     let profile: MacGatewayProfile
     let canPromote: Bool
+    var usesBrowserIdentity = false
+    var browserSessionExpiresAt: Date?
+    var authKind: AuthKind?
+    var browserSessionSubject: String?
 }
 
 enum DashboardGatewayCatalog {
+    static func primaryRemoteHostLabel(
+        transport: AppState.RemoteTransport,
+        sshTarget: String?,
+        resolvedHostLabel: String?) -> String?
+    {
+        switch transport {
+        case .ssh: CommandResolver.parseSSHTarget(sshTarget ?? "")?.host ?? resolvedHostLabel
+        case .direct: resolvedHostLabel
+        }
+    }
+
     static func entries(
         mode: AppState.ConnectionMode,
         primaryRemoteURL: URL?,
         resolvedRemoteURL: URL?,
         resolvedRemoteHostLabel: String?,
         profiles: [MacGatewayCatalogProfile],
-        primaryHealth: DashboardGatewayHealth) -> [DashboardGatewayEntry]
+        primaryHealth: DashboardGatewayHealth,
+        hostsLocalGateway: Bool = false,
+        localHealth: DashboardGatewayHealth = .unknown) -> [DashboardGatewayEntry]
     {
         let canonicalPrimaryURL = mode == .remote
             ? (resolvedRemoteURL ?? primaryRemoteURL).flatMap {
@@ -64,7 +94,9 @@ enum DashboardGatewayCatalog {
             }
             : nil
         let duplicate = canonicalPrimaryURL.flatMap { primaryURL in
-            profiles.first { (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL }
+            profiles.first {
+                !$0.usesBrowserIdentity && (try? MacGatewayProfileStore.canonicalURL($0.profile.url)) == primaryURL
+            }
         }
         let primaryName: String = if mode == .local {
             "Local Gateway"
@@ -81,8 +113,8 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A saved identity for the active route is represented by the
-            // primary row so one physical Gateway never appears twice.
+            // A browser sign-in is a separate human authority even when its
+            // address matches the primary machine connection.
             if item.profile.id == duplicate?.profile.id { return nil }
             return DashboardGatewayEntry(
                 id: DashboardGatewayTarget.profile(item.profile.id).bridgeID,
@@ -92,7 +124,10 @@ enum DashboardGatewayCatalog {
                 canPromote: item.canPromote,
                 health: .unknown)
         }
-        return [primary] + saved
+        let local: [DashboardGatewayEntry] = mode == .remote && hostsLocalGateway ? [.init(
+            id: "local", name: "This Mac", kind: "local", isPrimary: false, canPromote: false, health: localHealth)] :
+            []
+        return mode == .unconfigured ? saved : [primary] + local + saved
     }
 
     @MainActor
@@ -121,9 +156,14 @@ enum DashboardGatewayCatalog {
             mode: state.connectionMode,
             primaryRemoteURL: GatewayRemoteConfig.resolveGatewayUrl(root: root),
             resolvedRemoteURL: resolvedRemoteURL,
-            resolvedRemoteHostLabel: connectivity.resolvedHostLabel,
+            resolvedRemoteHostLabel: self.primaryRemoteHostLabel(
+                transport: GatewayRemoteConfig.resolveTransportResolution(root: root).transport,
+                sshTarget: state.remoteTarget,
+                resolvedHostLabel: connectivity.resolvedHostLabel),
             profiles: profiles,
-            primaryHealth: self.primaryHealth(for: ControlChannel.shared.state))
+            primaryHealth: self.primaryHealth(for: ControlChannel.shared.state),
+            hostsLocalGateway: state.hostsLocalGatewayWithRemotePrimary,
+            localHealth: GatewaysMainMenu.shared.localHealth)
     }
 }
 
@@ -148,12 +188,8 @@ struct DashboardPrimaryGatewayAdapter {
         try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
     }
 
-    var currentTLSFingerprint: @MainActor () -> String? = {
-        GatewayRemoteConfig.resolveTLSFingerprint(root: OpenClawConfigFile.loadDict())
-    }
-
-    var persist: @MainActor (AppState, String?) -> Bool = {
-        $0.syncGatewayConfigNow(remoteTLSFingerprint: $1)
+    var persist: @MainActor (AppState, AppState.PrimaryGatewayConfiguration) -> Bool = {
+        $0.replacePrimaryGateway($1)
     }
 
     func apply(profileID: String) async throws {
@@ -185,24 +221,8 @@ struct DashboardPrimaryGatewayAdapter {
     }
 
     private func apply(url: URL, token: String?, tlsFingerprint: String?) throws {
-        let previous = (
-            transport: self.state.remoteTransport,
-            url: self.state.remoteUrl,
-            token: self.state.remoteToken,
-            mode: self.state.connectionMode,
-            tlsFingerprint: self.currentTLSFingerprint())
-        self.state.remoteTransport = .direct
-        self.state.remoteUrl = url.absoluteString
-        // Promotion intentionally moves the saved token into gateway.remote.token,
-        // matching the existing Settings connection flow.
-        self.state.remoteToken = token ?? ""
-        self.state.connectionMode = .remote
-        guard self.persist(self.state, tlsFingerprint) else {
-            self.state.remoteTransport = previous.transport
-            self.state.remoteUrl = previous.url
-            self.state.remoteToken = previous.token
-            self.state.connectionMode = previous.mode
-            _ = self.persist(self.state, previous.tlsFingerprint)
+        let configuration = AppState.PrimaryGatewayConfiguration(url: url, token: token, tlsFingerprint: tlsFingerprint)
+        guard self.persist(self.state, configuration) else {
             throw DashboardPrimaryGatewayError.notPromotable
         }
     }

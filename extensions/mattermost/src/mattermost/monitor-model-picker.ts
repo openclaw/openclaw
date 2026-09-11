@@ -1,4 +1,5 @@
 // Mattermost plugin module owns native model-picker interactions.
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type { MattermostInteractionResponse } from "./interactions.js";
@@ -18,7 +19,7 @@ import { buildMattermostEventPlan, type MattermostEventPlan } from "./monitor-ev
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
-import { buildModelsProviderData } from "./runtime-api.js";
+import { buildPreparedModelsProviderData } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
 type RunModelPickerCommandParams = {
@@ -203,7 +204,14 @@ export function createMattermostModelPickerInteractionHandler(
       agentId: eventPlan.route.agentId,
       sessionKey: eventPlan.thread.sessionKey,
     };
-    const data = await buildModelsProviderData(cfg, eventPlan.route.agentId);
+    const sessionEntry = getSessionEntry({
+      storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
+      sessionKey: modelSessionRoute.sessionKey,
+      readConsistency: "latest",
+    });
+    const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId, {
+      sessionEntry,
+    });
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }

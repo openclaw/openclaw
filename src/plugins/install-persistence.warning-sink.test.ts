@@ -63,7 +63,9 @@ describe("plugin install persistence warning audiences", () => {
     );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("requires configuration first");
     expect(pluginsCliRuntimeLogs).toContain("Installed plugin: workboard");
-    expect(pluginsCliRuntimeLogs).toContain("Restart the gateway to load plugins.");
+    const sourceChangeMessage =
+      "Plugin source changes take effect on the next Gateway start. Installs performed by the running Gateway request an automatic restart when config reload is enabled; installs from a separate shell, or with config reload off, require a manual Gateway restart. Configuration reload can restart connected channels before that Gateway restart.";
+    expect(pluginsCliRuntimeLogs.filter((line) => line === sourceChangeMessage)).toHaveLength(1);
   });
 
   it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
@@ -112,6 +114,7 @@ describe("plugin install persistence warning audiences", () => {
     async (audience) => {
       const { persistPluginInstall } = await import("./install-persistence.js");
       const warn = vi.fn();
+      const onCommitted = vi.fn();
       const cleanupDetail = "npm stderr PRIVATE_NPM_MARKER /private/previous-source/workboard";
       const refreshDetail = "PRIVATE_REFRESH_MARKER /private/registry-source/workboard";
       const configuredSource = "/private/configured-source/workboard/index.js";
@@ -133,7 +136,10 @@ describe("plugin install persistence warning audiences", () => {
         directoryRemoved: false,
         warnings: [cleanupDetail],
       });
-      refreshPluginRegistryMock.mockRejectedValueOnce(new Error(refreshDetail));
+      refreshPluginRegistryMock.mockImplementationOnce(async () => {
+        expect(onCommitted).toHaveBeenCalledExactlyOnceWith();
+        throw new Error(refreshDetail);
+      });
       buildPluginSnapshotReportMock.mockReturnValue({
         plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
         diagnostics: [],
@@ -143,6 +149,7 @@ describe("plugin install persistence warning audiences", () => {
         snapshot,
         pluginId: "workboard",
         install,
+        onCommitted,
         ...(audience === "management" ? { persistenceLogger: { warn } } : {}),
       });
 

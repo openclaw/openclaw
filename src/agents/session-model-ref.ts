@@ -1,5 +1,6 @@
 // Resolves persisted session model metadata without loading Gateway projections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -14,7 +15,16 @@ import {
 
 type SessionModelEntry =
   | SessionEntry
-  | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  | Pick<
+      SessionEntry,
+      | "model"
+      | "modelProvider"
+      | "modelOverride"
+      | "providerOverride"
+      | "modelOverrideRouteResolution"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
+    >;
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
@@ -22,15 +32,18 @@ export function resolveSessionModelRef(
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
+  const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
+    routeResolution: overrideRouteResolution,
   });
   if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
     return resolvePersistedSelectedModelRef({
       defaultProvider: normalizedOverride.providerOverride,
       overrideProvider: normalizedOverride.providerOverride,
       overrideModel: normalizedOverride.modelOverride,
+      overrideRouteResolution,
       allowPluginNormalization: options?.allowPluginNormalization,
     })!;
   }
@@ -59,6 +72,7 @@ export function resolveSessionModelRef(
     runtimeModel: agentId ? undefined : runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
+    overrideRouteResolution,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
   return persisted ?? resolved;

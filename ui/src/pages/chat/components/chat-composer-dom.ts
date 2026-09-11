@@ -15,8 +15,10 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 ].join(",");
 
 type ComposerTextareaResizeObserverState = {
-  observer: ResizeObserver;
+  observer: ResizeObserver | null;
   adjustmentFrame: number | null;
+  editing: boolean;
+  events: AbortController;
 };
 
 type ComposerPopoverAnchorObserverState = {
@@ -124,10 +126,30 @@ export function replaceComposerPopoverAnchor(
 }
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
-  el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
+  const scrollable = el.scrollHeight > el.clientHeight + 1;
+  // Two 16px fades need enough vertical runway not to overlap into a narrow
+  // opaque strip on short drafts. Small overflows still scroll, just unfaded.
+  const canFade =
+    scrollable && el.clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
+  const fadeTop = canFade && el.scrollTop > 1;
+  const fadeBottom = canFade && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+  el.style.overflowY = scrollable ? "auto" : "hidden";
+  el.toggleAttribute("data-scroll-fade-top", fadeTop);
+  el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
 }
 
 export function adjustTextareaHeight(el: HTMLTextAreaElement) {
+  // A surface that declares the compact shape is a fixed CSS box: it holds one
+  // line whatever the draft is, so an inline height left by an earlier measured
+  // pass would silently outrank the stylesheet. Which shape a composer is in is
+  // declared in its markup, never inferred here from how much text it holds.
+  if (el.closest('[data-composer-layout="single-line"]')) {
+    el.style.height = "";
+    el.style.overflowY = "";
+    el.removeAttribute("data-scroll-fade-top");
+    el.removeAttribute("data-scroll-fade-bottom");
+    return;
+  }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
   const preserveBottomAnchor = thread
     ? captureChatSessionScrollPosition(thread).anchorToEnd
@@ -151,29 +173,69 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
 }
 
 export function observeTextareaOverflow(el: HTMLTextAreaElement) {
-  if (typeof ResizeObserver !== "function" || composerTextareaResizeObservers.has(el)) {
+  if (composerTextareaResizeObservers.has(el)) {
     return;
   }
+  const state: ComposerTextareaResizeObserverState = {
+    observer: null,
+    adjustmentFrame: null,
+    editing: false,
+    events: new AbortController(),
+  };
   let width = el.getBoundingClientRect().width;
-  const observer = new ResizeObserver(() => {
-    const nextWidth = el.getBoundingClientRect().width;
-    if (nextWidth !== width) {
-      width = nextWidth;
-      const state = composerTextareaResizeObservers.get(el);
-      if (state && state.adjustmentFrame === null) {
-        state.adjustmentFrame = requestAnimationFrame(() => {
-          state.adjustmentFrame = null;
-          if (composerTextareaResizeObservers.get(el) === state) {
-            adjustTextareaHeight(el);
+  const onScroll = () => updateTextareaOverflow(el);
+  state.observer =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          const nextWidth = el.getBoundingClientRect().width;
+          if (nextWidth !== width) {
+            width = nextWidth;
+            if (
+              composerTextareaResizeObservers.get(el) === state &&
+              state.adjustmentFrame === null
+            ) {
+              state.adjustmentFrame = requestAnimationFrame(() => {
+                state.adjustmentFrame = null;
+                if (composerTextareaResizeObservers.get(el) === state) {
+                  adjustTextareaHeight(el);
+                }
+              });
+            }
+            return;
           }
-        });
-      }
+          updateTextareaOverflow(el);
+        })
+      : null;
+  // Native caret scrolling can leave the active line inside the fade. Keep
+  // editing unfaded until explicit navigation; a scroll event alone cannot
+  // distinguish the browser following the caret from the user browsing text.
+  const onInteraction = (event: Event) => {
+    if (
+      event instanceof KeyboardEvent &&
+      (event.isComposing ||
+        !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
+    ) {
       return;
     }
+    state.editing = ["beforeinput", "input", "compositionstart"].includes(event.type);
     updateTextareaOverflow(el);
-  });
-  observer.observe(el);
-  composerTextareaResizeObservers.set(el, { observer, adjustmentFrame: null });
+  };
+  const eventOptions = { passive: true, signal: state.events.signal };
+  for (const type of [
+    "beforeinput",
+    "input",
+    "compositionstart",
+    "wheel",
+    "pointerdown",
+    "keydown",
+    "blur",
+  ]) {
+    el.addEventListener(type, onInteraction, eventOptions);
+  }
+  el.addEventListener("scroll", onScroll, eventOptions);
+  composerTextareaResizeObservers.set(el, state);
+  state.observer?.observe(el);
+  updateTextareaOverflow(el);
 }
 
 export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
@@ -182,7 +244,8 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   if (!state) {
     return;
   }
-  state.observer.disconnect();
+  state.observer?.disconnect();
+  state.events.abort();
   if (state.adjustmentFrame !== null) {
     cancelAnimationFrame(state.adjustmentFrame);
   }
@@ -208,10 +271,7 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   }
   if (event.type === "pointerdown") {
     // Cancel only pointer focus; click and popover-owned focus still run.
-    if (
-      event.button === 0 &&
-      target.closest("summary, wa-dropdown>[slot='trigger'], .agent-chat__session-overrides-open")
-    ) {
+    if (event.button === 0 && target.closest("summary, wa-dropdown>[slot='trigger']")) {
       event.preventDefault();
     }
     return;
@@ -236,11 +296,7 @@ export function preserveComposerFocusOnPrimaryAction(
   textarea: HTMLTextAreaElement | null,
 ): void {
   const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
-  if (
-    document.activeElement === textarea &&
-    composerShell &&
-    Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
-  ) {
+  if (document.activeElement === textarea && composerShell) {
     event.preventDefault();
   }
 }
@@ -254,30 +310,6 @@ export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up"
     const caret = direction === "up" ? 0 : target.value.length;
     target.selectionStart = caret;
     target.selectionEnd = caret;
-  });
-}
-
-// Shared by the slash and skill composer menus, which resolve their own
-// active-option id but scroll the same ".slash-menu__scroll" viewport shape.
-export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page. Keep
-    // keyboard navigation owned by the menu so textarea focus stays stable.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
   });
 }
 

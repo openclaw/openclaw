@@ -1,5 +1,5 @@
 ---
-summary: "Node discovery and transports (Bonjour, Tailscale, SSH) for finding the gateway"
+summary: "Node discovery and transports (Bonjour, Tailscale, SSH) for finding the Gateway"
 read_when:
   - Implementing or changing Bonjour discovery/advertising
   - Adjusting remote connection modes (direct vs SSH)
@@ -9,10 +9,10 @@ title: "Discovery and transports"
 
 OpenClaw has two related but distinct discovery problems:
 
-1. **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
-2. **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
+1. **Operator remote control**: the macOS menu bar app controlling a Gateway running elsewhere.
+2. **Node pairing**: iOS/Android (and future nodes) finding a Gateway and pairing securely.
 
-All network discovery/advertising lives in the **Node Gateway**
+All network discovery/advertising lives in the **Gateway**
 (`openclaw gateway`); clients (mac app, iOS) are consumers only.
 
 ## Terms
@@ -25,17 +25,13 @@ All network discovery/advertising lives in the **Node Gateway**
 - **Direct WS transport**: a LAN/tailnet-facing Gateway WS endpoint (no SSH).
 - **SSH transport (fallback)**: remote control by forwarding
   `127.0.0.1:18789` over SSH.
-- **Legacy TCP bridge (removed)**: older node transport (see
-  [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for
-  discovery and no longer part of current builds.
 
-Protocol details: [Gateway protocol](/gateway/protocol),
-[Bridge protocol (legacy)](/gateway/bridge-protocol).
+Protocol details: [Gateway protocol](/gateway/protocol).
 
 ## Why direct and SSH both exist
 
 - **Direct WS** is the best UX on the same network and within a tailnet: LAN
-  auto-discovery via Bonjour, pairing tokens and ACLs owned by the gateway,
+  auto-discovery via Bonjour, pairing tokens and ACLs owned by the Gateway,
   and no shell access required.
 - **SSH** is the universal fallback: works anywhere you have SSH access, even
   across unrelated networks, survives multicast/mDNS issues, and needs no new
@@ -46,19 +42,19 @@ Protocol details: [Gateway protocol](/gateway/protocol),
 ### 1) Bonjour / DNS-SD
 
 Multicast Bonjour is best-effort and does not cross networks. OpenClaw also
-supports browsing the same gateway beacon via a configured wide-area DNS-SD
+supports browsing the same Gateway beacon via a configured wide-area DNS-SD
 domain, so discovery can cover both `local.` on the same LAN and a configured
 unicast DNS-SD domain for cross-network discovery.
 
-The **gateway** advertises its WS endpoint via Bonjour when the bundled
-`bonjour` plugin is enabled; clients browse and show a "pick a gateway" list,
+The **Gateway** advertises its WS endpoint via Bonjour when the bundled
+`bonjour` plugin is enabled; clients browse and show a "pick a Gateway" list,
 then store the chosen endpoint.
 
 Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 
 #### Service beacon details
 
-- Service type: `_openclaw-gw._tcp` (gateway transport beacon).
+- Service type: `_openclaw-gw._tcp` (Gateway transport beacon).
 - TXT keys (non-secret):
 
   | Key                         | Notes                                                                                                                                                            |
@@ -108,13 +104,13 @@ Enable, disable, and override:
 
 ### 2) Tailnet (cross-network)
 
-For gateways on different physical networks, Bonjour will not help. The
+For Gateways on different physical networks, Bonjour will not help. The
 recommended direct target is a Tailscale MagicDNS name (preferred) or a
 stable tailnet IP.
 
-If the gateway detects it is running under Tailscale, it publishes
+If the Gateway detects it is running under Tailscale, it publishes
 `tailnetDns` as an optional hint for clients (including wide-area beacons).
-The macOS app prefers MagicDNS names over raw Tailscale IPs for gateway
+The macOS app prefers MagicDNS names over raw Tailscale IPs for Gateway
 discovery, which stays reliable when tailnet IPs change (node restarts,
 CGNAT reassignment) since MagicDNS resolves to the current IP automatically.
 
@@ -132,14 +128,14 @@ tailnet/public routes:
 ### 3) Manual / SSH target
 
 When there is no direct route (or direct is disabled), clients can always
-connect via SSH by forwarding the loopback gateway port. See
+connect via SSH by forwarding the loopback Gateway port. See
 [Remote access](/gateway/remote).
 
 ## Transport selection (client policy)
 
 1. If a paired direct endpoint is configured and reachable, use it.
-2. Else, if discovery finds a gateway on `local.` or the configured wide-area
-   domain, offer a one-tap "Use this gateway" choice and save it as the
+2. Else, if discovery finds a Gateway on `local.` or the configured wide-area
+   domain, offer a one-tap "Use this Gateway" choice and save it as the
    direct endpoint.
 3. Else, if a tailnet DNS/IP is configured, try direct. For mobile nodes on
    tailnet/public routes, direct means a secure endpoint, not plaintext
@@ -148,18 +144,18 @@ connect via SSH by forwarding the loopback gateway port. See
 
 ## Pairing and auth (direct transport)
 
-The gateway is the source of truth for node/client admission:
+The Gateway is the source of truth for node/client admission:
 
-- Pairing requests are created/approved/rejected in the gateway (see
+- Pairing requests are created/approved/rejected in the Gateway (see
   [Gateway pairing](/gateway/pairing)).
-- The gateway enforces auth (token/keypair), scopes/ACLs (it is not a raw
+- The Gateway enforces auth (token/keypair), scopes/ACLs (it is not a raw
   proxy to every method), and rate limits.
 
 ## Responsibilities by component
 
 - **Gateway**: advertises discovery beacons, owns pairing decisions, hosts
   the WS endpoint.
-- **macOS app**: helps you pick a gateway, shows pairing prompts, uses SSH
+- **macOS app**: helps you pick a Gateway, shows pairing prompts, uses SSH
   only as a fallback.
 - **iOS/Android nodes**: browse Bonjour as a convenience, connect to the
   paired Gateway WS.

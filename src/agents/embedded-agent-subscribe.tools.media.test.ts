@@ -6,6 +6,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
+import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {
@@ -88,6 +89,100 @@ describe("extractToolResultMediaArtifact", () => {
         "https://example.test/cover.png",
         "/tmp/stems.zip",
         "https://example.test/stems.zip",
+      ],
+      attachments: [
+        { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
+        { type: "image", url: "https://example.test/cover.png" },
+        { type: "file" },
+        { type: "file" },
+      ],
+    });
+  });
+
+  it("aligns generated attachment metadata with deduplicated media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrls: [" /tmp/song.mp3 ", "/tmp/cover.png", "/tmp/song.mp3"],
+            attachments: [
+              {
+                type: "image",
+                path: "/tmp/cover.png",
+                name: "cover.png",
+                width: 640,
+                height: 480,
+              },
+              {
+                type: "audio",
+                path: "/tmp/song.mp3",
+                name: "friendly-song.mp3",
+                mimeType: "audio/mpeg",
+                durationMs: 2_000,
+                trustedLocalMedia: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/song.mp3", "/tmp/cover.png"],
+      attachments: [
+        {
+          type: "audio",
+          path: "/tmp/song.mp3",
+          name: "friendly-song.mp3",
+          mimeType: "audio/mpeg",
+          durationMs: 2_000,
+        },
+        {
+          type: "image",
+          path: "/tmp/cover.png",
+          name: "cover.png",
+          width: 640,
+          height: 480,
+        },
+      ],
+    });
+  });
+
+  it("drops malformed provider attachment metadata while preserving valid media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            attachments: [
+              {
+                type: "document",
+                path: "/tmp/generated.mp3",
+                url: false,
+                mediaUrl: {},
+                filePath: 12,
+                mimeType: 7,
+                name: 1,
+                sizeBytes: Infinity,
+                durationMs: -1,
+                width: "1920",
+                height: Number.NaN,
+                trustedLocalMedia: true,
+              },
+              {
+                type: "audio",
+                path: "/tmp/empty.mp3",
+                sizeBytes: 0,
+                durationMs: 0,
+                width: 0,
+                height: 0,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/generated.mp3", "/tmp/empty.mp3"],
+      attachments: [
+        { path: "/tmp/generated.mp3" },
+        { type: "audio", path: "/tmp/empty.mp3", sizeBytes: 0, durationMs: 0 },
       ],
     });
   });
@@ -321,22 +416,19 @@ describe("extractToolResultMediaArtifact", () => {
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+  it("keeps only attested TTS local media when the raw built-in name is absent", () => {
+    const result = markCoreTtsToolResult(
+      { details: { media: { mediaUrl: "/tmp/reply.opus", trustedLocalMedia: true } } },
+      ["/tmp/reply.opus"],
+    );
     expect(
       filterToolResultMediaUrls(
         "tts",
-        ["/tmp/reply.opus"],
-        {
-          details: {
-            media: {
-              mediaUrl: "/tmp/reply.opus",
-              trustedLocalMedia: true,
-            },
-          },
-        },
+        ["/tmp/reply.opus", "/tmp/unattested.opus", "https://example.com/audio.opus"],
+        result,
         new Set(["web_search"]),
       ),
-    ).toEqual(["/tmp/reply.opus"]);
+    ).toEqual(["/tmp/reply.opus", "https://example.com/audio.opus"]);
   });
 
   it("keeps local media for bundled plugin tool names trusted in this run", () => {

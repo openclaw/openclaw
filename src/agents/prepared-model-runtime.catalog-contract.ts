@@ -1,4 +1,4 @@
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
@@ -7,8 +7,8 @@ import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
   PreparedConfiguredRuntimeModel,
   PreparedRuntimeCapabilityModel,
-} from "./prepared-model-runtime.configured.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+  PreparedModelRuntimeInput,
+} from "./prepared-model-runtime.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -19,7 +19,7 @@ export type PreparedModelRuntimeAgentBaseFacts = {
   templateAuthStorage: AuthStorage;
   credentials: Readonly<AuthStorageData>;
   providerIds: string[];
-  configuredModelRefs: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
 };
 
 export type PreparedModelRuntimeAgentFacts = PreparedModelRuntimeAgentBaseFacts & {

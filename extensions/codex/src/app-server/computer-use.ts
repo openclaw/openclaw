@@ -22,10 +22,15 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import { resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath } from "./desktop-app-paths.js";
+import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
+  resolveMacOSDesktopCodexBundledMarketplaceCandidates,
+} from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
+  CodexAppServerRequestResult,
+  CodexConfigReadResponse,
   CodexListMcpServerStatusResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
@@ -207,8 +212,9 @@ type PluginInspection =
     };
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
+const BUNDLED_MARKETPLACE_NAME = "openai-bundled";
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
-  "openai-bundled",
+  BUNDLED_MARKETPLACE_NAME,
   "openai-curated",
   "openai-api-curated",
   "openai-curated-remote",
@@ -417,11 +423,11 @@ async function inspectCodexComputerUseWithoutFence(
     params.client,
     params.agentDir,
   );
-  if (params.installPlugin && managedMarketplacePath) {
-    const codexHome = params.client?.getRuntimeIdentity()?.codexHome;
-    if (codexHome) {
-      await assertNotSymlink(path.join(codexHome, "config.toml"), "Codex config");
-    }
+  const managedCodexHome = managedMarketplacePath
+    ? params.client?.getRuntimeIdentity()?.codexHome
+    : undefined;
+  if (params.installPlugin && managedCodexHome) {
+    await assertNotSymlink(path.join(managedCodexHome, "config.toml"), "Codex config");
   }
   const marketplace = await resolveMarketplaceRef({
     request,
@@ -430,6 +436,7 @@ async function inspectCodexComputerUseWithoutFence(
     signal: params.signal,
     defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
+    managedCodexHome,
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -795,6 +802,7 @@ async function resolveMarketplaceRef(params: {
   signal?: AbortSignal;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
+  managedCodexHome?: string;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -818,6 +826,14 @@ async function resolveMarketplaceRef(params: {
     bundledMarketplacePath &&
     shouldAddBundledComputerUseMarketplace(params)
   ) {
+    if (params.managedCodexHome) {
+      await migrateLegacyBundledMarketplaceSource({
+        request: params.request,
+        bundledMarketplacePath,
+        legacySources: params.defaultBundledMarketplacePathCandidates,
+        userConfigPath: path.join(params.managedCodexHome, "config.toml"),
+      });
+    }
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: bundledMarketplacePath,
     } satisfies CodexRequestObject);
@@ -826,6 +842,16 @@ async function resolveMarketplaceRef(params: {
   }
 
   const waitUntil = marketplaceDiscoveryWaitUntil(params);
+  if (
+    candidates.length === 0 &&
+    waitUntil > Date.now() &&
+    (await codexNativePluginsDisabled(params.request))
+  ) {
+    return {
+      message:
+        "Codex native plugin support is disabled (features.plugins = false). Enable it in the Codex config, then run /codex computer-use install.",
+    };
+  }
   while (candidates.length === 0) {
     if (Date.now() >= waitUntil) {
       break;
@@ -865,6 +891,43 @@ async function resolveMarketplaceRef(params: {
   return marketplace ? { marketplace } : {};
 }
 
+async function migrateLegacyBundledMarketplaceSource(params: {
+  request: CodexComputerUseRequest;
+  bundledMarketplacePath: string;
+  legacySources?: readonly string[];
+  userConfigPath: string;
+}): Promise<void> {
+  const response = await params.request<
+    CodexConfigReadResponse & {
+      config: { marketplaces?: Record<string, { source_type?: string; source?: string }> };
+    }
+  >("config/read", { includeLayers: false });
+  const bundled = response.config.marketplaces?.[BUNDLED_MARKETPLACE_NAME];
+  const sourceOrigin = response.origins[`marketplaces.${BUNDLED_MARKETPLACE_NAME}.source`];
+  if (
+    bundled?.source_type !== "local" ||
+    !bundled.source ||
+    sourceOrigin?.name.type !== "user" ||
+    sourceOrigin.name.profile !== null ||
+    path.resolve(sourceOrigin.name.file) !== path.resolve(params.userConfigPath)
+  ) {
+    return;
+  }
+
+  // Codex hides a reserved marketplace whose old direct source violates its
+  // managed-root policy. Remove only sources OpenClaw previously provisioned.
+  const configuredSource = path.resolve(bundled.source);
+  if (configuredSource === path.resolve(params.bundledMarketplacePath)) {
+    return;
+  }
+  const legacySources =
+    params.legacySources ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  if (!legacySources.some((source) => path.resolve(source) === configuredSource)) {
+    return;
+  }
+  await params.request("marketplace/remove", { marketplaceName: BUNDLED_MARKETPLACE_NAME });
+}
+
 async function listComputerUseMarketplaceCandidates(
   request: CodexComputerUseRequest,
   config: ResolvedCodexComputerUseConfig,
@@ -873,6 +936,15 @@ async function listComputerUseMarketplaceCandidates(
     cwds: [],
   } satisfies CodexRequestObject);
   return findComputerUseMarketplaces(listed, config.pluginName);
+}
+
+async function codexNativePluginsDisabled(request: CodexComputerUseRequest): Promise<boolean> {
+  const response = await request<CodexAppServerRequestResult<"experimentalFeature/list">>(
+    "experimentalFeature/list",
+    {},
+  );
+  // Codex returns the full catalog when limit is omitted; absent plugins remains unknown so polling continues.
+  return response.data.find(({ name }) => name === "plugins")?.enabled === false;
 }
 
 function blockUnsafeAutoInstallStatus(

@@ -12,7 +12,6 @@ import {
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
   resolveHookModelSelection,
-  resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
 
 const hookContext = {
@@ -243,6 +242,48 @@ function createConfiguredModel(
 }
 
 describe("resolveEmbeddedRuntimeModelPolicy", () => {
+  it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example.test/v1",
+            models: [
+              createConfiguredModel({
+                id: "tiny-model",
+                name: "Tiny model",
+                contextWindow: 3_000,
+                contextTokens: 16_000,
+                maxTokens: 256,
+              }),
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveEmbeddedRuntimeModelPolicy({
+        cfg,
+        provider: "custom",
+        modelId: "tiny-model",
+        runtimeModel: {
+          ...createRuntimeModel(),
+          provider: "custom",
+          id: "tiny-model",
+          name: "Tiny model",
+          baseUrl: "https://models.example.test/v1",
+          contextWindow: 3_000,
+          contextTokens: 16_000,
+          maxTokens: 256,
+        },
+        nativeModelOwned: false,
+      }),
+    ).toThrow(
+      "Model context window too small (3000 tokens; source=modelsConfig). Minimum is 4000.",
+    );
+  });
+
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
@@ -338,6 +379,66 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
+  it("keeps the session-selected context window ahead of discovered and configured caps", () => {
+    // The selection is passed as the lowest-priority input, so a discovered
+    // contextTokens value or a models.providers entry would otherwise leave a
+    // 200k session budgeting against the wider window while the session row
+    // and model projections already report the selected 200k.
+    const runtimeModel: ProviderRuntimeModel = {
+      provider: "anthropic",
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    };
+    const resolve = (params: { cfg?: OpenClawConfig; contextWindow?: string }) =>
+      resolveEmbeddedRuntimeModelPolicy({
+        cfg: params.cfg,
+        provider: "anthropic",
+        modelId: "claude-sonnet-5",
+        runtimeModel,
+        nativeModelOwned: false,
+        ...(params.contextWindow ? { contextWindow: params.contextWindow } : {}),
+      });
+
+    const discovered = resolve({ contextWindow: "200k" });
+    expect(discovered.contextTokenBudget).toBe(200_000);
+    expect(discovered.effectiveModel.contextWindow).toBe(200_000);
+
+    const configured = resolve({
+      contextWindow: "200k",
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [createConfiguredModel({ id: "claude-sonnet-5", contextTokens: 1_000_000 })],
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+    expect(configured.contextTokenBudget).toBe(200_000);
+    expect(configured.effectiveModel.contextWindow).toBe(200_000);
+
+    // Without a selection the declared default resolves to the wider option, so
+    // the tighter discovered cap still owns the budget.
+    const unselected = resolve({});
+    expect(unselected.contextTokenBudget).toBe(272_000);
+    expect(unselected.effectiveModel.contextWindow).toBe(272_000);
+  });
+
   it("preserves the effective budget and adds an authored cap for plugin transports (#124702)", () => {
     const resolve = (models: ModelDefinitionConfig[]) =>
       resolveEmbeddedRunEffectiveModel({
@@ -362,55 +463,87 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(discovered.contextTokenBudget).toBe(272_000);
     expect(discovered).not.toHaveProperty("authoredContextTokenCap");
   });
+
+  it("caps the effective attempt budget with the caller limit", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+      },
+      provider: "openai",
+      modelConfigProvider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextTokenBudget).toBe(32_000);
+    expect(result.contextWindowInfo).toEqual({
+      source: "model",
+      tokens: 32_000,
+      referenceTokens: 272_000,
+    });
+    expect(result.effectiveModel.contextWindow).toBe(32_000);
+  });
+
+  it("does not let the caller budget widen a smaller fallback model", () => {
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "maintenance-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "checkpoint memory",
+        runId: "maintenance-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+      },
+      provider: "fallback",
+      modelConfigProvider: "fallback",
+      modelId: "small-model",
+      agentHarnessId: "openclaw",
+      runtimeModel: {
+        ...createRuntimeModel(),
+        id: "small-model",
+        contextTokens: 16_000,
+      },
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextTokenBudget).toBe(16_000);
+    expect(result.effectiveModel.contextWindow).toBe(16_000);
+  });
 });
 
 describe("native model-owned harness policy", () => {
-  it("requires an exact pinned, locked, non-default harness", () => {
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        selectedHarnessId: "codex",
-      }),
-    ).toBe("codex");
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: false,
-        selectedHarnessId: "codex",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-        selectedHarnessId: "openclaw",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveNativeModelOwnedHarnessId({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        selectedHarnessId: "other",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not apply outer context guards or budgets", () => {
+  it("does not apply outer context guards, budgets, or authored caps", () => {
     const runtimeModel = createRuntimeModel();
-    const result = resolveEmbeddedRuntimeModelPolicy({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [createConfiguredModel({ contextWindow: 1, contextTokens: 1 })],
+    const result = resolveEmbeddedRunEffectiveModel({
+      runParams: {
+        sessionId: "native-session",
+        workspaceDir: hookContext.workspaceDir,
+        prompt: "hello",
+        runId: "native-run",
+        timeoutMs: 5_000,
+        contextTokenBudget: 32_000,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [createConfiguredModel({ contextWindow: 1, contextTokens: 1 })],
+              },
             },
           },
         },
       },
       provider: "openai",
+      modelConfigProvider: "openai",
       modelId: runtimeModel.id,
+      agentHarnessId: "codex",
       runtimeModel,
       nativeModelOwned: true,
     });

@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillSecurityVerdicts,
+  fetchClawHubSkillVerification,
   searchClawHubSkills,
 } from "./clawhub-skills.js";
 
@@ -51,14 +52,15 @@ function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
 }
 
 describe("clawhub client", () => {
-  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
+  const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
 
-  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+  async function searchAuthorizationHeader(): Promise<string | null> {
+    let authorization: string | null = null;
     await expect(
       searchClawHubSkills({
         query: "calendar",
         fetchImpl: async (_input, init) => {
-          expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${expectedToken}`);
+          authorization = new Headers(init?.headers).get("Authorization");
           return new Response(JSON.stringify({ results: [] }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -66,6 +68,11 @@ describe("clawhub client", () => {
         },
       }),
     ).resolves.toStrictEqual([]);
+    return authorization;
+  }
+
+  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+    await expect(searchAuthorizationHeader()).resolves.toBe(`Bearer ${expectedToken}`);
   }
 
   afterEach(() => {
@@ -103,6 +110,90 @@ describe("clawhub client", () => {
       await expectSearchUsesAuthToken("fixture-legacy-token");
     });
   });
+
+  it.each(["clawhub", "clawdhub"])(
+    "loads ClawHub request auth from the Windows AppData %s config path",
+    async (configDirectory) => {
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        const configPath = path.join(appDataRoot, configDirectory, "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
+        try {
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({ token: "fixture-appdata-token" }),
+            "utf8",
+          );
+
+          await expectSearchUsesAuthToken("fixture-appdata-token");
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("keeps XDG_CONFIG_HOME ahead of AppData on Windows", async () => {
+    await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+      await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
+        const appDataConfigPath = path.join(appDataRoot, "clawhub", "config.json");
+        const xdgConfigPath = path.join(xdgRoot, "clawhub", "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+        try {
+          await Promise.all([
+            fs.mkdir(path.dirname(appDataConfigPath), { recursive: true }),
+            fs.mkdir(path.dirname(xdgConfigPath), { recursive: true }),
+          ]);
+          await Promise.all([
+            fs.writeFile(
+              appDataConfigPath,
+              JSON.stringify({ token: "stale-appdata-token" }),
+              "utf8",
+            ),
+            fs.writeFile(xdgConfigPath, JSON.stringify({ token: "fixture-xdg-token" }), "utf8"),
+          ]);
+
+          await expectSearchUsesAuthToken("fixture-xdg-token");
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    });
+  });
+
+  it.each([
+    ["without a token", JSON.stringify({})],
+    ["with malformed JSON", "{"],
+  ])(
+    "does not fall back to a legacy token when the canonical config exists %s",
+    async (_, contents) => {
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        const canonicalConfigPath = path.join(appDataRoot, "clawhub", "config.json");
+        const legacyConfigPath = path.join(appDataRoot, "clawdhub", "config.json");
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
+        try {
+          await Promise.all([
+            fs.mkdir(path.dirname(canonicalConfigPath), { recursive: true }),
+            fs.mkdir(path.dirname(legacyConfigPath), { recursive: true }),
+          ]);
+          await Promise.all([
+            fs.writeFile(canonicalConfigPath, contents, "utf8"),
+            fs.writeFile(legacyConfigPath, JSON.stringify({ token: "stale-legacy-token" }), "utf8"),
+          ]);
+
+          await expect(searchAuthorizationHeader()).resolves.toBeNull();
+        } finally {
+          platformSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it.runIf(process.platform === "darwin")(
     "loads ClawHub request auth from the macOS Application Support path",
@@ -387,39 +478,42 @@ describe("clawhub client", () => {
     expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
-    const cancel = vi.fn();
-    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
-    let emitted = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted >= overshootChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        cancel();
-      },
-    });
+  it.each([
+    { kind: "metadata", maxMiB: 16, requestPath: "/api/v1/search" },
+    { kind: "verification", maxMiB: 64, requestPath: "/api/v1/skills/weather/verify" },
+  ])(
+    "bounds oversized $kind JSON and cancels the stream",
+    async ({ kind, maxMiB, requestPath }) => {
+      const cancel = vi.fn();
+      const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+      let emitted = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (emitted >= (maxMiB + 1) * 2) {
+            controller.close();
+            return;
+          }
+          emitted += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancel();
+        },
+      });
+      const fetchImpl = async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      const result =
+        kind === "verification"
+          ? fetchClawHubSkillVerification({ slug: "weather", fetchImpl })
+          : searchClawHubSkills({ query: "calendar", fetchImpl });
 
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response(body, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      }),
-    ).rejects.toThrow(/ClawHub \/api\/v1\/search response exceeded 16777216 bytes/);
-    // The reader is cancelled at the cap so the oversized stream releases its
-    // socket/buffer instead of being drained into memory.
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
+      await expect(result).rejects.toThrow(
+        `ClawHub ${requestPath} response exceeded ${maxMiB * 1024 * 1024} bytes`,
+      );
+      // Cancel at the cap before allocating a contiguous copy of the oversized body.
+      expect(cancel).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
     const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body

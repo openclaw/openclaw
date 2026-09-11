@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
@@ -122,14 +123,6 @@ function createDefaultOllamaConfig(primary: string) {
     agents: { defaults: { model: { primary } } },
     models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
   };
-}
-
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
 }
 
 describe("ollama setup", () => {
@@ -461,6 +454,7 @@ describe("ollama setup", () => {
     const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual(["minimax-m2.7", "minimax-m3", "kimi-k3", "glm-5.1", "glm-5.2"]);
+    expect(models?.every((model) => model.contextTokens === undefined)).toBe(true);
     expect(models).toEqual(
       expect.arrayContaining(
         [
@@ -531,7 +525,7 @@ describe("ollama setup", () => {
       (m) => m.id === "llama3:8b",
     );
 
-    expect(model?.contextWindow).toBe(65536);
+    expect(model).toMatchObject({ contextWindow: 65_536, contextTokens: 32_768 });
     expect(result.defaultModel).toBe("ollama/llama3:8b");
   });
 
@@ -950,48 +944,13 @@ describe("ollama setup", () => {
     });
   });
 
-  it("uses discovered model when requested non-interactive download fails", async () => {
-    const fetchMock = createOllamaFetchMock({
-      tags: ["qwen2.5-coder:7b"],
-      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
-
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-4o-mini",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
-            },
-          },
-        },
-      },
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "missing-model",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
-    expect(result.agents?.defaults?.model).toEqual({
-      primary: "ollama/qwen2.5-coder:7b",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
-    });
-    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-  });
-
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
     const fetchMock = createOllamaFetchMock({
       tags: [],
       pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -1012,7 +971,7 @@ describe("ollama setup", () => {
   it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
     const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
     vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+    const runtime: RuntimeEnv = createRuntimeSpies();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -1039,7 +998,7 @@ describe("ollama setup", () => {
     async (modelId) => {
       const fetchMock = createOllamaFetchMock({ tags: [] });
       vi.stubGlobal("fetch", fetchMock);
-      const runtime = createRuntime();
+      const runtime: RuntimeEnv = createRuntimeSpies();
 
       const result = await configureOllamaNonInteractive({
         nextConfig: {},
@@ -1062,11 +1021,7 @@ describe("ollama setup", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime: RuntimeEnv = createRuntimeSpies();
     const nextConfig = {};
 
     const result = await configureOllamaNonInteractive({

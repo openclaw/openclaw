@@ -13,18 +13,16 @@ import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
-  loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
-import { buildStatusCommandReportData } from "./status.command-report-data.ts";
-import { buildStatusCommandReportLines } from "./status.command-report.ts";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
 const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
@@ -111,11 +109,17 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   assertStatusUsageAgentScope(opts);
+  for (const finding of await collectNodeRuntimeFindings()) {
+    const write = opts.json ? runtime.error : runtime.log;
+    write(
+      `[${finding.severity}] ${finding.message}${finding.fixHint ? `\n${finding.fixHint}` : ""}`,
+    );
+  }
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader
       .load()
-      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, opts));
     return;
   }
 
@@ -136,12 +140,7 @@ export async function statusCommand(
 
   const scan = await statusScanModuleLoader
     .load()
-    .then(({ scanStatus }) =>
-      scanStatus(
-        { json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep },
-        runtime,
-      ),
-    );
+    .then(({ scanStatus }) => scanStatus({ timeoutMs: opts.timeoutMs, deep: opts.deep }));
 
   const {
     cfg,
@@ -233,22 +232,12 @@ export async function statusCommand(
 
   const rich = true;
   const {
+    buildStatusCommandReportData,
+    buildStatusCommandReportLines,
     buildStatusUpdateSurface,
-    formatCliCommand,
-    formatHealthChannelLines,
-    formatKTokens,
-    formatPromptCacheCompact,
-    formatPluginCompatibilityNotice,
-    formatTimeAgo,
-    formatTokensCompact,
-    formatUpdateAvailableHint,
+    formatUsageReportLines,
     getTerminalTableWidth,
     info,
-    renderTable,
-    resolveMemoryCacheSummary,
-    resolveMemoryFtsState,
-    resolveMemoryVectorState,
-    shortenText,
     theme,
   } = await statusCommandTextRuntimeLoader.load();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
@@ -303,11 +292,7 @@ export async function statusCommand(
     details: gatewayProbe?.connectErrorDetails,
   });
 
-  const usageLines = usage
-    ? await loadStatusProviderUsageModule().then(({ formatUsageReportLines }) =>
-        formatUsageReportLines(usage),
-      )
-    : undefined;
+  const usageLines = usage ? formatUsageReportLines(usage) : undefined;
   const overviewSurface = buildStatusOverviewSurfaceFromScan({
     scan: {
       cfg,
@@ -329,13 +314,12 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
-  const updateRestartValue = formatUpdateRestartStatusValue(
+  const updateRows = buildStatusUpdateRows(
     (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,
       warn,
       muted,
-      formatTimeAgo,
     },
   );
   const lines = await buildStatusCommandReportLines(
@@ -357,28 +341,10 @@ export async function statusCommand(
       pluginCompatibility,
       pairingRecovery,
       tableWidth,
-      ok,
-      warn,
-      muted,
-      shortenText,
-      formatCliCommand,
-      formatTimeAgo,
-      formatKTokens,
-      formatTokensCompact,
-      formatPromptCacheCompact,
-      formatHealthChannelLines,
-      formatPluginCompatibilityNotice,
-      formatUpdateAvailableHint,
-      resolveMemoryVectorState,
-      resolveMemoryFtsState,
-      resolveMemoryCacheSummary,
-      accentDim: theme.accentDim,
-      theme,
-      renderTable,
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
-      updateRestartValue,
+      updateRows,
     }),
   );
   runtime.log(lines.join("\n"));

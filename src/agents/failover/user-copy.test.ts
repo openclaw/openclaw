@@ -1,14 +1,48 @@
 import { describe, expect, it } from "vitest";
 import {
-  BILLING_ERROR_USER_MESSAGE,
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
+  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
+  renderSanitizedUserFacingText,
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  it.each([
+    [undefined, HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
+    ["", HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
+    [
+      "Codex session became active in another runner; wait for it to finish before continuing",
+      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+    ],
+    [
+      "Codex session became active in another runner; wait for it to finish before continuing.",
+      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+    ],
+  ])("renders heartbeat failure copy for %j", (reason, expected) => {
+    expect(renderHeartbeatRunFailureCopy(reason)).toBe(expected);
+  });
+
+  const tokenLimitCopy =
+    "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
+
+  it("renders only the allowlisted selected-profile code", () => {
+    expect(renderFailoverCodeUserCopy("selected_auth_profile_unavailable")).toBe(
+      "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+        "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+    );
+    expect(renderFailoverCodeUserCopy("plugin_selected_profile_unavailable")).toBeUndefined();
+    expect(
+      renderFailoverCodeUserCopy({ code: "selected_auth_profile_unavailable" }),
+    ).toBeUndefined();
+  });
+
   it("renders transient copy from the classified reason", () => {
     const raw = "429 Too Many Requests: model overloaded";
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
@@ -26,6 +60,22 @@ describe("failover user copy", () => {
         raw: "429 rate limit: service overloaded, try again in 30 seconds",
       }),
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
+  });
+
+  it.each([
+    "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "OpenAI API error (400): max_output_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "Azure OpenAI API error (400): max_completion_tokens (384000) exceeds model's maximum output tokens (65536)",
+    "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
+  ])("surfaces token limits from %s", (raw) => {
+    expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
+  });
+
+  it("keeps overlong provider-controlled limit text generic", () => {
+    const raw = `400 max_tokens (384000) exceeds ${"x".repeat(301)} maximum output tokens (65536)`;
+    expect(renderFormatErrorCopy(raw)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
 
   it("renders structured cooldown durations and exhausted model sets", () => {
@@ -64,7 +114,9 @@ describe("failover user copy", () => {
     ).toBe(
       "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
     );
-    expect(renderBillingReplyCopy({})).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(renderBillingReplyCopy({})).toBe(
+      "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.",
+    );
   });
 
   it("renders provider-safe missing-key guidance", () => {
@@ -93,5 +145,34 @@ describe("failover user copy", () => {
     ).toBe(
       "⚠️ CLI turn (routing openai/gpt-5.6-sol): timed out after 90s (overall turn limit). The gateway is unaffected. It also stopped 2 CLI background tasks and 1 active CLI tool call; that work shares the parent CLI process. Effects may be partial; check before retrying. OpenClaw did not replay this turn automatically. For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise `agents.defaults.timeoutSeconds`.",
     );
+  });
+
+  // Session transcripts, run status, and the TUI render failed turns through this
+  // renderer; the channel reply path renders the same reason-level copy from failover
+  // facts, so every error grammar the harnesses emit must agree across surfaces.
+  it.each([
+    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a38749741971a37b-SEA, request id: req_21723077dbef46fc8a554a7f511bcb2f",
+    "status code 401: Incorrect API key provided",
+    "401 Unauthorized: invalid api key",
+  ])("renders the provider authentication copy for %j", (raw) => {
+    expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(
+      `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`,
+    );
+  });
+
+  it("renders the unavailable-model copy for provider model-not-found errors", () => {
+    expect(
+      renderSanitizedUserFacingText(
+        "unexpected status 404 Not Found: The model `gpt-x` does not exist",
+        { errorContext: true },
+      ),
+    ).toMatch(/^⚠️ The configured model is unavailable from the provider/);
+  });
+
+  it("keeps non-401 auth text and non-error context out of the provider copy", () => {
+    const forbidden = "unexpected status 403 Forbidden: insufficient permissions for this key";
+    expect(renderSanitizedUserFacingText(forbidden, { errorContext: true })).toBe(forbidden);
+    const unauthorized = "status code 401: Incorrect API key provided";
+    expect(renderSanitizedUserFacingText(unauthorized)).toBe(unauthorized);
   });
 });

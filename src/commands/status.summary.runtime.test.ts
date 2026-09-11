@@ -273,7 +273,7 @@ describe("statusSummaryRuntime.resolveSessionRuntime", () => {
         model: "gpt-5.5",
         sessionKey: "agent:main:main",
       }),
-    ).toEqual({ id: "codex", label: "OpenAI Codex" });
+    ).toEqual({ id: "codex", label: "OpenAI Codex (previous runtime: OpenClaw Default)" });
   });
 
   it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
@@ -304,17 +304,11 @@ describe("statusSummaryRuntime.resolveSessionRuntime", () => {
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
-  const cfg = {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-sonnet-4-6" },
-      },
-    },
-  } as never;
+  const configured = { provider: "anthropic", model: "claude-sonnet-4-6" };
 
   it("preserves explicit runtime providers for vendor-prefixed model ids", () => {
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         modelProvider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
       }),
@@ -326,7 +320,7 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
 
   it("splits legacy combined overrides when provider is missing", () => {
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
       }),
     ).toEqual({
@@ -338,13 +332,7 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   it("uses the configured default provider for providerless runtime models", () => {
     expect(
       statusSummaryRuntime.resolveSessionModelRef(
-        {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-            },
-          },
-        } as never,
+        { provider: "openai", model: "gpt-5.5" },
         {
           model: "gpt-5.5",
         },
@@ -357,7 +345,7 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
 
   it("prefers explicit overrides ahead of fallback runtime fields", () => {
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
         modelProvider: "amazon-bedrock",
@@ -371,7 +359,7 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
 
   it("falls back to configured defaults when persisted session model fields are malformed", () => {
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         modelProvider: { provider: "openai" },
         model: false,
         providerOverride: ["anthropic"],

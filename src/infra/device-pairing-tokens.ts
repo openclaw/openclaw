@@ -228,10 +228,16 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  isIssuanceCurrent?: () => boolean;
   baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
   return await withDevicePairingLock(async () => {
     const state = await loadDevicePairingState(params.baseDir);
+    // A handshake can lose authority while queued behind another pairing operation.
+    // Recheck before reusing or replacing a token, with no further await before commit.
+    if (params.isIssuanceCurrent?.() === false) {
+      return null;
+    }
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     const context = resolveDeviceTokenUpdateContext({
       state,
@@ -373,7 +379,20 @@ export async function rotateDeviceToken(params: {
     device.tokens = tokens;
     clearNodePairingGenerationState(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
-    persistState(state, params.baseDir, "paired");
+    const retiredNodeToken =
+      role === "node" &&
+      params.scopes !== undefined &&
+      requestedScopes.length === 0 &&
+      existing &&
+      !scopesWithinApprovedDeviceBaseline({
+        role,
+        scopes: existing.scopes,
+        approvedScopes,
+      })
+        ? { deviceId: device.deviceId, expectedToken: existing.token }
+        : undefined;
+    // Retire the matching legacy cache with the token, even if the CLI loses its response.
+    persistState(state, params.baseDir, "paired", { retiredNodeToken });
     return { ok: true, entry: next };
   });
 }

@@ -1,9 +1,12 @@
 // Defines agent-related Zod schema fragments for config parsing.
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
+
+export { BroadcastSchema } from "./zod-schema.messages.js";
 
 const AgentEntryConfigSchema = z.preprocess(
   (value, ctx) => {
@@ -44,6 +47,20 @@ export const AgentsSchema = z
         code: z.ZodIssueCode.custom,
         path: ["entries"],
         message: "agents.entries must contain at least one configured agent",
+      });
+    }
+    const firstKeyByAgentId = new Map<string, string>();
+    for (const [key] of entries) {
+      const agentId = normalizeAgentId(key);
+      const firstKey = firstKeyByAgentId.get(agentId);
+      if (!firstKey) {
+        firstKeyByAgentId.set(agentId, key);
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries", key],
+        message: `agents.entries keys "${firstKey}" and "${key}" resolve to the same agent id "${agentId}"; rename one key so each agent has a unique id`,
       });
     }
     const marked = entries.filter(([, entry]) => entry.default === true);
@@ -137,12 +154,3 @@ const AcpBindingSchema = z
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
-
-const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
-
-export const BroadcastSchema = z
-  .object({
-    strategy: BroadcastStrategySchema.optional(),
-  })
-  .catchall(z.array(z.string()))
-  .optional();

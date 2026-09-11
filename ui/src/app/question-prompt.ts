@@ -6,7 +6,6 @@ import type {
   Question,
   QuestionAnswers,
   QuestionRecord,
-  QuestionResolveResult,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
@@ -20,6 +19,12 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
+import { parseQuestion } from "./question-prompt-parse.ts";
+import {
+  clearSecretQuestionDrafts,
+  parseQuestionSubmissionResult,
+  prepareQuestionSecretStoreSubmission,
+} from "./question-prompt-secret-store.ts";
 
 type QuestionDraft = {
   selected: Set<string>;
@@ -45,6 +50,7 @@ export type QuestionPrompt = {
   submitting: boolean;
   error: string | null;
   drafts: Map<string, QuestionDraft>;
+  secretStoreAllowedHostsDraft?: string;
   revision: number;
 };
 
@@ -64,69 +70,6 @@ const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 function readTimestamp(value: unknown): number | null {
   return asSafeIntegerInRange(value, { min: 0 }) ?? null;
-}
-
-const MAX_HEADER_GRAPHEMES = 12;
-
-function clampHeaderGraphemes(header: string): string {
-  const segments = [...new Intl.Segmenter().segment(header)];
-  if (segments.length <= MAX_HEADER_GRAPHEMES) {
-    return header;
-  }
-  return segments
-    .slice(0, MAX_HEADER_GRAPHEMES)
-    .map((part) => part.segment)
-    .join("");
-}
-
-function parseQuestion(value: unknown): Question | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const questionId = readNonEmptyString(value.questionId);
-  const header = typeof value.header === "string" ? value.header : null;
-  const question = readNonEmptyString(value.question);
-  if (!questionId || !/^[a-z][a-z0-9_]*$/.test(questionId) || header === null || !question) {
-    return null;
-  }
-  // Clamp instead of reject: the gateway enforces the 12-cap with grapheme
-  // semantics, and any re-count here (UTF-16, code points, or a second grapheme
-  // impl) can disagree at the boundary and silently drop the whole prompt.
-  const clampedHeader = clampHeaderGraphemes(header);
-  if (!Array.isArray(value.options) || value.options.length > 4) {
-    return null;
-  }
-  const options = value.options.flatMap((option) => {
-    if (!isRecord(option)) {
-      return [];
-    }
-    const label = readNonEmptyString(option.label);
-    if (!label || (option.description !== undefined && typeof option.description !== "string")) {
-      return [];
-    }
-    return [
-      {
-        label,
-        ...(typeof option.description === "string" ? { description: option.description } : {}),
-      },
-    ];
-  });
-  if (options.length !== value.options.length) {
-    return null;
-  }
-  for (const field of ["multiSelect", "isOther"] as const) {
-    if (value[field] !== undefined && typeof value[field] !== "boolean") {
-      return null;
-    }
-  }
-  return {
-    questionId,
-    header: clampedHeader,
-    question,
-    options,
-    ...(value.multiSelect === true ? { multiSelect: true } : {}),
-    ...(typeof value.isOther === "boolean" ? { isOther: value.isOther } : {}),
-  };
 }
 
 function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
@@ -245,17 +188,6 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
-function parseQuestionResolveResult(payload: unknown): QuestionResolveResult | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  if (payload.status === "cancelled") {
-    return { status: "cancelled" };
-  }
-  const answers = parseQuestionAnswers(payload.answers);
-  return payload.status === "answered" && answers ? { status: "answered", answers } : null;
-}
-
 export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
   const state: QuestionPromptState = {
     client: null,
@@ -286,6 +218,7 @@ function scheduleTick(state: QuestionPromptState): void {
     for (const prompt of state.prompts.values()) {
       if (prompt.status === "pending" && prompt.expiresAtMs <= now) {
         prompt.status = "expired";
+        clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
         prompt.locallyExpired = true;
         prompt.submitting = false;
         prompt.error = null;
@@ -306,6 +239,10 @@ function promptFromRecord(
   previous?: QuestionPrompt,
 ): QuestionPrompt {
   const revision = ++state.revision;
+  const drafts = previous?.drafts ?? new Map();
+  if (record.status !== "pending") {
+    clearSecretQuestionDrafts(record.questions, drafts);
+  }
   return {
     id: record.id,
     questions: record.questions,
@@ -329,7 +266,10 @@ function promptFromRecord(
         ? (previous?.submitting ?? false)
         : false,
     error: record.status === "pending" ? (previous?.error ?? null) : null,
-    drafts: previous?.drafts ?? new Map(),
+    drafts,
+    ...(previous?.secretStoreAllowedHostsDraft !== undefined
+      ? { secretStoreAllowedHostsDraft: previous.secretStoreAllowedHostsDraft }
+      : {}),
     revision,
   };
 }
@@ -340,6 +280,7 @@ function applyQuestionResolution(
   resolved: QuestionResolvedEvent,
 ): void {
   prompt.status = resolved.status;
+  clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = resolved.status === "answered" ? resolved.answers : undefined;
   const matchesSubmittedAnswer =
     resolved.status === "answered" &&
@@ -433,6 +374,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.
   prompt.status = "unavailable";
+  clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = undefined;
   prompt.answeredElsewhere = false;
   prompt.localResolutionConfirmed = false;
@@ -656,12 +598,6 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   state.client = null;
 }
 
-function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
-  return {
-    answers: Object.fromEntries(Object.entries(values).map(([id, answers]) => [id, [...answers]])),
-  };
-}
-
 async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
@@ -680,8 +616,13 @@ async function resolveQuestionPrompt(
     return;
   }
   prompt.submitting = true;
-  const submittedAnswers = "answers" in resolution ? buildAnswers(resolution.answers) : undefined;
-  prompt.submittedAnswers = submittedAnswers;
+  const submission = prepareQuestionSecretStoreSubmission(
+    id,
+    prompt.questions,
+    resolution,
+    prompt.secretStoreAllowedHostsDraft,
+  );
+  prompt.submittedAnswers = submission.submittedAnswers;
   prompt.error = null;
   prompt.revision = ++state.revision;
   state.onChange();
@@ -689,11 +630,11 @@ async function resolveQuestionPrompt(
     const result = await requestQuestionGateway(
       client,
       "question.resolve",
-      submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
+      submission.requestParams,
       prompt.expiresAtMs,
     );
-    const resolved = parseQuestionResolveResult(result);
-    if (!resolved || resolved.status !== (submittedAnswers ? "answered" : "cancelled")) {
+    const resolved = parseQuestionSubmissionResult(result, parseQuestionAnswers);
+    if (!resolved || resolved.status !== (submission.submittedAnswers ? "answered" : "cancelled")) {
       throw new Error("invalid question.resolve response");
     }
     if (state.client === client && state.clientGeneration === clientGeneration) {

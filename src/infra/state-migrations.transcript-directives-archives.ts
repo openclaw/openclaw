@@ -9,6 +9,7 @@ import {
 } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -29,6 +30,19 @@ type TranscriptArchiveMigrationDatabase = Pick<
 >;
 
 type ArchiveCursor = { generation: string; sessionId: string };
+
+type ArchiveContentTransform = (
+  content: string,
+  owner: string,
+) => { changed: boolean; content: string };
+
+type ArchiveMigrationOptions = {
+  agentId: string;
+  database: DatabaseSync;
+  pathname: string;
+  start: ArchiveCursor;
+  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
+};
 
 type ArchiveRowPlan = {
   archiveName: string;
@@ -101,7 +115,11 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
-function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): ArchiveRowPlan[] {
+function listArchiveBatch(
+  database: DatabaseSync,
+  cursor: ArchiveCursor,
+  transformContent: ArchiveContentTransform = transformArchiveContent,
+): ArchiveRowPlan[] {
   // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
   const hasArchiveTable = database
     .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -140,7 +158,7 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
       throw new Error(`Canonical SQLite transcript archive is corrupt for ${row.session_id}`);
     }
     const content = decodeSessionArchiveBytes(bytes, encoding === "zstd");
-    const transformed = transformArchiveContent(content, owner);
+    const transformed = transformContent(content, owner);
     const nextBytes = transformed.changed
       ? encodeArchiveContent(transformed.content, encoding, owner)
       : bytes;
@@ -157,6 +175,27 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
       sessionId: row.session_id,
     };
   });
+}
+
+export function transcriptDirectiveArchivesNeedMigration(
+  database: DatabaseSync,
+  start: ArchiveCursor,
+): boolean {
+  let cursor = start;
+  while (true) {
+    const batch = listArchiveBatch(database, cursor);
+    if (batch.length === 0) {
+      return false;
+    }
+    if (batch.some((planned) => planned.changed)) {
+      return true;
+    }
+    const last = batch.at(-1);
+    if (!last) {
+      return false;
+    }
+    cursor = { generation: last.generation, sessionId: last.sessionId };
+  }
 }
 
 function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
@@ -233,12 +272,16 @@ function repairPublishedArchiveFile(params: {
   ) {
     return true;
   }
+  assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
     beforeRename: ({ tempPath }) => {
       const stagedHash = createHash("sha256").update(fs.readFileSync(tempPath)).digest("hex");
       if (stagedHash !== params.planned.nextSha256) {
         throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
       }
+      // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
+      // at the atomic publication boundary so an expired owner cannot rename.
+      assertAgentDatabaseMaintenanceAuthority();
     },
     content: params.planned.nextBytes,
     filePath: archivePath,
@@ -298,13 +341,13 @@ function finalizeArchiveCursor(params: {
   });
 }
 
-export function migrateTranscriptDirectiveArchives(params: {
-  agentId: string;
-  database: DatabaseSync;
-  pathname: string;
-  start: ArchiveCursor;
-  writeCursor: (cursor: ArchiveCursor | { phase: "complete" }) => void;
-}): number {
+/** Repairs canonical blobs before their reconstructible files under maintenance authority. */
+export async function migrateCanonicalTranscriptArchives(
+  params: ArchiveMigrationOptions & {
+    onArchive?: (archivePath: string) => void;
+    transformContent: ArchiveContentTransform;
+  },
+): Promise<number> {
   let rewrittenArchives = 0;
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
@@ -312,17 +355,25 @@ export function migrateTranscriptDirectiveArchives(params: {
     path: params.pathname,
   });
   while (true) {
-    const batch = listArchiveBatch(params.database, cursor);
+    const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
       runSqliteImmediateTransactionSync(params.database, () => {
+        assertAgentDatabaseMaintenanceAuthority();
         params.writeCursor({ phase: "complete" });
+        assertAgentDatabaseMaintenanceAuthority();
       });
       return rewrittenArchives;
     }
     for (const planned of batch) {
+      params.onArchive?.(path.resolve(archiveDirectory, planned.archiveName));
       const rowPresent = runSqliteImmediateTransactionSync(
         params.database,
-        () => rewriteArchiveRow(params.database, planned),
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          const currentRowPresent = rewriteArchiveRow(params.database, planned);
+          assertAgentDatabaseMaintenanceAuthority();
+          return currentRowPresent;
+        },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: params.pathname,
@@ -334,13 +385,16 @@ export function migrateTranscriptDirectiveArchives(params: {
         : false;
       runSqliteImmediateTransactionSync(
         params.database,
-        () =>
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
           finalizeArchiveCursor({
             database: params.database,
             fileCurrent,
             planned,
             writeCursor: params.writeCursor,
-          }),
+          });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: params.pathname,
@@ -350,5 +404,19 @@ export function migrateTranscriptDirectiveArchives(params: {
       rewrittenArchives += planned.changed && rowPresent ? 1 : 0;
       cursor = { generation: planned.generation, sessionId: planned.sessionId };
     }
+    // Archive planning and file publication are synchronous. Give the lease
+    // heartbeat a scheduling point before the next bounded batch begins.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
+}
+
+export function migrateTranscriptDirectiveArchives(
+  params: ArchiveMigrationOptions,
+): Promise<number> {
+  return migrateCanonicalTranscriptArchives({
+    ...params,
+    transformContent: transformArchiveContent,
+  });
 }

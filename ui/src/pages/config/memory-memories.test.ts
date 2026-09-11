@@ -60,6 +60,21 @@ const result = {
   source: "memory" as const,
 };
 
+function memoryFileResponse(content: string, path = result.path) {
+  return {
+    agentId: "main",
+    file: {
+      path,
+      name: path.split("/").at(-1),
+      size: content.length,
+      updatedAtMs: 1,
+      mimeType: "text/plain",
+      encoding: "utf8",
+      content,
+    },
+  };
+}
+
 describe("MemoryMemoriesElement", () => {
   it("renders idle and gateway-update-required states", async () => {
     const current = createElement(vi.fn(() => Promise.resolve({})));
@@ -152,41 +167,50 @@ describe("MemoryMemoriesElement", () => {
     }
   });
 
-  it("loads a row file once, highlights the matched range, and keeps one row open", async () => {
-    const second = { ...result, path: "memory/projects/Open Claw.md", startLine: 1, endLine: 1 };
-    const request = vi.fn((method: string) => {
+  it("shares pending and loaded files across matches while keeping each row's highlight", async () => {
+    const second = { ...result, startLine: 1, endLine: 1 };
+    const third = { ...second, path: "memory/projects/Open Claw.md" };
+    const pending = deferred<unknown>();
+    const fileResponse = memoryFileResponse("first\nmatched two\nmatched three\nfourth");
+    const request = vi.fn((method: string, params: Record<string, unknown>) => {
       if (method === "memory.search") {
         return Promise.resolve({
           agentId: "main",
           provider: "local",
           searchMode: "hybrid",
-          results: [result, second],
+          results: [result, second, third],
         });
       }
-      return Promise.resolve({
-        agentId: "main",
-        file: {
-          path: result.path,
-          name: "ada.md",
-          size: 30,
-          updatedAtMs: 1,
-          mimeType: "text/plain",
-          encoding: "utf8",
-          content: "first\nmatched two\nmatched three\nfourth",
-        },
-      });
+      return params.path === result.path
+        ? pending.promise
+        : Promise.resolve(memoryFileResponse("Another memory file", third.path));
     });
     const element = createElement(request);
     try {
       await typeQuery(element, "Ada");
       submit(element);
-      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(2));
+      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(3));
 
       const rows = element.querySelectorAll<HTMLButtonElement>("article > button");
       rows[0]?.click();
       await waitForFast(() =>
-        expect(element.querySelector('[data-memory-match="true"]')).toBeTruthy(),
+        expect(element.textContent).toContain("Loading the full memory file"),
       );
+      rows[1]?.click();
+      await element.updateComplete;
+      expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
+      expect(rows[1]?.getAttribute("aria-expanded")).toBe("true");
+      expect(element.querySelectorAll(".memory-memories__detail")).toHaveLength(1);
+      expect(
+        request.mock.calls.filter(([method]) => method === "agents.workspace.get"),
+      ).toHaveLength(1);
+
+      pending.resolve(fileResponse);
+      await waitForFast(() =>
+        expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe("first"),
+      );
+      rows[0]?.click();
+      await element.updateComplete;
       expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
         "matched two\nmatched three",
       );
@@ -202,12 +226,15 @@ describe("MemoryMemoriesElement", () => {
         path: result.path,
       });
 
-      rows[1]?.click();
+      rows[2]?.click();
       await element.updateComplete;
       expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
-      expect(rows[1]?.getAttribute("aria-expanded")).toBe("true");
-      expect(rows[1]?.getAttribute("aria-controls")).toBe("memory-detail-1");
-      expect(element.querySelector("#memory-detail-1")).not.toBeNull();
+      expect(rows[2]?.getAttribute("aria-expanded")).toBe("true");
+      expect(rows[2]?.getAttribute("aria-controls")).toBe("memory-detail-2");
+      expect(element.querySelector("#memory-detail-2")).not.toBeNull();
+      expect(
+        request.mock.calls.filter(([method]) => method === "agents.workspace.get"),
+      ).toHaveLength(2);
     } finally {
       element.remove();
     }
@@ -298,4 +325,108 @@ describe("MemoryMemoriesElement", () => {
       element.remove();
     }
   });
+
+  it.each(["resolves", "rejects"] as const)(
+    "keeps the current file read when an earlier search's read %s",
+    async (outcome) => {
+      const previous = deferred<unknown>();
+      const current = deferred<unknown>();
+      let fileReads = 0;
+      const request = vi.fn((method: string) => {
+        if (method === "memory.search") {
+          return Promise.resolve({
+            agentId: "main",
+            provider: "local",
+            searchMode: "hybrid",
+            results: [result],
+          });
+        }
+        return fileReads++ === 0 ? previous.promise : current.promise;
+      });
+      const element = createElement(request);
+      try {
+        for (const query of ["Ada", "Ada again"]) {
+          await typeQuery(element, query);
+          submit(element);
+          await element.updateComplete;
+          await waitForFast(() => expect(element.querySelector("article > button")).not.toBeNull());
+          element.querySelector<HTMLButtonElement>("article > button")?.click();
+          await waitForFast(() =>
+            expect(element.textContent).toContain("Loading the full memory file"),
+          );
+        }
+        expect(fileReads).toBe(2);
+
+        if (outcome === "resolves") {
+          previous.resolve(memoryFileResponse("Retired content"));
+        } else {
+          previous.reject(new Error("Retired read failure"));
+        }
+        await previous.promise.catch(() => undefined);
+        await element.updateComplete;
+        expect(element.textContent).toContain("Loading the full memory file");
+        expect(element.textContent).not.toContain("Retired");
+
+        current.resolve(memoryFileResponse("first\nFresh matched content\nthird"));
+        await waitForFast(() =>
+          expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
+            "Fresh matched content\nthird",
+          ),
+        );
+      } finally {
+        element.remove();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "shows stale guidance alongside results and clears it after a fresh search (hits=%s)",
+    async (hasHits) => {
+      const warning =
+        "Memory index is stale: index scope changed (owner: configuration, code: scope). Search results may be incomplete.";
+      const action =
+        "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.";
+      const fresh = { ...result, snippet: "Freshly indexed Ada prefers careful reviews." };
+      const request = vi
+        .fn<Request>()
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: hasHits ? [result] : [],
+          stale: true,
+          warning,
+          action,
+        })
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: [fresh],
+        });
+      const element = createElement(request);
+      const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+      try {
+        await typeQuery(element, "Ada");
+        submit(element);
+        await waitForFast(() =>
+          expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
+        );
+        expect(element.querySelectorAll("article")).toHaveLength(hasHits ? 1 : 0);
+        expect.soft(readText(), "stale result warning").toContain(warning);
+        expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);
+        if (hasHits) {
+          expect(readText()).toContain(result.snippet);
+        }
+
+        await typeQuery(element, "Ada fresh");
+        submit(element);
+        await waitForFast(() => expect(readText()).toContain(fresh.snippet));
+        expect(readText()).not.toContain(warning);
+        expect(readText()).not.toContain(action);
+      } finally {
+        element.remove();
+      }
+    },
+  );
 });

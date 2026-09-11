@@ -12,18 +12,45 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
+  areDiagnosticsEnabledForProcess,
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
   type TrustedToolExecutionEvent,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
+} from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
+import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import { findCliMaxTurnsError } from "../failover-error.js";
+import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
+import { findCliTerminalStopError } from "../failover-error.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
-import { executePreparedCliRun } from "./execute.js";
-import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  createSuccessfulProcessExit,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Gateway unit coverage owns quiet-admission timing. These integration cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -117,6 +144,7 @@ function buildPreparedCliRunContext(params: {
       bundleMcp: false,
       parseJsonlEvent: params.parseJsonlEvent,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},
@@ -130,13 +158,12 @@ function buildPreparedCliRunContext(params: {
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     claudeSkillsPluginArgs: [],
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
   };
 }
 
-function requireSupervisorSpawnInput(): SupervisorSpawnInput {
-  const call = supervisorSpawnMock.mock.calls[0];
+function requireSupervisorSpawnInput(index = 0): SupervisorSpawnInput {
+  const call = supervisorSpawnMock.mock.calls[index];
   if (!call) {
     throw new Error("Expected supervisor spawn");
   }
@@ -148,29 +175,327 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
+  // These contexts bypass preparation, which normally loads the provider owner.
+  // Unknown CLI errors must not materialize bundled plugins inside this fixture.
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture-cli-provider",
+    provider: {
+      id: "fixture-cli-provider",
+      label: "Fixture CLI provider",
+      hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
+      auth: [],
+    },
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
 });
 
+// These cases flip process-global diagnostics state, and the lane runs with
+// `--isolate=false`, so every mutation is restored and the event queue drained
+// before the next file in this worker observes it.
+async function withDiagnosticsEnabled<T>(run: () => Promise<T>): Promise<T> {
+  const previouslyEnabled = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
+  startDiagnosticRunActivityTracking();
+  try {
+    return await run();
+  } finally {
+    await waitForDiagnosticEventsDrained();
+    resetDiagnosticRunActivityForTest();
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(previouslyEnabled);
+  }
+}
+
+function holdSupervisorRun() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const exit = createSuccessfulProcessExit();
+  const managedRun = createManagedRun(exit);
+  managedRun.wait.mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return exit;
+  });
+  supervisorSpawnMock.mockResolvedValueOnce(managedRun);
+  return { entered: entered.promise, release: () => release.resolve() };
+}
+
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("binds Claude image prompts to the persisted local transcript turn", async () => {
+    const entryId = "persisted-image-turn";
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "describe this" },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const message = recorder.message;
+    if (!message) {
+      throw new Error("expected prepared user turn");
+    }
+    recorder.markRuntimePersisted(message, {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.db",
+      generation: "generation-1",
+      entryId,
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
+      logicalTurnId: "logical-turn-1",
+      role: "user",
+    });
+    const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
+    context.preparedBackend.backend.imageArg = "@";
+    context.params.userTurnTranscriptRecorder = recorder;
+    context.params.images = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.("done");
+      return createManagedRun(createSuccessfulProcessExit());
+    });
+
+    await executePreparedCliRun(context);
+
+    const spawnInput = requireSupervisorSpawnInput();
+    if (!("input" in spawnInput)) {
+      throw new Error("expected direct CLI process input");
+    }
+    const prompt = spawnInput.input;
+    expect(prompt).toContain(hashCliImageTurnEntryId(entryId));
+  });
+
+  it.each(["claude-cli", "fixture-cli"])(
+    "owns the initial quiet allowance and streamed progress only while %s executes",
+    async (provider) => {
+      await withDiagnosticsEnabled(async () => {
+        let now = 1_000_000;
+        const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+        const context = buildPreparedCliRunContext({ output: "text", provider });
+        const owner = createDiagnosticEmbeddedRunOwner(context.params);
+        context.params.diagnosticOwner = owner;
+        markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
+        const held = holdSupervisorRun();
+        const run = executePreparedCliRun(context);
+        try {
+          await held.entered;
+          await waitForDiagnosticEventsDrained();
+          const input = requireSupervisorSpawnInput();
+          const quietMs = input.noOutputTimeoutMs;
+          if (quietMs === undefined) {
+            throw new Error("Expected the CLI child quiet timeout");
+          }
+          expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+            hasActiveEmbeddedRun: true,
+            activeBackendLivenessDeadlineAtMs: now + quietMs,
+            activeModelCallRequestTimeoutMs: undefined,
+          });
+
+          now += 250;
+          input.onStdout?.("first");
+          await waitForDiagnosticEventsDrained();
+          expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+            lastProgressAgeMs: 0,
+            lastProgressReason: "model_call:stream_progress",
+            activeBackendLivenessDeadlineAtMs: now + quietMs,
+          });
+
+          // A second chunk inside the diagnostic event throttle still refreshes liveness.
+          now += 100;
+          input.onStdout?.(" second");
+          await waitForDiagnosticEventsDrained();
+          expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+            lastProgressAgeMs: 0,
+            activeBackendLivenessDeadlineAtMs: now + quietMs,
+          });
+
+          held.release();
+          await expect(run).resolves.toMatchObject({ text: "first second" });
+          await waitForDiagnosticEventsDrained();
+          const closed = getDiagnosticSessionActivitySnapshot(context.params);
+          expect(closed.hasActiveEmbeddedRun).toBe(true);
+          expect(closed.activeBackendLivenessDeadlineAtMs).toBeUndefined();
+        } finally {
+          held.release();
+          await Promise.allSettled([run]);
+          closeDiagnosticEmbeddedRunOwner(owner);
+          clock.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("ignores stdout from a closed owner after a same-id owner replacement", async () => {
+    await withDiagnosticsEnabled(async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const firstContext = buildPreparedCliRunContext({ output: "text", provider: "fixture-cli" });
+      const firstOwner = createDiagnosticEmbeddedRunOwner(firstContext.params);
+      firstContext.params.diagnosticOwner = firstOwner;
+      markDiagnosticEmbeddedRunStarted({ ...firstContext.params, owner: firstOwner });
+      const firstHeld = holdSupervisorRun();
+      const firstRun = executePreparedCliRun(firstContext);
+      const successorOwner = createDiagnosticEmbeddedRunOwner(firstContext.params);
+      try {
+        await firstHeld.entered;
+        const oldInput = requireSupervisorSpawnInput();
+        oldInput.onStdout?.("first");
+        await waitForDiagnosticEventsDrained();
+        closeDiagnosticEmbeddedRunOwner(firstOwner);
+        markDiagnosticEmbeddedRunStarted({ ...firstContext.params, owner: successorOwner });
+
+        now += 100;
+        const before = getDiagnosticSessionActivitySnapshot(firstContext.params);
+        expect(before.activeBackendLivenessDeadlineAtMs).toBeUndefined();
+        oldInput.onStdout?.(" late old output");
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(firstContext.params)).toEqual(before);
+
+        firstHeld.release();
+        await firstRun;
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(firstContext.params)).toEqual(before);
+      } finally {
+        firstHeld.release();
+        await Promise.allSettled([firstRun]);
+        closeDiagnosticEmbeddedRunOwner(firstOwner);
+        closeDiagnosticEmbeddedRunOwner(successorOwner);
+        clock.mockRestore();
+      }
+    });
+  });
+
+  it("retains the newer same-session allowance when an overlapping serialize:false call settles", async () => {
+    await withDiagnosticsEnabled(async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const first = buildPreparedCliRunContext({
+        output: "text",
+        provider: "fixture-cli",
+        runId: "overlap-first",
+      });
+      const second = buildPreparedCliRunContext({
+        output: "text",
+        provider: "fixture-cli",
+        runId: "overlap-second",
+      });
+      for (const context of [first, second]) {
+        context.preparedBackend.backend.serialize = false;
+      }
+      const firstOwner = createDiagnosticEmbeddedRunOwner(first.params);
+      const secondOwner = createDiagnosticEmbeddedRunOwner(second.params);
+      first.params.diagnosticOwner = firstOwner;
+      second.params.diagnosticOwner = secondOwner;
+      const firstHeld = holdSupervisorRun();
+      const secondHeld = holdSupervisorRun();
+      markDiagnosticEmbeddedRunStarted({ ...first.params, owner: firstOwner });
+      const runs = [executePreparedCliRun(first)];
+      try {
+        await firstHeld.entered;
+        now += 100;
+        markDiagnosticEmbeddedRunStarted({
+          ...second.params,
+          owner: secondOwner,
+        });
+        runs.push(executePreparedCliRun(second));
+        await secondHeld.entered;
+        const secondInput = requireSupervisorSpawnInput(1);
+        const quietMs = secondInput.noOutputTimeoutMs;
+        if (quietMs === undefined) {
+          throw new Error("Expected the second CLI child's quiet timeout");
+        }
+        const deadline = now + quietMs;
+        expect(getDiagnosticSessionActivitySnapshot(second.params)).toMatchObject({
+          activeBackendLivenessDeadlineAtMs: deadline,
+        });
+
+        requireSupervisorSpawnInput().onStdout?.("first");
+        firstHeld.release();
+        await expect(runs[0]).resolves.toMatchObject({ text: "first" });
+        closeDiagnosticEmbeddedRunOwner(firstOwner);
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(second.params)).toMatchObject({
+          hasActiveEmbeddedRun: true,
+          activeBackendLivenessDeadlineAtMs: deadline,
+        });
+
+        secondInput.onStdout?.("second");
+        secondHeld.release();
+        await expect(runs[1]).resolves.toMatchObject({ text: "second" });
+      } finally {
+        firstHeld.release();
+        secondHeld.release();
+        await Promise.allSettled(runs);
+        closeDiagnosticEmbeddedRunOwner(firstOwner);
+        closeDiagnosticEmbeddedRunOwner(secondOwner);
+        clock.mockRestore();
+      }
+    });
+  });
+
+  it("refreshes the backend quiet deadline without refreshing an active tool's progress", async () => {
+    await withDiagnosticsEnabled(async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const toolUse = `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "sleep" } }],
+        },
+      })}\n`;
+      const resultEvent = `${JSON.stringify({
+        type: "result",
+        session_id: "session-blocked-tool",
+        result: "final answer",
+      })}\n`;
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      const owner = createDiagnosticEmbeddedRunOwner(context.params);
+      context.params.diagnosticOwner = owner;
+      markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
+      const held = holdSupervisorRun();
+      const run = executePreparedCliRun(context);
+      try {
+        await held.entered;
+        const input = requireSupervisorSpawnInput();
+        const quietMs = input.noOutputTimeoutMs;
+        if (quietMs === undefined) {
+          throw new Error("Expected the CLI child quiet timeout");
+        }
+        input.onStdout?.(toolUse);
+        await waitForDiagnosticEventsDrained();
+        now += 250;
+        input.onStdout?.("noise\n");
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+          activeWorkKind: "tool_call",
+          lastProgressReason: "tool:Bash:started",
+          lastProgressAgeMs: 250,
+          activeBackendLivenessDeadlineAtMs: now + quietMs,
+        });
+        input.onStdout?.(resultEvent);
+        held.release();
+        await expect(run).resolves.toMatchObject({ text: "final answer" });
+      } finally {
+        held.release();
+        await Promise.allSettled([run]);
+        closeDiagnosticEmbeddedRunOwner(owner);
+        clock.mockRestore();
+      }
+    });
+  });
+
   it("passes native compaction as an argument and requires backend acknowledgement", async () => {
     const raw = `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`;
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(raw);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.prompt = "/compact";
     context.params.controlOperation = "compact";
-    context.bootstrapPromptWarningLines = ["must not decorate the control command"];
     context.backendResolved.textTransforms = { input: [{ from: "/compact", to: "mutated" }] };
     context.backendResolved.manualCompaction = {
       input: "arg",
@@ -198,16 +523,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.(raw);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.prompt = "/compact";
@@ -242,16 +558,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         firstSpawnEntered.resolve();
         await releaseFirstSpawn.promise;
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const first = executePreparedCliRun(
@@ -285,30 +592,31 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(events).toEqual(["stage:first", "spawn:first", "stage:second", "spawn:second"]);
   });
 
-  it("disables supervisor capture without parsing from the diagnostic stdout tail", async () => {
-    const fullText = `start-${"x".repeat(80 * 1024)}-end`;
+  it.each(["text", "json"] as const)(
+    "parses fragmented %s at the byte limit with supervisor capture disabled",
+    async (output) => {
+      const textBytes =
+        1024 * 1024 - (output === "json" ? Buffer.byteLength(JSON.stringify({ result: "" })) : 0);
+      const fullText = `start-${"x".repeat(textBytes - 10)}-end`;
+      const stdout = output === "json" ? JSON.stringify({ result: fullText }) : fullText;
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(fullText);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : fullText,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.("");
+        for (let offset = 0; offset < stdout.length; offset += 4093) {
+          input.onStdout?.(stdout.slice(offset, offset + 4093));
+        }
+        input.onStdout?.("");
+        return createManagedRun(createSuccessfulProcessExit());
       });
-    });
 
-    const result = await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    const spawnInput = requireSupervisorSpawnInput();
+      const result = await executePreparedCliRun(buildPreparedCliRunContext({ output }));
+      const spawnInput = requireSupervisorSpawnInput();
 
-    expect(spawnInput.captureOutput).toBe(false);
-    expect(result.rawText).toBe(fullText);
-  });
+      expect(spawnInput.captureOutput).toBe(false);
+      expect(result.rawText).toBe(fullText);
+    },
+  );
 
   it("passes prepared secret input to a one-shot child", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
@@ -321,16 +629,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     await executePreparedCliRun(context);
@@ -338,33 +637,35 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
   });
 
-  it("rejects oversized successful stdout instead of parsing a truncated tail", async () => {
-    const noisyPrefix = "x".repeat(2 * 1024 * 1024);
-    const finalText = "final answer";
+  it.each(["text", "json"] as const)(
+    "rejects fragmented %s one byte over the parse limit",
+    async (output) => {
+      const textBytes =
+        1024 * 1024 +
+        1 -
+        (output === "json" ? Buffer.byteLength(JSON.stringify({ result: "" })) : 0);
+      const fullText = `start-${"x".repeat(textBytes - 10)}-end`;
+      const stdout = output === "json" ? JSON.stringify({ result: fullText }) : fullText;
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(noisyPrefix);
-      input.onStdout?.(finalText);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : `${noisyPrefix}${finalText}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        for (let offset = 0; offset < stdout.length; offset += 4096) {
+          input.onStdout?.(stdout.slice(offset, offset + 4096));
+        }
+        return createManagedRun(createSuccessfulProcessExit());
       });
-    });
 
-    await expect(
-      executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
-    ).rejects.toThrow("CLI stdout exceeded");
-    const spawnInput = requireSupervisorSpawnInput();
+      await expect(
+        executePreparedCliRun(buildPreparedCliRunContext({ output })),
+      ).rejects.toMatchObject({
+        reason: "format",
+        message: "CLI stdout exceeded 1048576 bytes; refusing to parse truncated output.",
+      });
+      const spawnInput = requireSupervisorSpawnInput();
 
-    expect(spawnInput.captureOutput).toBe(false);
-  });
+      expect(spawnInput.captureOutput).toBe(false);
+    },
+  );
 
   it("parses valid oversized JSONL output incrementally", async () => {
     // JSONL agents can emit huge tool deltas; only the incremental parser sees
@@ -454,42 +755,66 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("resume-jsonl-session");
   });
 
-  it("classifies failed stdout from the retained parse buffer before the diagnostic tail", async () => {
-    // The error classifier needs the retained parse buffer; the human-facing
-    // diagnostic tail may contain only noise once stdout grows large.
-    const errorPrefix = `${JSON.stringify({
-      type: "result",
-      is_error: true,
-      result: "429 rate limit exceeded",
-    })}\n`;
-    const noisyTail = "x".repeat(80 * 1024);
+  it.each([
+    { stream: "stdout", clipped: false },
+    { stream: "stderr", clipped: false },
+    { stream: "stdout", clipped: true },
+    { stream: "stderr", clipped: true },
+  ] as const)(
+    "classifies failed $stream from the retained prefix (clipped UTF-8: $clipped)",
+    async ({ stream, clipped }) => {
+      // The error classifier needs the retained parse buffer; the human-facing
+      // diagnostic tail may contain only noise once stdout grows large.
+      const errorPrefix = clipped
+        ? "429 rate limit exceeded: "
+        : `${JSON.stringify({
+            type: "result",
+            is_error: true,
+            result: "429 rate limit exceeded",
+          })}\n`;
+      const noisyTail = "x".repeat(
+        clipped ? 1024 * 1024 - Buffer.byteLength(errorPrefix) - 1 : 80 * 1024,
+      );
+      const expectedMessage = clipped
+        ? `${errorPrefix}${noisyTail}\uFFFD`
+        : "429 rate limit exceeded";
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(errorPrefix);
-      input.onStdout?.(noisyTail);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : `${errorPrefix}${noisyTail}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        const emit = stream === "stderr" ? input.onStderr : input.onStdout;
+        emit?.(errorPrefix);
+        for (let offset = 0; offset < noisyTail.length; offset += 4093) {
+          emit?.(noisyTail.slice(offset, offset + 4093));
+        }
+        if (clipped) {
+          // Only the first byte of this code point fits in the retained prefix.
+          emit?.("🙂");
+          emit?.("discarded after the prefix");
+        }
+        if (stream === "stderr") {
+          input.onStdout?.(
+            clipped
+              ? "Credit balance is too low"
+              : JSON.stringify({ type: "error", message: "Credit balance is too low" }),
+          );
+        }
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
       });
-    });
 
-    try {
-      await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    } catch (error) {
-      const classified = error as { reason?: unknown; status?: unknown };
-      expect(classified.reason).toBe("rate_limit");
-      expect(classified.status).toBe(429);
-      return;
-    }
-    throw new Error("Expected CLI run to reject with a rate limit error");
-  });
+      await expect(
+        executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
+      ).rejects.toMatchObject({ reason: "rate_limit", status: 429, message: expectedMessage });
+    },
+  );
 
   it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
     const stdout = `${JSON.stringify({
@@ -567,6 +892,57 @@ describe("executePreparedCliRun supervisor output capture", () => {
       reason: "format",
       code: "cli_synthetic_no_response",
       rawError: "Claude CLI returned a synthetic no-response result.",
+    });
+  });
+
+  it("surfaces a Claude hook-stopped terminal result through the output error path", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      session_id: "claude-hook-stopped",
+      stop_reason: "tool_use",
+      terminal_reason: "hook_stopped",
+      result: "",
+      num_turns: 4,
+      permission_denials: [],
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "claude-cli",
+          runId: "run-hook-stopped",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-hook-stopped. OpenClaw session: session-1. " +
+        "Claude session: claude-hook-stopped. Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+      reason: "unknown",
+      code: "cli_turn_stopped",
+      rawError:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
     });
   });
 
@@ -696,59 +1072,87 @@ describe("executePreparedCliRun supervisor output capture", () => {
     },
   );
 
-  it("preserves max-turn failure through fork successor persistence errors", async () => {
-    const stdout = `${JSON.stringify({
-      type: "result",
-      subtype: "error_max_turns",
-      session_id: "fork-successor",
-      terminal_reason: "max_turns",
-      errors: ["Reached maximum number of turns (1)"],
-    })}\n`;
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(stdout);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+  it.for([false, true])(
+    "preserves primary run failure through fork persistence errors (watchdog=%s)",
+    async (watchdog, { onTestFinished }) => {
+      const stdout = `${JSON.stringify(
+        watchdog
+          ? {
+              type: "system",
+              subtype: "init",
+              session_id: "fork-successor",
+            }
+          : {
+              type: "result",
+              subtype: "error_max_turns",
+              session_id: "fork-successor",
+              terminal_reason: "max_turns",
+              errors: ["Reached maximum number of turns (1)"],
+            },
+      )}\n`;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(stdout);
+        return createManagedRun({
+          reason: watchdog ? "overall-timeout" : "exit",
+          exitCode: watchdog ? null : 1,
+          exitSignal: watchdog ? "SIGTERM" : null,
+          durationMs: watchdog ? 1_000 : 50,
+          stdout: input.captureOutput === false ? "" : stdout,
+          stderr: "",
+          timedOut: watchdog,
+          noOutputTimedOut: false,
+        });
       });
-    });
-    const persistenceError = new Error("fork successor persistence failed");
-    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
-    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
-    const context = buildPreparedCliRunContext({
-      output: "jsonl",
-      provider: "claude-cli",
-      runId: "run-fork-max-turns",
-    });
-    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
-    context.preparedBackend.backend.forkArg = "--fork-session";
-    context.params.forkCliSessionOnResume = true;
-    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
-    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
-    context.params.restoreCliSessionFork = restoreCliSessionFork;
+      const persistenceError = new Error("fork successor persistence failed");
+      if (!watchdog) {
+        persistenceError.name = "TimeoutError";
+      }
+      const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+      const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+      const context = buildPreparedCliRunContext({
+        output: "jsonl",
+        provider: "claude-cli",
+        runId: "run-fork-primary-failure",
+      });
+      context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+      context.preparedBackend.backend.forkArg = "--fork-session";
+      context.params.forkCliSessionOnResume = true;
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        context.params.runId,
+        "main",
+        "fork-test",
+      );
+      onTestFinished(admission.close);
+      context.params.admittedRunContext = await admission.admit("embedded");
+      context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+      context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+      context.params.restoreCliSessionFork = restoreCliSessionFork;
 
-    let failure: unknown;
-    try {
-      await executePreparedCliRun(context, "fork-source");
-    } catch (error) {
-      failure = error;
-    }
+      let failure: unknown;
+      try {
+        await executePreparedCliRun(context, "fork-source");
+      } catch (error) {
+        failure = error;
+      }
 
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).errors).toEqual([
-      expect.objectContaining({ code: "cli_max_turns" }),
-      persistenceError,
-    ]);
-    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
-    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
-    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
-  });
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([
+        expect.objectContaining({ code: watchdog ? "cli_overall_timeout" : "cli_max_turns" }),
+        persistenceError,
+      ]);
+      if (!watchdog) {
+        expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
+      }
+      expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual(
+        watchdog ? { stopReason: "timeout", timeoutPhase: "provider" } : {},
+      );
+      expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[0]);
+      expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+      expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("composes plugin-owned JSONL parsing into the production executor", async () => {
     const agentEvents: Array<{ stream: string; phase?: string; text?: string }> = [];
@@ -818,16 +1222,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     try {
@@ -860,7 +1255,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     }
   });
 
-  it("persists plugin-owned successor session ids for forked resumes", async () => {
+  it("persists plugin-owned successor session ids for forked resumes", async ({
+    onTestFinished,
+  }) => {
     const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
       const event = JSON.parse(line) as { type: string; session?: string; text?: string };
       return event.type === "session"
@@ -876,16 +1273,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const persistCliSessionForkSuccessor = vi.fn().mockResolvedValue(undefined);
     const context = buildPreparedCliRunContext({
@@ -896,6 +1284,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
     context.preparedBackend.backend.forkArg = "--fork-session";
     context.params.forkCliSessionOnResume = true;
+    const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
     context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
 
@@ -905,21 +1296,44 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
   });
 
-  it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {
+  it("streams native thinking snapshots and text with supervisor capture disabled", async () => {
     // Streaming events are emitted from live chunks, not from the final captured
     // stdout string, so users still see deltas when captureOutput is false.
-    const agentEvents: Array<{ text?: string; delta?: string }> = [];
+    const agentEvents: Array<{
+      stream: string;
+      text?: string;
+      delta?: string;
+      isReasoningSnapshot?: boolean;
+    }> = [];
     const stop = onAgentEvent((event) => {
-      if (event.stream !== "assistant") {
+      if (event.stream !== "assistant" && event.stream !== "thinking") {
         return;
       }
       agentEvents.push({
+        stream: event.stream,
         text: typeof event.data.text === "string" ? event.data.text : undefined,
         delta: typeof event.data.delta === "string" ? event.data.delta : undefined,
+        ...(event.data.isReasoningSnapshot === true ? { isReasoningSnapshot: true } : {}),
       });
     });
     const chunks = [
       `${JSON.stringify({ type: "init", session_id: "session-jsonl" })}\n`,
+      ...[
+        { index: 0, thinking: "Checking " },
+        { index: 1, thinking: "facts." },
+        { index: 0, thinking: "the " },
+        { index: 1, thinking: " Done." },
+      ].map(
+        ({ index, thinking }) =>
+          `${JSON.stringify({
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              index,
+              delta: { type: "thinking_delta", thinking },
+            },
+          })}\n`,
+      ),
       `${JSON.stringify({
         type: "stream_event",
         event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
@@ -963,8 +1377,22 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.text).toBe("Hello world");
       expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
       expect(agentEvents).toEqual([
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
+        { stream: "thinking", text: "Checking ", delta: "Checking ", isReasoningSnapshot: true },
+        { stream: "thinking", text: "Checking facts.", delta: "facts.", isReasoningSnapshot: true },
+        {
+          stream: "thinking",
+          text: "Checking the facts.",
+          delta: "the ",
+          isReasoningSnapshot: true,
+        },
+        {
+          stream: "thinking",
+          text: "Checking the facts. Done.",
+          delta: " Done.",
+          isReasoningSnapshot: true,
+        },
+        { stream: "assistant", text: "Hello", delta: "Hello" },
+        { stream: "assistant", text: "Hello world", delta: " world" },
       ]);
       expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
       expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
@@ -1009,16 +1437,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.params.sessionKey = "agent:coder:main";
@@ -1121,16 +1540,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1205,16 +1615,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1293,16 +1694,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1407,16 +1799,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
           },
         })}\n${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
       );
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1500,16 +1883,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         });
         markMcpLoopbackToolCallFinished(captureHandle);
       }, 10);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
     context.mcpDeliveryCapture = true;
@@ -1527,6 +1901,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   });
 
   it("finishes parsed CLI tools when the process exits before a tool result", async () => {
+    const pluginLoaderCalls = getPluginModuleLoaderStats().calls;
     const toolEvents: TrustedToolExecutionEvent[] = [];
     const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
     const toolStart = `${JSON.stringify({
@@ -1579,6 +1954,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
         errorCategory: "cli_tool_incomplete",
       },
     ]);
+    expect(
+      getPluginModuleLoaderStats().calls,
+      "prepared CLI execution must not materialize provider plugins",
+    ).toBe(pluginLoaderCalls);
   });
 
   it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {
@@ -1790,16 +2169,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
@@ -1850,16 +2220,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(
@@ -1906,16 +2267,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       for (const chunk of chunks) {
         input.onStdout?.(chunk);
       }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(
@@ -2097,16 +2449,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2127,16 +2470,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       );
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2163,16 +2497,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2202,16 +2527,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2244,16 +2560,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         outcome: "unknown",
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2288,16 +2595,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2332,16 +2630,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2388,16 +2677,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2432,16 +2712,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2474,16 +2745,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2497,6 +2759,87 @@ describe("executePreparedCliRun supervisor output capture", () => {
       }),
     ]);
   });
+
+  it.each(
+    ["send", "reply", "thread-reply", "poll"].flatMap((action) =>
+      [0, 1].map((exitCode) => ({ action, exitCode })),
+    ),
+  )(
+    "retains source $action delivery and suppresses assistant output through CLI exit $exitCode",
+    async ({ action, exitCode }) => {
+      const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
+      context.mcpDeliveryCapture = true;
+      context.params.sourceReplyDeliveryMode = "message_tool_only";
+      context.params.messageChannel = "webchat";
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        recordMcpLoopbackToolCallResult({
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: { action, channel: TEST_MESSAGE_CHANNEL, message: "implicit source reply" },
+          result: {
+            content: [{ type: "text", text: "sent" }],
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+          },
+          isError: false,
+        });
+        input.onStdout?.("done");
+        return createManagedRun({
+          reason: "exit",
+          exitCode,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: exitCode === 0 ? "" : "CLI failed after delivery",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+
+      let result: ReturnType<typeof buildCliRunResult>;
+      if (exitCode === 0) {
+        const output = await executePreparedCliRun(context);
+        expect(output.messagingToolSentTargets).toBeUndefined();
+        result = buildCliRunResult({
+          context,
+          output,
+          usedHistoryPrompt: false,
+          userTurnHandled: true,
+          sessionBindingDisabled: true,
+          preparedContextAgentMeta: {},
+        });
+      } else {
+        let failure: unknown;
+        try {
+          await executePreparedCliRun(context);
+        } catch (error) {
+          failure = error;
+        }
+        const evidence = getCliMessagingDeliveryEvidence(failure);
+        expect(evidence?.messagingToolSentTargets).toBeUndefined();
+        if (!evidence) {
+          throw new Error("expected CLI failure to retain confirmed delivery evidence");
+        }
+        result = buildCliDeliveredFailure({
+          error: failure,
+          evidence,
+          context,
+          preparedContextAgentMeta: {},
+          sessionBindingDisabled: true,
+        });
+      }
+      expect(result.sourceReplyDelivered).toBe(true);
+      expect(result.messagingToolSentTargets).toBeUndefined();
+      expect(result.payloads).toBeUndefined();
+    },
+  );
 
   it("preserves text and media evidence for confirmed implicit message sends", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
@@ -2547,16 +2890,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2566,6 +2900,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentMediaUrls).toEqual(["https://example.com/implicit.png"]);
     expect(result.messagingToolSentTargets).toBeUndefined();
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBeUndefined();
     expect(result.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "implicit reply",
@@ -2641,16 +2976,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2676,16 +3002,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.("done");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const result = await executePreparedCliRun(context);
@@ -2761,16 +3078,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         isError: false,
       });
       input.onStdout?.(`${JSON.stringify({ item: { type: "message", text: "done" } })}\n`);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      return createManagedRun(createSuccessfulProcessExit());
     });
 
     const first = await executePreparedCliRun(context);

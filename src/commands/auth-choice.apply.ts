@@ -18,8 +18,8 @@ async function normalizeLegacyChoice(
   if (typeof authChoice !== "string") {
     return authChoice;
   }
-  const { normalizeLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
-  return normalizeLegacyOnboardAuthChoice(authChoice, params);
+  const { resolveLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
+  return resolveLegacyOnboardAuthChoice(authChoice, params).authChoice;
 }
 
 async function normalizeTokenProviderChoice(params: {
@@ -86,7 +86,10 @@ export async function prepareAuthChoice(
     normalizedProviderAuthChoice === params.authChoice
       ? params
       : { ...params, authChoice: normalizedProviderAuthChoice };
-  const result = await prepareAuthChoiceLoadedPluginProvider(normalizedParams);
+  const result = await prepareAuthChoiceLoadedPluginProvider(
+    normalizedParams,
+    (prepared) => prepared,
+  );
   if (result) {
     return result;
   }

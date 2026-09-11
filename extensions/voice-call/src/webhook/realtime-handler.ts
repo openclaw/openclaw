@@ -10,14 +10,17 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  buildRealtimeVoiceAgentErrorProviderResult,
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceCloseReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
   type RealtimeVoiceSessionHarness,
@@ -26,12 +29,12 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
-import WebSocket, { WebSocketServer } from "ws";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
+import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
@@ -312,12 +315,13 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
+type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
 type RealtimeTelephonyBinding = {
   bridge: ActiveRealtimeVoiceBridge;
+  acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause: RealtimeCallEndCause) => Promise<void>;
   endCall: () => void;
   noteMediaActivity: () => void;
@@ -332,33 +336,45 @@ async function waitForNativeConsult(state: NativeConsultState): Promise<NativeCo
 }
 
 function appendRecentTalkEventMetadata(
-  call: CallRecord | null | undefined,
+  metadata: CallRecord["metadata"],
   event: TalkEvent,
-): void {
-  if (!call) {
-    return;
-  }
-  const metadata = call.metadata ?? {};
-  const previous = Array.isArray(metadata.recentTalkEvents) ? metadata.recentTalkEvents : [];
-  metadata.lastTalkEventAt = event.timestamp;
-  metadata.lastTalkEventType = event.type;
-  metadata.recentTalkEvents = [
+): CallRecord["metadata"] {
+  const previous = metadata ?? {};
+  const recent = Array.isArray(previous.recentTalkEvents) ? previous.recentTalkEvents : [];
+  return {
     ...previous,
-    {
-      id: event.id,
-      brain: event.brain,
-      mode: event.mode,
-      provider: event.provider,
-      seq: event.seq,
-      sessionId: event.sessionId,
-      timestamp: event.timestamp,
-      transport: event.transport,
-      type: event.type,
-      ...(event.turnId ? { turnId: event.turnId } : {}),
-      ...(event.final !== undefined ? { final: event.final } : {}),
-    },
-  ].slice(-12);
-  call.metadata = metadata;
+    lastTalkEventAt: event.timestamp,
+    lastTalkEventType: event.type,
+    recentTalkEvents: [
+      ...recent,
+      {
+        id: event.id,
+        brain: event.brain,
+        mode: event.mode,
+        provider: event.provider,
+        seq: event.seq,
+        sessionId: event.sessionId,
+        timestamp: event.timestamp,
+        transport: event.transport,
+        type: event.type,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+        ...(event.final !== undefined ? { final: event.final } : {}),
+      },
+    ].slice(-12),
+  };
+}
+
+// The declared 2026.9.2 host has no WebSocket SDK subpath. Keep these two
+// rejection statuses local until that host leaves the supported plugin API range.
+function rejectRealtimeUpgrade(socket: Duplex, status: 401 | 503): void {
+  const reason = status === 401 ? "Unauthorized" : "Service Unavailable";
+  try {
+    // Reused HTTP sockets can buffer writes; destroy only after the response flushes.
+    socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`, () => socket.destroy());
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
 }
 
 export class RealtimeCallHandler {
@@ -373,6 +389,7 @@ export class RealtimeCallHandler {
   private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private readonly terminationAttempts = new Set<Promise<void>>();
+  private readonly admissions = new Set<Promise<void>>();
   private closePromise: Promise<void> | null = null;
   private closing = false;
   private publicOrigin: string | null = null;
@@ -432,9 +449,10 @@ export class RealtimeCallHandler {
   }
 
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    // HTTP no longer owns socket errors after handing off an upgrade.
+    socket.once("error", () => socket.destroy());
     if (this.closing) {
-      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-      socket.destroy();
+      rejectRealtimeUpgrade(socket, 503);
       return;
     }
 
@@ -442,8 +460,7 @@ export class RealtimeCallHandler {
     const token = url.pathname.split("/").pop() ?? null;
     const callerMeta = token ? this.consumeStreamToken(token) : null;
     if (!callerMeta) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
+      rejectRealtimeUpgrade(socket, 401);
       return;
     }
 
@@ -465,7 +482,19 @@ export class RealtimeCallHandler {
       let lastMediaTimestamp: number | undefined;
       let lastMediaGapWarnAt = 0;
 
-      ws.on("message", (data: Buffer) => {
+      let admitting = false;
+      const pendingFrames: Buffer[] = [];
+      let pendingBytes = 0;
+      const handleMessage = (data: Buffer) => {
+        if (admitting) {
+          pendingBytes += Math.max(1, data.byteLength);
+          if (pendingBytes > MAX_REALTIME_WS_BUFFERED_BYTES) {
+            ws.terminate();
+            return;
+          }
+          pendingFrames.push(data);
+          return;
+        }
         try {
           const frame = adapter.parseInbound(data.toString());
           if (frame.kind === "ignored") {
@@ -478,18 +507,46 @@ export class RealtimeCallHandler {
             initialized = true;
             activeCallSid = frame.providerCallId;
             activeStreamSid = frame.streamId;
-            const nextBinding = this.handleCall(
+            admitting = true;
+            // pause() stops socket reads, but ws can still emit frames already in its receiver.
+            ws.pause();
+            const admission = this.handleCall(
               frame.streamId,
               frame.providerCallId,
               ws,
               callerMeta,
               adapter,
-            );
-            if (!nextBinding) {
-              return;
-            }
-            telephonyBinding = nextBinding;
-            this.streamDisconnectLifecycle.connect(activeCallSid, activeStreamSid);
+            )
+              .then(async (nextBinding) => {
+                telephonyBinding = nextBinding;
+                if (!nextBinding) {
+                  return;
+                }
+                if (this.closing || ws.readyState !== WebSocket.OPEN) {
+                  await nextBinding.close(
+                    this.serverClosingSockets.has(ws) ? "shutdown" : "disconnect",
+                  );
+                  return;
+                }
+                this.streamDisconnectLifecycle.connect(activeCallSid, activeStreamSid);
+              })
+              .catch((error: unknown) => {
+                console.error("[voice-call] realtime admission failed:", error);
+                ws.close(1011, "Failed to persist call");
+              })
+              .finally(() => {
+                admitting = false;
+                if (ws.readyState === WebSocket.OPEN && !this.closing) {
+                  for (const pending of pendingFrames) {
+                    handleMessage(pending);
+                  }
+                }
+                ws.resume();
+                pendingFrames.length = 0;
+                pendingBytes = 0;
+                this.admissions.delete(admission);
+              });
+            this.admissions.add(admission);
             return;
           }
           if (!telephonyBinding) {
@@ -516,7 +573,8 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "mark") {
-            telephonyBinding.bridge.acknowledgeMark();
+            telephonyBinding.acknowledgeCarrierMark(frame.name);
+            telephonyBinding.bridge.acknowledgeMark(frame.name);
             return;
           }
           if (frame.kind === "error") {
@@ -531,7 +589,8 @@ export class RealtimeCallHandler {
         } catch (error) {
           console.error("[voice-call] realtime WS parse failed:", error);
         }
-      });
+      };
+      ws.on("message", handleMessage);
 
       ws.on("close", () => {
         this.activeSockets.delete(ws);
@@ -561,7 +620,7 @@ export class RealtimeCallHandler {
     this.closing = true;
     this.pendingStreamTokens.clear();
     const sockets = [...this.activeSockets];
-    this.closePromise = Promise.all([
+    this.closePromise = Promise.allSettled([
       shutdownBarrier,
       ...sockets.map(
         (ws) =>
@@ -576,9 +635,14 @@ export class RealtimeCallHandler {
           }),
       ),
     ])
-      .then(async () => {
-        await Promise.all(this.terminationAttempts);
+      .then(async (results) => {
+        results.push(...(await Promise.allSettled(this.admissions)));
+        results.push(...(await Promise.allSettled(this.terminationAttempts)));
         this.pendingStreamTokens.clear();
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") {
+          throw failure.reason;
+        }
       })
       .finally(() => {
         this.closing = false;
@@ -665,14 +729,14 @@ export class RealtimeCallHandler {
     };
   }
 
-  private handleCall(
+  private async handleCall(
     streamSid: string,
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
     adapter: StreamFrameAdapter,
-  ): RealtimeTelephonyBinding | null {
-    const preparedCall = this.prepareCallInManager(callSid, callerMeta);
+  ): Promise<RealtimeTelephonyBinding | null> {
+    const preparedCall = await this.prepareCallInManager(callSid, callerMeta);
     if (!preparedCall) {
       ws.close(1008, "Caller rejected by policy");
       return null;
@@ -681,7 +745,6 @@ export class RealtimeCallHandler {
     const { callRecord } = preparedCall;
     const callId = callRecord.callId;
     const hadPredecessorOnAdmission = this.activeBridgesByCallId.has(callId);
-    const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
     let callEndPromise: Promise<void> | undefined;
     const emitCallEnd = (cause: RealtimeCallEndCause): Promise<void> => {
       if (callEndPromise) {
@@ -707,6 +770,22 @@ export class RealtimeCallHandler {
       return attempt;
     };
 
+    const admissionAbandoned = () => this.closing || ws.readyState !== WebSocket.OPEN;
+    const abandonAdmission = async (): Promise<void> => {
+      if (!this.activeBridgesByCallId.has(callId)) {
+        if (this.closing || this.serverClosingSockets.has(ws)) {
+          await emitCallEnd("shutdown");
+        } else {
+          this.streamDisconnectLifecycle.connect(callSid, streamSid);
+          this.streamDisconnectLifecycle.disconnect(callSid, streamSid);
+        }
+      }
+    };
+    if (admissionAbandoned()) {
+      await abandonAdmission();
+      return null;
+    }
+
     let registration: RealtimeCallRegistration;
     try {
       registration = this.resolveCallRegistration(callRecord);
@@ -714,23 +793,38 @@ export class RealtimeCallHandler {
       console.error(
         `[voice-call] Failed to resolve realtime call registration callId=${callId} providerCallId=${callSid}: ${formatErrorMessage(error)}`,
       );
-      if (!hadPredecessorOnAdmission) {
+      if (!this.activeBridgesByCallId.has(callId)) {
         void emitCallEnd("error");
       }
       ws.close(1011, "Check realtime configuration for routed agent");
       return null;
     }
 
-    const { baseFields, initialGreeting } = preparedCall;
-    if (callRecord.metadata) {
-      delete callRecord.metadata.initialMessage;
-    }
-    this.manager.processEvent({
+    const { baseFields } = preparedCall;
+    let initialGreeting: string | undefined;
+    await this.manager.updateCallMetadata(callRecord, (metadata) => {
+      if (metadata) {
+        initialGreeting =
+          typeof metadata.initialMessage === "string" ? metadata.initialMessage : undefined;
+        delete metadata.initialMessage;
+      }
+      return metadata;
+    });
+    await this.manager.processEvent({
       id: `realtime-answered-${callSid}`,
       callId,
       type: "call.answered",
       ...baseFields,
     });
+    if (admissionAbandoned()) {
+      await abandonAdmission();
+      return null;
+    }
+    if (this.manager.getCallByProviderCallId(callSid) !== callRecord) {
+      ws.close(1008, "Call is no longer active");
+      return null;
+    }
+    const previousTelephonyBinding = this.activeTelephonyBindingsByCallId.get(callId);
     const { agentId, instructions, provider: realtimeProvider, providerConfig } = registration;
     const initialGreetingInstructions = buildGreetingInstructions(instructions, initialGreeting);
     const harness = createRealtimeVoiceSessionHarness({
@@ -749,7 +843,15 @@ export class RealtimeCallHandler {
         outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
         outputAudioDone: (reason) => ({ callId, providerCallId: callSid, reason }),
       },
-      onTalkEvent: (event) => appendRecentTalkEventMetadata(callRecord, event),
+      onTalkEvent: (event) => {
+        void this.manager
+          .updateCallMetadata(callRecord, (metadata) =>
+            appendRecentTalkEventMetadata(metadata, event),
+          )
+          .catch((error: unknown) => {
+            console.warn("[voice-call] Failed to update realtime call metadata:", error);
+          });
+      },
     });
     let providerHandlesInputAudioBargeIn =
       realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
@@ -816,7 +918,11 @@ export class RealtimeCallHandler {
       }
       return true;
     };
+    const pendingMarkAcks = new Map<string, () => void>();
     const audioPacer = new RealtimeAudioPacer({
+      // Every pacer reset discards queued marks, so their stored provider
+      // acknowledgements can never fire and must be retired with them.
+      onPlaybackReset: () => pendingMarkAcks.clear(),
       send: sendString,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
@@ -843,15 +949,20 @@ export class RealtimeCallHandler {
         : undefined;
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
+    let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
+    let sessionClosed = false;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
     const userTranscriptOwner = userTranscriptAdoption.owner;
+    let transcriptPersistence = Promise.resolve();
+    let continuityGeneration = 0;
     const bridgeParams: Parameters<typeof harness.createBridge>[0] = {
       provider: realtimeProvider,
       cfg: this.coreConfig,
       agentId,
       providerConfig,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions,
       tools: this.config.tools,
@@ -859,10 +970,13 @@ export class RealtimeCallHandler {
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
-        sendAudio: (muLaw) => {
+        sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
-          audioPacer.sendAudio(muLaw);
+          audioPacer.sendAudio(muLaw, metadata);
         },
+        // Telephony pacing knows what actually reached the line; the provider's
+        // inbound media clock can run far ahead of playout.
+        getPlaybackState: () => audioPacer.getPlaybackState(),
         clearAudio: (reason) => {
           harness.flushOutput(() => {
             const clearedBytes = audioPacer.clearAudio();
@@ -876,13 +990,17 @@ export class RealtimeCallHandler {
             harness.finishOutputAudio("clear");
           });
         },
-        sendMark: (markName) => {
+        sendMark: (markName, acknowledge) => {
           audioPacer.sendMark(markName);
+          if (markName && acknowledge) {
+            pendingMarkAcks.set(markName, acknowledge);
+          }
         },
       },
       onTranscript: (role, text, isFinal) => {
         const owner = nativeConsultOwner.current;
         if (
+          provisionalCloseReason ||
           !this.getUserTranscriptState(callId, userTranscriptOwner) ||
           (owner && !this.isActiveBridgeOwner(callId, owner))
         ) {
@@ -948,33 +1066,60 @@ export class RealtimeCallHandler {
             transcript,
             isFinal: true,
           };
-          this.manager.processEvent(event);
-          this.scheduleForcedAgentConsult({
-            harness,
-            session,
-            callId,
-            callSid,
-            transcript,
-            userTranscriptOwner,
-            clearAudio: () => {
-              const clearedBytes = audioPacer.clearAudio();
-              console.log(
-                `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
-              );
-            },
+          const generation = continuityGeneration;
+          transcriptPersistence = this.manager.processEvent(event).then(() => {
+            if (
+              sessionClosed ||
+              generation !== continuityGeneration ||
+              !this.getUserTranscriptState(callId, userTranscriptOwner) ||
+              !this.isActiveBridgeOwner(callId, session)
+            ) {
+              return;
+            }
+            this.scheduleForcedAgentConsult({
+              harness,
+              session,
+              callId,
+              callSid,
+              transcript,
+              userTranscriptOwner,
+              clearAudio: () => {
+                const clearedBytes = audioPacer.clearAudio();
+                console.log(
+                  `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+                );
+              },
+            });
+          });
+          void transcriptPersistence.catch((error: unknown) => {
+            console.error("[voice-call] Failed to persist realtime transcript:", error);
           });
           return;
         }
-        this.manager.processEvent({
-          id: `realtime-bot-${callSid}-${Date.now()}`,
-          type: "call.assistant-speech",
-          callId,
-          providerCallId: callSid,
-          timestamp: Date.now(),
-          transcript: text,
+        transcriptPersistence = this.manager
+          .processEvent({
+            id: `realtime-bot-${callSid}-${Date.now()}`,
+            type: "call.assistant-speech",
+            callId,
+            providerCallId: callSid,
+            timestamp: Date.now(),
+            transcript: text,
+          })
+          .then(() => {});
+        void transcriptPersistence.catch((error: unknown) => {
+          console.error("[voice-call] Failed to persist realtime transcript:", error);
         });
       },
-      onToolCall: (toolEvent, sessionLocal) => {
+      onToolCall: async (toolEvent, sessionLocal) => {
+        const generation = continuityGeneration;
+        await transcriptPersistence;
+        if (
+          sessionClosed ||
+          generation !== continuityGeneration ||
+          !this.isActiveBridgeOwner(callId, sessionLocal)
+        ) {
+          return;
+        }
         const turnId = harness.ensureTurn();
         harness.emit({
           type: "tool.call",
@@ -999,6 +1144,7 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "session.continuity.reset") {
+          continuityGeneration += 1;
           // A fresh provider session cannot complete the prior session's text,
           // audio, tool work, or Talk turn.
           const turnId = harness.talk.activeTurnId;
@@ -1064,56 +1210,65 @@ export class RealtimeCallHandler {
         });
       },
       onClose: (reason) => {
-        const owner = nativeConsultOwner.current;
-        const ownsCallState = owner ? this.isActiveBridgeOwner(callId, owner) : false;
-        if (owner) {
-          this.clearActiveBridgeMappings(callId, callSid, owner);
-          this.cancelConsultSession(callId, owner);
-        }
-        if (ownsCallState) {
-          this.clearUserTranscriptState(callId, userTranscriptOwner);
-        }
         harness.finishOutputAudio(reason);
         harness.emit({
           type: "session.closed",
           payload: { reason },
           final: true,
         });
-        if (reason !== "error") {
+        const owner = nativeConsultOwner.current;
+        if (!owner) {
+          // Settle terminal creation before adopting a bridge or retiring its predecessor.
+          provisionalCloseReason ??= reason;
+          return;
+        }
+        const ownsCallState = this.isActiveBridgeOwner(callId, owner);
+        this.clearActiveBridgeMappings(callId, callSid, owner);
+        this.cancelConsultSession(callId, owner);
+        if (ownsCallState) {
+          this.clearUserTranscriptState(callId, userTranscriptOwner);
+        }
+        // Carrier teardown already owns its outcome; a provider-ended call still needs hangup.
+        if (reason === "completed" && (!ownsCallState || sessionClosed)) {
           return;
         }
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Bridge disconnected");
+          ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
         }
-        // A provisional replacement may fail before its bridge owner is assigned.
-        // The active predecessor still owns call termination until creation succeeds.
-        if (
-          (owner && !ownsCallState) ||
-          (!owner && hadPredecessorOnAdmission && this.activeBridgesByCallId.has(callId))
-        ) {
-          return;
+        if (ownsCallState) {
+          void emitCallEnd(reason);
         }
-        void emitCallEnd("error");
       },
     };
-    let session: ActiveRealtimeVoiceBridge;
+    let candidate: ActiveRealtimeVoiceBridge | undefined;
     try {
-      session = harness.createBridge(bridgeParams);
+      candidate = harness.createBridge(bridgeParams);
     } catch (error) {
+      console.error("[voice-call] Failed to create realtime bridge:", error);
+    }
+    if (!candidate || provisionalCloseReason) {
       this.rollbackUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
+      try {
+        candidate?.close();
+      } catch (error) {
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
+        );
+      }
       harness.close();
       audioPacer.close();
+      const reason = provisionalCloseReason ?? "error";
       // A failed provisional replacement must not terminate its active predecessor.
       if (!hadPredecessorOnAdmission || !this.activeBridgesByCallId.has(callId)) {
-        void emitCallEnd("error");
+        void emitCallEnd(reason);
       }
       if (ws.readyState === WebSocket.OPEN) {
-        ws.close(1011, "Failed to create realtime bridge");
+        ws.close(reason === "error" ? 1011 : 1000, "Failed to create realtime bridge");
       }
-      console.error("[voice-call] Failed to create realtime bridge:", error);
       return null;
     }
+    const session = candidate;
     this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
     nativeConsultOwner.current = session;
     providerHandlesInputAudioBargeIn =
@@ -1142,7 +1297,6 @@ export class RealtimeCallHandler {
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
-    let sessionClosed = false;
     session.close = () => {
       if (sessionClosed) {
         return;
@@ -1201,6 +1355,19 @@ export class RealtimeCallHandler {
     };
     const telephonyBinding: RealtimeTelephonyBinding = {
       bridge: session,
+      acknowledgeCarrierMark: (markName) => {
+        // Retire the played prefix before provider acknowledgement so any
+        // truncation snapshot no longer carries carrier-confirmed items.
+        audioPacer.acknowledgeMark(markName);
+        if (!markName) {
+          return;
+        }
+        const acknowledge = pendingMarkAcks.get(markName);
+        if (acknowledge) {
+          pendingMarkAcks.delete(markName);
+          acknowledge();
+        }
+      },
       close: (cause) => closeBinding(telephonyBinding, cause),
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
@@ -1662,8 +1829,11 @@ export class RealtimeCallHandler {
       );
     } catch (error) {
       if (!state.cancelled) {
-        console.warn(
-          `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
+        const result = buildRealtimeVoiceAgentErrorProviderResult(error);
+        const failed = "error" in result;
+        const report = failed ? console.warn : console.log;
+        report(
+          `[voice-call] realtime forced agent consult ${failed ? "failed" : "cancelled"} callId=${params.callId} providerCallId=${params.callSid}${failed ? ` error=${result.error}` : ""}`,
         );
       }
     } finally {
@@ -1683,7 +1853,7 @@ export class RealtimeCallHandler {
     }
   }
 
-  private prepareCallInManager(
+  private async prepareCallInManager(
     callSid: string,
     callerMeta: Omit<PendingStreamToken, "expiry"> = {},
   ) {
@@ -1696,19 +1866,15 @@ export class RealtimeCallHandler {
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
 
-    const callRecord = this.resolveRealtimeCall(callSid, callerMeta, baseFields);
+    const callRecord = await this.resolveRealtimeCall(callSid, callerMeta, baseFields);
     if (!callRecord) {
       return null;
     }
 
-    const initialGreeting = this.extractInitialGreeting(callRecord);
-    console.log(
-      `[voice-call] Realtime call ${callRecord.callId} initial greeting ${initialGreeting ? "queued" : "absent"}`,
-    );
-    return { callRecord, baseFields, initialGreeting };
+    return { callRecord, baseFields };
   }
 
-  private resolveRealtimeCall(
+  private async resolveRealtimeCall(
     callSid: string,
     callerMeta: Omit<PendingStreamToken, "expiry">,
     baseFields: {
@@ -1718,13 +1884,13 @@ export class RealtimeCallHandler {
       from?: string;
       to?: string;
     },
-  ): CallRecord | null {
+  ): Promise<CallRecord | null> {
     if (callerMeta.callId) {
-      const call = this.manager.getCall(callerMeta.callId);
+      const call = await this.manager.getCallForStream(callerMeta.callId);
       return call?.providerCallId === callSid ? call : null;
     }
 
-    this.manager.processEvent({
+    await this.manager.processEvent({
       id: `realtime-initiated-${callSid}`,
       callId: callSid,
       type: "call.initiated",
@@ -1732,12 +1898,6 @@ export class RealtimeCallHandler {
     });
 
     return this.manager.getCallByProviderCallId(callSid) ?? null;
-  }
-
-  private extractInitialGreeting(call: CallRecord): string | undefined {
-    return typeof call.metadata?.initialMessage === "string"
-      ? call.metadata.initialMessage
-      : undefined;
   }
 
   private async executeEndCallTool(params: {
@@ -1811,9 +1971,9 @@ export class RealtimeCallHandler {
     }
     const handler = this.toolHandlers.get(name);
     const startedAt = Date.now();
-    const hasResultError = (result: unknown): boolean => {
-      return Boolean(
-        result && typeof result === "object" && !Array.isArray(result) && "error" in result,
+    const hasResultError = (result: unknown): result is { error: unknown } => {
+      return (
+        result !== null && typeof result === "object" && !Array.isArray(result) && "error" in result
       );
     };
     const emitFinalToolEvent = (result: unknown): void => {
@@ -1885,9 +2045,9 @@ export class RealtimeCallHandler {
           return;
         }
         forcedConsult.sendSpeechPrompt = false;
-        const result = await forcedConsult.promise.catch((error: unknown) => ({
-          error: formatErrorMessage(error),
-        }));
+        const result = await forcedConsult.promise.catch(
+          buildRealtimeVoiceAgentErrorProviderResult,
+        );
         if (
           forcedConsult.cancelled ||
           forcedConsult.owner !== bridge ||
@@ -1961,9 +2121,7 @@ export class RealtimeCallHandler {
             ? { error: `Tool "${name}" not available` }
             : await handler(handlerArgs, callId, context);
         } catch (error) {
-          return {
-            error: formatErrorMessage(error),
-          };
+          return buildRealtimeVoiceAgentErrorProviderResult(error);
         }
       })().then(completeConsult);
       try {
@@ -1972,19 +2130,13 @@ export class RealtimeCallHandler {
           return;
         }
         const result = outcome.result;
-        const status =
-          result && typeof result === "object" && !Array.isArray(result) && "error" in result
-            ? "error"
-            : "ok";
-        const error =
-          status === "error" && result && typeof result === "object" && !Array.isArray(result)
-            ? formatErrorMessage((result as { error?: unknown }).error ?? "unknown")
-            : undefined;
+        const failed = hasResultError(result);
+        const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
         console.log(
-          `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+          `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
         );
         await submitFinalToolResult(result);
-        if (status === "ok") {
+        if (!failed) {
           this.consumePartialUserTranscript(
             callId,
             userTranscriptOwner,
@@ -2004,30 +2156,21 @@ export class RealtimeCallHandler {
     const context = {
       partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
     };
-    const handlerArgs =
-      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
-        ? withFallbackConsultQuestion(args, context.partialUserTranscript)
-        : args;
-    const result = !handler
-      ? { error: `Tool "${name}" not available` }
-      : await handler(handlerArgs, callId, context).catch((error: unknown) => ({
-          error: formatErrorMessage(error),
-        }));
-    const status =
-      result && typeof result === "object" && !Array.isArray(result) && "error" in result
-        ? "error"
-        : "ok";
-    const error =
-      status === "error" && result && typeof result === "object" && !Array.isArray(result)
-        ? formatErrorMessage((result as { error?: unknown }).error ?? "unknown")
-        : undefined;
+    let result: unknown;
+    try {
+      result = !handler
+        ? { error: `Tool "${name}" not available` }
+        : await handler(args, callId, context);
+    } catch (error) {
+      result = buildRealtimeVoiceAgentErrorProviderResult(error);
+    }
+    const error = hasResultError(result)
+      ? formatErrorMessage(result.error ?? "unknown")
+      : undefined;
     console.log(
-      `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+      `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${error === undefined ? "ok" : "error"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
     );
     await submitFinalToolResult(result);
-    if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME && status === "ok") {
-      this.consumePartialUserTranscript(callId, userTranscriptOwner, context.partialUserTranscript);
-    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

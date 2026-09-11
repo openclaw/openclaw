@@ -6,6 +6,7 @@ import type {
   DeferredPluginToolApproval,
   HookContext,
 } from "../agent-tools.before-tool-call.js";
+import type { CodexMcpServersConfig } from "../codex-mcp-config.types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 type NativeHookRelayApprovalContext = Pick<
@@ -76,6 +77,7 @@ export type NativeHookRelayRegistration = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  deferMcpToolApprovals?: boolean;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -116,6 +118,8 @@ export type RegisterNativeHookRelayParams = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: CodexMcpServersConfig;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -208,6 +212,15 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
   generation: string;
 };
 
+export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Strict policy preparation and direct publication result. */
+  ready: Promise<void>;
+  /** Requires current foreground authority; direct publication may use the Gateway fallback. */
+  prepareInvocation: () => Promise<void>;
+  /** Joins accepted policy, publication, renewal and cleanup without retiring retained children. */
+  drain: () => Promise<void>;
+};
+
 export type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
   agentId?: string;
@@ -249,14 +262,19 @@ export type NativeHookRelayBridgeRegistration = {
   stateDbPath: string;
   token: string;
   server: Server;
+  ready: Promise<void>;
+  pending: Promise<void>;
+  cancelStartup: () => void;
+  closing?: Promise<void>;
 };
 
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  pendingOperations: Set<Promise<unknown>>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  permissionAllowAlwaysApprovals: Map<string, { relayId: string; expiresAtMs?: number }>;
 };

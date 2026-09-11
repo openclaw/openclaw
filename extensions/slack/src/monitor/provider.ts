@@ -1,5 +1,5 @@
 // Slack provider module implements model/runtime integration.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import {
   addAllowlistUserEntriesFromConfigEntry,
@@ -28,7 +28,6 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
@@ -70,6 +69,7 @@ import {
   type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
+import { createSlackHttpRequestHandler } from "./http-handler.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
@@ -126,9 +126,6 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 }
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
-
-const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 type SlackRuntimeIdentity = {
   botUserId: string;
@@ -309,10 +306,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
-  const signingSecret = normalizeResolvedSecretInputString({
-    value: account.config.signingSecret,
-    path: `channels.slack.accounts.${account.accountId}.signingSecret`,
-  });
+  const signingSecret =
+    slackMode === "http"
+      ? normalizeResolvedSecretInputString({
+          value: account.config.signingSecret,
+          path: `channels.slack.accounts.${account.accountId}.signingSecret`,
+        })
+      : undefined;
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const userToken = account.userToken;
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
@@ -394,7 +394,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
-  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const slackDispatcher = resolveSlackProxyDispatcher();
@@ -410,7 +409,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slackMode,
     token,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
-    signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
+    signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     dispatcher: slackDispatcher,
@@ -446,6 +445,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         installationState.update(contextInstallationIdentity.kind);
         await installSlackRuntimeForIdentity(contextInstallationIdentity);
       }
+      if (
+        !current.apiAppId &&
+        identity.apiAppId &&
+        current.installationIdentity.kind !== "degraded"
+      ) {
+        // HTTP accounts have no app token and auth.test omits app_id for bot tokens,
+        // so the first signed event is the earliest trusted source. Recorded once;
+        // later mismatches are dropped by shouldDropMismatchedSlackEvent, never re-learned.
+        applySlackInstallationIdentity(current, {
+          ...current.installationIdentity,
+          apiAppId: identity.apiAppId,
+        });
+        runtime.log?.(
+          `[${account.accountId}] slack app id ${identity.apiAppId} learned from signed event`,
+        );
+      }
       if (recovered || adopted) {
         publishSlackConnectedStatus(opts.setStatus, current.identityHealth);
       }
@@ -462,28 +477,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackHttpHandler =
     slackMode === "http" && receiver
-      ? async (req: IncomingMessage, res: ServerResponse) => {
-          const httpReceiver = receiver as {
-            requestListener: (req: IncomingMessage, res: ServerResponse) => unknown;
-          };
-          const guard = installRequestBodyLimitGuard(req, res, {
-            maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
-            timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
-            responseFormat: "text",
-          });
-          if (guard.isTripped()) {
-            return;
-          }
-          try {
-            await Promise.resolve(httpReceiver.requestListener(req, res));
-          } catch (err) {
-            if (!guard.isTripped()) {
-              throw err;
-            }
-          } finally {
-            guard.dispose();
-          }
-        }
+      ? createSlackHttpRequestHandler({
+          receiver: receiver as { requestListener: RequestListener },
+          accountId: account.accountId,
+        })
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
   const unregisterSocketModeConnectionDiagnostics =
@@ -619,7 +616,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     threadInheritParent,
     slashCommand,
     textLimit,
-    ackReactionScope,
     typingReaction,
     mediaMaxBytes,
   });
@@ -687,6 +683,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({
     ctx,
     account,
+    abortSignal: opts.abortSignal,
     trackEvent,
     onPrepared: (prepared) => presenceMonitor?.observe(prepared),
   });
@@ -864,7 +861,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         ...(identity.kind === "enterprise"
           ? {
               enterprise: {
-                apiAppId: identity.apiAppId,
                 enterpriseId: identity.enterpriseId,
               },
             }

@@ -20,6 +20,7 @@ import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
+  type PreparedEnvironmentPlacementBinding,
   type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch,
@@ -207,7 +208,10 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   };
 
   const attachSession = async (
-    request: WorkerCredentialBinding & { sessionId: string },
+    request: WorkerCredentialBinding & {
+      sessionId: string;
+      placementBinding?: PreparedEnvironmentPlacementBinding;
+    },
   ): Promise<MintedWorkerCredential> => {
     let stopping = options.isStopping();
     if (stopping) {
@@ -248,6 +252,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
           from: current.state,
           to: "attached",
           expectedOwnerEpoch: request.ownerEpoch,
+          placementBinding: request.placementBinding,
           patch: {
             attachedSessionIds: [request.sessionId],
             credential: {
@@ -349,7 +354,8 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const acquireTurnCredential = (claim: WorkerSessionTurnClaim) => {
     const binding = bindingForClaim(claim);
     return withLock(binding.environmentId, async () => {
-      if (!validateTurnClaim(claim)) {
+      const placementStore = options.placementStore;
+      if (!placementStore || !validateTurnClaim(claim)) {
         throw serviceError("invalid_state", "Worker turn credential claim is not authoritative");
       }
       const pending = readPendingCredential(binding, claim)?.grant;
@@ -367,10 +373,15 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         throw serviceError("invalid_state", "Worker session credential owner is not attached");
       }
       const previous = store.getCredential(binding.environmentId);
+      const ackedSeq =
+        previous?.sessionId === binding.sessionId
+          ? placementStore.readWorkerTurnLiveAckCursor(claim)
+          : undefined;
       const minted = mintCredentialLocked(binding, claim);
       const grant = stageCredential(minted.grant);
-      if (previous?.sessionId === binding.sessionId) {
+      if (previous && ackedSeq !== undefined) {
         options.liveEvents?.rotateCredential({
+          ackedSeq,
           credentialHash: minted.credentialHash,
           environmentId: binding.environmentId,
           newProcessTurn: true,

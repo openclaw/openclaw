@@ -75,6 +75,13 @@ export interface ToolLoopIntervention {
   reason: string;
 }
 
+/** Bucketed feedback for an admitted call, not a veto or recovery attempt. */
+export interface ToolLoopWarning {
+  kind: "tool-loop-warning";
+  toolCallId: string;
+  count: number;
+}
+
 /** Context for OpenClaw-owned whole-batch tool admission. */
 export interface InternalBeforeToolBatchContext {
   assistantMessage: AssistantMessage;
@@ -83,9 +90,9 @@ export interface InternalBeforeToolBatchContext {
 }
 
 /** Result of OpenClaw-owned whole-batch tool admission. */
-export interface InternalBeforeToolBatchResult {
-  intervention?: ToolLoopIntervention;
-}
+export type InternalBeforeToolBatchResult =
+  | { intervention: ToolLoopIntervention; warnings?: never }
+  | { intervention?: never; warnings?: ToolLoopWarning[] };
 
 export interface DeferredToolCallContext {
   /** The assistant message that requested the deferred tool call. */
@@ -319,6 +326,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * Contract: must not throw or reject. Return [] when no follow-up messages are available.
    */
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
+
+  /** Consumes the cancellation fact for a previously drained queue message. */
+  consumeQueuedMessageCancellation?: (message: AgentMessage) => boolean;
 
   /**
    * Tool execution mode.
@@ -615,9 +625,6 @@ export type AgentEvent =
   | {
       type: "tool_execution_start";
       toolCallId: string;
-      /** Outer control-tool call that dispatched this nested tool. */
-      parentToolCallId?: string;
-      codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
       toolName: string;
       args: unknown;
       hideFromChannelProgress?: boolean;
@@ -625,8 +632,6 @@ export type AgentEvent =
   | {
       type: "tool_execution_update";
       toolCallId: string;
-      /** Outer control-tool call that dispatched this nested tool. */
-      parentToolCallId?: string;
       toolName: string;
       args: unknown;
       partialResult: unknown;
@@ -635,9 +640,6 @@ export type AgentEvent =
   | {
       type: "tool_execution_end";
       toolCallId: string;
-      /** Outer control-tool call that dispatched this nested tool. */
-      parentToolCallId?: string;
-      codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
       toolName: string;
       result: unknown;
       isError: boolean;

@@ -23,6 +23,13 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
+import type { TelegramThreadSpec } from "./thread-spec.js";
+
+export type TelegramPendingInboundTarget = {
+  chatId: number;
+  threadSpec: TelegramThreadSpec;
+  senderId: string;
+};
 
 export type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
@@ -106,6 +113,7 @@ export type TelegramInboundDisposition =
   | { kind: "processed" };
 
 export interface TelegramInboundPipeline {
+  cancelPending: (target: TelegramPendingInboundTarget) => void;
   handle: (ctx: Context) => Promise<TelegramInboundDisposition>;
 }
 
@@ -116,6 +124,7 @@ export interface TelegramCallbackRouter {
 }
 
 export interface TelegramEventBindings {
+  registerChatMembership(): void;
   registerReaction(): void;
   registerPolls(): void;
   registerMigration(): void;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,9 +18,10 @@ import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
+  parseSystemAgentOperation,
 } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
-import { installSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -56,6 +58,14 @@ function requireFirstMockCall(mock: unknown, label: string): unknown[] {
 function expectRuntimeArg(value: unknown) {
   const runtime = requireRecord(value, "runtime argument");
   expect(typeof runtime.log).toBe("function");
+}
+
+async function readConfigOutput(...paths: string[]): Promise<string> {
+  const { runtime, lines } = createSystemAgentTestRuntime();
+  for (const configPath of paths) {
+    await executeSystemAgentOperation({ kind: "config-get", path: configPath }, runtime);
+  }
+  return lines.join("\n");
 }
 
 const mockConfig = vi.hoisted(() => {
@@ -265,15 +275,10 @@ describe("system agent operations", () => {
         },
       },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const output = await readConfigOutput("models.providers.local.localService");
 
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "models.providers.local.localService" },
-      runtime,
-    );
-
-    expect(lines.join("\n")).toContain('"HF_HOME": "<redacted>"');
-    expect(lines.join("\n")).not.toContain("/private/model-cache");
+    expect(output).toContain('"HF_HOME": "<redacted>"');
+    expect(output).not.toContain("/private/model-cache");
     expect(
       describeSystemAgentPersistentOperation({
         kind: "config-set",
@@ -281,6 +286,27 @@ describe("system agent operations", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
+  });
+
+  it.each([
+    ['channels.modelByChannel.telegram["team.ops[west]"]', '"openai/gpt-5.5"'],
+    ["channels.modelByChannel.telegram['team.ops[west]']", '"openai/gpt-5.5"'],
+    [String.raw`channels.modelByChannel.telegram.team\.ops\[west\]`, '"openai/gpt-5.5"'],
+    ['models.providers["local.service"].apiKey', '"<redacted>"'],
+    ["agents.list[0].id", '"main"'],
+    ["agents.list[00].id", '"main"'],
+    ["agents.list.length", "1"],
+  ])("reads canonical config path %s after redaction", async (configPath, expected) => {
+    mockConfig.setConfig({
+      channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
+      models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
+      agents: { list: [{ id: "main" }] },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const operation = parseSystemAgentOperation(`config get ${configPath}`);
+    expect(operation).toEqual({ kind: "config-get", path: configPath });
+    expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
+    expect(lines).toEqual([`${configPath} = ${expected}`]);
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {
@@ -293,13 +319,7 @@ describe("system agent operations", () => {
       },
       {},
     );
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    await executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime);
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.missing" },
-      runtime,
-    );
-    const output = lines.join("\n");
+    const output = await readConfigOutput("gateway", "plugins.entries.missing");
     expect(output).toContain('"port": 19001');
     expect(output).toContain('"token": "<redacted>"');
     expect(output).toContain('"config": "<redacted>"');
@@ -316,15 +336,7 @@ describe("system agent operations", () => {
       },
       channels: { missing: { enabled: true, opaque: "missing-channel-secret" } },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.missing" },
-      runtime,
-    );
-    await executeSystemAgentOperation({ kind: "config-get", path: "channels.missing" }, runtime);
-
-    const output = lines.join("\n");
+    const output = await readConfigOutput("plugins.entries.missing", "channels.missing");
     expect(output).toContain('"enabled": true');
     expect(output).toContain('"config": "<redacted>"');
     expect(output).toContain('channels.missing = "<redacted>"');
@@ -339,15 +351,7 @@ describe("system agent operations", () => {
         modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
       },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await executeSystemAgentOperation({ kind: "config-get", path: "channels.defaults" }, runtime);
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "channels.modelByChannel" },
-      runtime,
-    );
-
-    const output = lines.join("\n");
+    const output = await readConfigOutput("channels.defaults", "channels.modelByChannel");
     expect(output).toContain('"groupPolicy": "open"');
     expect(output).toContain('"chat": "openai/gpt-5.5"');
     expect(output).not.toContain("<redacted>");
@@ -363,20 +367,13 @@ describe("system agent operations", () => {
       },
     };
     mockConfig.setConfig(config);
-    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const output = await pluginMetadata.run(() =>
+      readConfigOutput("plugins.entries.codex.config.appServer"),
+    );
 
-    try {
-      await executeSystemAgentOperation(
-        { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
-        runtime,
-      );
-    } finally {
-      pluginMetadata.restore();
-    }
-
-    expect(lines.join("\n")).toContain('"headers": "<redacted>"');
-    expect(lines.join("\n")).not.toContain(authorization);
+    expect(output).toContain('"headers": "<redacted>"');
+    expect(output).not.toContain(authorization);
   });
 
   it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {
@@ -395,35 +392,31 @@ describe("system agent operations", () => {
     };
     mockConfig.setConfig(config);
     setRuntimeConfigSnapshot(config, config);
-    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
+    const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
     try {
-      await executeSystemAgentOperation(
-        { kind: "config-get", path: "channels.synology-chat" },
-        runtime,
-      );
+      await pluginMetadata.run(async () => {
+        const output = await readConfigOutput("channels.synology-chat");
 
-      expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
-      expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
-      expect(lines.join("\n")).not.toContain("callback-secret");
-      expect(lines.join("\n")).not.toContain("incoming-secret");
-      expect(
-        describeSystemAgentPersistentOperation({
-          kind: "config-set",
-          path: "channels.synology-chat.accounts.work.webhookUrl",
-          value: callbackUrl,
-        }),
-      ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
-      expect(
-        describeSystemAgentPersistentOperation({
-          kind: "config-set",
-          path: "channels.synology-chat",
-          value: `{ webhookUrl: "${callbackUrl}" }`,
-        }),
-      ).toBe("set config channels.synology-chat to <redacted>");
+        expect(output).toContain('"webhookUrl": "<redacted>"');
+        expect(output).toContain('"incomingUrl": "<redacted>"');
+        expect(output).not.toContain("callback-secret");
+        expect(output).not.toContain("incoming-secret");
+        expect(
+          describeSystemAgentPersistentOperation({
+            kind: "config-set",
+            path: "channels.synology-chat.accounts.work.webhookUrl",
+            value: callbackUrl,
+          }),
+        ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
+        expect(
+          describeSystemAgentPersistentOperation({
+            kind: "config-set",
+            path: "channels.synology-chat",
+            value: `{ webhookUrl: "${callbackUrl}" }`,
+          }),
+        ).toBe("set config channels.synology-chat to <redacted>");
+      });
     } finally {
-      pluginMetadata.restore();
       clearRuntimeConfigSnapshot();
     }
   });
@@ -554,7 +547,17 @@ describe("system agent operations", () => {
       },
     });
 
-    await expect(runGatewayLifecycle("restart", "gateway")).resolves.toBe(true);
+    const host = createGatewayHostLifecycle({
+      processOwner: { ownsProcessLifecycle: true, supervisor: null },
+      isCurrent: () => true,
+      isServing: () => true,
+      acceptStop: () => {},
+    });
+    await expect(host.capability.request("restart", () => {})).resolves.toEqual({
+      ok: true,
+      value: { outcome: "scheduled" },
+    });
+    await host.retire();
 
     expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
       reason: "gateway.restart.safe",
@@ -564,32 +567,28 @@ describe("system agent operations", () => {
   });
 
   it("preserves the standalone CLI Gateway restart route", async () => {
-    await runGatewayLifecycle("restart", "cli");
+    await runGatewayLifecycle("restart");
 
     expect(mockDaemonRestart).toHaveBeenCalledExactlyOnceWith();
     expect(mockScheduleGatewayRestart).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { surface: "gateway" as const, summary: "Scheduled Gateway restart" },
-    { surface: "cli" as const, summary: "Restarted Gateway" },
-  ])("records an approved $surface restart truthfully", async ({ surface, summary }) => {
-    const tempDir = opTempDirs.make("openclaw-restart-scheduled-");
+  it("records an approved standalone restart truthfully", async () => {
+    const tempDir = opTempDirs.make("openclaw-restart-applied-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const { runtime } = createSystemAgentTestRuntime();
     const runGatewayRestart = vi.fn(async () => true);
-
     const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
       approved: true,
-      deps: { runGatewayRestart, setupSurface: surface },
+      deps: { runGatewayRestart },
     });
-
     expect(result.applied).toBe(true);
     expect(runGatewayRestart).toHaveBeenCalledOnce();
-    if (surface === "gateway") {
-      expect(lines.join("\n")).toContain(summary);
-    }
-    expectAuditRecord(readLastAuditEntry(), { operation: "gateway.restart", summary }, {});
+    expectAuditRecord(
+      readLastAuditEntry(),
+      { operation: "gateway.restart", summary: "Restarted Gateway" },
+      {},
+    );
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {
@@ -966,6 +965,7 @@ describe("system agent operations", () => {
     const tempDir = opTempDirs.make("openclaw-plugin-install-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
+    const beforePersistentApply = vi.fn();
 
     const plan = await executeSystemAgentOperation(
       { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
@@ -982,6 +982,7 @@ describe("system agent operations", () => {
       runtime,
       {
         approved: true,
+        beforePersistentApply,
         auditDetails: { rescue: true },
       },
     );
@@ -997,8 +998,13 @@ describe("system agent operations", () => {
       opts: {},
       allowInstallPolicyWarningPrompt: false,
     });
+    expect(typeof installRequest.beforePersistentApply).toBe("function");
+    expect(beforePersistentApply).toHaveBeenCalledOnce();
     expectRuntimeArg(installRequest.runtime);
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.install");
+    expect(lines.join("\n")).not.toContain(
+      "Restart the Gateway to apply installed plugin changes.",
+    );
     const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,

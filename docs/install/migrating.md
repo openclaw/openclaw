@@ -29,7 +29,7 @@ The CLI entry point is [`openclaw migrate`](/cli/migrate). Onboarding can also o
 Copy the **state directory** (`~/.openclaw/` by default) and your **workspace** to preserve:
 
 - **Config** — `openclaw.json` and all gateway settings.
-- **Auth** — per-agent `auth-profiles.json` (API keys plus OAuth), plus any channel or provider state under `credentials/`.
+- **Auth** — shared and per-agent SQLite auth stores (API keys plus OAuth), plus any channel or provider state under `credentials/`.
 - **Sessions** — conversation history and agent state.
 - **Channel state** — WhatsApp login, Telegram session, and similar.
 - **Workspace files** — `MEMORY.md`, `USER.md`, skills, and prompts.
@@ -112,7 +112,7 @@ awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.
   </Accordion>
 
   <Accordion title="Copying only openclaw.json">
-    The config file alone is not enough. Model auth profiles live under `agents/<agentId>/agent/auth-profiles.json`, and channel and provider state lives under `credentials/`. Always migrate the **entire** state directory.
+    The config file alone is not enough. Shared model auth lives in `state/openclaw.sqlite`, agent-local profiles live in `agents/<agentId>/agent/openclaw-agent.sqlite`, and channel and provider state lives under `credentials/`. Always migrate the **entire** state directory using the backup and restore flow above.
   </Accordion>
 
   <Accordion title="Permissions and ownership">
@@ -148,4 +148,6 @@ In-place plugin upgrades preserve the same plugin id and config keys but may mov
 - [`openclaw migrate`](/cli/migrate): CLI reference for cross-system imports.
 - [Install overview](/install): all installation methods.
 - [Doctor](/gateway/doctor): post-migration health check.
+- [Updating](/install/updating): updating an existing install in place, plus rollback strategy.
 - [Uninstall](/install/uninstall): removing OpenClaw cleanly.
+- [`openclaw backup`](/cli/backup) — create the archive this migration restores

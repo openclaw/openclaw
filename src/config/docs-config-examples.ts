@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import { validateConfigObjectRaw, validateConfigObjectRawWithPlugins } from "./validation.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
@@ -125,10 +127,9 @@ function stripIncludeKeys(value: unknown): unknown {
 }
 
 function createDocsConfigValidationContext(): DocsConfigValidationContext {
-  const env = {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
-  };
+  const env = resolveRepoBundledPluginEnv(
+    fileURLToPath(new URL("../../extensions", import.meta.url)),
+  );
   return {
     env,
     pluginMetadataSnapshot: loadPluginMetadataSnapshot({

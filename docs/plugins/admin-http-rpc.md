@@ -48,7 +48,9 @@ Enable the bundled plugin:
   </Tab>
 </Tabs>
 
-The route is registered during plugin startup, so restart the Gateway after changing plugin config.
+The route is registered during plugin startup. With the default hybrid reload
+mode, changes to its existing plugin entry hot-reload the plugin runtime;
+restart after plugin code, metadata, or discovery-root changes.
 
 Disable it when you no longer need the HTTP surface:
 
@@ -192,34 +194,22 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 
 ## Troubleshooting
 
-`404 Not Found`
+**`404 Not Found`** The plugin is disabled, the Gateway has not reloaded it since enablement, or the request is going to a different Gateway process.
 
-: The plugin is disabled, the Gateway has not restarted since enabling it, or the request is going to a different Gateway process.
+**`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer token or the trusted-proxy identity headers.
 
-`401 Unauthorized`
+**`405 Method Not Allowed`** The request used something other than `POST`.
 
-: The request did not satisfy Gateway HTTP auth. Check the bearer token or the trusted-proxy identity headers.
+**`413 Payload Too Large`** The request body exceeded the 1 MB limit.
 
-`405 Method Not Allowed`
+**`400 INVALID_REQUEST`** The request body is not valid JSON, the `method` field is missing, the method is not in the plugin allowlist, or a suspension resume ID does not match the active lease.
 
-: The request used something other than `POST`.
-
-`413 Payload Too Large`
-
-: The request body exceeded the 1 MB limit.
-
-`400 INVALID_REQUEST`
-
-: The request body is not valid JSON, the `method` field is missing, the method is not in the plugin allowlist, or a suspension resume ID does not match the active lease.
-
-`503 UNAVAILABLE`
-
-: The Gateway method is starting, rate-limited, suspended, or waiting on a competing suspension/resume operation. Inspect `error.details` when present and honor `error.retryAfterMs` before retrying.
+**`503 UNAVAILABLE`** The Gateway method is starting, rate-limited, suspended, or waiting on a competing suspension/resume operation. Inspect `error.details` when present and honor `error.retryAfterMs` before retrying.
 
 ## Related
 
 - [Operator scopes](/gateway/operator-scopes)
 - [Gateway security](/gateway/security)
 - [Remote access](/gateway/remote)
-- [Plugin manifest](/plugins/manifest#contracts-reference)
+- [Plugin manifest](/plugins/manifest/capabilities#contracts-reference)
 - [SDK subpaths](/plugins/sdk-subpaths)

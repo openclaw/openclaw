@@ -23,6 +23,7 @@ type DoctorSqliteCompactResult = {
 type DoctorSqliteCompactOptions = {
   afterSuccess?: () => void;
   busyTimeoutMs?: number;
+  operation?: "import-finalize";
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
 };
@@ -48,10 +49,16 @@ export function compactDoctorSqliteFile(
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
     assertSqliteIntegrity(database, options.sqlitePath);
-    checkpointTruncate(database, options.sqlitePath);
+    checkpointDoctorSqliteFile(database, options.sqlitePath);
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-    database.exec("VACUUM;");
-    checkpointTruncate(database, options.sqlitePath);
+    // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
+    // stores can release free pages without repacking; explicit compact still repacks.
+    database.exec(
+      options.operation === "import-finalize" && before.autoVacuum !== 0
+        ? "PRAGMA incremental_vacuum;"
+        : "VACUUM;",
+    );
+    checkpointDoctorSqliteFile(database, options.sqlitePath);
     const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
@@ -88,7 +95,7 @@ export function compactDoctorSqliteFile(
   return result;
 }
 
-function checkpointTruncate(database: DatabaseSync, sqlitePath: string): void {
+export function checkpointDoctorSqliteFile(database: DatabaseSync, sqlitePath: string): void {
   const row = database.prepare("PRAGMA wal_checkpoint(TRUNCATE);").get() as
     | Record<string, unknown>
     | undefined;

@@ -1,11 +1,19 @@
-import { definePage, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
+import {
+  definePage,
+  redirect,
+  type RouteLoaderOptions,
+  type RouteLocation,
+} from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
-import type { PluginsRouteData } from "./plugins-page.ts";
-import { pluginsRouteLocation } from "./route-data.ts";
+import {
+  canonicalPluginsRouteLocation,
+  pluginsRouteLocation,
+  type PluginsRouteData,
+} from "./route-data.ts";
 
 async function loadPluginsRouteData(
   context: ApplicationContext,
@@ -32,17 +40,41 @@ async function loadPluginsRouteData(
   }
 }
 
-export const page = definePage({
-  ...routePageSpec("plugins"),
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
-    const routeLocation = pluginsRouteLocation(location);
-    return `${routeLocation.pathname}\u0000${routeLocation.search}\u0000${routeLocation.hash}`;
-  },
-  loader: loadPluginsRouteData,
-  component: () =>
-    import("./plugins-page.ts").then(() => ({
-      header: true,
-      render: (data: PluginsRouteData | undefined) =>
-        html`<openclaw-plugins-page .routeData=${data}></openclaw-plugins-page>`,
-    })),
-});
+type PluginsSurface = "discovery" | "settings";
+
+function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: PluginsSurface) {
+  return definePage({
+    ...routePageSpec(routeId),
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+      const routeLocation = pluginsRouteLocation(location);
+      return `${routeLocation.pathname}\u0000${routeLocation.search}\u0000${routeLocation.hash}`;
+    },
+    loader: (context: ApplicationContext, options: RouteLoaderOptions) => {
+      const location = pluginsRouteLocation(options.location);
+      const canonical = canonicalPluginsRouteLocation(location, context.basePath);
+      if (canonical) {
+        return redirect(canonical);
+      }
+      if (surface === "settings") {
+        const configLoad = context.runtimeConfig.ensureLoaded();
+        void configLoad
+          .then(() => context.runtimeConfig.ensureSchemaLoaded())
+          .catch(() => undefined);
+      }
+      return loadPluginsRouteData(context, options);
+    },
+    component: () =>
+      import("./plugins-page.ts").then(() => ({
+        header: true,
+        render: (data: PluginsRouteData | undefined) =>
+          html`<openclaw-plugins-page
+            .routeData=${data}
+            .surface=${surface}
+          ></openclaw-plugins-page>`,
+      })),
+  });
+}
+
+const page = definePluginsPage("plugins", "discovery");
+const settingsPage = definePluginsPage("plugin-settings", "settings");
+export const pages = [page, settingsPage] as const;

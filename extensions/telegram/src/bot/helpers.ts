@@ -96,6 +96,22 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
   });
 }
 
+export function getCachedTelegramForumFlag(
+  chatId: string | number,
+  nowMs?: number,
+): boolean | undefined {
+  const cacheKey = String(chatId);
+  const cached = telegramForumFlagByChatId.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  const effectiveNow = nowMs ?? Date.now();
+  if (cached.expiresAtMs <= effectiveNow) {
+    return undefined;
+  }
+  return cached.isForum;
+}
+
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
 }
@@ -565,6 +581,7 @@ export function resolveTelegramCommandAuthorization(params: {
   threadSpec: TelegramThreadSpec;
   senderId?: string;
   senderUsername?: string;
+  commandAuthorized?: boolean;
 }): CommandAuthorization {
   return resolveCommandAuthorization({
     ctx: {
@@ -580,7 +597,7 @@ export function resolveTelegramCommandAuthorization(params: {
       SenderUsername: params.senderUsername || undefined,
     },
     cfg: params.cfg,
-    commandAuthorized: false,
+    commandAuthorized: params.commandAuthorized ?? false,
   });
 }
 

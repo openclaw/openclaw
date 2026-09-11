@@ -1,9 +1,62 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
-import { Value } from "typebox/value";
+import { Guard } from "typebox/guard";
+import { Check } from "typebox/schema";
 import { isRecord } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
+
+/** Validation details shared by the TypeBox schema and value compilers. */
+export type TypeBoxValidationError = {
+  keyword?: string;
+  instancePath?: string;
+  schemaPath?: string;
+  params?: Record<string, unknown>;
+  message?: string;
+};
+
+/** Remove complete false-schema child groups immediately preceding their aggregate. */
+export function normalizeTypeBoxValidationErrors<T extends TypeBoxValidationError>(
+  errors: T[],
+): T[] {
+  const normalized: T[] = [];
+  let consecutiveBooleanErrors = 0;
+  for (const error of errors) {
+    if (error.keyword === "boolean") {
+      normalized.push(error);
+      consecutiveBooleanErrors += 1;
+      continue;
+    }
+    const properties = error.params?.additionalProperties;
+    if (
+      error.keyword === "additionalProperties" &&
+      typeof error.schemaPath === "string" &&
+      typeof error.instancePath === "string" &&
+      Array.isArray(properties) &&
+      properties.length > 0 &&
+      properties.length <= consecutiveBooleanErrors
+    ) {
+      const children = normalized.slice(-properties.length);
+      // TypeBox emits this group immediately before its aggregate, in property order.
+      // Matching only that suffix preserves genuine errors with colliding raw paths.
+      if (
+        children.every((child, index) => {
+          const property = properties[index];
+          return (
+            typeof property === "string" &&
+            child.schemaPath === `${error.schemaPath}/additionalProperties` &&
+            child.instancePath === `${error.instancePath}/${property}`
+          );
+        })
+      ) {
+        normalized.length -= properties.length;
+      }
+    }
+    normalized.push(error);
+    consecutiveBooleanErrors = 0;
+  }
+  return normalized;
+}
 
 const schemaMapKeywords = new Set([
   "$defs",
@@ -107,15 +160,14 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
   if (types.length === 1 && !Array.isArray(type)) {
     return schema;
   }
-  const resourceEntries = Object.entries(rest).filter(([key]) => schemaResourceKeywords.has(key));
-  const branchEntries = Object.entries(rest).filter(([key]) => !schemaResourceKeywords.has(key));
+  const entries = Object.entries(rest);
+  const resourceEntries = entries.filter(([key]) => schemaResourceKeywords.has(key));
+  const branch = Object.fromEntries(entries.filter(([key]) => !schemaResourceKeywords.has(key)));
   // Keep value-wide constraints on every branch: const, enum, and applicators
   // must still decide whether null is valid. Type-specific keywords ignore null.
   return {
     ...Object.fromEntries(resourceEntries),
-    anyOf: types.map((entry) =>
-      Object.assign({}, Object.fromEntries(branchEntries), { type: entry }),
-    ),
+    anyOf: types.map((entry) => Object.assign({}, branch, { type: entry })),
   };
 }
 
@@ -269,7 +321,7 @@ export function jsonSchemaValuesEqual(left: unknown, right: unknown): boolean {
     return false;
   }
   try {
-    return Value.Equal(left, right);
+    return Guard.IsDeepEqual(left, right);
   } catch {
     return false;
   }
@@ -281,7 +333,7 @@ export function isJsonSchemaValueValid(schema: JsonSchemaValue, value: unknown):
     return false;
   }
   try {
-    return Value.Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
+    return Check(normalizeJsonSchemaForTypeBox(schema) as never, value);
   } catch {
     return false;
   }

@@ -3,26 +3,24 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listDevicePairing, type PairedDevice } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
-import {
-  collectNodeRunnerIssuesByNodeId,
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
-  isNodeRunnerSessionHost,
-} from "../node-registry-private.js";
-import type {
-  WorkerEnvironmentServiceContract,
-  WorkerEnvironmentServiceRecord,
-} from "../worker-environments/service-contract.js";
-import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
+import {
+  callEnvironmentMethod,
+  FakeWorkerServiceError,
+  mockContext,
+  workerRecord,
+  workerService,
+} from "./environments.test-support.js";
 
-vi.mock("../../infra/device-pairing.js", () => ({
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
 }));
 
 vi.mock("../../infra/device-pairing-node.js", () => ({
@@ -30,168 +28,26 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 
 vi.mock("../node-registry-private.js", () => ({
-  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerBundleStatusByNodeId: vi.fn(() => new Map()),
-  collectNodeWorkerCapacityByNodeId: vi.fn(() => new Map()),
-  isNodeRunnerSessionHost: vi.fn(() => false),
+  collectNodeCatalogRuntimeState: vi.fn(() => ({
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  })),
 }));
 
 const NOW = 10_000;
-
-type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
-
-type TestWorkerService = Omit<WorkerEnvironmentServiceContract, "startTunnel" | "stopTunnel">;
-
-function mockContext(
-  workerEnvironmentService?: TestWorkerService,
-  reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
-  forceDestroyEnvironment: (
-    environmentId: string,
-    onCleanupError?: (error: unknown) => void,
-  ) => Promise<TestWorkerRecord> = vi.fn(async () => workerRecord({ state: "destroyed" })),
-  connectedNodes: unknown[] = [
-    {
-      nodeId: "node-live",
-      connId: "conn-live",
-      displayName: "Live Node",
-      platform: "ios",
-      caps: ["camera"],
-      commands: ["system.run"],
-      connectedAtMs: 123,
-    },
-  ],
-) {
-  return {
-    logGateway: {
-      warn: vi.fn(),
-    },
-    nodeRegistry: {
-      listConnectedForPairingStates: () => connectedNodes,
-    },
-    workerEnvironmentService,
-    getRuntimeConfig: () => ({
-      cloudWorkers: {
-        profiles: {
-          zeta: { provider: "static-ssh", settings: {} },
-          aws: { provider: "crabbox", settings: {} },
-        },
-      },
-    }),
-    ...(workerEnvironmentService
-      ? {
-          workerPlacementDispatchService: {
-            dispatch: vi.fn(),
-            forceDestroyEnvironment,
-            reconcileActive,
-          },
-        }
-      : {}),
-  };
-}
-
-function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerRecord {
-  return {
-    environmentId: "worker-1",
-    providerId: "static-ssh",
-    profileId: "development",
-    profileSnapshot: { settings: {} },
-    provisionOperationId: "provision:worker-1",
-    leaseId: "lease-1",
-    sharedHost: false,
-    desktop: null,
-    sshEndpoint: {
-      host: "worker.example.test",
-      port: 22,
-      user: "openclaw",
-      hostKey: ["ssh-ed25519", "AAAA"].join(" "),
-      keyRef: { source: "file", provider: "default", id: "/worker/private-key" },
-    },
-    state: "ready",
-    attachedSessionIds: [],
-    createdAtMs: 1_000,
-    updatedAtMs: 1_000,
-    stateChangedAtMs: 1_000,
-    idleSinceAtMs: null,
-    lastError: null,
-    tunnelStatus: "stopped",
-    desktopAvailable: false,
-    desktopApps: [],
-    ...overrides,
-  } as TestWorkerRecord;
-}
-
-function workerService(overrides: Partial<TestWorkerService> = {}) {
-  return {
-    list: vi.fn(() => []),
-    get: vi.fn(() => undefined),
-    supportsExecutionMode: vi.fn(() => false),
-    listMachineOptions: vi.fn(async () => undefined),
-    create: vi.fn(async () => workerRecord()),
-    destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
-    destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
-    observeDesktop: vi.fn(async ({ control }) => ({
-      transport: "rfb" as const,
-      wsPath: "/desktop/observe?token=abc",
-      expiresAtMs: 70_000,
-      control,
-    })),
-    launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
-    ...overrides,
-  };
-}
-
-async function callEnvironmentMethod(
-  method:
-    | "environments.list"
-    | "environments.status"
-    | "environments.create"
-    | "environments.destroy"
-    | "worker.desktop.observe"
-    | "worker.desktop.launch",
-  params: unknown,
-  options: {
-    service?: TestWorkerService;
-    reconcileActive?: (environmentId?: string) => Promise<void>;
-    forceDestroyEnvironment?: (
-      environmentId: string,
-      onCleanupError?: (error: unknown) => void,
-    ) => Promise<TestWorkerRecord>;
-    connectedNodes?: unknown[];
-  } = {},
-) {
-  const respond = vi.fn();
-  await environmentsHandlers[method]?.({
-    params: params as Record<string, unknown>,
-    respond,
-    context: mockContext(
-      options.service,
-      options.reconcileActive,
-      options.forceDestroyEnvironment,
-      options.connectedNodes,
-    ),
-  } as never);
-  const call = respond.mock.calls.at(0);
-  if (call === undefined) {
-    throw new Error("expected environments handler to respond");
-  }
-  return call;
-}
-
-class FakeWorkerServiceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+let runtimeState: ReturnType<typeof collectNodeCatalogRuntimeState>;
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
-  vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
-  vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(new Map());
-  vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(new Map());
+  runtimeState = {
+    sessionHostNodeIds: new Set(),
+    issuesByNodeId: new Map(),
+    workerSlotsByNodeId: new Map(),
+    workerBundleByNodeId: new Map(),
+  };
+  vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue(runtimeState);
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -208,8 +64,123 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it.each(["locked", "unlocked", "unknown"])(
+    "projects %s desktop availability only from its matching live node",
+    async (state) => {
+      const connectedNodes = [
+        {
+          nodeId: "node-live",
+          connId: "conn-live",
+          caps: [],
+          commands: [],
+          desktopAvailability: { state },
+        },
+        { nodeId: "node-other", connId: "conn-other", caps: [], commands: [] },
+      ];
+      const [ok, payload] = await callEnvironmentMethod(
+        "environments.list",
+        {},
+        { connectedNodes },
+      );
+      expect(ok).toBe(true);
+      const { environments } = payload as { environments: Array<Record<string, unknown>> };
+      expect(environments.find((entry) => entry.id === "node:node-live")).toMatchObject({
+        desktopAvailability: { state },
+      });
+      for (const entry of environments.filter((candidate) => candidate.id !== "node:node-live")) {
+        expect(entry).not.toHaveProperty("desktopAvailability");
+      }
+      const [statusOk, summary] = await callEnvironmentMethod(
+        "environments.status",
+        { environmentId: "node:node-live" },
+        { connectedNodes },
+      );
+      expect(statusOk).toBe(true);
+      expect(summary).toMatchObject({ desktopAvailability: { state } });
+    },
+  );
+  it.each(["devices", "nodes"] as const)(
+    "waits for both independent pairing reads when %s finishes first",
+    async (first) => {
+      const devices = createDeferred<Awaited<ReturnType<typeof listDevicePairing>>>();
+      const nodes = createDeferred<Awaited<ReturnType<typeof listNodePairing>>>();
+      vi.mocked(listDevicePairing).mockClear().mockReturnValue(devices.promise);
+      vi.mocked(listNodePairing).mockClear().mockReturnValue(nodes.promise);
+      const context = mockContext();
+      const project = vi.spyOn(context.nodeRegistry, "listConnectedForPairingStates");
+      const respond = vi.fn();
+      const request = environmentsHandlers["environments.list"]?.({
+        params: {},
+        respond,
+        context,
+      } as never);
+
+      const liveDevice: PairedDevice = {
+        deviceId: "node-live",
+        publicKey: "public-key-live",
+        roles: ["node"],
+        tokens: { node: { token: "test-node-token", role: "node", scopes: [], createdAtMs: 1 } },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      };
+      const deviceSnapshot = {
+        paired: [
+          liveDevice,
+          { ...liveDevice, deviceId: "operator-only", roles: ["operator"], tokens: {} },
+        ],
+        pending: [],
+      };
+      const nodeSnapshot = {
+        paired: [
+          {
+            nodeId: "node-offline",
+            displayName: "Independent snapshot",
+            createdAtMs: 1,
+            approvedAtMs: 1,
+          },
+        ],
+        pending: [],
+      };
+      try {
+        expect(listDevicePairing).toHaveBeenCalledTimes(1);
+        expect(listNodePairing).toHaveBeenCalledTimes(1);
+        if (first === "devices") {
+          devices.resolve(deviceSnapshot);
+          await devices.promise;
+        } else {
+          nodes.resolve(nodeSnapshot);
+          await nodes.promise;
+        }
+        expect(project).not.toHaveBeenCalled();
+        expect(respond).not.toHaveBeenCalled();
+        devices.resolve(deviceSnapshot);
+        nodes.resolve(nodeSnapshot);
+        await request;
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            environments: expect.arrayContaining([
+              expect.objectContaining({ id: "node:node-offline", label: "Independent snapshot" }),
+            ]),
+          }),
+          undefined,
+        );
+        expect(project).toHaveBeenCalledTimes(1);
+        expect(project).toHaveBeenCalledWith(
+          new Map([["node-live", { identity: expect.any(String) }]]),
+        );
+        expect(listDevicePairing).toHaveBeenCalledTimes(1);
+        expect(listNodePairing).toHaveBeenCalledTimes(1);
+      } finally {
+        devices.resolve(deviceSnapshot);
+        nodes.resolve(nodeSnapshot);
+        await request;
+      }
+    },
+  );
+
   it("projects live node session-host capability without a worker service", async () => {
-    vi.mocked(isNodeRunnerSessionHost).mockImplementation(({ nodeId }) => nodeId === "node-live");
+    runtimeState.sessionHostNodeIds.add("node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
 
     expect(ok).toBe(true);
@@ -331,12 +302,11 @@ describe("environment gateway methods", () => {
   });
 
   it("projects the same exact slots and redacted bundle status through list and status", async () => {
-    vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
-      new Map([["node-live", { total: 2, available: 1 }]]),
-    );
-    vi.mocked(collectNodeWorkerBundleStatusByNodeId).mockReturnValue(
-      new Map([["node-live", { status: "installed", version: "2026.8.9" }]]),
-    );
+    runtimeState.workerSlotsByNodeId.set("node-live", { total: 2, available: 1 });
+    runtimeState.workerBundleByNodeId.set("node-live", {
+      status: "installed",
+      version: "2026.8.9",
+    });
 
     const [, listPayload] = await callEnvironmentMethod("environments.list", {});
     const [, statusPayload] = await callEnvironmentMethod("environments.status", {
@@ -358,9 +328,7 @@ describe("environment gateway methods", () => {
   });
 
   it("projects the same current-node update issue through list and status", async () => {
-    vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(
-      new Map([["node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]]]),
-    );
+    runtimeState.issuesByNodeId.set("node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]);
 
     const [, listPayload] = await callEnvironmentMethod("environments.list", {});
     const [, statusPayload] = await callEnvironmentMethod("environments.status", {
@@ -477,39 +445,46 @@ describe("environment gateway methods", () => {
     }
   });
 
-  it("adds known provider capabilities to configured profile summaries", async () => {
-    const standardMachine = {
-      id: "standard",
-      label: "Standard",
-      cpu: 32,
-      memoryGb: 64,
-      default: true,
-    };
-    const listMachineOptions = vi.fn(async (profileId: string) =>
-      profileId === "aws" ? [standardMachine] : undefined,
-    );
-    const [ok, payload] = await callEnvironmentMethod(
-      "environments.list",
-      {},
-      {
-        service: workerService({
-          listMachineOptions,
-          supportsExecutionMode: vi.fn(
-            (profileId, mode) => profileId === "aws" || mode === "remote-exec",
-          ),
-        }),
-      },
-    );
+  it.each([undefined, []])(
+    "keeps profiles available when machine options are %j",
+    async (optionlessMachines) => {
+      const standardMachine = {
+        id: "standard",
+        label: "Standard",
+        cpu: 32,
+        memoryGb: 64,
+        default: true,
+        os: "os-a",
+      };
+      const listMachineOptions = vi.fn(async (profileId: string) =>
+        profileId === "aws" ? [standardMachine] : optionlessMachines,
+      );
+      const systems = [
+        { id: "os-a", label: "OS A", default: true },
+        { id: "os-b", label: "OS B" },
+      ];
+      const listOperatingSystems = vi.fn(async (profileId: string) =>
+        profileId === "aws" ? systems : [systems[0]!],
+      );
+      const service = workerService({
+        listMachineOptions,
+        listOperatingSystems,
+        supportsExecutionMode: vi.fn(
+          (profileId, mode) => profileId === "aws" || mode === "remote-exec",
+        ),
+      });
+      const [ok, payload] = await callEnvironmentMethod("environments.list", {}, { service });
 
-    expect(ok).toBe(true);
-    expect(payload).toMatchObject({
-      profiles: [
+      expect(ok).toBe(true);
+      const profiles = (payload as { profiles: unknown[] }).profiles;
+      expect(profiles).toMatchObject([
         {
           id: "aws",
           providerId: "crabbox",
           executionMode: "worker-turn",
           executionModes: ["worker-turn", "remote-exec"],
           machines: [standardMachine],
+          operatingSystems: systems,
         },
         {
           id: "zeta",
@@ -517,10 +492,13 @@ describe("environment gateway methods", () => {
           executionMode: "remote-exec",
           executionModes: ["remote-exec"],
         },
-      ],
-    });
-    expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
-  });
+      ]);
+      expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
+      expect(listOperatingSystems.mock.calls).toEqual([["aws"], ["zeta"]]);
+      expect(profiles[1]).not.toHaveProperty("machines");
+      expect(profiles[1]).not.toHaveProperty("operatingSystems");
+    },
+  );
 
   it("projects trust from recorded worker isolation without guessing unknown leases", () => {
     expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
@@ -563,7 +541,7 @@ describe("environment gateway methods", () => {
   });
 
   it("returns status for one node environment", async () => {
-    vi.mocked(isNodeRunnerSessionHost).mockReturnValue(true);
+    runtimeState.sessionHostNodeIds.add("node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.status", {
       environmentId: "node:node-live",
     });
@@ -957,29 +935,23 @@ describe("environment gateway methods", () => {
     expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
   });
 
-  it("rejects an unknown worker environment on destroy", async () => {
+  it.each([
+    [
+      "environment_not_found",
+      "unknown environmentId",
+      ErrorCodes.INVALID_REQUEST,
+      "unknown environmentId",
+    ],
+    [
+      "provider_not_found",
+      "private provider details",
+      ErrorCodes.UNAVAILABLE,
+      "worker environment destruction failed",
+    ],
+  ])("maps destroy %s errors", async (serviceCode, detail, code, message) => {
     const service = workerService({
       destroyUnattached: vi.fn(async () => {
-        throw new FakeWorkerServiceError("environment_not_found", "unknown environmentId");
-      }),
-    });
-    const [ok, , error] = await callEnvironmentMethod(
-      "environments.destroy",
-      { environmentId: "missing" },
-      { service },
-    );
-
-    expect(ok).toBe(false);
-    expect(error).toEqual({
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "unknown environmentId",
-    });
-  });
-
-  it("returns unavailable without provider details when destroy fails", async () => {
-    const service = workerService({
-      destroyUnattached: vi.fn(async () => {
-        throw new FakeWorkerServiceError("provider_not_found", "private provider details");
+        throw new FakeWorkerServiceError(serviceCode, detail);
       }),
     });
     const [ok, , error] = await callEnvironmentMethod(
@@ -987,11 +959,7 @@ describe("environment gateway methods", () => {
       { environmentId: "worker-1" },
       { service },
     );
-
     expect(ok).toBe(false);
-    expect(error).toEqual({
-      code: ErrorCodes.UNAVAILABLE,
-      message: "worker environment destruction failed",
-    });
+    expect(error).toEqual({ code, message });
   });
 });

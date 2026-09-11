@@ -4,15 +4,17 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { repoName } from "../lib/session-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -40,6 +42,7 @@ export function findCatalogSessionHovercardRow(params: {
   sessionKey: string;
   liveRow?: SidebarSessionHovercardRow;
 }): SidebarSessionHovercardRow | undefined {
+  const catalogKey = parseCatalogSessionKey(params.sessionKey);
   for (const catalog of params.catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
@@ -50,7 +53,12 @@ export function findCatalogSessionHovercardRow(params: {
             hostId: host.hostId,
             threadId: session.threadId,
           });
-        if (key !== params.sessionKey) {
+        const matchesCatalogKey =
+          // Routed catalog keys keep agent ownership; source lookup ignores only that prefix.
+          catalogKey?.catalogId === catalog.id &&
+          catalogKey.hostId === host.hostId &&
+          catalogKey.threadId === session.threadId;
+        if (key !== params.sessionKey && !matchesCatalogKey) {
           continue;
         }
         const cwd = normalizeOptionalString(session.cwd);
@@ -59,7 +67,11 @@ export function findCatalogSessionHovercardRow(params: {
         // itself prove repository identity; only projected Git facts do that.
         return {
           ...params.liveRow,
-          label: session.name || session.threadId,
+          hasActiveRun: params.liveRow?.hasActiveRun === true,
+          hasAutomation: params.liveRow?.hasAutomation === true,
+          label: params.liveRow?.label ?? (session.name || session.threadId),
+          // Once adopted, even an unset live color overrides stale catalog metadata.
+          color: params.liveRow ? params.liveRow.color : session.color,
           createdActor: params.liveRow?.createdActor ?? session.createdActor,
           createdAt: params.liveRow?.createdAt ?? normalizeCatalogTimestamp(session.createdAt),
           updatedAt: params.liveRow?.updatedAt ?? normalizeCatalogTimestamp(session.updatedAt),
@@ -108,7 +120,45 @@ export function visibleSessionCatalogProjection(
   return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
 }
 
-export function visibleCatalogHosts(
+export function catalogErrorMessages(catalog: SessionCatalog): string[] {
+  const messages = new Set<string>();
+  const add = (error: SessionCatalog["error"]) => {
+    if (error) {
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
+    }
+  };
+  add(catalog.error);
+  for (const host of catalog.hosts) {
+    // A disconnected empty host is normal fleet state, not a provider failure.
+    // Cached rows still expose the host-level offline badge when the host is visible.
+    if (host.error?.code !== "NODE_OFFLINE") {
+      add(host.error);
+    }
+  }
+  return [...messages];
+}
+
+export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
+
+/** Section peers and rendering share owner-filtered rows; paging and failures remain visible. */
+export function projectSidebarSessionCatalogs(
+  catalogs: readonly SessionCatalog[],
+  ownerId: string | null,
+  liveRows: readonly GatewaySessionRow[],
+): SidebarSessionCatalog[] {
+  // The current list wins over cached agent lists, including an unset live owner.
+  const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
+  return catalogs.flatMap((catalog) => {
+    const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
+    return visibleHosts.length > 0 ||
+      catalog.hosts.some((host) => Boolean(host.nextCursor)) ||
+      catalogErrorMessages(catalog).length > 0
+      ? [{ ...catalog, visibleHosts }]
+      : [];
+  });
+}
+
+function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
   ownerId?: string | null,
   liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),
@@ -133,15 +183,12 @@ export function visibleCatalogHosts(
 }
 
 export type CatalogBackingSessionDisplay = {
-  label: string;
   catalogIdentityKey: string;
-  marqueeKey?: string;
-  catalogMenuOpen?: boolean;
-  catalogMenuTriggerRef?: (element: Element | undefined) => void;
+  catalogMenuOpen: boolean;
+  catalogMenu: CatalogSessionMenuRequest;
+  rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
-  focusedControl?: "link" | "child-toggle" | "pin" | "menu";
-  restoreControlFocus?: (element: Element | undefined) => void;
 };
 
 export type CatalogSessionMenuRequest = {
@@ -150,6 +197,8 @@ export type CatalogSessionMenuRequest = {
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
+  canDelete: boolean;
+  name: string;
   meta: string;
 };
 

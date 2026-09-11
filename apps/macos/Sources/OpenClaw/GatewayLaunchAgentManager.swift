@@ -129,18 +129,21 @@ enum GatewayLaunchAgentManager {
         return nil
     }
 
-    static func reusableLoadedGatewayPID(port: Int) async -> Int32? {
-        await self.loadedGatewayState(port: port).reusablePID
+    static func reusableLoadedGatewayPID(port: Int, allowUnconfigured: Bool = false) async -> Int32? {
+        await self.loadedGatewayState(port: port, allowUnconfigured: allowUnconfigured).reusablePID
     }
 
-    static func loadedGatewayState(port: Int) async -> LoadedGatewayState {
+    static func loadedGatewayState(port: Int, allowUnconfigured: Bool = false) async -> LoadedGatewayState {
         guard let service = await self.readDaemonService() else {
             return LoadedGatewayState(runningPID: nil, reusablePID: nil)
         }
         let runningPID = self.runningGatewayPID(from: service)
         let configAudit = service["configAudit"] as? [String: Any]
+        let command = service["command"] as? [String: Any]
+        let arguments = command?["programArguments"] as? [String] ?? []
         let reusablePID: Int32? = if self.configAuditAllowsReuse(configAudit),
-                                     self.gatewayPort(from: service) == port
+                                     self.gatewayPort(from: service) == port,
+                                     arguments.contains("--allow-unconfigured") == allowUnconfigured
         {
             runningPID
         } else {
@@ -164,9 +167,14 @@ enum GatewayLaunchAgentManager {
         return self.runningGatewayPID(from: service)
     }
 
-    static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
+    static func set(
+        enabled: Bool,
+        bundlePath: String,
+        port: Int,
+        allowUnconfigured: Bool = false) async -> String?
+    {
         _ = bundlePath
-        if enabled, CommandResolver.connectionModeIsRemote() {
+        if enabled, CommandResolver.connectionModeIsRemote(), !allowUnconfigured {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
@@ -177,14 +185,16 @@ enum GatewayLaunchAgentManager {
 
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
-            return await self.runDaemonCommand([
+            var arguments = [
                 "install",
                 "--force",
                 "--port",
                 "\(port)",
                 "--runtime",
                 "node",
-            ])
+            ]
+            if allowUnconfigured { arguments.append("--allow-unconfigured") }
+            return await self.runDaemonCommand(arguments)
         }
 
         self.logger.info("launchd disable requested via CLI")
@@ -221,7 +231,8 @@ enum GatewayLaunchAgentManager {
     /// ownership record so update callers fail closed instead of consuming it.
     static func launchdProgramArguments() -> [String]? {
         guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
-        return self.launchdConfigSnapshot()?.programArguments
+        guard let arguments = self.launchdConfigSnapshot()?.programArguments, !arguments.isEmpty else { return nil }
+        return arguments
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -302,12 +313,7 @@ extension GatewayLaunchAgentManager {
         let message: String?
     }
 
-    private struct ParsedDaemonJson {
-        let text: String
-        let object: [String: Any]
-    }
-
-    private static func runDaemonCommand(
+    static func runDaemonCommand(
         _ args: [String],
         timeout: Double = Self.startupMigrationTolerance,
         quiet: Bool = false) async -> String?
@@ -323,11 +329,10 @@ extension GatewayLaunchAgentManager {
         quiet: Bool) async -> CommandResult
     {
         #if DEBUG
-        if self.testingInterceptDaemonCommands {
-            self.testingDaemonCommandCalls.append(args)
-            if self.testingDaemonCommandDelayNanoseconds > 0 {
-                try? await Task.sleep(nanoseconds: self.testingDaemonCommandDelayNanoseconds)
-            }
+        if let resolveCLI = self.testingInterceptDaemonCommands {
+            let command = await self.daemonCommand(args, resolveCLI: resolveCLI)
+            self.testingDaemonCommandCalls.append((arguments: args, command: command))
+            await self.testingDaemonCommandHook?(args)
             let payload = if args.first == "status" {
                 if self.testingDaemonStatusPayloads.isEmpty {
                     self.testingDaemonStatusPayload ?? "{\"ok\":true}"
@@ -335,12 +340,13 @@ extension GatewayLaunchAgentManager {
                     self.testingDaemonStatusPayloads.removeFirst()
                 }
             } else {
-                "{\"ok\":true}"
+                self.testingDaemonStatusPayload ?? "{\"ok\":true}"
             }
+            let parsed = JSONObjectExtractionSupport.extract(from: payload)
             return CommandResult(
-                success: true,
+                success: (parsed?.object["ok"] as? Bool) ?? true,
                 payload: Data(payload.utf8),
-                message: nil)
+                message: parsed?.message)
         }
         if ProcessInfo.processInfo.isRunningTests {
             return CommandResult(
@@ -349,20 +355,17 @@ extension GatewayLaunchAgentManager {
                 message: "Gateway daemon commands require explicit interception during tests")
         }
         #endif
-        let command = await CommandResolver.openclawCommand(
-            subcommand: "gateway",
-            extraArgs: self.withJsonFlag(args),
-            // Launchd management must always run locally, even if remote mode is configured.
-            configRoot: ["gateway": ["mode": "local"]])
+        let command = await self.daemonCommand(args)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
-        let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
+        let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
+            ?? JSONObjectExtractionSupport.extract(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
-        let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
+        let message = parsed?.message
         let payload = parsed?.text.data(using: .utf8)
             ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
-        let success = ok ?? response.success
+        let success = response.success && (ok ?? true)
         if success {
             return CommandResult(success: true, payload: payload, message: nil)
         }
@@ -379,14 +382,17 @@ extension GatewayLaunchAgentManager {
         return CommandResult(success: false, payload: payload, message: detail)
     }
 
+    private static func daemonCommand(
+        _ args: [String],
+        resolveCLI: CommandResolver.LocalCLIResolver = CommandResolver.resolveLocalCLI) async -> [String]
+    {
+        await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway", extraArgs: self.withJsonFlag(args), resolveCLI: resolveCLI)
+    }
+
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
-    }
-
-    private static func parseDaemonJson(from raw: String) -> ParsedDaemonJson? {
-        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
-        return ParsedDaemonJson(text: parsed.text, object: parsed.object)
     }
 
     private static func summarize(_ text: String) -> String? {
@@ -395,18 +401,23 @@ extension GatewayLaunchAgentManager {
 
     #if DEBUG
     private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
-    private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
-    private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
+    private nonisolated(unsafe) static var testingInterceptDaemonCommands: CommandResolver.LocalCLIResolver?
+    private nonisolated(unsafe) static var testingDaemonCommandCalls: [(arguments: [String], command: [String])] = []
     private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
     private nonisolated(unsafe) static var testingDaemonStatusPayloads: [String] = []
-    private nonisolated(unsafe) static var testingDaemonCommandDelayNanoseconds: UInt64 = 0
+    private nonisolated(unsafe) static var testingDaemonCommandHook: (@Sendable ([String]) async -> Void)?
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
     }
 
-    static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
-        self.testingInterceptDaemonCommands = intercept
+    static func setTestingInterceptDaemonCommands(
+        _ intercept: Bool,
+        beforeReturning hook: (@Sendable ([String]) async -> Void)? = nil,
+        resolveCLI: @escaping CommandResolver.LocalCLIResolver = { _, _ in .executable(["openclaw"]) })
+    {
+        self.testingInterceptDaemonCommands = intercept ? resolveCLI : nil
+        self.testingDaemonCommandHook = hook
     }
 
     static func setTestingDaemonStatusPayload(_ payload: String?) {
@@ -419,16 +430,16 @@ extension GatewayLaunchAgentManager {
         self.testingDaemonStatusPayloads = payloads
     }
 
-    static func setTestingDaemonCommandDelayNanoseconds(_ nanoseconds: UInt64) {
-        self.testingDaemonCommandDelayNanoseconds = nanoseconds
-    }
-
     static func clearTestingDaemonCommandCalls() {
         self.testingDaemonCommandCalls.removeAll(keepingCapacity: false)
     }
 
     static func testingDaemonCommandCallsSnapshot() -> [[String]] {
-        self.testingDaemonCommandCalls
+        self.testingDaemonCommandCalls.map(\.arguments)
+    }
+
+    static func testingResolvedDaemonCommandsSnapshot() -> [[String]] {
+        self.testingDaemonCommandCalls.map(\.command)
     }
 
     static func _testRunningGatewayPID(from json: String) -> Int32? {

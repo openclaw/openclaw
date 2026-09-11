@@ -8,7 +8,6 @@ import {
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
 import {
-  formatThinkingLevels,
   listThinkingLevelLabels,
   type ReasoningLevel,
   type VerboseLevel,
@@ -46,6 +45,12 @@ type SlashCommandOptions = {
   local?: boolean;
   dynamicCommands?: CommandEntry[];
 };
+
+function resolveThinkingLevelLabels(options: SlashCommandOptions): string[] {
+  return options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+}
 
 function createLevelCompletion(
   levels: string[],
@@ -86,6 +91,7 @@ type TuiCommandRow = readonly [
 
 const TUI_COMMAND_ROWS = [
   ["help", "Show slash command help", "/help"],
+  ["question", "Reopen the pending agent question", "/question"],
   [
     "commands",
     undefined,
@@ -243,9 +249,7 @@ export function isSharedTextCommand(input: string): boolean {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = options.thinkingLevels?.length
-    ? options.thinkingLevels.map((level) => level.label)
-    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
+  const thinkLevels = resolveThinkingLevelLabels(options);
   const commands: SlashCommand[] = [];
   const seen = new Map<string, SlashCommand["getArgumentCompletions"]>();
   for (const command of TUI_COMMAND_DESCRIPTORS) {
@@ -324,13 +328,7 @@ export function shouldSubmitExactArgumentCompletion(
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(
-    options.provider,
-    options.model,
-    "|",
-    undefined,
-    options.agentRuntime,
-  );
+  const thinkLevels = resolveThinkingLevelLabels(options).join("|");
   const commandHelp = TUI_COMMAND_DESCRIPTORS.flatMap((command) => {
     if (!command.help || !commandIsVisible(command, options.local === true)) {
       return [];

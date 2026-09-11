@@ -205,6 +205,10 @@ payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
 
+Perplexity, Tavily, and xAI HTTP errors retain the status code and bounded
+diagnostics, with reflected request credentials redacted. Review diagnostics
+before sharing them; redaction does not remove every kind of sensitive content.
+
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection uses a
@@ -229,6 +233,11 @@ API-backed providers first:
 Configured endpoint providers after that:
 
 11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+
+If an auto-detected provider fails, OpenClaw tries the next eligible provider.
+If all attempts fail, it reports the first provider's error to help you diagnose
+the primary failure. An explicitly selected provider does not use automatic
+fallback.
 
 Key-free providers such as **Parallel Search (Free)**, **DuckDuckGo**,
 **Ollama Web Search**, and **Codex Hosted Search** never win auto-detection,
@@ -379,6 +388,11 @@ trusted proxy owns those synthetic ranges.
   },
 }
 ```
+
+`tools.web.search.cacheTtlMinutes` controls OpenClaw's local search-result
+caches. Set it to `0` to bypass reads and writes, even for previously cached
+queries. A shorter positive TTL limits reuse by entry age; a longer TTL does
+not extend an entry's original expiry. Provider-side caching is separate.
 
 Provider-specific config (API keys, base URLs, modes) lives under
 `plugins.entries.<plugin>.config.webSearch.*`. Gemini can also reuse
@@ -557,6 +571,11 @@ every provider. xAI credentials are always required.
 it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
 public xAI endpoint (`https://api.x.ai/v1`).
 
+`plugins.entries.xai.config.xSearch.cacheTtlMinutes` controls OpenClaw's local
+`x_search` result cache. Set it to `0` to bypass reads and writes. A shorter TTL
+limits reuse of existing entries; a longer TTL does not extend their original
+expiry.
+
 ### x_search parameters
 
 | Parameter                    | Description                                            |
@@ -633,3 +652,4 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
 - [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host
+- [Moonshot AI](/providers/moonshot) -- Kimi as the `web_search` provider

@@ -191,9 +191,9 @@ describe("memory tools", () => {
     expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
-  it("returns disabled details when memory_get fails", async () => {
+  it("reports a failed memory read without disabling memory", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      throw new Error("path required");
+      throw Object.assign(new Error("memory file unreadable"), { code: "EACCES" });
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -202,8 +202,9 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       path: "memory/NOPE.md",
       text: "",
-      disabled: true,
-      error: "path required",
+      status: "error",
+      code: "EACCES",
+      error: "memory file unreadable",
     });
   });
 
@@ -665,7 +666,7 @@ describe("memory tools", () => {
     }
   });
 
-  it("records an unregistered requested wiki corpus without hiding memory results", async () => {
+  it("records an unregistered optional wiki corpus without warning or hiding memory results", async () => {
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("call_all_without_wiki", {
       query: "alpha",
@@ -678,8 +679,8 @@ describe("memory tools", () => {
         { corpus: "memory", outcome: "ok" },
         { corpus: "wiki", outcome: "not-registered" },
       ],
-      warning: expect.stringContaining("Wiki corpus is not registered"),
     });
+    expect(result.details).not.toHaveProperty("warning");
   });
 
   it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {

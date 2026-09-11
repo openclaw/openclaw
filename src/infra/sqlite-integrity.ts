@@ -1,16 +1,98 @@
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
-import { isSqliteCorruptionError } from "./sqlite-transaction.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
+
+export type SqliteIntegrityCheck = {
+  database: DatabaseSync;
+  databaseLabel: string;
+  timing?: { syncElapsedMs?: number };
+};
+
+export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
+
+export type SqliteIntegrityDiagnostics = {
+  integrityGateMs?: number;
+  integrityGateOutcome?: "healthy" | "failed";
+  integrityCheckSyncMs?: number;
+  integrityOutsideCheckMs?: number;
+  canonicalIndexMs?: number;
+  repairedIndexCount?: number;
+};
+
+/** The gate includes the driver's check, awaited lifetime, and admission revalidation. */
+export function* sqliteIntegrityCheckSteps(
+  database: DatabaseSync,
+  databaseLabel: string,
+  diagnostics?: SqliteIntegrityDiagnostics,
+): SqliteIntegrityOperation<void> {
+  const startedAt = performance.now();
+  const check: SqliteIntegrityCheck = { database, databaseLabel };
+  if (diagnostics) {
+    check.timing = {};
+    // A later async driver must not inherit an earlier gate's synchronous measurement.
+    delete diagnostics.integrityCheckSyncMs;
+    delete diagnostics.integrityOutsideCheckMs;
+  }
+  try {
+    yield check;
+    if (diagnostics) {
+      diagnostics.integrityGateOutcome = "healthy";
+    }
+  } catch (error) {
+    if (diagnostics) {
+      diagnostics.integrityGateOutcome = "failed";
+    }
+    throw error;
+  } finally {
+    if (diagnostics) {
+      diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
+      if (check.timing?.syncElapsedMs !== undefined) {
+        diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
+        diagnostics.integrityOutsideCheckMs =
+          diagnostics.integrityGateMs - diagnostics.integrityCheckSyncMs;
+      }
+    }
+  }
+}
+
+/** Measure only the calling driver's synchronous check, excluding admission and resumption. */
+export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
+  const timing = check.timing;
+  const startedAt = timing ? performance.now() : 0;
+  try {
+    assertSqliteIntegrity(check.database, check.databaseLabel);
+  } finally {
+    if (timing) {
+      timing.syncElapsedMs = performance.now() - startedAt;
+    }
+  }
+}
+
+/** Run the same admission steps synchronously when the caller cannot yield. */
+export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      runSqliteIntegrityCheckSync(step.value);
+    } catch (error) {
+      step = operation.throw(error);
+      continue;
+    }
+    step = operation.next();
+  }
+  return step.value;
+}
 
 type UnboundSqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; terminal: boolean }
@@ -207,7 +289,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     // table-valued pragma name and make a corrupt database appear clean.
     const statement = database.prepare("PRAGMA foreign_key_check;");
     statement.setReadBigInts(true);
-    // OpenClaw's Node >=22.22.3 floor includes iterate(), added in Node 22.13.
+    // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {
       violationCount += 1;
       retainSortedForeignKeyViolation(violations, violation);

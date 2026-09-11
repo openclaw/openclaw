@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
@@ -44,6 +45,72 @@ describe("compareSemverStrings", () => {
   });
 });
 
+describe("historical package schema compatibility", () => {
+  it("does not assign OpenClaw historical schemas to an npm alias", async () => {
+    const result = await fetchNpmPackageTargetStatus({
+      target: "2026.7.1",
+      spec: "openclaw@npm:@example/replacement@2026.7.1",
+      runCommand: async () => ({
+        stdout: JSON.stringify({ version: "2026.7.1" }),
+        stderr: "",
+        code: 0,
+      }),
+    });
+    expect(result.schemaVersions).toBeUndefined();
+  });
+
+  it.each([
+    { version: "2026.7.1", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.35", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.34", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.33", expected: { state: 1, agent: 1 } },
+    { version: "2026.6.11", expected: { state: 1, agent: 1 } },
+    { version: "2026.7.2", expected: undefined },
+    { version: "2026.6.35-beta.1", expected: undefined },
+    { version: "2026.7.1-1", expected: undefined },
+    { version: "1.0.4", expected: undefined },
+    { version: "2026.07.1", expected: undefined },
+    { version: "2026.0.1", expected: undefined },
+    { version: "2026.7.1", packageName: "@example/openclaw", expected: undefined },
+    {
+      version: "2026.7.1",
+      schemaVersions: { state: 3, agent: 11 },
+      expected: { state: 3, agent: 11 },
+    },
+    { version: "2026.7.1", schemaVersions: null, expected: undefined },
+    { version: "2026.7.1", schemaVersions: { state: "1", agent: 1 }, expected: undefined },
+  ])(
+    "retains shipped legacy schema limits across metadata readers: $version $packageName $schemaVersions",
+    async ({ version, packageName = "openclaw", schemaVersions, expected }) => {
+      const manifest = {
+        name: packageName,
+        version,
+        ...(schemaVersions === undefined ? {} : { openclaw: { schemaVersions } }),
+      };
+      expect(parsePackageOpenClawSchemaVersions(manifest)).toEqual(expected);
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`,
+        reply: { json: manifest },
+      });
+      const registry = await fetchNpmPackageTargetStatus({ target: version, packageName });
+      const npm = await fetchNpmPackageTargetStatus({
+        target: version,
+        spec: `${packageName}@${version}`,
+        runCommand: async () => ({
+          stdout: JSON.stringify({
+            version,
+            ...(schemaVersions === undefined ? {} : { "openclaw.schemaVersions": schemaVersions }),
+          }),
+          stderr: "",
+          code: 0,
+        }),
+      });
+      expect(registry.schemaVersions).toEqual(expected);
+      expect(npm.schemaVersions).toEqual(expected);
+    },
+  );
+});
+
 describe("resolveNpmChannelTag", () => {
   type NpmMetadataCommandRunner = NonNullable<
     Parameters<typeof fetchNpmPackageTargetStatus>[0]["runCommand"]
@@ -51,11 +118,11 @@ describe("resolveNpmChannelTag", () => {
 
   let versionByTag: Record<string, string | null>;
   let runCommand: NpmMetadataCommandRunner;
-  let runCommandMock: ReturnType<typeof vi.fn>;
+  let runCommandMock: ReturnType<typeof vi.fn<NpmMetadataCommandRunner>>;
 
   beforeEach(() => {
     versionByTag = {};
-    runCommandMock = vi.fn(async (argv: string[]) => {
+    runCommandMock = vi.fn<NpmMetadataCommandRunner>(async (argv) => {
       const spec = argv[2] ?? "";
       const tag = spec.slice(spec.lastIndexOf("@") + 1);
       const version = versionByTag[tag] ?? null;
@@ -71,7 +138,7 @@ describe("resolveNpmChannelTag", () => {
         code: version == null ? 1 : 0,
       };
     });
-    runCommand = runCommandMock as unknown as NpmMetadataCommandRunner;
+    runCommand = runCommandMock;
   });
 
   it("delegates package target metadata to npm view with global config scope", async () => {
@@ -203,6 +270,7 @@ describe("resolveNpmChannelTag", () => {
           target: "latest",
           version: "2026.6.6",
           nodeEngine: ">=22.19.0",
+          schemaVersions: { state: 1, agent: 1 },
         });
 
         expect(requests.some((request) => request.url.startsWith("/user/openclaw"))).toBe(true);
@@ -235,6 +303,7 @@ describe("resolveNpmChannelTag", () => {
       target: "latest",
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
+      schemaVersions: { state: 1, agent: 1 },
     });
   });
 
@@ -396,6 +465,35 @@ describe("resolveNpmChannelTag", () => {
       tag: "latest",
       version: "1.0.3",
     });
+  });
+
+  it("resolves beta and stable within one registry response delay", async () => {
+    vi.useFakeTimers();
+    try {
+      runCommandMock.mockImplementation(async (argv: string[]) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        return {
+          stdout: JSON.stringify({
+            version: argv[2] === "openclaw@beta" ? "2026.9.1-beta.1" : "2026.8.30",
+          }),
+          stderr: "",
+          code: 0,
+        };
+      });
+      const completed = vi.fn();
+      const pending = resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
+      void pending.then(completed);
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(completed).toHaveBeenCalledWith({ tag: "beta", version: "2026.9.1-beta.1" });
+      await pending;
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("fetches registry tag versions and reports missing tags", async () => {
@@ -606,11 +704,58 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus registry behavior", () => {
+  it.each([
+    { channel: "stable", tag: "latest" },
+    { channel: "beta", tag: "beta" },
+    { channel: "dev", tag: "dev" },
+  ] as const)("preserves $channel registry failures in status", async ({ channel, tag }) => {
+    for (const queryTag of channel === "beta" ? ["beta", "latest"] : [tag]) {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${queryTag}`,
+        reply: { status: 503, body: "unavailable" },
+      });
+    }
+
+    const status = await checkUpdateStatus({
+      root: null,
+      includeRegistry: true,
+      registryChannel: channel,
+      timeoutMs: 1000,
+    });
+
+    expect(status.registry).toEqual({ latestVersion: null, tag, error: "HTTP 503" });
+  });
+
+  it.each(["beta", "latest"])(
+    "uses the available beta-channel target when %s fails",
+    async (failedTag) => {
+      const selectedTag = failedTag === "beta" ? "latest" : "beta";
+      for (const tag of ["beta", "latest"]) {
+        mockHttp.intercept({
+          url: `https://registry.npmjs.org/openclaw/${tag}`,
+          reply:
+            tag === failedTag
+              ? { status: 503, body: "unavailable" }
+              : { json: { version: "2026.6.6" } },
+        });
+      }
+
+      const status = await checkUpdateStatus({
+        root: null,
+        includeRegistry: true,
+        registryChannel: "beta",
+        timeoutMs: 1000,
+      });
+
+      expect(status.registry).toEqual({ latestVersion: "2026.6.6", tag: selectedTag });
+    },
+  );
+
   it("reports unsupported_git_channel for Git status without querying npm", async () => {
     await withTestDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@12.0.0" }),
         "utf8",
       );
       await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });

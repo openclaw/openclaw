@@ -3,7 +3,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
-export type SessionRoutePresentation = Pick<GatewaySessionRow, "key" | "displayName" | "boardFace">;
+export type SessionRoutePresentation = Pick<
+  GatewaySessionRow,
+  "key" | "agentId" | "displayName" | "boardFace"
+>;
 
 export type SessionReferenceResolution =
   | { kind: "not-found" }
@@ -17,6 +20,7 @@ export async function resolveShortSessionReference(
 ): Promise<SessionReferenceResolution> {
   const client = await waitForGatewayClient(context.gateway, signal);
   signal.throwIfAborted();
+  // Resolve identity before reading history so the real pane can accept a draft.
   const result = await client.request<SessionsResolveResult>("sessions.resolve", {
     shortId: target.shortId,
     ...(target.slugHint ? { slugHint: target.slugHint } : {}),
@@ -24,6 +28,12 @@ export async function resolveShortSessionReference(
     allowMissing: true,
   });
   signal.throwIfAborted();
+  return sessionReferenceResolution(result);
+}
+
+export function sessionReferenceResolution(
+  result: SessionsResolveResult,
+): SessionReferenceResolution {
   if (result.ok) {
     return { kind: "unique", session: result };
   }

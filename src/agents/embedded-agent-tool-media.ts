@@ -1,10 +1,15 @@
 /** Extracts and trust-filters media from embedded-agent tool results. */
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { extractToolResultText } from "./embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -128,7 +133,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
@@ -164,23 +169,25 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { isToolResultMediaTrusted };
 }
 
-function isTrustedOwnedTtsLocalMedia(
+function getTrustedOwnedTtsLocalMediaUrls(
   toolName: string | undefined,
   result: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
-): boolean {
+): readonly string[] | undefined {
   if (
     !toolName ||
     !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
     normalizeToolPolicyName(toolName) !== "tts"
   ) {
-    return false;
+    return undefined;
   }
   const media = readToolResultDetails(result)?.media;
   if (!media || typeof media !== "object" || Array.isArray(media)) {
-    return false;
+    return undefined;
   }
-  return (media as Record<string, unknown>).trustedLocalMedia === true;
+  return (media as Record<string, unknown>).trustedLocalMedia === true
+    ? getCoreTtsToolResultMediaUrls(result)
+    : undefined;
 }
 
 export function filterToolResultMediaUrls(
@@ -192,26 +199,20 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
+  const trustedOwnedTtsMediaUrls = getTrustedOwnedTtsLocalMediaUrls(
     toolName,
     result,
     trustedLocalMediaToolNames,
   );
   if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
-    // When the current run provides its exact trusted local-media tool names,
-    // require the raw emitted tool name to match one of them before allowing
-    // local media paths.
-    // This blocks normalized aliases and case-variant collisions such as
-    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
-    // registered tool's media trust. TTS-generated local files carry a
-    // separate trusted-media flag from the owned tool result, so they can
-    // survive runs whose exact trusted set omitted the raw tts name.
+    // An omitted raw name needs private core-TTS provenance for each local path.
+    // A result field alone cannot grant that exception to a plugin with a core name.
     if (trustedLocalMediaToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter(
+          (url) => HTTP_URL_RE.test(url.trim()) || trustedOwnedTtsMediaUrls?.includes(url.trim()),
+        );
       }
     }
     return mediaUrls;
@@ -232,6 +233,7 @@ export function filterToolResultMediaUrls(
  */
 type ToolResultMediaArtifact = {
   mediaUrls: string[];
+  attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
 };
@@ -247,28 +249,57 @@ function readToolResultDetailsMedia(
   return media;
 }
 
-function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const pushString = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = value.trim();
-    if (normalized) {
-      urls.push(normalized);
+const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
+  "type",
+  "path",
+  "url",
+  "mediaUrl",
+  "filePath",
+  "mimeType",
+  "name",
+  "sizeBytes",
+  "durationMs",
+  "width",
+  "height",
+]);
+
+function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
+  const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
+    pushUniqueMessagingMediaUrl(mediaUrls, seen, value);
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
+      attachmentsByUrl.set(normalized, attachment);
     }
   };
   const pushAttachment = (value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return;
     }
-    const attachment = value as Record<string, unknown>;
-    pushString(attachment.media);
-    pushString(attachment.path);
-    pushString(attachment.url);
-    pushString(attachment.mediaUrl);
-    pushString(attachment.filePath);
-    pushString(attachment.fileUrl);
+    const record = value as Record<string, unknown>;
+    // Provider metadata can break Gateway delivery; media trust remains policy-owned.
+    const attachment: ReplyMediaAttachment = Object.fromEntries(
+      Object.entries(record).filter(([key, entry]) => {
+        if (!REPLY_ATTACHMENT_METADATA_KEYS.has(key)) {
+          return false;
+        }
+        if (key === "type") {
+          return entry === "image" || entry === "audio" || entry === "video" || entry === "file";
+        }
+        if (key === "width" || key === "height") {
+          return asPositiveFiniteNumber(entry) !== undefined;
+        }
+        if (key === "sizeBytes" || key === "durationMs") {
+          return asNonNegativeFiniteNumber(entry) !== undefined;
+        }
+        return typeof entry === "string";
+      }),
+    );
+    for (const key of ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"]) {
+      pushString(record[key], attachment);
+    }
   };
   pushString(media.media);
   pushString(media.path);
@@ -286,7 +317,12 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
       pushAttachment(attachment);
     }
   }
-  return uniqueStrings(urls);
+  return {
+    mediaUrls,
+    ...(attachmentsByUrl.size > 0
+      ? { attachments: mediaUrls.map((url) => attachmentsByUrl.get(url) ?? {}) }
+      : {}),
+  };
 }
 
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
@@ -318,10 +354,10 @@ export function extractToolResultMediaArtifact(
     if (isNonOutboundToolResultMedia(detailsMedia)) {
       return undefined;
     }
-    const mediaUrls = collectStructuredMediaUrls(detailsMedia);
-    if (mediaUrls.length > 0) {
+    const structuredMedia = collectStructuredMedia(detailsMedia);
+    if (structuredMedia.mediaUrls.length > 0) {
       return {
-        mediaUrls,
+        ...structuredMedia,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };

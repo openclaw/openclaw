@@ -65,6 +65,10 @@ such as `telegram:123456789`. This gives first-time setups an explicit owner for
 privileged commands and exec approval prompts. After an owner exists, later
 pairing approvals only grant DM access; they do not add more owners.
 
+Manually allowlisted senders are not automatically command owners. If an
+authorized sender has no owner access, owner-only commands reply with the exact
+`openclaw config set commands.ownerAllowFrom` command for the operator to run.
+
 <Note>
 WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
 approve people who message that account. These are separate flows.
@@ -155,6 +159,8 @@ The button is disabled when the current Control UI session does not have
 administrator access. Use the CLI approval flow below from the Gateway host in
 that case.
 
+<a id="pair-via-telegram-recommended-for-ios" />
+
 ### Pair via Telegram
 
 If you use the `device-pair` plugin, you can do first-time device pairing entirely from Telegram:
@@ -206,9 +212,15 @@ QR/setup-code issuance.
 OpenClaw advertises Tailscale setup URLs only when it owns the route through
 `gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that proxy a
 `gateway.bind=lan` listener are not advertised because the ordinary listener
-rejects Tailscale-shaped proxy ingress. Run `openclaw doctor` to preview the
-safe default-route migration, then `openclaw doctor --fix` and restart the
-Gateway. Custom Serve ports and Tailscale Services require manual migration.
+rejects Tailscale-shaped proxy ingress. Run `openclaw doctor` to inspect the
+route; Doctor leaves the configuration unchanged because it cannot prove route
+ownership. If you confirm it is a stale route from an older OpenClaw release,
+remove only its root handler with `tailscale serve --yes --https=443
+--set-path=/ off` or `tailscale funnel --yes --https=443 --set-path=/ off`, then
+configure `gateway.bind=loopback` and `gateway.tailscale.mode=serve` manually and
+restart the Gateway. If another service owns the route, leave managed Tailscale
+ingress off and configure the explicit `gateway.trustedProxies` compatibility
+path. Custom Serve ports and Tailscale Services require manual migration.
 For a retired `gateway.tailscale.serviceName` config, Doctor disables managed
 ingress and prints the command needed to clear the retained Service route.
 
@@ -287,3 +299,4 @@ imported into SQLite at gateway startup and archived with a `.migrated` suffix.
   - iMessage: [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)
+- [`openclaw pairing`](/cli/pairing) — drive pairing from the CLI

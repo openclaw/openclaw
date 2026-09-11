@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
@@ -22,8 +23,11 @@ const modelCatalogRouteVariants = vi.hoisted(() => ({
 }));
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await loadModelCatalog(...args);
+  loadPreparedModelCatalogSnapshot: async (params: LoadPreparedModelCatalogParams) => {
+    if (params.providerDiscoveryProviderIds) {
+      return loadScopedModelCatalog(params);
+    }
+    const entries = await loadModelCatalog(params);
     return { entries, routeVariants: modelCatalogRouteVariants.value ?? entries };
   },
 }));
@@ -35,20 +39,12 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
 }));
 
-const loadPreferredProviderPickerCatalog = vi.hoisted(() =>
-  vi.fn<
-    (_params: {
-      cfg: OpenClawConfig;
-      preferredProvider: string;
-      agentDir?: string;
-      workspaceDir?: string;
-      env?: NodeJS.ProcessEnv;
-    }) => Promise<ModelCatalogSnapshot>
-  >(async () => ({ entries: [], routeVariants: [] })),
+const loadScopedModelCatalog = vi.hoisted(() =>
+  vi.fn<(params: LoadPreparedModelCatalogParams) => Promise<ModelCatalogSnapshot>>(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
 );
-vi.mock("../flows/model-picker.provider-catalog.js", () => ({
-  loadPreferredProviderPickerCatalog,
-}));
 
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({
@@ -395,7 +391,7 @@ beforeEach(() => {
     }),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
-  loadPreferredProviderPickerCatalog.mockResolvedValue(providerCatalogSnapshot([]));
+  loadScopedModelCatalog.mockResolvedValue(providerCatalogSnapshot([]));
   listProfilesForProvider.mockReturnValue([]);
   resolveEnvApiKey.mockImplementation((_provider: string) => ({
     apiKey: "test-key",
@@ -993,13 +989,13 @@ describe("promptDefaultModel", () => {
 
     expect(result.model).toBe("openai/gpt-5.5-pro");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
-    expect(loadPreferredProviderPickerCatalog).not.toHaveBeenCalled();
+    expect(loadScopedModelCatalog).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2);
     expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
   });
 
   it("loads the preferred provider catalog when the user chooses to browse", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("openai", "gpt-5.5", "GPT-5.5"),
         catalogModel("openai", "gpt-5.5-pro", "GPT-5.5 Pro"),
@@ -1033,9 +1029,11 @@ describe("promptDefaultModel", () => {
     });
 
     expect(result.model).toBe("openai/gpt-5.5-pro");
-    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
-      cfg: config,
-      preferredProvider: "openai",
+    expect(loadScopedModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
+      providerDiscoveryProviderIds: ["openai"],
       agentDir: expect.stringContaining("agents/main/agent"),
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
@@ -1044,7 +1042,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("keeps empty-default provider browsing off unrelated provider setup surfaces", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("ollama", "minimax-m2.7:cloud", "MiniMax M2.7"),
         catalogModel("ollama", "gemma4", "Gemma 4"),
@@ -1091,7 +1089,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("scopes on-demand preferred-provider loads before the first model prompt", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
         catalogModel("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5"),
@@ -1115,9 +1113,11 @@ describe("promptDefaultModel", () => {
     });
 
     expect(result.model).toBe("nvidia/nemotron-3-super-120b-a12b");
-    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
-      cfg: config,
-      preferredProvider: "nvidia",
+    expect(loadScopedModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
+      providerDiscoveryProviderIds: ["nvidia"],
       agentDir: expect.stringContaining("agents/main/agent"),
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
@@ -1128,7 +1128,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("preselects the first live provider row when keep-current is disabled", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
@@ -1165,7 +1165,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
         catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
@@ -1210,7 +1210,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("omits local NVIDIA static fallback rows when browsing live provider rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
         catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
@@ -1258,7 +1258,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("uses the configured default agent dir for provider-scoped catalog auth", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1")]),
     );
     const select = vi.fn(async (params) => params.options[0]?.value as never);
@@ -1284,9 +1284,11 @@ describe("promptDefaultModel", () => {
       env,
     });
 
-    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
-      cfg: config,
-      preferredProvider: "nvidia",
+    expect(loadScopedModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
+      providerDiscoveryProviderIds: ["nvidia"],
       agentDir: "/tmp/openclaw-picker-state/agents/worker/agent",
       env,
     });
@@ -1494,6 +1496,36 @@ describe("promptModelAllowlist", () => {
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["anthropic/claude-opus-4-6"]);
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("seeds scoped choices with a fallback-only agent's inherited primary", async () => {
+    const multiselect = createSelectAllMultiselect();
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: { "anthropic/outside-scope": {} },
+        },
+        entries: { ops: { model: { fallbacks: ["openai/backup-model"] } } },
+      },
+    } satisfies OpenClawConfig;
+    const before = structuredClone(config);
+    const allowedKeys = ["openai/global-model", "openai/backup-model"];
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter: makePrompter({ multiselect }),
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      allowedKeys,
+      loadCatalog: false,
+    });
+
+    const prompt = multiselect.mock.calls[0]?.[0];
+    expect(optionValues(prompt.options)).toEqual(allowedKeys);
+    expect(prompt.initialValues).toEqual(allowedKeys);
+    expect(result).toEqual({ models: allowedKeys, scopeKeys: allowedKeys });
+    expect(config).toEqual(before);
   });
 
   it("localizes the model allowlist picker", async () => {
@@ -1770,7 +1802,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps live preferred-provider rows before configured fallback supplements", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
@@ -1815,7 +1847,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps provider-scoped live rows authoritative over configured provider supplements", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
         catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
@@ -1876,7 +1908,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("keeps custom configured rows after provider-scoped live rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
         catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
@@ -1925,7 +1957,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("does not re-add configured static rows after filtering deprecated live rows", async () => {
-    loadPreferredProviderPickerCatalog.mockResolvedValue(
+    loadScopedModelCatalog.mockResolvedValue(
       providerCatalogSnapshot([
         catalogModel("nvidia", "minimaxai/minimax-m2.5", "MiniMax M2.5"),
         catalogModel("nvidia", "z-ai/glm5", "GLM5"),

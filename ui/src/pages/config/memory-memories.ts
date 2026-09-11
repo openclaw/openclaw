@@ -61,7 +61,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   @state() private details = new Map<string, DetailState>();
 
   private searchRequest: object | null = null;
-  private detailRequests = new Map<string, object>();
 
   protected override updated(changed: PropertyValues<this>) {
     if (
@@ -76,7 +75,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
 
   private resetSearch() {
     this.searchRequest = null;
-    this.detailRequests.clear();
     this.query = "";
     this.searchState = { kind: "idle" };
     this.openResultKey = null;
@@ -96,7 +94,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     this.searchState = { kind: "loading", query: normalizedQuery };
     this.openResultKey = null;
     this.details = new Map();
-    this.detailRequests.clear();
     try {
       const result = await client.request<MemorySearchResponse>("memory.search", {
         query: normalizedQuery,
@@ -125,45 +122,40 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       return;
     }
     this.openResultKey = key;
-    if (!this.details.has(key)) {
-      void this.loadDetail(key, result);
+    if (!this.details.has(result.path)) {
+      void this.loadDetail(result.path);
     }
   }
 
-  private async loadDetail(key: string, result: SearchResult) {
+  private async loadDetail(path: string) {
     const client = this.connected ? this.client : null;
     const agentId = this.agentId;
     if (!client || !agentId) {
       return;
     }
-    const request = { client, agentId, path: result.path };
-    this.detailRequests.set(key, request);
-    this.details = new Map(this.details).set(key, { kind: "loading" });
+    const pending: DetailState = { kind: "loading" };
+    this.details = new Map(this.details).set(path, pending);
     try {
       const response = await client.request<AgentsWorkspaceGetResult>("agents.workspace.get", {
         agentId,
-        path: result.path,
+        path,
       });
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
       const detail: DetailState =
         response.file.encoding === "utf8"
           ? { kind: "ready", content: response.file.content }
           : { kind: "error", message: t("memoryPage.memories.fileUnsupported") };
-      this.details = new Map(this.details).set(key, detail);
+      this.details = new Map(this.details).set(path, detail);
     } catch (error) {
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
-      this.details = new Map(this.details).set(key, {
+      this.details = new Map(this.details).set(path, {
         kind: "error",
         message: formatUiError(error),
       });
-    } finally {
-      if (this.detailRequests.get(key) === request) {
-        this.detailRequests.delete(key);
-      }
     }
   }
 
@@ -171,15 +163,17 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (this.openResultKey !== key) {
       return nothing;
     }
-    const detail = this.details.get(key);
+    const detail = this.details.get(result.path);
     return html`<div id=${panelId} class="memory-memories__detail">
-      ${!detail || detail.kind === "loading"
-        ? html`<p role="status">${t("memoryPage.memories.fileLoading")}</p>`
-        : detail.kind === "error"
-          ? html`<p class="memory-memories__detail-error" role="alert">
-              ${t("memoryPage.memories.fileError", { message: detail.message })}
-            </p>`
-          : renderFileContent(detail.content, result)}
+      ${
+        !detail || detail.kind === "loading"
+          ? html`<p role="status">${t("memoryPage.memories.fileLoading")}</p>`
+          : detail.kind === "error"
+            ? html`<p class="memory-memories__detail-error" role="alert">
+                ${t("memoryPage.memories.fileError", { message: detail.message })}
+              </p>`
+            : renderFileContent(detail.content, result)
+      }
     </div>`;
   }
 
@@ -189,64 +183,76 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
         ? t("memoryPage.memories.hybridSearch")
         : t("memoryPage.memories.keywordSearch");
     return html`
+      ${
+        ready.stale
+          ? html`<div class="callout warn" role="status">
+              ${ready.warning ? html`<p>${ready.warning}</p>` : nothing}
+              ${ready.action ? html`<p>${ready.action}</p>` : nothing}
+            </div>`
+          : nothing
+      }
       <div class="memory-memories__results-heading">
         <span>${t("memoryPage.memories.results", { count: String(ready.results.length) })}</span>
         <span class="memory-memories__mode">${mode}</span>
       </div>
-      ${ready.results.length === 0
-        ? html`<p class="memory-memories__state">
-            ${t("memoryPage.memories.empty", {
-              query: ready.query,
-            })}
-          </p>`
-        : html`<div class="settings-group memory-memories__results">
-            ${ready.results.map((result, index) => {
-              const key = resultKey(result, index);
-              const open = this.openResultKey === key;
-              const expandable = isExpandableWorkspaceResult(result);
-              const panelId = `memory-detail-${index}`;
-              const summary = html`
-                <span class="settings-row__text">
-                  <span class="settings-row__title">${result.snippet}</span>
-                  <span class="settings-row__desc memory-memories__path"
-                    >${result.path} ·
-                    ${t("memoryPage.memories.lineRange", {
-                      start: String(result.startLine),
-                      end: String(result.endLine),
-                    })}</span
-                  >
-                </span>
-                <span class="settings-row__control memory-memories__meta">
-                  <span class="memory-memories__source"
-                    >${t(
-                      result.source === "sessions"
-                        ? "memoryPage.memories.sourceSessions"
-                        : "memoryPage.memories.sourceMemory",
-                    )}</span
-                  >
-                  <span
-                    >${t("memoryPage.memories.score", {
-                      score: result.score.toFixed(2),
-                    })}</span
-                  >
-                </span>
-              `;
-              return html`<article class="memory-memories__result">
-                ${expandable
-                  ? html`<button
-                      type="button"
-                      class="settings-row settings-row--nav"
-                      aria-expanded=${String(open)}
-                      aria-controls=${panelId}
-                      @click=${() => this.toggleResult(result, index)}
+      ${
+        ready.results.length === 0
+          ? html`<p class="memory-memories__state">
+              ${t("memoryPage.memories.empty", {
+                query: ready.query,
+              })}
+            </p>`
+          : html`<div class="settings-group memory-memories__results">
+              ${ready.results.map((result, index) => {
+                const key = resultKey(result, index);
+                const open = this.openResultKey === key;
+                const expandable = isExpandableWorkspaceResult(result);
+                const panelId = `memory-detail-${index}`;
+                const summary = html`
+                  <span class="settings-row__text">
+                    <span class="settings-row__title">${result.snippet}</span>
+                    <span class="settings-row__desc memory-memories__path"
+                      >${result.path} ·
+                      ${t("memoryPage.memories.lineRange", {
+                        start: String(result.startLine),
+                        end: String(result.endLine),
+                      })}</span
                     >
-                      ${summary}
-                    </button>`
-                  : html`<div class="settings-row">${summary}</div>`}
-                ${expandable ? this.renderDetail(key, panelId, result) : nothing}
-              </article>`;
-            })}
-          </div>`}
+                  </span>
+                  <span class="settings-row__control memory-memories__meta">
+                    <span class="memory-memories__source"
+                      >${t(
+                        result.source === "sessions"
+                          ? "memoryPage.memories.sourceSessions"
+                          : "memoryPage.memories.sourceMemory",
+                      )}</span
+                    >
+                    <span
+                      >${t("memoryPage.memories.score", {
+                        score: result.score.toFixed(2),
+                      })}</span
+                    >
+                  </span>
+                `;
+                return html`<article class="memory-memories__result">
+                  ${
+                    expandable
+                      ? html`<button
+                          type="button"
+                          class="settings-row settings-row--nav"
+                          aria-expanded=${String(open)}
+                          aria-controls=${panelId}
+                          @click=${() => this.toggleResult(result, index)}
+                        >
+                          ${summary}
+                        </button>`
+                      : html`<div class="settings-row">${summary}</div>`
+                  }
+                  ${expandable ? this.renderDetail(key, panelId, result) : nothing}
+                </article>`;
+              })}
+            </div>`
+      }
     `;
   }
 
@@ -274,43 +280,47 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
 
   override render() {
     return html`<div class="settings-page memory-memories">
-      ${!this.methodAdvertised
-        ? html`<p class="memory-memories__unavailable">
-            ${t("memoryPage.memories.gatewayUpdateRequired")}
-          </p>`
-        : html`<form
-              class="memory-memories__search"
-              role="search"
-              @submit=${(event: SubmitEvent) => {
-                event.preventDefault();
-                void this.search(this.query);
-              }}
-            >
-              <label class="settings-control__sr-label" for="memory-search-input"
-                >${t("memoryPage.memories.searchLabel")}</label
-              >
-              <input
-                id="memory-search-input"
-                type="search"
-                class="settings-input"
-                .value=${this.query}
-                placeholder=${t("memoryPage.memories.searchPlaceholder")}
-                @input=${(event: InputEvent) => {
-                  this.query = (event.currentTarget as HTMLInputElement).value;
+      ${
+        !this.methodAdvertised
+          ? html`<p class="memory-memories__unavailable">
+              ${t("memoryPage.memories.gatewayUpdateRequired")}
+            </p>`
+          : html`<form
+                class="memory-memories__search"
+                role="search"
+                @submit=${(event: SubmitEvent) => {
+                  event.preventDefault();
+                  void this.search(this.query);
                 }}
-              />
-              <button
-                class="btn btn--sm primary"
-                type="submit"
-                ?disabled=${!this.connected ||
-                !this.agentId ||
-                !this.query.trim() ||
-                this.searchState.kind === "loading"}
               >
-                ${t("memoryPage.memories.searchButton")}
-              </button>
-            </form>
-            ${this.renderSearchState()}`}
+                <label class="settings-control__sr-label" for="memory-search-input"
+                  >${t("memoryPage.memories.searchLabel")}</label
+                >
+                <input
+                  id="memory-search-input"
+                  type="search"
+                  class="settings-input"
+                  .value=${this.query}
+                  placeholder=${t("memoryPage.memories.searchPlaceholder")}
+                  @input=${(event: InputEvent) => {
+                    this.query = (event.currentTarget as HTMLInputElement).value;
+                  }}
+                />
+                <button
+                  class="btn btn--sm primary"
+                  type="submit"
+                  ?disabled=${
+                    !this.connected ||
+                    !this.agentId ||
+                    !this.query.trim() ||
+                    this.searchState.kind === "loading"
+                  }
+                >
+                  ${t("memoryPage.memories.searchButton")}
+                </button>
+              </form>
+              ${this.renderSearchState()}`
+      }
     </div>`;
   }
 }

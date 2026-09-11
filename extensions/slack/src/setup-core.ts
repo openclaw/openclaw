@@ -4,6 +4,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 // Slack plugin module implements setup core behavior.
 import {
   createAccountScopedAllowFromSection,
@@ -74,15 +75,12 @@ function setSlackSetupIdentity(params: {
     return next;
   }
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    const nextSlack = { ...slack };
-    delete nextSlack.postAs;
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        slack: nextSlack,
-      },
-    } as OpenClawConfig;
+    return patchTopLevelChannelConfigSection({
+      cfg: next,
+      channel,
+      clearFields: ["postAs"],
+      patch: {},
+    });
   }
 
   const account = slack.accounts?.[params.accountId];
@@ -97,19 +95,16 @@ function setSlackSetupIdentity(params: {
   } else {
     delete nextAccount.postAs;
   }
-  return {
-    ...next,
-    channels: {
-      ...next.channels,
-      slack: {
-        ...slack,
-        accounts: {
-          ...slack.accounts,
-          [params.accountId]: nextAccount,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg: next,
+    channel,
+    patch: {
+      accounts: {
+        ...slack.accounts,
+        [params.accountId]: nextAccount,
       },
     },
-  } as OpenClawConfig;
+  });
 }
 
 function createSlackTokenCredential(params: {
@@ -361,15 +356,12 @@ export function createSlackSetupWizardBase(handlers: {
           "Slack user identity",
         );
       } else {
-        await prompter.note(
-          buildSlackSetupLines().join("\n"),
-          t("wizard.slack.socketModeTokensTitle"),
-        );
-        const manifest = buildSlackManifest();
-        if (prompter.plain) {
-          await prompter.plain(manifest);
-        } else {
-          await prompter.note(manifest, "Slack manifest JSON");
+        await prompter.note(buildSlackSetupLines().join("\n"), t("wizard.channels.setupTitle"));
+        if (currentAccount.config.mode !== "http") {
+          const manifest = buildSlackManifest();
+          await (prompter.plain
+            ? prompter.plain(manifest)
+            : prompter.note(manifest, "Slack manifest JSON"));
         }
       }
       return { cfg: next };

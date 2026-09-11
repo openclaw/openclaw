@@ -1,13 +1,10 @@
 // Shared option types for Gateway service CLI commands.
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { GatewayRpcOpts as SharedGatewayRpcOpts } from "../gateway-rpc.types.js";
 
 /** RPC probe options accepted by Gateway service status commands. */
-export type GatewayRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
+export type GatewayRpcOpts = Omit<SharedGatewayRpcOpts, "expectFinal"> & {
+  localPortOverride?: number;
 };
 
 /** Full option bag for Gateway service status. */
@@ -24,6 +21,9 @@ export type DaemonInstallOptions = {
   runtime?: string;
   token?: string;
   wrapper?: string;
+  allowUnconfigured?: boolean;
+  /** Private updater IPC handoff before native service load. */
+  deferActivation?: boolean;
   force?: boolean;
   json?: boolean;
 };
@@ -34,6 +34,7 @@ export type DaemonLifecycleOptions = {
   force?: boolean;
   safe?: boolean;
   skipDeferral?: boolean;
+  preserveDefinition?: boolean;
   wait?: string;
   disable?: boolean;
 };

@@ -1,8 +1,9 @@
 {
   "id": "canvas",
+  "categories": ["documents-files"],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "canvas-custom-root-documents-to-core" }]
   },
   "activation": {
     "onStartup": true

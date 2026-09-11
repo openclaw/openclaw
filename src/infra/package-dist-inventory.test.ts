@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   isLegacyPluginDependencyInstallStagePath,
   LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   collectPackageDistInventory,
@@ -25,9 +25,11 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
         "dist/current-BR6xv1a1.js",
+        "dist/postinstall-content-inventory.json",
       ]);
 
       await fs.rm(currentFile);
@@ -38,30 +40,33 @@ describe("package dist inventory", () => {
       );
 
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/postinstall-content-inventory.json",
         "dist/stale-CJUAgRQR.js",
       ]);
     });
   });
 
-  it("keeps the pending install guard outside the expected inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-install-guard-" }, async (packageRoot) => {
+  it("keeps lifecycle state outside the closed dist inventory", async () => {
+    await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
       const currentFile = path.join(packageRoot, "dist", "current.js");
       await fs.mkdir(path.dirname(currentFile), { recursive: true });
       await fs.writeFile(currentFile, "export {};\n", "utf8");
 
       await expect(writePackageDistInventoryForPublish(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current.js",
-        PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toEqual([
         "dist/current.js",
+        "dist/postinstall-content-inventory.json",
       ]);
       await expect(
-        fs.readFile(path.join(packageRoot, PACKAGE_INSTALL_GUARD_RELATIVE_PATH), "utf8"),
-      ).resolves.toContain("preinstall has not completed");
+        fs.readFile(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+      ).resolves.toBe("pending\n");
     });
   });
 
@@ -153,73 +158,86 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
         "dist/plugin-sdk/provider-entry.d.ts",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
 
-  it("honors package files exclusions when writing the dist inventory", async () => {
-    await withTestDir({ prefix: "openclaw-dist-inventory-package-files-" }, async (packageRoot) => {
-      const packagedRuntime = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-      const omittedTestRuntime = path.join(
-        packageRoot,
-        "dist",
-        "plugin-sdk",
-        "plugin-test-runtime.js",
-      );
-      const omittedTestTypes = path.join(
-        packageRoot,
-        "dist",
-        "plugin-sdk",
-        "plugin-test-runtime.d.ts",
-      );
-      const omittedNestedHelper = path.join(
-        packageRoot,
-        "dist",
-        "plugin-sdk",
-        "src",
-        "test-utils",
-        "helpers.d.ts",
-      );
-      const omittedQaCompat = path.join(packageRoot, "dist", "plugin-sdk", "qa-channel.js");
-      const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
-      const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
-      const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
-      const omittedAppBundle = path.join(packageRoot, "dist", "OpenClaw.app");
+  it.each([
+    { exclusion: "!dist/OpenClaw.app/**", app: "dist/OpenClaw.app" },
+    { exclusion: "!dist/**/*.app/**", app: "dist/.stage/OpenClaw.app" },
+    { exclusion: "!dist/OpenClaw.app", app: "dist/OpenClaw.app" },
+    { exclusion: "!dist/**/*.app", app: "dist/.stage/OpenClaw.app" },
+  ])(
+    "honors package files exclusions ($exclusion) when writing the dist inventory",
+    async ({ exclusion, app }) => {
+      await withTestDir(
+        { prefix: "openclaw-dist-inventory-package-files-" },
+        async (packageRoot) => {
+          const packagedRuntime = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+          const omittedTestRuntime = path.join(
+            packageRoot,
+            "dist",
+            "plugin-sdk",
+            "plugin-test-runtime.js",
+          );
+          const omittedTestTypes = path.join(
+            packageRoot,
+            "dist",
+            "plugin-sdk",
+            "plugin-test-runtime.d.ts",
+          );
+          const omittedNestedHelper = path.join(
+            packageRoot,
+            "dist",
+            "plugin-sdk",
+            "src",
+            "test-utils",
+            "helpers.d.ts",
+          );
+          const omittedQaCompat = path.join(packageRoot, "dist", "plugin-sdk", "qa-channel.js");
+          const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
+          const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
+          const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
+          const omittedAppBundle = path.join(packageRoot, app);
 
-      await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
-      await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
-      await fs.mkdir(omittedAppBundle, { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({
-          files: [
-            "dist/",
-            "!dist/OpenClaw.app/**",
-            "!dist/plugin-sdk/plugin-test-runtime.js",
-            "!dist/plugin-sdk/plugin-test-runtime.d.ts",
-            "!dist/plugin-sdk/src/test-utils/**",
-            "!dist/plugin-sdk/qa-channel.*",
-            "!dist/qa-runtime-*.js",
-            "!dist/**/*.map",
-          ],
-        }),
-        "utf8",
-      );
-      await fs.writeFile(packagedRuntime, "export {};\n", "utf8");
-      await fs.writeFile(omittedTestRuntime, "export {};\n", "utf8");
-      await fs.writeFile(omittedTestTypes, "export {};\n", "utf8");
-      await fs.writeFile(omittedNestedHelper, "export {};\n", "utf8");
-      await fs.writeFile(omittedQaCompat, "export {};\n", "utf8");
-      await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
-      await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
-      await fs.writeFile(omittedMap, "{}", "utf8");
-      await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
+          await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
+          await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
+          await fs.mkdir(omittedAppBundle, { recursive: true });
+          await fs.writeFile(
+            path.join(packageRoot, "package.json"),
+            JSON.stringify({
+              files: [
+                "dist/",
+                exclusion,
+                "!dist/plugin-sdk/plugin-test-runtime.js",
+                "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+                "!dist/plugin-sdk/src/test-utils/**",
+                "!dist/plugin-sdk/qa-channel.*",
+                "!dist/qa-runtime-*.js",
+                "!dist/**/*.map",
+              ],
+            }),
+            "utf8",
+          );
+          await fs.writeFile(packagedRuntime, "export {};\n", "utf8");
+          await fs.writeFile(omittedTestRuntime, "export {};\n", "utf8");
+          await fs.writeFile(omittedTestTypes, "export {};\n", "utf8");
+          await fs.writeFile(omittedNestedHelper, "export {};\n", "utf8");
+          await fs.writeFile(omittedQaCompat, "export {};\n", "utf8");
+          await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
+          await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
+          await fs.writeFile(omittedMap, "{}", "utf8");
+          await fs.symlink(packageRoot, path.join(omittedAppBundle, "Autoupdate"));
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-        "dist/plugin-sdk/runtime.js",
-      ]);
-    });
-  });
+          await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+            "dist/plugin-sdk/runtime.js",
+            "dist/postinstall-content-inventory.json",
+          ]);
+        },
+      );
+    },
+  );
 
   it("keeps transient plugin dependency trees out of the inventory", async () => {
     await withTestDir({ prefix: "openclaw-dist-inventory-plugin-deps-" }, async (packageRoot) => {
@@ -248,7 +266,10 @@ describe("package dist inventory", () => {
       await fs.writeFile(rootDependencyPackage, "{}", "utf8");
       await fs.writeFile(pluginDependencyPackage, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual(["dist/index.js"]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/index.js",
+        "dist/postinstall-content-inventory.json",
+      ]);
     });
   });
 
@@ -290,19 +311,20 @@ describe("package dist inventory", () => {
 
         await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
           "dist/extensions/demo/runtime-api.js",
+          "dist/postinstall-content-inventory.json",
         ]);
       },
     );
   });
 
-  it("keeps publishable externalized bundled plugin dist trees out of the inventory", async () => {
+  it.each(["index.js", ""])("omits externalized plugin entry %j", async (entry) => {
     await withTestDir({ prefix: "openclaw-dist-inventory-externalized-" }, async (packageRoot) => {
       const externalizedRuntime = path.join(
         packageRoot,
         "dist",
         "extensions",
         "external-chat",
-        "index.js",
+        entry,
       );
       const bundledRuntime = path.join(
         packageRoot,
@@ -362,6 +384,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/bundled-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });
@@ -390,6 +413,7 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/core-chat/index.js",
+        "dist/postinstall-content-inventory.json",
       ]);
     });
   });

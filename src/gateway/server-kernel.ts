@@ -1,8 +1,17 @@
-import { isNixMode } from "../config/paths.js";
+import { randomUUID } from "node:crypto";
+import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import {
+  LegacyPluginSdkResourceHost,
+  bindLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -11,6 +20,7 @@ import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
+import { rethrowGatewayStartupError } from "./server-shutdown.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
@@ -104,6 +114,9 @@ registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
     "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token.";
+  if (!isNixMode && resolveIsConfigReadOnly()) {
+    return `${base} Set gateway.auth.token in your external config source and redeploy.`;
+  }
   if (!isNixMode) {
     return `${base} Persist one with \`openclaw config set gateway.auth.mode token\` and \`openclaw config set gateway.auth.token <token>\`.`;
   }
@@ -119,71 +132,182 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
   await resetPreparedModelCatalogStateForTest();
 }
 
+type GatewayKernelOptions = {
+  deferEarlyRuntime?: boolean;
+  sdkResourceHost?: LegacyPluginSdkResourceHost;
+};
+
 /** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
-export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
+export async function createGatewayKernel(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+  options: GatewayKernelOptions = {},
+) {
+  const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
+  sdkResourceHost.assertOpen();
+  return await sdkResourceHost.run(() =>
+    createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost),
+  );
+}
+
+async function createGatewayKernelWithSdkHost(
+  port: number,
+  opts: GatewayServerOptions,
+  options: GatewayKernelOptions,
+  sdkResourceHost: LegacyPluginSdkResourceHost,
+) {
+  // Listener and socket-free embedders share one generation for instance-owned state.
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
+    throw new Error("Gateway boot ID must contain 1 to 96 characters");
+  }
+  const bootId = suppliedBootId ?? randomUUID();
+  // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
+  captureRemoteModelCatalogStartupSnapshot();
   ensureOpenClawCliOnPath();
+  const pluginMetadata = retainGatewayPluginMetadata();
+  let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
+  let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
+  let closeStartupTrace: (() => void) | undefined;
+  let startupError: unknown;
   try {
-    const bootstrap = await prepareGatewayServerBootstrap({
-      port,
-      opts,
-      log,
-      logSecrets,
-      loadWorkerEnvironmentStartupModule,
-      formatRuntimeGatewayAuthTokenWarning,
-    });
-    const runtime = await prepareGatewayKernelState({
-      bootstrap,
-      port,
-      opts,
-      log,
-      logChannels,
-      logHooks,
-      logPlugins,
-      gatewayRuntime,
-      resolveChannelRuntime: getChannelRuntime,
-      loadWorkerEnvironmentStartupModule,
-      loadWorkerPlacementStartupModule,
-    });
+    const bootstrap = await pluginMetadata.runBootstrap(() =>
+      prepareGatewayServerBootstrap({
+        port,
+        opts,
+        log,
+        logSecrets,
+        loadWorkerEnvironmentStartupModule,
+        formatRuntimeGatewayAuthTokenWarning,
+      }),
+    );
+    closeStartupTrace = bootstrap.startupTrace.close;
+    pluginRegistryOwner = createPluginRegistryOwner(
+      bootstrap.pluginBootstrap.pluginRegistry,
+      bootstrap.pluginBootstrap.pluginWorkspaceDir,
+    );
+    pluginMetadata.publish(bootstrap.pluginMetadataSnapshot);
+    const preparedPluginRegistryOwner = pluginRegistryOwner;
+    const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
+      prepareGatewayKernelState({
+        bootstrap,
+        bootId,
+        pluginRegistryOwner: preparedPluginRegistryOwner,
+        port,
+        opts,
+        log,
+        logChannels,
+        logHooks,
+        logPlugins,
+        gatewayRuntime,
+        resolveChannelRuntime: getChannelRuntime,
+        loadWorkerEnvironmentStartupModule,
+        loadWorkerPlacementStartupModule,
+      }),
+    );
+    kernelState = runtime;
+    bindLegacyPluginSdkResourceHost(runtime.resolvePluginGatewayContext, sdkResourceHost);
     // An in-place update may replace every hashed chunk before SIGTERM arrives.
     // Resolve and retain the complete shutdown graph while the install is healthy.
     const shutdownRuntime = await runtime.startupTrace.measure(
       "gateway.shutdown-runtime-import",
       async () => (await loadGatewayShutdownModule()).prepareGatewayShutdownRuntime(),
     );
-    lifecycleRuntime = await prepareGatewayLifecycle({
-      runtime,
-      port,
-      log,
-      logCron,
-      diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-      shutdownRuntime,
-    });
+    const preparedLifecycleRuntime = await runtime.startupTrace.measure("gateway.lifecycle", () =>
+      prepareGatewayLifecycle({
+        runtime,
+        sdkResourceHost,
+        pluginMetadata,
+        port,
+        log,
+        logCron,
+        shutdownRuntime,
+      }),
+    );
+    lifecycleRuntime = preparedLifecycleRuntime;
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
     }
-    const coreRuntime = await startGatewayCoreRuntime({
-      lifecycleRuntime,
-      port,
-      log,
-      logDiscovery,
-      logHealth,
-      logChannels,
-      loadGatewayStartupEarlyModule,
-      loadGatewayPluginBootstrapModule,
-      loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
-    });
-    return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
+    const coreRuntime = await runtime.startupTrace.measure("gateway.core-runtime", () =>
+      startGatewayCoreRuntime({
+        lifecycleRuntime: preparedLifecycleRuntime,
+        port,
+        log,
+        logDiscovery,
+        logHealth,
+        logChannels,
+        loadGatewayStartupEarlyModule,
+        loadGatewayPluginBootstrapModule,
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+        readPreparedGatewayModelCatalog,
+      }),
+    );
+    if (!options.deferEarlyRuntime) {
+      await coreRuntime.startEarlyRuntime();
+    }
+    await pluginMetadata.waitForRetirement();
+    return await runtime.startupTrace.measure("gateway.request-runtime", () =>
+      prepareGatewayKernelRequestRuntime({
+        coreRuntime,
+        log,
+        logHealth,
+        hostLifecycle: opts.hostLifecycle,
+      }),
+    );
   } catch (error) {
+    startupError = error;
+  }
+  return await rethrowGatewayStartupError(startupError, async () => {
+    pluginMetadata.beginClose();
     if (lifecycleRuntime) {
+      // The lifecycle releases metadata only after its required joins succeed.
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
-      clearGatewayAgentCliShim();
-      clearSecretsRuntimeSnapshotState();
-      clearPluginMetadataLifecycleCaches();
+      closeStartupTrace?.();
+      kernelState?.mentionInbox.dispose();
+      await sdkResourceHost.drainWork();
+      const cleanupErrors: unknown[] = [];
+      const releaseMetadata = async (retireRegistry?: () => Promise<void>) => {
+        try {
+          await sdkResourceHost.close();
+        } catch (cleanupError) {
+          if (hasRetainedPluginRuntimeCloseError(cleanupError)) {
+            throw cleanupError;
+          }
+          cleanupErrors.push(cleanupError);
+        }
+        await pluginMetadata.close(async (retire) => {
+          await closePreparedModelRuntimeSnapshots();
+          await retire();
+          for (const cleanup of [clearGatewayAgentCliShim, clearSecretsRuntimeSnapshotState]) {
+            try {
+              cleanup();
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+        }, retireRegistry);
+      };
+      try {
+        await (pluginRegistryOwner
+          ? pluginRegistryOwner.close(releaseMetadata)
+          : releaseMetadata());
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (cleanupErrors.length === 1) {
+        throw cleanupErrors[0];
+      }
+      if (cleanupErrors.length > 1) {
+        throw new AggregateError(cleanupErrors, "Gateway startup cleanup failed", {
+          cause: cleanupErrors[0],
+        });
+      }
     }
-    throw error;
-  }
+  });
 }

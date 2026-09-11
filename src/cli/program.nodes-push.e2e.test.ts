@@ -10,6 +10,7 @@ let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 describe("cli program (nodes push)", () => {
   let program: Command;
   let previousExitCode: NodeJS.Process["exitCode"];
+  let previousArgv: string[];
 
   function mockPushResult(result: PushTestResult) {
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
@@ -31,14 +32,14 @@ describe("cli program (nodes push)", () => {
   }
 
   async function runPush(extraArgs: string[] = []) {
-    await program.parseAsync(["nodes", "push", "--node", "ios-node", ...extraArgs], {
-      from: "user",
-    });
+    process.argv = ["node", "openclaw", "nodes", "push", "--node", "ios-node", ...extraArgs];
+    await program.parseAsync(process.argv);
   }
 
   beforeEach(async () => {
     vi.clearAllMocks();
     previousExitCode = process.exitCode;
+    previousArgv = process.argv;
     process.exitCode = undefined;
     ({ registerNodesCli } = await import("./nodes-cli.js"));
     program = new Command();
@@ -48,7 +49,42 @@ describe("cli program (nodes push)", () => {
 
   afterEach(() => {
     process.exitCode = previousExitCode;
+    process.argv = previousArgv;
   });
+
+  it.each(
+    ["", " \t ", "staging"].flatMap((environment) => [
+      { environment, json: false },
+      { environment, json: true },
+    ]),
+  )(
+    "rejects environment $environment before lookup (JSON: $json)",
+    async ({ environment, json }) => {
+      mockPushResult({
+        ok: true,
+        status: 200,
+        tokenSuffix: "1234abcd",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        transport: "direct",
+      });
+      const invalidEnvironment = "invalid --environment (use sandbox|production)";
+      await expect(
+        runPush(["--environment", environment, ...(json ? ["--json"] : [])]),
+      ).rejects.toThrow(json ? invalidEnvironment : "exit");
+      expect(programGatewayCallMock).not.toHaveBeenCalled();
+      expect(runtimeOutput()).toBe("");
+      if (json) {
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(`nodes push failed: ${invalidEnvironment}`),
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      }
+    },
+  );
 
   it("sets a failing exit code after rendering an APNs push failure", async () => {
     mockPushResult({
@@ -90,28 +126,59 @@ describe("cli program (nodes push)", () => {
   });
 
   it.each([
-    ["text", []],
-    ["JSON", ["--json"]],
-  ])("keeps successful APNs push %s output at exit zero", async (_label, extraArgs) => {
-    const result: PushTestResult = {
-      ok: true,
-      status: 200,
-      apnsId: "apns-id",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
-    };
-    mockPushResult(result);
+    { label: "text", extraArgs: [], environment: undefined },
+    { label: "JSON", extraArgs: ["--json"], environment: undefined },
+    { label: "sandbox", extraArgs: ["--environment", " SaNdBoX "], environment: "sandbox" },
+    { label: "production", extraArgs: ["--environment", "PrOdUcTiOn"], environment: "production" },
+    {
+      label: "explicit copy",
+      extraArgs: ["--title", " Proof ", "--body", " Body ", "--json"],
+      environment: undefined,
+      title: "Proof",
+      body: "Body",
+    },
+    {
+      label: "blank copy",
+      extraArgs: ["--title", " \t ", "--body", "", "--json"],
+      environment: undefined,
+    },
+  ])(
+    "keeps successful APNs push $label output at exit zero",
+    async ({
+      extraArgs,
+      environment,
+      title = "OpenClaw",
+      body = "Push test for node ios-node",
+    }) => {
+      const result: PushTestResult = {
+        ok: true,
+        status: 200,
+        apnsId: "apns-id",
+        tokenSuffix: "1234abcd",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        transport: "direct",
+      };
+      mockPushResult(result);
 
-    await runPush(extraArgs);
+      await runPush(extraArgs);
 
-    expect(process.exitCode).toBeUndefined();
-    if (extraArgs.length > 0) {
-      expect(JSON.parse(runtimeOutput())).toEqual(result);
-    } else {
-      expect(runtimeOutput()).toContain("push.test status=200 ok=true env=sandbox");
-    }
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      expect(process.exitCode).toBeUndefined();
+      const pushRequest = programGatewayCallMock.mock.calls
+        .map(([request]) => request as { method?: string; params?: unknown })
+        .find(({ method }) => method === "push.test");
+      expect(pushRequest?.params).toEqual({
+        nodeId: "ios-node",
+        title,
+        body,
+        ...(environment ? { environment } : {}),
+      });
+      if (extraArgs.includes("--json")) {
+        expect(JSON.parse(runtimeOutput())).toEqual(result);
+      } else {
+        expect(runtimeOutput()).toContain("push.test status=200 ok=true env=sandbox");
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 });

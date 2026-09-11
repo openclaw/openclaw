@@ -49,7 +49,7 @@ export async function collectLegacyMemoryHostEventSources(
   const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
-  for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+  for (const workspaceDir of await resolveConfiguredWorkspaces(config, env)) {
     let canonicalWorkspaceDir = path.resolve(workspaceDir);
     let filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
     try {
@@ -68,19 +68,14 @@ export async function collectLegacyMemoryHostEventSources(
       filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
       const relativePath = path.relative(canonicalWorkspaceDir, filePath);
       const directoryRelativePath = path.dirname(relativePath);
-      if (!(await workspaceRoot.exists(directoryRelativePath))) {
-        continue;
-      }
-      const directoryStat = await workspaceRoot.stat(directoryRelativePath);
-      if (!directoryStat.isDirectory) {
-        continue;
-      }
       const baseName = path.basename(relativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       const archivePattern = new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u");
       const claimPattern = new RegExp(
         `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
         "u",
       );
+      // Discover names before containment checks: shared notes without legacy
+      // events need no repair. Each actual source still goes through guarded stat/read.
       const entries = await fs.readdir(path.join(workspaceRoot.rootReal, directoryRelativePath));
       const candidates: Array<{
         entry: string;
@@ -113,6 +108,7 @@ export async function collectLegacyMemoryHostEventSources(
       });
       for (const candidate of candidates) {
         const candidateRelativePath = path.join(directoryRelativePath, candidate.entry);
+        filePath = path.join(canonicalWorkspaceDir, candidateRelativePath);
         const stat = await workspaceRoot.stat(candidateRelativePath);
         if (!stat.isFile) {
           continue;
@@ -122,7 +118,7 @@ export async function collectLegacyMemoryHostEventSources(
         sources.push({
           kind: "ready",
           workspaceDir: canonicalWorkspaceDir,
-          filePath: path.join(canonicalWorkspaceDir, candidateRelativePath),
+          filePath,
           relativePath: candidateRelativePath,
           root: workspaceRoot,
           storage: candidate.storage,
@@ -146,7 +142,7 @@ export async function collectLegacyMemoryHostEventSources(
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
-        reason: String(error),
+        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use canonical paths in memory.search.extraPaths; this does not migrate legacy events.`,
       });
     }
   }

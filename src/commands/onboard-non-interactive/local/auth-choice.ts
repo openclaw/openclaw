@@ -6,6 +6,7 @@
  */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -14,11 +15,7 @@ import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-in
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
-import {
-  formatDeprecatedNonInteractiveAuthChoiceError,
-  isDeprecatedAuthChoice,
-  resolveDeprecatedAuthChoiceReplacement,
-} from "../../auth-choice-legacy.js";
+import { resolveLegacyOnboardAuthChoice } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
@@ -127,35 +124,16 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
-  if (
-    isDeprecatedAuthChoice(authChoice, {
-      config: nextConfig,
-      workspaceDir: params.target.workspaceDir,
-      env: process.env,
-    })
-  ) {
-    // Keep deprecated aliases out of the config by normalizing them before
-    // either plugin dispatch or built-in setup handling.
-    const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
-      config: nextConfig,
-      workspaceDir: params.target.workspaceDir,
-      env: process.env,
-    });
-    if (replacement) {
-      runtime.log(replacement.message);
-      authChoice = replacement.normalized;
-    } else {
-      rejectOnboardingOption(
-        opts,
-        runtime,
-        formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
-          config: nextConfig,
-          workspaceDir: params.target.workspaceDir,
-          env: process.env,
-        })!,
-      );
-      return null;
-    }
+  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, {
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  });
+  if (legacyChoice.deprecated) {
+    // Only provider aliases normalize here; the onboarding entry point owns
+    // the separate oauth spelling before local dispatch.
+    runtime.log(legacyChoice.deprecated.message);
+    authChoice = legacyChoice.authChoice;
   }
 
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
@@ -287,6 +265,34 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime.log(
           `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
         );
+      }
+      if (customApiKeyInput !== undefined && resolvedCustomApiKey?.source !== "profile") {
+        const { isSetupCredentialReplacement, saveSetupCredential } =
+          await import("../../../system-agent/setup-inference-credentials.js");
+        if (
+          isSetupCredentialReplacement({
+            provider: result.providerId,
+            baseConfig,
+            agentDir: params.target.agentDir,
+          })
+        ) {
+          const { prepareCustomSetupCredentials } =
+            await import("../../../system-agent/setup-inference-custom.js");
+          const prepared = prepareCustomSetupCredentials(result);
+          const saved = await saveSetupCredential({
+            profile: prepared.profiles[0]!,
+            config: prepared.config,
+            baseConfig,
+            agentDir: params.target.agentDir,
+            modelRef: `${result.providerId}/${result.modelId}`,
+          });
+          rejectOnboardingOption(
+            opts,
+            runtime,
+            `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(saved.profile.profileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
+          );
+          return null;
+        }
       }
       return result.config;
     } catch (err) {

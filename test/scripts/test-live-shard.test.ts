@@ -1,6 +1,14 @@
 // Test Live Shard tests cover test live shard script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +23,8 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardBuildEntrypoint,
+  resolveLiveShardBuildProfile,
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
@@ -85,77 +95,65 @@ describe("scripts/test-live-shard", () => {
     );
   });
 
-  it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+  it("routes fixture files across alphabet boundaries and dedicated slow shards", () => {
+    const expectedByShard = {
+      "native-live-src-agents": [
+        "src/agents/zai.live.test.ts",
+        "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+        "src/skills/workshop/experience-review.live.test.ts",
+      ],
+      "native-live-src-agents-zai-coding": ["src/agents/zai.live.test.ts"],
+      "native-live-src-gateway-backends": [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/gateway/gateway-cli-backend.live.test.ts",
+        "src/gateway/gateway-codex-bind.live.test.ts",
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ],
+      "native-live-src-gateway-profiles": [
+        "src/gateway/gateway-models.profiles.live.test.ts",
+        "src/gateway/gateway-openai-long-context.live.test.ts",
+      ],
+      "native-live-src-gateway-core": [
+        "src/gateway/fixture.live.test.ts",
+        "src/system-agent/fixture.live.test.ts",
+      ],
+      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-test": ["test/fixture.live.test.ts"],
+      "native-live-extensions-a-k": [
+        "extensions/a-provider/model.live.test.ts",
+        "extensions/k-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-l-n": [
+        "extensions/l-provider/model.live.test.ts",
+        "extensions/n-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-moonshot": ["extensions/moonshot/moonshot.live.test.ts"],
+      "native-live-extensions-openai": ["extensions/openai/openai.live.test.ts"],
+      "native-live-extensions-o-z-other": [
+        "extensions/o-provider/model.live.test.ts",
+        "extensions/z-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-xai": ["extensions/xai/xai.live.test.ts"],
+      "native-live-extensions-media": [
+        "extensions/minimax/minimax.live.test.ts",
+        "extensions/music-generation-providers.live.test.ts",
+        "extensions/openai/openai-tts.live.test.ts",
+        "extensions/tts-local-cli/speech-provider.live.test.ts",
+        "extensions/video-generation-providers.live.test.ts",
+        "extensions/volcengine/tts.live.test.ts",
+        "extensions/vydra/vydra.live.test.ts",
+      ],
+    };
+    const files = [...new Set(Object.values(expectedByShard).flat())].toSorted((a, b) =>
+      a.localeCompare(b),
     );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/skills/workshop/experience-review.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/agents/zai.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
-      "src/agents/zai.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
-      "src/gateway/gateway-acp-bind.live.test.ts",
-      "src/gateway/gateway-cli-backend.live.test.ts",
-      "src/gateway/gateway-codex-bind.live.test.ts",
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-profiles", allFiles)).toEqual([
-      "src/gateway/gateway-models.profiles.live.test.ts",
-      "src/gateway/gateway-openai-long-context.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
-      "src/gateway/android-node.capabilities.live.test.ts",
-      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-      "src/gateway/gateway-trajectory-export.live.test.ts",
-      "src/system-agent/rescue-channel.live.test.ts",
-      "src/system-agent/setup-app-recommendations.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
-      "src/infra/push-apns-http2.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
-      "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
-      "test/image-generation.infer-cli.live.test.ts",
-      "test/image-generation.runtime.live.test.ts",
-      "test/openai-onboarding.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
-      "extensions/minimax/minimax.live.test.ts",
-      "extensions/music-generation-providers.live.test.ts",
-      "extensions/openai/openai-tts.live.test.ts",
-      "extensions/video-generation-providers.live.test.ts",
-      "extensions/volcengine/tts.live.test.ts",
-      "extensions/vydra/vydra.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
-      "extensions/openai/openai-provider.live.test.ts",
-      "extensions/openai/openai.live.test.ts",
-      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
-      "extensions/openai/realtime-quicksilver.live.test.ts",
-      "extensions/openai/realtime-voice-provider.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
-      "extensions/llama-cpp/src/external-server/llama-server.live.test.ts",
-      "extensions/memory-lancedb/memory-lancedb.live.test.ts",
-      "extensions/meta/meta.live.test.ts",
-      "extensions/microsoft/microsoft.live.test.ts",
-      "extensions/mistral/mistral.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
-      "extensions/moonshot/moonshot.live.test.ts",
-    ]);
-  });
 
-  it("keeps the Codex CLI backend live smoke on a minimal tool profile", () => {
-    const source = readFileSync("src/gateway/gateway-cli-backend.live.test.ts", "utf8");
-
-    expect(source).toContain('providerId === "codex-cli" && !schemaProbePluginPath');
-    expect(source).toContain('profile: "minimal" as const');
+    for (const [shard, expectedFiles] of Object.entries(expectedByShard)) {
+      expect(selectLiveShardFiles(shard, files), shard).toEqual(expectedFiles);
+    }
+    expect(selectLiveShardFiles("native-live-extensions-media-audio", allFiles)).toContain(
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
+    );
   });
 
   it("rejects unknown shard names", () => {
@@ -261,10 +259,64 @@ describe("scripts/test-live-shard", () => {
         OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
       },
     });
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-gateway-core", allFiles)),
-    ).toBeNull();
   });
+
+  it.each([
+    "native-live-src-gateway-core",
+    "native-live-src-gateway-backends",
+    "native-live-src-infra",
+    "native-live-test",
+    "src/infra/heartbeat-runner.live.test.ts",
+    "test/e2e/qa-lab/runtime/worker-skill-resources.live.test.ts",
+    "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
+  ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
+    const files = target.endsWith(".live.test.ts")
+      ? [target]
+      : selectLiveShardFiles(target, allFiles);
+    expect(resolveLiveShardPreparation(files)).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+  });
+
+  it("prepares system-agent gateway tests without building unrelated source shards", () => {
+    expect(resolveLiveShardPreparation(["src/system-agent/rescue-channel.live.test.ts"])).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+    expect(resolveLiveShardPreparation(["src/infra/push-apns-http2.live.test.ts"])).toBeNull();
+  });
+
+  it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
+      "--import",
+      "tsx",
+      "scripts/build-all.mts",
+    ]);
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
+      "scripts/build-all.mjs",
+    ]);
+    expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(
+      "Live test shard cannot find scripts/build-all.{mts,mjs}",
+    );
+    expect(
+      resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n  sourcePerformance\n"),
+    ).toBe("sourcePerformance");
+    expect(resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n")).toBe("full");
+  });
+
+  it.each(["native-live-src-agents", "native-live-extensions-openai"])(
+    "prepares executable runtime artifacts before %s exercises live vision",
+    (shard) => {
+      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
+        env: {},
+        profile: "sourcePerformance",
+        requiredArtifact: "dist/.runtime-postbuildstamp",
+      });
+    },
+  );
 
   it("fails live shard reports with no passing tests", () => {
     expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
@@ -451,8 +503,15 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it("allows the experience review live file to be skipped until its env is enabled", () => {
-    const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
+  it.each([
+    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    [
+      "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+      "OPENCLAW_LIVE_OPENAI_COMPACTION",
+    ],
+  ])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
@@ -474,12 +533,25 @@ describe("scripts/test-live-shard", () => {
     });
     expect(
       validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+        [optInEnv]: "1",
       }),
     ).toEqual({
       ok: false,
       reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: 2,
+      testResults: payload.testResults.map(({ name }) => ({
+        name,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        [optInEnv]: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {
@@ -607,21 +679,29 @@ describe("scripts/test-live-shard", () => {
     async () => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-signal-"));
       const fakePnpmPath = path.join(root, "pnpm");
+      const argsPath = path.join(root, "args.json");
       const childPidPath = path.join(root, "child.pid");
       const descendantPidPath = path.join(root, "descendant.pid");
       const signaledPath = path.join(root, "signaled");
       let childPid = 0;
       let descendantPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
+      let runnerClosed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
 
       try {
         writeFakePnpm(fakePnpmPath);
-        runner = spawn(
+        // Give the real shard selector an APNs-only inventory: readiness must belong
+        // to the live-test child, not a build prerequisite of another infra test.
+        mkdirSync(path.join(root, "src/infra"), { recursive: true });
+        writeFileSync(path.join(root, "src/infra/push-apns-http2.live.test.ts"), "");
+        const startedRunner = spawn(
           process.execPath,
-          ["scripts/test-live-shard.mjs", "native-live-src-agents"],
+          [path.resolve("scripts/test-live-shard.mjs"), "native-live-src-infra"],
           {
+            cwd: root,
             env: {
               ...process.env,
+              OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
               OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
               OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
               OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
@@ -631,27 +711,59 @@ describe("scripts/test-live-shard", () => {
           },
         );
 
+        runner = startedRunner;
+        runnerClosed = new Promise((resolve) => {
+          startedRunner.once("close", (code, signal) => resolve({ code, signal }));
+        });
+
         childPid = await waitForPidFile(childPidPath, 5_000);
         descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        expect(JSON.parse(readFileSync(argsPath, "utf8")).slice(0, 3)).toEqual([
+          "test:live",
+          "--",
+          "src/infra/push-apns-http2.live.test.ts",
+        ]);
 
         runner.kill("SIGTERM");
 
-        await expect(waitForClose(runner)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => existsSync(signaledPath), 5_000);
-        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        await expect(waitForClose(runnerClosed)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        // Creation precedes the synchronous write; wait for the signal receipt itself.
+        await waitFor(
+          () => existsSync(signaledPath) && readFileSync(signaledPath, "utf8") === "SIGTERM",
+          5_000,
+        );
         await waitFor(() => !isProcessAlive(childPid), 5_000);
         await waitFor(() => !isProcessAlive(descendantPid), 5_000);
       } finally {
-        if (runner?.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
+        try {
+          if (runner?.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          // Join the shim so it can forward cancellation to its detached child group
+          // before the fixture directory (and its process receipts) disappears.
+          if (runnerClosed) {
+            await waitForClose(runnerClosed);
+          }
+        } finally {
+          // A failed shim join must not skip cleanup of already observed descendants.
+          for (const pid of [childPid, descendantPid]) {
+            if (pid && isProcessAlive(pid)) {
+              process.kill(pid, "SIGKILL");
+            }
+          }
+          try {
+            await Promise.all(
+              [childPid, descendantPid]
+                .filter((pid) => pid > 0)
+                .map((pid) => waitFor(() => !isProcessAlive(pid), 5_000)),
+            );
+          } finally {
+            rmSync(root, { force: true, recursive: true });
+          }
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { force: true, recursive: true });
       }
     },
   );
@@ -664,6 +776,8 @@ function writeFakePnpm(filePath: string): void {
       "#!/usr/bin/env node",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
+      'if (process.argv[2] !== "test:live") throw new Error("Expected the live-test invocation");',
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
       "const child = spawn(process.execPath, [",
       '  "-e",',
       "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
@@ -692,13 +806,11 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 }
 
 async function waitForClose(
-  child: ReturnType<typeof spawn>,
+  completion: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
   timeoutMs = 5_000,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    }),
+    completion,
     delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),

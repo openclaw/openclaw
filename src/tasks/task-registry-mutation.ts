@@ -3,23 +3,26 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
-import { ensureLinkedTaskFlowRegistryReady, isTerminalFlowStatus } from "./task-registry-common.js";
+import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-query.js";
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
+  cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
+  bumpTaskRegistryRevision,
   deleteOwnerKeyIndex,
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
@@ -46,7 +49,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
     !flow ||
     flow.syncMode !== "managed" ||
     flow.cancelRequestedAt == null ||
-    isTerminalFlowStatus(flow.status)
+    isTerminalTaskFlow(flow)
   ) {
     return;
   }
@@ -75,7 +78,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
       !flow ||
       flow.syncMode !== "managed" ||
       flow.cancelRequestedAt == null ||
-      isTerminalFlowStatus(flow.status)
+      isTerminalTaskFlow(flow)
     ) {
       return;
     }
@@ -123,7 +126,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
         });
         scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
       }
-    }).catch((error: unknown) => {
+    }, "tasks:mutation").catch((error: unknown) => {
       taskRegistryLog.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,
@@ -155,11 +158,17 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({
+  const updated = {
     ...current,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
-  });
+  };
+  const becomesTerminal =
+    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(updated.status);
+  if (becomesTerminal && patch.endedAt === undefined) {
+    updated.endedAt = patch.lastEventAt ?? Date.now();
+  }
+  const next = normalizeTaskTimestamps(updated);
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }
@@ -171,14 +180,14 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
   }
   const sessionIndexChanged =
+    normalizeOptionalString(current.requesterSessionKey) !==
+      normalizeOptionalString(next.requesterSessionKey) ||
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
-  const becomesTerminal =
-    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
   if (becomesTerminal) {
     flushTaskActivity(taskId);
   }
@@ -188,6 +197,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     return null;
   }
   tasks.set(taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(taskId);
   }
@@ -216,41 +226,8 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   }
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
-    task: cloneTaskRecord(next),
-    previous: cloneTaskRecord(current),
-  }));
-  return cloneTaskRecord(next);
-}
-
-/** Publishes a record already committed by a cross-owner shared-state transaction. */
-export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecord {
-  const next = normalizeTaskTimestamps(cloneTaskRecord(record));
-  const current = tasks.get(next.taskId);
-  const becomesTerminal =
-    current !== undefined &&
-    !isTerminalTaskStatus(current.status) &&
-    isTerminalTaskStatus(next.status);
-  if (becomesTerminal) {
-    flushTaskActivity(next.taskId);
-  }
-  if (current) {
-    deleteOwnerKeyIndex(next.taskId, current);
-    deleteParentFlowIdIndex(next.taskId, current);
-    deleteRelatedSessionKeyIndex(next.taskId, current);
-  }
-  tasks.set(next.taskId, next);
-  if (becomesTerminal) {
-    clearTaskActivity(next.taskId);
-  }
-  addOwnerKeyIndex(next.taskId, next);
-  addParentFlowIdIndex(next.taskId, next);
-  addRelatedSessionKeyIndex(next.taskId, next);
-  rebuildRunIdIndex();
-  syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
-  emitTaskRegistryObserverEvent(() => ({
-    kind: "upserted",
-    task: cloneTaskRecord(next),
-    ...(current ? { previous: cloneTaskRecord(current) } : {}),
+    task: cloneTaskRecordForObserver(next),
+    previous: cloneTaskRecordForObserver(current),
   }));
   return cloneTaskRecord(next);
 }

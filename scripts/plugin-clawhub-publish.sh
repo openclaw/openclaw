@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>"
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]"
   echo "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>"
 }
 
@@ -37,6 +41,15 @@ fi
 if [[ -z "${input_path}" ]]; then
   echo "missing package dir or ClawPack path" >&2
   exit 2
+fi
+metadata_root=""
+if [[ "${1:-}" == "--metadata-root" ]]; then
+  if [[ -z "${2:-}" || "${2}" == -* || "${mode}" == "--validate-packed" || "${mode}" == "--publish-packed" ]]; then
+    echo "--metadata-root requires a trusted checkout and an unpacked package mode" >&2
+    exit 2
+  fi
+  metadata_root="$(cd "$2" && pwd)"
+  shift 2
 fi
 if [[ "$#" -gt 0 ]]; then
   echo "unexpected plugin ClawHub publish argument: $1" >&2
@@ -139,7 +152,7 @@ pack_cmd=(
   "${clawhub_workdir}"
   package
   pack
-  "${package_source}"
+  .
   --pack-destination
   "${pack_dir}"
   --json
@@ -173,8 +186,13 @@ if [[ "${packed_mode}" == "false" ]]; then
   build_package_runtime
 
   pack_json="${pack_dir}/pack.json"
+  metadata_args=()
+  if [[ -n "${metadata_root}" ]]; then
+    metadata_args=(--clawhub-metadata "${metadata_root}/${package_dir}")
+  fi
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
-    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" -- \
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${invocation_root}" \
+    node "${repo_root}/scripts/lib/plugin-npm-package-manifest.mjs" --run "${package_dir}" "${metadata_args[@]}" -- \
     "${pack_cmd[@]}" > "${pack_json}"
   pack_output="$(cat "${pack_json}")"
   printf '%s\n' "${pack_output}"
@@ -261,16 +279,21 @@ for timeout_candidate in timeout gtimeout; do
     break
   fi
 done
-if [[ -z "${timeout_bin}" ]]; then
-  echo "GNU timeout or gtimeout with --signal and --kill-after support is required for bounded ClawHub CLI calls." >&2
-  exit 1
+if [[ -n "${timeout_bin}" ]]; then
+  clawhub_timeout=(
+    "${timeout_bin}"
+    --signal=TERM
+    --kill-after=10s
+    "${clawhub_timeout_seconds}s"
+  )
+else
+  clawhub_timeout=(
+    node
+    "${repo_root}/scripts/lib/bounded-command.mjs"
+    "$((clawhub_timeout_seconds * 1000))"
+    --
+  )
 fi
-clawhub_timeout=(
-  "${timeout_bin}"
-  --signal=TERM
-  --kill-after=10s
-  "${clawhub_timeout_seconds}s"
-)
 
 validate_packed_publish() {
   local dry_run_json

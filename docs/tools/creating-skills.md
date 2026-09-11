@@ -1,7 +1,8 @@
 ---
+doc-schema-version: 1
 title: "Creating skills"
 sidebarTitle: "Creating skills"
-summary: "Build, test, and publish custom SKILL.md workspace skills for your OpenClaw agents."
+summary: "Build, test, and publish custom SKILL.md workspace skills or personal skills on a shared Gateway."
 read_when:
   - You are creating a new custom skill
   - You need a quick starter workflow for SKILL.md-based skills
@@ -35,7 +36,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   <Step title="Write SKILL.md">
     The frontmatter defines metadata; the body gives the agent instructions.
 
-    ```markdown
+    ````markdown
     ---
     name: hello-world
     description: A simple skill that prints a greeting.
@@ -48,7 +49,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
     ```bash
     echo "Hello from your custom skill!"
     ```
-    ```
+    ````
 
     Naming rules:
     - Use lowercase letters, digits, and hyphens for `name`.
@@ -87,6 +88,25 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 
   </Step>
 </Steps>
+
+## Create a personal skill on a shared Gateway
+
+For a skill that should follow your signed-in profile rather than belong to an
+agent workspace, use **Plugins → Skills → My skills**. Create or import the
+`SKILL.md` bundle there, then review the saved revision and activation result.
+You do not need host shell access or permission to edit shared Gateway settings.
+
+You can also ask the agent to create or improve a personal skill. Its
+`skill_workshop` tool uses the Gateway's authorized library service; it does not
+write managed revision directories directly. The result distinguishes a
+published skill from a pending proposal and explains when the session can use
+it. Ask explicitly to use the new revision in the current session or share it
+with the team.
+
+The single-admin default remains the workspace workflow above. Extra channel
+identities for the same operator do not turn a personal installation into a
+team setup. See [personal skills and revisions](/tools/skills#personal-skills-on-a-shared-gateway)
+for ownership, sharing, storage, and session behavior.
 
 ## SKILL.md reference
 
@@ -212,6 +232,11 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 
 ## Publishing to ClawHub
 
+An owner is a ClawHub publisher handle, such as `@alice` or `@your-org`.
+Your account has a personal owner. Organization owners can have members with
+`owner`, `admin`, or `publisher` roles; all three roles can publish. Choose your
+personal owner or an organization where you have publisher access.
+
 <Steps>
   <Step title="Ensure your SKILL.md is complete">
     Make sure `name`, `description`, and any `metadata.openclaw` gating fields
@@ -265,5 +290,8 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
   </Card>
   <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">
     Plugins can ship skills alongside the tools they document.
+  </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    How the command a skill registers is invoked and gated.
   </Card>
 </CardGroup>

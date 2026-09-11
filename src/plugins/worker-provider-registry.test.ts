@@ -22,6 +22,7 @@ function createTestRegistry() {
 function createWorkerProvider(id: string): WorkerProvider {
   return {
     id,
+    resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
     provision: async () => {
       throw new Error("not called");
     },
@@ -58,35 +59,43 @@ describe("worker provider registry", () => {
     );
   });
 
-  it("rejects incomplete provider contracts", () => {
-    const pluginRegistry = createTestRegistry();
-    const provider = createWorkerProvider("static-ssh");
-    delete (provider as Partial<WorkerProvider>).inspect;
+  it.each(["resolveAllocation", "provision", "inspect", "destroy"] as const)(
+    "rejects a missing %s method",
+    (method) => {
+      const pluginRegistry = createTestRegistry();
+      const provider = createWorkerProvider("static-ssh");
+      delete (provider as Partial<WorkerProvider>)[method];
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+      pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({ message: "worker provider registration missing method: inspect" }),
-    );
-  });
+      expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+      expect(pluginRegistry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          message: `worker provider registration missing method: ${method}`,
+        }),
+      );
+    },
+  );
 
-  it("rejects a non-function optional renew hook", () => {
-    const pluginRegistry = createTestRegistry();
-    const provider = {
-      ...createWorkerProvider("static-ssh"),
-      renew: "later",
-    } as unknown as WorkerProvider;
+  it.each(["renew", "maintain", "prepareProvision"] as const)(
+    "rejects a non-function optional %s hook",
+    (method) => {
+      const pluginRegistry = createTestRegistry();
+      const provider = {
+        ...createWorkerProvider("static-ssh"),
+        [method]: "later",
+      } as unknown as WorkerProvider;
 
-    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+      pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
 
-    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        message: "worker provider registration renew must be a function",
-      }),
-    );
-  });
+      expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+      expect(pluginRegistry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          message: `worker provider registration ${method} must be a function`,
+        }),
+      );
+    },
+  );
 
   it("rejects a non-function optional machine-options hook", () => {
     const pluginRegistry = createTestRegistry();

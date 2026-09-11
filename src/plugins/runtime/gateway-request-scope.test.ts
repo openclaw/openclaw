@@ -55,7 +55,7 @@ describe("gateway request scope", () => {
     ) => Promise<void>,
   ) {
     await withTestGatewayScope(async (runtimeScope) => {
-      await runtimeScope.withPluginRuntimePluginIdScope(pluginId, async () => {
+      await runtimeScope.withPluginRuntimePluginScope({ pluginId }, async () => {
         await run(runtimeScope);
       });
     });
@@ -80,6 +80,23 @@ describe("gateway request scope", () => {
       const second = await importGatewayRequestScopeModule();
       expectGatewayScope(second, TEST_SCOPE);
     });
+  });
+
+  it("preserves host-issued Gateway resolver bindings across reloaded modules", async () => {
+    const first = await importGatewayRequestScopeModule();
+    const owner = {};
+    const resolver = vi.fn(() => TEST_SCOPE.context!);
+    first.bindGatewayContextResolver(owner, resolver);
+
+    vi.resetModules();
+    const second = await importGatewayRequestScopeModule();
+
+    expect(second.getGatewayContextResolver(owner)).toBe(resolver);
+    expect(second.getSharedGatewayContextResolver([owner])?.()).toBe(TEST_SCOPE.context);
+    expect(second.getGatewayContextResolver({})).toBeUndefined();
+
+    second.clearGatewayContextResolver(owner);
+    expect(first.getGatewayContextResolver(owner)).toBeUndefined();
   });
 
   it("attaches plugin id to the active scope", async () => {

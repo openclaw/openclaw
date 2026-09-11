@@ -49,9 +49,11 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.x"
 
       - name: Setup pnpm and dependencies
         shell: bash
@@ -99,6 +101,11 @@ jobs:
               exit 1
               ;;
           esac
+          image_corepack_home="$(node .github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs "$package_manager")"
+          if [[ -n "$image_corepack_home" ]]; then
+            export COREPACK_HOME="$image_corepack_home"
+            echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"
+          fi
           corepack enable --install-directory "$PNPM_HOME"
           for attempt in 1 2 3; do
             if corepack prepare "$package_manager" --activate; then
@@ -121,7 +128,7 @@ jobs:
           install_args=(
             install
             --prefer-offline
-            --ignore-scripts=false
+            --config.ignore-scripts=false
             --config.engine-strict=false
             --config.enable-pre-post-scripts=true
             --config.side-effects-cache=true
@@ -132,7 +139,7 @@ jobs:
             local option_name="$2"
             local value="${!env_name-}"
             if [ -n "$value" ]; then
-              install_args+=("--${option_name}=${value}")
+              install_args+=("--config.${option_name}=${value}")
             fi
           }
           append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
@@ -555,16 +562,16 @@ jobs:
             "--filter",
             "openclaw",
             "--prefer-offline",
-            "--ignore-scripts=true",
+            "--ignore-scripts",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=false",
             "--config.side-effects-cache=false",
             "--frozen-lockfile",
-            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
-            "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
-            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
-            "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
-            "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            "--config.child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--config.modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
+            "--config.network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--config.store-dir=$env:PNPM_CONFIG_STORE_DIR",
+            "--config.virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
           pnpm @installArgs
           if ($LASTEXITCODE -ne 0) {
@@ -741,6 +748,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
@@ -810,7 +818,7 @@ jobs:
             fi
           }
           {
-            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
               write_export "$key"
             done
           } > "${env_file}.tmp"

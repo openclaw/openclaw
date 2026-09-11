@@ -22,6 +22,7 @@ const profileMocks = vi.hoisted(() => ({
     options.environmentFile,
     "cell-image",
   ]),
+  validateCellContainerProfile: vi.fn(),
   validateFleetImage: vi.fn((image: string) => image),
 }));
 
@@ -134,14 +135,21 @@ describe("fleet container runtime", () => {
       }
       environmentFiles.push(environmentFile);
       await expect(fs.readFile(environmentFile, "utf8")).resolves.toBe(
-        "OPENCLAW_GATEWAY_TOKEN=fake-value\n",
+        "AAA_FEATURE=synthetic-first\nOPENCLAW_GATEWAY_TOKEN=fake-value\nZZZ_FEATURE=synthetic-last\n",
       );
+      expect(args.join(" ")).not.toContain("fake-value");
+      expect(args.join(" ")).not.toContain("synthetic-first");
+      expect(args.join(" ")).not.toContain("synthetic-last");
       return { stdout: "", stderr: "", code: 0 };
     });
     const runtime = createFleetContainerRuntime(executor);
     const profile = {
       runtime: "podman",
-      environment: { OPENCLAW_GATEWAY_TOKEN: "fake-value" },
+      environment: {
+        ZZZ_FEATURE: "synthetic-last",
+        OPENCLAW_GATEWAY_TOKEN: "fake-value",
+        AAA_FEATURE: "synthetic-first",
+      },
     } as unknown as CellContainerProfile;
 
     await runtime.run(profile, true);
@@ -157,14 +165,14 @@ describe("fleet container runtime", () => {
       1,
       "podman",
       ["run", "--env-file", environmentFiles[0], "cell-image"],
-      { redactValues: ["fake-value"] },
+      { redactValues: ["synthetic-last", "fake-value", "synthetic-first"] },
     );
     expect(executor).toHaveBeenNthCalledWith(
       2,
       "podman",
       ["create", "--env-file", environmentFiles[1], "cell-image"],
       {
-        redactValues: ["fake-value"],
+        redactValues: ["synthetic-last", "fake-value", "synthetic-first"],
       },
     );
     await Promise.all(
@@ -172,6 +180,21 @@ describe("fleet container runtime", () => {
         await expect(fs.stat(environmentFile)).rejects.toMatchObject({ code: "ENOENT" });
       }),
     );
+  });
+
+  it("preserves fleet profile validation errors before staging an invalid environment", async () => {
+    const executor = successfulExecutor();
+    const failure = new Error("Invalid fleet cell environment entry: BAD KEY");
+    profileMocks.validateCellContainerProfile.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const profile = {
+      runtime: "docker",
+      environment: { "BAD KEY": "synthetic-invalid-value" },
+    } as unknown as CellContainerProfile;
+
+    await expect(createFleetContainerRuntime(executor).run(profile, true)).rejects.toBe(failure);
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it("normalizes Docker and Podman inspect output", async () => {
@@ -429,11 +452,21 @@ describe("fleet container runtime", () => {
   it.each([
     [{}, ["logs", "cell-acme"]],
     [{ follow: true }, ["logs", "--follow", "cell-acme"]],
+    [{ timestamps: true }, ["logs", "--timestamps", "cell-acme"]],
     [{ tail: 200 }, ["logs", "--tail", "200", "cell-acme"]],
     [{ since: "10m" }, ["logs", "--since", "10m", "cell-acme"]],
     [
-      { follow: true, tail: 100, since: "2026-07-11T10:00:00Z" },
-      ["logs", "--follow", "--tail", "100", "--since", "2026-07-11T10:00:00Z", "cell-acme"],
+      { follow: true, timestamps: true, tail: 100, since: "2026-07-11T10:00:00Z" },
+      [
+        "logs",
+        "--follow",
+        "--timestamps",
+        "--tail",
+        "100",
+        "--since",
+        "2026-07-11T10:00:00Z",
+        "cell-acme",
+      ],
     ],
   ] as const)("streams logs with exact argv for %o", async (options, expectedArgs) => {
     const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));

@@ -1,7 +1,9 @@
 // image_generate tool tests cover provider/model selection, edit inputs,
 // background task handling, media saving, and duplicate-generation guards.
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
@@ -39,13 +41,14 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
 }));
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
+let mediaGenerationToolProviders: typeof import("./media-generation-tool-providers.js");
+let mediaGenerationRegistry: typeof import("../../media-generation/registry.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
 let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateToolImpl: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 
 function createImageGenerateTool(
@@ -352,6 +355,8 @@ describe("createImageGenerateTool", () => {
       };
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
+    mediaGenerationToolProviders = await import("./media-generation-tool-providers.js");
+    mediaGenerationRegistry = await import("../../media-generation/registry.js");
     imageOps = await import("../../media/media-services.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
@@ -360,11 +365,23 @@ describe("createImageGenerateTool", () => {
       await import("../media-generation-task-status-shared.test-support.js"));
     ({ createImageGenerateTool: createImageGenerateToolImpl } =
       await import("./image-generate-tool.js"));
-    ({ resolveImageGenerationModelConfigForTool } =
-      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {
+    // These fixtures cover routing and limits; the native suite proves actual resource ownership.
+    vi.spyOn(
+      mediaGenerationToolProviders,
+      "acquireImageGenerationToolProviders",
+    ).mockImplementation(async ({ cfg }) => ({
+      providers: imageGenerationRuntime.listRuntimeImageGenerationProviders({ config: cfg }),
+      assertOpen() {},
+      run: async (run) => await run(),
+      release: async () => {},
+    }));
+    vi.spyOn(mediaGenerationRegistry, "withImageGenerationProviders").mockImplementation(
+      async (cfg, run) =>
+        await run(imageGenerationRuntime.listRuntimeImageGenerationProviders({ config: cfg })),
+    );
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
       vi.stubEnv(envVar, "");
     }
@@ -439,80 +456,25 @@ describe("createImageGenerateTool", () => {
     expect(listProviders).not.toHaveBeenCalled();
   });
 
-  it("matches image-generation providers across plugin-advertised aliases", () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "z.ai",
-        aliases: ["z-ai"],
-        defaultModel: "glm-4.5-image",
-        models: ["glm-4.5-image"],
-        capabilities: {
-          generate: {
-            maxCount: 4,
-          },
-          edit: {
-            enabled: false,
-            maxInputImages: 0,
-          },
-          geometry: {},
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
+  it("infers an OpenAI image-generation model from env-backed auth", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
 
-    requireImageGenerateTool(
-      createImageGenerateTool({
-        config: {
-          agents: {
-            defaults: {
-              imageGenerationModel: {
-                primary: "z-ai/glm-4.5-image",
-              },
-            },
-          },
-        },
-      }),
+    await expect(tool.execute("call-inferred-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      { primary: "openai/gpt-image-1" },
     );
   });
 
-  it("infers an OpenAI image-generation model from env-backed auth", () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-
-    expect(resolveImageGenerationModelConfigForTool({ cfg: {} })).toEqual({
-      primary: "openai/gpt-image-1",
-    });
-    requireImageGenerateTool(createImageGenerateTool({ config: {} }));
-  });
-
-  it("does not load runtime providers while resolving an explicitly configured model", () => {
-    const listProviders = vi
-      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
-      .mockImplementation(() => {
-        throw new Error("runtime provider list should not run for explicit image model config");
-      });
-
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                image: {
-                  primary: "openai/gpt-image-1",
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({ primary: "openai/gpt-image-1" });
-    expect(listProviders).not.toHaveBeenCalled();
-  });
-
-  it("infers the canonical OpenAI image model from provider readiness without explicit config", () => {
+  it("infers the canonical OpenAI image model from provider readiness without explicit config", async () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
@@ -541,78 +503,39 @@ describe("createImageGenerateTool", () => {
       },
     ]);
 
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {},
-        agentDir: "/tmp/agent",
-      }),
-    ).toEqual({
-      primary: "openai/gpt-image-2",
-    });
-    requireImageGenerateTool(createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }));
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({ config: {}, agentDir: "/tmp/agent" }),
+    );
+
+    await expect(tool.execute("call-ready-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      { primary: "openai/gpt-image-2" },
+    );
     expect(isConfigured).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/agent",
     });
   });
 
-  it("prefers OpenAI image generation when the default model uses its Codex provider alias", () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "fal",
-        defaultModel: "fal-ai/flux/dev",
-        models: ["fal-ai/flux/dev"],
-        isConfigured: () => true,
-        capabilities: {
-          generate: { maxCount: 4 },
-          edit: { enabled: true, maxInputImages: 1 },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-      {
-        id: "openai",
-        aliases: ["openai"],
-        defaultModel: "gpt-image-2",
-        models: ["gpt-image-2"],
-        isConfigured: () => true,
-        capabilities: {
-          generate: { maxCount: 4 },
-          edit: { enabled: true, maxInputImages: 5 },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
-
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5",
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      primary: "openai/gpt-image-2",
-      fallbacks: ["fal/fal-ai/flux/dev"],
-    });
-  });
-
-  it("prefers the primary model provider when multiple image providers have auth", () => {
+  it("prefers the primary model provider when multiple image providers have auth", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.stubEnv("GEMINI_API_KEY", "gemini-test");
 
-    expect(
-      resolveImageGenerationModelConfigForTool({
-        cfg: {
+    const generationError = new Error("image generation stopped");
+    const generateImage = vi
+      .spyOn(imageGenerationRuntime, "generateImage")
+      .mockRejectedValue(generationError);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
           agents: {
             defaults: {
               model: {
@@ -622,10 +545,18 @@ describe("createImageGenerateTool", () => {
           },
         },
       }),
-    ).toEqual({
-      primary: "google/gemini-3.1-flash-image-preview",
-      fallbacks: ["openai/gpt-image-1"],
-    });
+    );
+
+    await expect(tool.execute("call-primary-image", { prompt: "An image" })).rejects.toBe(
+      generationError,
+    );
+    expect(mockCallArg(generateImage, 0, "generateImage").cfg).toHaveProperty(
+      "agents.defaults.mediaModels.image",
+      {
+        primary: "google/gemini-3.1-flash-image-preview",
+        fallbacks: ["openai/gpt-image-1"],
+      },
+    );
   });
 
   it("generates images and returns details.media paths", async () => {
@@ -828,27 +759,35 @@ describe("createImageGenerateTool", () => {
   });
 
   it("runs explicit deployment refs and preserves timeout-only image defaults", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "microsoft-foundry",
-        models: [],
-        isConfigured: () => true,
-        capabilities: {
-          generate: {
-            maxCount: 1,
-            supportsSize: true,
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockImplementation(
+      (params) => {
+        expect(params?.config?.agents?.defaults?.mediaModels?.image).toEqual({
+          primary: "microsoft-foundry/prod-image",
+          timeoutMs: 180_000,
+        });
+        return [
+          {
+            id: "microsoft-foundry",
+            models: [],
+            isConfigured: () => true,
+            capabilities: {
+              generate: {
+                maxCount: 1,
+                supportsSize: true,
+              },
+              edit: {
+                enabled: true,
+                maxInputImages: 1,
+                supportsSize: false,
+              },
+            },
+            generateImage: vi.fn(async () => {
+              throw new Error("not used");
+            }),
           },
-          edit: {
-            enabled: true,
-            maxInputImages: 1,
-            supportsSize: false,
-          },
-        },
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
+        ];
       },
-    ]);
+    );
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "microsoft-foundry",
       model: "prod-image",
@@ -1020,6 +959,45 @@ describe("createImageGenerateTool", () => {
       expect(generateImage).not.toHaveBeenCalled();
     },
   );
+
+  it("does not acquire image providers when the caller aborts a pending duplicate lookup", async () => {
+    const acquireProviders = vi.mocked(
+      mediaGenerationToolProviders.acquireImageGenerationToolProviders,
+    );
+    const lookup = createDeferred<[]>();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue(lookup.promise);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const scheduleBackgroundWork = vi.fn();
+    const agentSessionKey = "agent:main:discord:direct:123";
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } },
+          },
+        },
+        agentSessionKey,
+        requesterOrigin: { channel: "discord", to: "dm:123" },
+        scheduleBackgroundWork,
+      }),
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("image requester cancelled during task lookup");
+
+    const pending = tool.execute("call-image-lookup", { prompt: "an image" }, controller.signal);
+    expect(taskRuntimeInternalMocks.listFreshTasksForOwnerKey).toHaveBeenCalledWith(
+      agentSessionKey,
+    );
+    expect(acquireProviders).not.toHaveBeenCalled();
+    controller.abort(abortReason);
+    lookup.resolve([]);
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(acquireProviders).not.toHaveBeenCalled();
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(scheduleBackgroundWork).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
 
   it("stops loading later image references when the caller aborts a pending reference", async () => {
     stubImageGenerationProviders();
@@ -1342,6 +1320,9 @@ describe("createImageGenerateTool", () => {
   });
 
   it("returns active status for a duplicate image request with the same prompt", async () => {
+    const acquireProviders = vi.mocked(
+      mediaGenerationToolProviders.acquireImageGenerationToolProviders,
+    );
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
@@ -1384,6 +1365,7 @@ describe("createImageGenerateTool", () => {
     });
 
     expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(acquireProviders).not.toHaveBeenCalled();
     expect(resultText(result)).toContain(
       "Image generation task task-existing-image is already running",
     );
@@ -1670,55 +1652,58 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
 
-  it("forwards output hints and OpenAI provider options", async () => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "openai",
-      model: "gpt-image-2",
-      attempts: [],
-      ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("jpg-out"),
-          mimeType: "image/jpeg",
-          fileName: "preview.jpg",
+  it.each(["low", "xhigh", "max"])(
+    "forwards %s quality and OpenAI provider options",
+    async (quality) => {
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+        provider: "openai",
+        model: "gpt-image-2",
+        attempts: [],
+        ignoredOverrides: [],
+        images: [
+          {
+            buffer: Buffer.from("jpg-out"),
+            mimeType: "image/jpeg",
+            fileName: "preview.jpg",
+          },
+        ],
+      });
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+        path: "/tmp/generated.jpg",
+        id: "generated.jpg",
+        size: 5,
+        contentType: "image/jpeg",
+      });
+
+      const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+      const result = await tool.execute("call-openai-hints", {
+        prompt: "Cheap preview",
+        quality,
+        outputFormat: "jpeg",
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
         },
-      ],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/generated.jpg",
-      id: "generated.jpg",
-      size: 5,
-      contentType: "image/jpeg",
-    });
+      });
 
-    const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
-    const result = await tool.execute("call-openai-hints", {
-      prompt: "Cheap preview",
-      quality: "low",
-      outputFormat: "jpeg",
-      openai: {
-        background: "opaque",
-        moderation: "low",
-        outputCompression: 60,
-        user: "end-user-42",
-      },
-    });
-
-    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
-    expect(generateArgs.quality).toBe("low");
-    expect(generateArgs.outputFormat).toBe("jpeg");
-    expect(generateArgs.providerOptions).toEqual({
-      openai: {
-        background: "opaque",
-        moderation: "low",
-        outputCompression: 60,
-        user: "end-user-42",
-      },
-    });
-    const details = resultDetails(result);
-    expect(details.quality).toBe("low");
-    expect(details.outputFormat).toBe("jpeg");
-  });
+      const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+      expect(generateArgs.quality).toBe(quality);
+      expect(generateArgs.outputFormat).toBe("jpeg");
+      expect(generateArgs.providerOptions).toEqual({
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      });
+      const details = resultDetails(result);
+      expect(details.quality).toBe(quality);
+      expect(details.outputFormat).toBe("jpeg");
+    },
+  );
 
   it("forwards generic fal provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -1817,6 +1802,18 @@ describe("createImageGenerateTool", () => {
 
   it.each([
     {
+      model: "openai/gpt-image-2.5/flare/text-to-image",
+      primaryRef: "fal/openai/gpt-image-2.5/flare/text-to-image",
+      maxInputImages: 16,
+      disablesResolution: true,
+    },
+    {
+      model: "openai/gpt-image-2.5/sunburst/edit",
+      primaryRef: "fal/openai/gpt-image-2.5/sunburst/edit",
+      maxInputImages: 16,
+      disablesResolution: true,
+    },
+    {
       model: "fal-ai/nano-banana-2",
       primaryRef: "fal/fal-ai/nano-banana-2",
       maxInputImages: 14,
@@ -1883,6 +1880,16 @@ describe("createImageGenerateTool", () => {
     });
 
     expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(maxInputImages);
+    await expect(
+      tool.execute("call-too-many-references", {
+        prompt: "combine references",
+        images: Array.from(
+          { length: maxInputImages + 1 },
+          (_, index) => `./fixtures/ref-${index + 1}.png`,
+        ),
+      }),
+    ).rejects.toThrow(/reference image/);
+    expect(generateImage).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
@@ -2405,7 +2412,21 @@ describe("createImageGenerateTool", () => {
     });
   });
 
-  it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+  it("rejects oversized inline references at the canonical image cap before generation", async () => {
+    stubImageGenerationProviders();
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview");
+
+    await expect(
+      tool.execute("call-oversized-inline-reference", {
+        prompt: "Use this reference.",
+        image: `data:image/png;base64,${Buffer.alloc(MAX_IMAGE_BYTES + 1).toString("base64")}`,
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("uses the canonical image cap when mediaMaxMb is non-finite", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });
     const tool = requireImageGenerateTool(
@@ -2432,7 +2453,7 @@ describe("createImageGenerateTool", () => {
     expect(typeof mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 0)).toBe("string");
     expect(mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1)).toHaveProperty(
       "maxBytes",
-      undefined,
+      MAX_IMAGE_BYTES,
     );
   });
 

@@ -18,6 +18,7 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -27,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import type { TelegramPendingInboundTarget } from "./bot-handlers.types.js";
 import {
   dispatchTelegramBuiltinTurn,
   prepareTelegramCommandDispatch,
@@ -217,10 +219,11 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   return await resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
-    loadRuntimeCatalog: async () => params.catalog,
+    loadModelCatalog: async () => params.catalog,
   });
 }
 
@@ -247,12 +250,11 @@ function formatTelegramCommandArgMenuTitle(params: {
 }
 
 export async function executeTelegramBuiltinCommand(
-  params: TelegramCommandExecutorParams & { commandName: string },
+  params: TelegramCommandExecutorParams & {
+    commandName: string;
+    cancelPendingInbound: (target: TelegramPendingInboundTarget) => void;
+  },
 ): Promise<boolean> {
-  const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
-  if (!dispatch) {
-    return false;
-  }
   // Loaded-registry lookup only: Telegram defines no resolveNativeCommandName
   // hook, and the bundled fallback would jiti-load the plugin source in dev/test.
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
@@ -268,9 +270,26 @@ export async function executeTelegramBuiltinCommand(
     : params.rawText
       ? `/${params.commandName} ${params.rawText}`
       : `/${params.commandName}`;
+  const dispatch = await prepareTelegramCommandDispatch(
+    { ...params, requireAuth: true },
+    isAbortRequestText(prompt) ? params.cancelPendingInbound : undefined,
+  );
+  if (!dispatch) {
+    return false;
+  }
   if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
-    return await executeTelegramLoginCommand({ dispatch, commandArgs });
+    const currentProvider =
+      resolveTelegramCommandMenuModelContext({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+        sessionKey: dispatch.targetSessionKey,
+      }).provider ??
+      resolveDefaultModelForAgent({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+      }).provider;
+    return await executeTelegramLoginCommand({ dispatch, commandText: prompt, currentProvider });
   }
 
   const menuNeedsModelContext =
@@ -321,8 +340,9 @@ export async function executeTelegramBuiltinCommand(
         command: commandDefinition,
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
+        session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
-        ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+        catalog: menuModelCatalog,
       })
     : null;
   if (menu && commandDefinition) {

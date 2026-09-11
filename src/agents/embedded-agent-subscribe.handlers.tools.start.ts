@@ -4,29 +4,18 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
-import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
-import {
-  isMessagingTool,
-  isMessagingToolSendAction,
-  isMessagingToolTargetEvidenceAction,
-} from "./embedded-agent-messaging.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
-import {
-  applyCurrentMessageProvider,
-  readMessagingText,
-} from "./embedded-agent-subscribe.handlers.tools.results.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { collectMessagingMediaUrlsFromRecord } from "./embedded-agent-tool-media.js";
 import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
-import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -39,6 +28,8 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
+import { sendQuestionToolPrompt } from "./tools/question-prompt-send.js";
+import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
 
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -46,7 +37,8 @@ const TRACE_REQUIRED_PARAM_GROUPS = {
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
 
-function buildAskUserPromptPayload(
+function reserveQuestionPromptDelivery(
+  toolName: "ask_user" | "secrets",
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
@@ -54,7 +46,8 @@ function buildAskUserPromptPayload(
   args: unknown,
 ) {
   try {
-    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
+    const { questions, timeoutSeconds } =
+      toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
     const reservation = reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
@@ -165,6 +158,7 @@ function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): s
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  parentToolCallId?: string;
   hasRepliedRef?: { value: boolean };
 };
 
@@ -204,13 +198,11 @@ export function buildToolCallSummary(
   instanceReplaySafe: boolean,
   ownerKey: string | undefined,
   structuredReplaySafe: boolean,
-  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" },
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
-    ...(codeModeControl ? { codeModeControl } : {}),
-    commandBearing: codeModeControl ? false : isCommandBearingToolCall(toolName, args),
+    commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
     ...(ownerKey ? { ownerKey } : {}),
@@ -319,19 +311,29 @@ export function handleToolExecutionStart(
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
-    parentToolCallId?: string;
-    codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
     lifecycleProvenance?: "nested";
+    parentToolCallId?: string;
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
-  const askUserPromptReservation =
-    startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(
+  const isQuestionTool =
+    startToolName === "ask_user" ||
+    (startToolName === "secrets" &&
+      evt.args !== null &&
+      typeof evt.args === "object" &&
+      "action" in evt.args &&
+      evt.args.action === "request");
+  const questionPromptReservation =
+    isQuestionTool &&
+    ctx.params.onToolResult &&
+    // Native credential cards arrive through question.requested, not a public link.
+    (startToolName === "ask_user" || isDeliverableMessageChannel(ctx.params.messageChannel ?? ""))
+      ? reserveQuestionPromptDelivery(
+          startToolName === "ask_user" ? "ask_user" : "secrets",
           evt.toolCallId,
           ctx.params.sessionKey,
           ctx.params.runId,
@@ -339,8 +341,8 @@ export function handleToolExecutionStart(
           evt.args,
         )
       : undefined;
-  const cancelAskUserPromptReservation = () => {
-    if (askUserPromptReservation) {
+  const cancelQuestionPromptReservation = () => {
+    if (questionPromptReservation) {
       cancelAskUserPromptDelivery(
         evt.toolCallId,
         ctx.params.sessionKey,
@@ -357,14 +359,14 @@ export function handleToolExecutionStart(
         assistantMessageIndex: ctx.state.assistantMessageIndex,
       });
     } catch (error) {
-      cancelAskUserPromptReservation();
+      cancelQuestionPromptReservation();
       throw error;
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
         () => continueToolExecutionStart(),
         (error: unknown) => {
-          cancelAskUserPromptReservation();
+          cancelQuestionPromptReservation();
           throw error;
         },
       );
@@ -377,7 +379,6 @@ export function handleToolExecutionStart(
     const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
-    const parentToolCallId = evt.parentToolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
@@ -392,6 +393,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
       args,
+      parentToolCallId: evt.parentToolCallId,
       ...(ctx.params.hasRepliedRef
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
         : {}),
@@ -470,7 +472,6 @@ export function handleToolExecutionStart(
       instanceReplaySafe,
       ctx.params.sideEffectToolOwners?.get(toolName),
       false,
-      evt.codeModeControl,
     );
     ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
@@ -485,8 +486,7 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
+        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
@@ -501,8 +501,6 @@ export function handleToolExecutionStart(
       meta,
       commandBearing: callSummary.commandBearing,
       toolCallId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
-      ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
       startedAt,
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       ...(callSummary.commandBearing && !isExecToolName(toolName)
@@ -517,14 +515,13 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
+        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
         args: sanitizeToolArgs(args) as Record<string, unknown>,
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
-    if (isExecToolName(toolName) && callSummary.commandBearing) {
+    if (isExecToolName(toolName)) {
       emitTrackedItemEvent(ctx, {
         itemId: buildCommandItemId(toolCallId),
         phase: "start",
@@ -534,7 +531,6 @@ export function handleToolExecutionStart(
         name: toolName,
         meta,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt,
       });
     } else if (resolveFileMutationToolName(toolName) === "apply_patch") {
@@ -547,7 +543,6 @@ export function handleToolExecutionStart(
         name: toolName,
         meta,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt,
       });
     }
@@ -555,79 +550,36 @@ export function handleToolExecutionStart(
     if (
       ctx.params.onToolResult &&
       shouldEmitToolEvents &&
+      !isAgentPlanProgressToolName(toolName) &&
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {
       ctx.state.toolSummaryById.add(toolCallId);
       ctx.emitToolSummary(toolName, meta, callSummary.commandBearing);
     }
 
-    // Track messaging tool sends (pending until confirmed in tool_execution_end).
-    if (isMessagingTool(toolName)) {
-      const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-      if (isMessagingToolTargetEvidenceAction(toolName, argsRecord)) {
-        const telemetryArgs = applyCurrentMessageProvider(
-          toolName,
-          argsRecord,
-          ctx.params.messageChannel,
+    const publishPrompt = ctx.params.onToolResult;
+    if (questionPromptReservation && publishPrompt) {
+      const questionId = questionPromptReservation.questionId;
+      void waitForAskUserPromptReady(questionId)
+        .then(async (questions) => {
+          if (!questions) {
+            return;
+          }
+          await sendQuestionToolPrompt({
+            toolName: toolName === "secrets" ? "secrets" : "ask_user",
+            questionId,
+            questions,
+            config: ctx.params.config,
+            send: publishPrompt,
+          });
+        })
+        .then(
+          () => settleAskUserPromptDelivery(questionId),
+          (error: unknown) => {
+            settleAskUserPromptDelivery(questionId, error);
+            ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
+          },
         );
-        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
-          config: ctx.params.config,
-          currentChannelId: ctx.params.currentChannelId,
-          currentMessagingTarget: ctx.params.currentMessagingTarget,
-          currentThreadId:
-            ctx.params.currentThreadId ??
-            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
-          currentMessageId: ctx.params.currentMessageId,
-          replyToMode: ctx.params.replyToMode,
-          hasRepliedRef: ctx.params.hasRepliedRef,
-        });
-        if (sendTarget) {
-          ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
-        }
-      }
-      if (isMessagingSend) {
-        const text = readMessagingText(argsRecord);
-        if (text) {
-          ctx.state.pendingMessagingTexts.set(toolCallId, text);
-          ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
-        }
-        // Track media URLs from messaging tool args (pending until tool_execution_end).
-        const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
-        if (mediaUrls.length > 0) {
-          ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
-        }
-      }
-    }
-
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
-      const payload = askUserPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
-              return;
-            }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
-            },
-          );
-      }
     }
   };
 
@@ -639,14 +591,14 @@ export function handleToolExecutionStart(
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   } catch (error) {
-    cancelAskUserPromptReservation();
+    cancelQuestionPromptReservation();
     throw error;
   }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
     return flushBlockReplyBufferResult.then(
       () => continueAfterBlockReplyFlush(),
       (error: unknown) => {
-        cancelAskUserPromptReservation();
+        cancelQuestionPromptReservation();
         throw error;
       },
     );

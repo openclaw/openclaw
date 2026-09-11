@@ -1,5 +1,6 @@
 {
   "id": "zoom-meetings",
+  "categories": ["voice"],
   "name": "Zoom meetings",
   "description": "Join Zoom meetings as a Chrome browser guest.",
   "cliCommands": [
@@ -9,7 +10,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://cdn.simpleicons.org/zoom",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "zoommeetings" }],
   "activation": {

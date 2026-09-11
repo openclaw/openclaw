@@ -12,10 +12,8 @@ import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
-  formatToolDetailText,
   formatDetailKey,
   normalizeToolDisplayName,
-  resolveCodeModeSourceLanguage,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
@@ -95,8 +93,7 @@ export function resolveToolDisplay(params: {
 
 /** Formats and redacts detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
-  return formatToolDetailText(detailRaw);
+  return display.detail ? redactToolDetail(display.detail) : undefined;
 }
 
 /** Infers compact display metadata for a tool invocation from its arguments. */
@@ -123,10 +120,6 @@ export function isShellToolDisplayName(name: string | undefined): boolean {
 
 /** Provider-defined tool names are not enough: namespaced tools can carry executable commands. */
 export function isCommandBearingToolCall(name: string | undefined, args?: unknown): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
-  if (normalized === "exec" && resolveCodeModeSourceLanguage(args)) {
-    return false;
-  }
   if (isShellToolDisplayName(name)) {
     return true;
   }

@@ -362,6 +362,7 @@ async function resolveTelegramCommandAuth(params: {
 
 export async function prepareTelegramCommandDispatch(
   params: TelegramCommandExecutorParams & { requireAuth: boolean },
+  onAuthorized?: (target: TelegramCommandAuthResult) => void,
 ): Promise<TelegramCommandDispatch | null> {
   const telegramDeps = params.telegramDeps ?? defaultTelegramNativeCommandDeps;
   const runtimeCfg = telegramDeps.getRuntimeConfig();
@@ -391,6 +392,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
+  onAuthorized?.(auth);
   const { route, bindingMode } = resolveTelegramConversationRoute({
     cfg: runtimeCfg,
     accountId: params.accountId,
@@ -641,6 +643,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
           silent:
             dispatch.runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
           onPlatformSendDispatch: info.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         });
         if (result.delivered) {
           deliveryState.delivered = true;
@@ -693,6 +696,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
   )(turnPlan);
   if (
     !deliveryState.delivered &&
+    (!turnResult.dispatched || !turnResult.dispatchResult.sendPolicyDenied) &&
     finalReplyOutcome !== "suppressed" &&
     (deliveryState.skippedNonSilent > 0 || deliveryState.failedNonSilent > 0) &&
     (!turnResult.dispatched ||

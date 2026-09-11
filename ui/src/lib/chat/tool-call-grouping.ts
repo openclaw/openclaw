@@ -10,13 +10,15 @@ import {
   resolveToolCallTargetPaths,
   type ToolCallKind,
 } from "./tool-call-view.ts";
+import { resolveToolDisplay } from "./tool-display.ts";
 
 type ToolGroupSummaryInput = {
-  callId?: string;
-  parentCallId?: string;
-  codeModeControl?: { kind: "exec" | "wait"; language?: "javascript" | "typescript" };
   name: string;
   args?: unknown;
+  callId?: string;
+  runId?: string;
+  parentToolCallId?: string;
+  isError?: boolean;
 };
 
 type FileActivity = "read" | "edit" | "write" | "delete";
@@ -27,7 +29,6 @@ type FileActivityCounts = {
 };
 
 type GroupCounts = {
-  codeWorkflows: number;
   commands: number;
   files: Record<FileActivity, FileActivityCounts>;
   searches: number;
@@ -47,7 +48,7 @@ function countFiles(counts: GroupCounts, activity: FileActivity, paths: readonly
 }
 
 function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
-  const kind: ToolCallKind = resolveToolCallKind(card.name, card.args, card.codeModeControl);
+  const kind: ToolCallKind = resolveToolCallKind(card.name, card.args);
   const fileOperations = resolveToolCallFileOperations(card.name, card.args);
   if (fileOperations) {
     for (const { operation, path } of fileOperations) {
@@ -57,9 +58,6 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
   } else {
     const pathKeys = resolveToolCallTargetPaths(card.name, card.args);
     switch (kind) {
-      case "code":
-        counts.codeWorkflows += 1;
-        break;
       case "command":
         counts.commands += 1;
         break;
@@ -80,7 +78,9 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
         break;
       default:
         counts.others += 1;
-        counts.otherNames.add(card.name);
+        // Same display label as the standalone row, so a collapsed rollup of
+        // e.g. heartbeat_respond reads "Heartbeat Respond" in both shapes.
+        counts.otherNames.add(resolveToolDisplay({ name: card.name, args: card.args }).label);
     }
   }
 }
@@ -99,7 +99,6 @@ function fileCount(calls: number, paths: Set<string>): number {
  */
 export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): string {
   const counts: GroupCounts = {
-    codeWorkflows: 0,
     commands: 0,
     files: {
       read: { calls: 0, paths: new Set() },
@@ -112,30 +111,26 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     otherNames: new Set(),
     others: 0,
   };
-  const childParentIds = new Set(
-    cards.map((card) => card.parentCallId).filter((callId): callId is string => Boolean(callId)),
+  const parents = new Set(
+    cards.flatMap((card) =>
+      card.runId && card.parentToolCallId && card.parentToolCallId !== card.callId
+        ? [JSON.stringify([card.runId, card.parentToolCallId])]
+        : [],
+    ),
   );
-  const summarizedCards = cards.filter(
+  // Only recorded relationships suppress a wrapper; failed wrappers retain their own outcome.
+  const operations = cards.filter(
     (card) =>
-      card.codeModeControl?.kind !== "wait" &&
-      (resolveToolCallKind(card.name, card.args, card.codeModeControl) !== "code" ||
-        !card.callId ||
-        !childParentIds.has(card.callId)),
+      card.isError ||
+      !card.runId ||
+      !card.callId ||
+      !parents.has(JSON.stringify([card.runId, card.callId])),
   );
-  for (const card of summarizedCards) {
+  for (const card of operations.length ? operations : cards) {
     countCard(counts, card);
   }
 
   const segments: string[] = [];
-  if (counts.codeWorkflows > 0) {
-    segments.push(
-      countLabel(
-        counts.codeWorkflows,
-        "chat.toolCards.group.codeOne",
-        "chat.toolCards.group.codeMany",
-      ),
-    );
-  }
   if (counts.commands > 0) {
     segments.push(
       countLabel(
@@ -199,12 +194,9 @@ export function summarizeToolGroup(cards: readonly ToolGroupSummaryInput[]): str
     );
   }
 
-  if (cards.length > 0 && summarizedCards.length === 0) {
-    segments.push(t("chat.toolCards.group.codeOne"));
-  }
   if (segments.length === 0) {
     return countLabel(
-      summarizedCards.length,
+      cards.length,
       "chat.toolCards.group.emptyOne",
       "chat.toolCards.group.emptyMany",
     );

@@ -12,6 +12,7 @@ import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
@@ -56,11 +57,16 @@ async function executeSingleAction(
     throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
   }
   const effectiveTargetId = action.targetId ?? targetId;
+  const interaction = {
+    cdpUrl,
+    targetId: effectiveTargetId,
+    ...navigationPolicy,
+    signal,
+  };
   switch (action.kind) {
     case "click":
       await clickViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         ref: action.ref,
         selector: action.selector,
         doubleClick: action.doubleClick,
@@ -70,102 +76,76 @@ async function executeSingleAction(
         >,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "clickCoords":
       await clickCoordsViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         x: action.x,
         y: action.y,
         doubleClick: action.doubleClick,
         button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "type":
       await typeViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         ref: action.ref,
         selector: action.selector,
         text: action.text,
         submit: action.submit,
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "press":
       await pressKeyViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         key: action.key,
         delayMs: action.delayMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "hover":
       await hoverViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "scrollIntoView":
       await scrollIntoViewViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "drag":
       await dragViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         startRef: action.startRef,
         startSelector: action.startSelector,
         endRef: action.endRef,
         endSelector: action.endSelector,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "select":
       await selectOptionViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         ref: action.ref,
         selector: action.selector,
         values: action.values,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "fill":
       await fillFormViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         fields: action.fields,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "resize":
@@ -174,6 +154,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         width: action.width,
         height: action.height,
+        signal,
       });
       break;
     case "wait":
@@ -181,8 +162,7 @@ async function executeSingleAction(
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
       }
       await waitForViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
+        ...interaction,
         timeMs: action.timeMs,
         text: action.text,
         textGone: action.textGone,
@@ -191,8 +171,6 @@ async function executeSingleAction(
         loadState: action.loadState,
         fn: action.fn,
         timeoutMs: action.timeoutMs,
-        ...navigationPolicy,
-        signal,
       });
       break;
     case "evaluate":
@@ -200,13 +178,10 @@ async function executeSingleAction(
         throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
       }
       return await evaluateViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
-        ...navigationPolicy,
+        ...interaction,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
-        signal,
       });
     case "close":
       await closePageViaPlaywright({
@@ -214,18 +189,22 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
       });
       break;
-    case "batch":
-      await batchViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
-        ...navigationPolicy,
+    case "batch": {
+      const batch = await batchViaPlaywright({
+        ...interaction,
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
         depth: depth + 1,
-        signal,
       });
+      // A nested batch is one parent action; surface its first failure so each
+      // level applies its own stopOnError without discarding the child outcome.
+      const failure = batch.results.find((result) => !result.ok);
+      if (failure) {
+        throw new Error(failure.error);
+      }
       break;
+    }
     default:
       throw new Error(`Unsupported batch action kind: ${(action as { kind: string }).kind}`);
   }
@@ -264,6 +243,7 @@ export async function executeActViaPlaywright(
   blockedByDialog?: boolean;
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
+  targetId?: string;
 }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const page = await getPageForTargetId({
@@ -271,6 +251,10 @@ export async function executeActViaPlaywright(
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
+    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
+    return { ...payload, ...(targetId ? { targetId } : {}) };
+  };
   // Any DOM action can synchronously trigger a download. Capturing all actions
   // keeps reporting and final-URL policy aligned with the actual file write.
   const downloadCapture = beginActionDownloadCaptureOnPage(page, {
@@ -310,11 +294,11 @@ export async function executeActViaPlaywright(
         signal: dialogAbort.signal,
       });
       const newDownloads = await drainDownloads();
-      return {
+      return await withOperationTarget({
         results: batch.results,
         ...(batch.aborted ? { aborted: batch.aborted } : {}),
         ...(newDownloads ? { downloads: newDownloads } : {}),
-      };
+      });
     }
     const result = await executeSingleAction(
       opts.action,
@@ -327,9 +311,12 @@ export async function executeActViaPlaywright(
     );
     const newDownloads = await drainDownloads();
     if (opts.action.kind === "evaluate") {
-      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
+      return await withOperationTarget({
+        result,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      });
     }
-    return newDownloads ? { downloads: newDownloads } : {};
+    return await withOperationTarget(newDownloads ? { downloads: newDownloads } : {});
   } catch (err) {
     let failure = err;
     try {
@@ -344,7 +331,10 @@ export async function executeActViaPlaywright(
       failure = downloadErr;
     }
     if (isBrowserObservedDialogBlockedError(failure)) {
-      return { blockedByDialog: true, browserState: failure.browserState };
+      return await withOperationTarget({
+        blockedByDialog: true,
+        browserState: failure.browserState,
+      });
     }
     if (
       isPolicyDenyNavigationError(failure) &&
@@ -424,6 +414,7 @@ export async function batchViaPlaywright(
         return finishAborted("closed", index, currentMainFrameUrl(), opts.actions.length - index);
       }
       navigationsAtLastDispatch = mainFrameNavigations;
+      let result: BrowserBatchActionResult;
       try {
         await executeSingleAction(
           action,
@@ -434,18 +425,7 @@ export async function batchViaPlaywright(
           depth,
           opts.signal,
         );
-        results.push({ ok: true });
-        if (page.isClosed?.()) {
-          return finishAborted(
-            "closed",
-            index + 1,
-            currentMainFrameUrl(),
-            opts.actions.length - index - 1,
-          );
-        }
-        if (mainFrameNavigations > navigationsAtLastDispatch) {
-          return finishNavigation(index + 1, opts.actions.length - index - 1);
-        }
+        result = { ok: true };
       } catch (err) {
         if (isBrowserObservedDialogBlockedError(err)) {
           throw err;
@@ -453,22 +433,22 @@ export async function batchViaPlaywright(
         if (isPolicyDenyNavigationError(err)) {
           throw err;
         }
-        const message = formatErrorMessage(err);
-        results.push({ ok: false, error: message });
-        if (page.isClosed?.()) {
-          return finishAborted(
-            "closed",
-            index + 1,
-            currentMainFrameUrl(),
-            opts.actions.length - index - 1,
-          );
-        }
-        if (mainFrameNavigations > navigationsAtLastDispatch) {
-          return finishNavigation(index + 1, opts.actions.length - index - 1);
-        }
-        if (opts.stopOnError !== false) {
-          break;
-        }
+        result = { ok: false, error: formatErrorMessage(err) };
+      }
+      results.push(result);
+      if (page.isClosed?.()) {
+        return finishAborted(
+          "closed",
+          index + 1,
+          currentMainFrameUrl(),
+          opts.actions.length - index - 1,
+        );
+      }
+      if (mainFrameNavigations > navigationsAtLastDispatch) {
+        return finishNavigation(index + 1, opts.actions.length - index - 1);
+      }
+      if (!result.ok && opts.stopOnError !== false) {
+        break;
       }
     }
     return { results };

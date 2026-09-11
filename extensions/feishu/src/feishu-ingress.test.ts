@@ -7,7 +7,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
@@ -125,7 +125,7 @@ async function withQueue<T>(fn: (queue: FeishuIngressQueue, stateDir: string) =>
 }
 
 function signWebhookBody(rawBody: string, encryptKey: string): Record<string, string> {
-  const timestamp = "1711111111";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = "feishu-ingress-test";
   return {
     "content-type": "application/json",

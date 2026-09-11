@@ -2,17 +2,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
   missingSystemRunApprovalBinding,
-  normalizeSystemRunApprovalPlan,
   prepareSystemRunMutableFileBinding,
+  prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
 } from "./system-run-approval-binding.js";
+import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
+import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
 
 function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
   expect(result.ok).toBe(true);
@@ -334,13 +338,164 @@ describe("missingSystemRunApprovalBinding", () => {
 });
 
 describe("mutable file operand binding", () => {
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "binds protected env and ls identities in dispatch order",
+    async () => {
+      const prepared = await prepareSystemRunMutableFileBinding({
+        command: { kind: "shell", text: "env ls" },
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
+        }),
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
+        }),
+      ]);
+      await expect(
+        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+      ).resolves.toEqual({ ok: true });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "binds protected executable identity without hashing or requiring one-shot approval",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: { kind: "shell", text: "ls *.ts" },
+            env: { PATH: "/bin:/usr/bin" },
+          }),
+        );
+        expect(prepared.binding.operands).toEqual([
+          expect.objectContaining({
+            kind: "identity",
+            executable: true,
+            argv: ["ls", "*.ts"],
+            snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
+            pathSearch: expect.objectContaining({ path: "/bin:/usr/bin" }),
+          }),
+        ]);
+        const reads = vi.spyOn(fs, "readFileSync");
+        try {
+          await expect(
+            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+          ).resolves.toEqual({ ok: true });
+          expect(reads).not.toHaveBeenCalled();
+        } finally {
+          reads.mockRestore();
+        }
+        const approval = expectOk(
+          await prepareSystemRunMutableFileApproval({ command: "/bin/ls *.ts" }),
+        );
+        expect(approval.requiresOneShot).toBe(false);
+      } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "revalidates executable availability without cached PATH resolution",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: { kind: "shell", text: "ls *.ts" },
+            env: { PATH: "/bin" },
+          }),
+        );
+        const access = fs.accessSync;
+        const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+          if (target === "/bin/ls") {
+            throw new Error("synthetic executable unavailable");
+          }
+          return access(target, mode);
+        });
+        try {
+          await expect(
+            revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+          ).resolves.toEqual({
+            ok: false,
+            message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+          });
+        } finally {
+          accessSpy.mockRestore();
+        }
+      } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "denies protected executable resolution drift after preparation",
+    async () => {
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      const resolution = commandResolution.resolveCommandResolutionFromArgv(["ls"], undefined, {
+        PATH: "/bin:/usr/bin",
+      });
+      if (!resolution) {
+        throw new Error("expected executable resolution");
+      }
+      const resolve = vi
+        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
+        .mockReturnValue(resolution);
+      try {
+        const prepared = expectOk(
+          await prepareSystemRunMutableFileBinding({
+            command: {
+              kind: "segments",
+              segments: [{ argv: ["ls", "*.ts"], raw: "ls *.ts", resolution }],
+            },
+            env: { PATH: "/bin:/usr/bin" },
+          }),
+        );
+        resolve.mockReturnValue({
+          ...resolution,
+          execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
+        });
+        await expect(
+          revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+        ).resolves.toEqual({
+          ok: false,
+          message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+        });
+        expect(resolve).toHaveBeenLastCalledWith(
+          ["ls", "*.ts"],
+          undefined,
+          expect.objectContaining({ PATH: "/bin:/usr/bin" }),
+          process.platform,
+          { useCache: false },
+        );
+      } finally {
+        resolve.mockRestore();
+        policy.mockRestore();
+      }
+    },
+  );
+
   it("binds every script in a compound command and detects drift", async () => {
-    const cwd = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-binding-")),
-    );
-    const first = path.join(cwd, "first.sh");
-    const second = path.join(cwd, "second.py");
-    try {
+    await withTempDir("openclaw-system-run-binding-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
+      const first = path.join(cwd, "first.sh");
+      const second = path.join(cwd, "second.py");
       fs.writeFileSync(first, "#!/bin/sh\necho first\n");
       fs.writeFileSync(second, "print('second')\n");
       const command = { kind: "shell" as const, text: "sh first.sh && python3 second.py" };
@@ -365,15 +520,12 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("binds direct script executables", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-direct-"));
-    const script = path.join(cwd, "direct.sh");
-    try {
+    await withTempDir("openclaw-system-run-direct-", async (cwd) => {
+      const script = path.join(cwd, "direct.sh");
       fs.writeFileSync(script, "#!/bin/sh\necho approved\n", { mode: 0o755 });
       const prepared = expectOk(
         await prepareSystemRunMutableFileBinding({
@@ -381,7 +533,7 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.filter((operand) => !operand.executable)).toHaveLength(1);
 
       fs.writeFileSync(script, "#!/bin/sh\necho changed\n", { mode: 0o755 });
       await expect(
@@ -390,18 +542,15 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it.each([
     { name: "accepts unchanged bytes", mutate: false },
     { name: "denies changed bytes", mutate: true },
   ])("revalidates transparent-wrapper executables: $name", async ({ mutate }) => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-wrapper-"));
-    const script = path.join(cwd, "wrapped.sh");
-    try {
+    await withTempDir("openclaw-system-run-wrapper-", async (cwd) => {
+      const script = path.join(cwd, "wrapped.sh");
       fs.writeFileSync(script, "#!/bin/sh\necho approved\n", { mode: 0o755 });
       const prepared = expectOk(
         await prepareSystemRunMutableFileBinding({
@@ -409,7 +558,9 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.map((operand) => operand.snapshot.path)).toContain(
+        fs.realpathSync(script),
+      );
       if (mutate) {
         fs.writeFileSync(script, "#!/bin/sh\necho changed\n", { mode: 0o755 });
       }
@@ -421,15 +572,12 @@ describe("mutable file operand binding", () => {
           ? { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE }
           : { ok: true },
       );
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("binds mutable native executables", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-native-"));
-    const executable = path.join(cwd, "native-tool");
-    try {
+    await withTempDir("openclaw-system-run-native-", async (cwd) => {
+      const executable = path.join(cwd, "native-tool");
       fs.copyFileSync(process.execPath, executable);
       fs.chmodSync(executable, 0o755);
       const prepared = expectOk(
@@ -438,7 +586,7 @@ describe("mutable file operand binding", () => {
           cwd,
         }),
       );
-      expect(prepared.binding.operands).toHaveLength(1);
+      expect(prepared.binding.operands.filter((operand) => operand.executable)).toHaveLength(1);
 
       fs.appendFileSync(executable, Buffer.from([0]));
       await expect(
@@ -447,14 +595,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails closed for shell startup file operands", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-startup-"));
-    try {
+    await withTempDir("openclaw-system-run-startup-", async (cwd) => {
       fs.writeFileSync(path.join(cwd, "init.sh"), "echo init\n");
       fs.writeFileSync(path.join(cwd, "job.sh"), "echo job\n");
       await expect(
@@ -502,14 +647,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails closed for shell source built-ins", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-source-"));
-    try {
+    await withTempDir("openclaw-system-run-source-", async (cwd) => {
       fs.writeFileSync(path.join(cwd, "loaded.sh"), "echo loaded\n");
       await expect(
         prepareSystemRunMutableFileBinding({
@@ -587,14 +729,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell source operands",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails closed for runtime code-loading and cwd options", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-bun-"));
-    try {
+    await withTempDir("openclaw-system-run-bun-", async (cwd) => {
       fs.writeFileSync(path.join(cwd, "loader.ts"), "export {};\n");
       fs.writeFileSync(path.join(cwd, "app.ts"), "console.log('app');\n");
       await expect(
@@ -660,15 +799,12 @@ describe("mutable file operand binding", () => {
         message:
           "SYSTEM_RUN_DENIED: approval cannot safely bind runtime code-loading or cwd options",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("binds mutable scripts resolved through PATH", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-path-script-"));
-    const binDir = path.join(cwd, "bin");
-    try {
+    await withTempDir("openclaw-system-run-path-script-", async (cwd) => {
+      const binDir = path.join(cwd, "bin");
       fs.mkdirSync(binDir);
       fs.writeFileSync(path.join(binDir, "workspace-tool"), "#!/bin/sh\necho tool\n", {
         mode: 0o755,
@@ -691,16 +827,13 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("binds both a PATH-resolved interpreter shim and its script operand", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-path-python-"));
-    const binDir = path.join(cwd, "bin");
-    const payload = path.join(cwd, "payload.py");
-    try {
+    await withTempDir("openclaw-system-run-path-python-", async (cwd) => {
+      const binDir = path.join(cwd, "bin");
+      const payload = path.join(cwd, "payload.py");
       fs.mkdirSync(binDir);
       fs.writeFileSync(path.join(binDir, "python"), '#!/bin/sh\nexec python3 "$@"\n', {
         mode: 0o755,
@@ -722,15 +855,12 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("binds both an explicit interpreter shim and its script operand", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-explicit-python-"));
-    const shim = path.join(cwd, "python");
-    try {
+    await withTempDir("openclaw-system-run-explicit-python-", async (cwd) => {
+      const shim = path.join(cwd, "python");
       fs.writeFileSync(shim, '#!/bin/sh\nexec python3 "$@"\n', { mode: 0o755 });
       fs.writeFileSync(path.join(cwd, "payload.py"), "print('approved')\n");
       const prepared = expectOk(
@@ -748,14 +878,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails closed when an earlier shell segment changes cwd", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-cd-"));
-    try {
+    await withTempDir("openclaw-system-run-cd-", async (cwd) => {
       fs.mkdirSync(path.join(cwd, "sub"));
       fs.writeFileSync(path.join(cwd, "sub", "script.sh"), "echo sub\n");
       await expect(
@@ -776,14 +903,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind dispatch cwd options",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails closed when a script operand does not exist", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-missing-"));
-    try {
+    await withTempDir("openclaw-system-run-missing-", async (cwd) => {
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "shell", text: "sh missing.sh" },
@@ -811,14 +935,11 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it("does not let inline eval bypass a mutable loader operand", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-loader-"));
-    try {
+    await withTempDir("openclaw-system-run-loader-", async (cwd) => {
       fs.writeFileSync(path.join(cwd, "loader.js"), "module.exports = {};\n");
       fs.writeFileSync(path.join(cwd, "payload.sh"), "echo payload\n", { mode: 0o755 });
       await expect(
@@ -842,9 +963,7 @@ describe("mutable file operand binding", () => {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
       });
-    } finally {
-      fs.rmSync(cwd, { recursive: true, force: true });
-    }
+    });
   });
 
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(

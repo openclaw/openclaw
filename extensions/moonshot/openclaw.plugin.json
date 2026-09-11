@@ -1,5 +1,6 @@
 {
   "id": "moonshot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -42,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "moonshot": "moonshotai"
+    },
     "aliases": {
       "moonshotai": {
         "provider": "moonshot"

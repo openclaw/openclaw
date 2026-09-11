@@ -1,4 +1,5 @@
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { resolveLegacyFirstAgentWorkspacePin } from "../../../config/legacy.default-agent-roles.js";
+import { projectLegacyAgentRosterEntries } from "../../../config/legacy.roster.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -15,36 +16,14 @@ function migrateAgentEntries(raw: Record<string, unknown>, changes: string[]): v
     changes.push("Removed agents.list because canonical agents.entries is already set.");
     return;
   }
-  const entries: Record<string, unknown> = {};
-  for (const [index, value] of agents.list.entries()) {
-    const entry = getRecord(value);
-    if (!entry) {
-      changes.push(`Removed malformed agents.list[${index}] entry.`);
-      continue;
-    }
-    const rawId = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "agent";
-    const requestedId = normalizeAgentId(rawId);
-    if (requestedId !== rawId) {
-      changes.push(`Normalized agents.list id "${rawId}" → agents.entries.${requestedId}.`);
-    }
-    let key = requestedId;
-    let suffix = 2;
-    while (Object.hasOwn(entries, key)) {
-      key = `${requestedId}-${suffix}`;
-      suffix += 1;
-    }
-    const { id: _id, ...config } = entry;
-    Object.defineProperty(entries, key, {
-      configurable: true,
-      enumerable: true,
-      value: config,
-      writable: true,
-    });
-    if (key !== requestedId) {
-      changes.push(`Moved duplicate agents.list id "${requestedId}" to agents.entries.${key}.`);
-    }
+  const projected = projectLegacyAgentRosterEntries(agents.list);
+  changes.push(...projected.diagnostics);
+  const orderedEntries = projected.entries.map(({ config }) => config);
+  const workspace = resolveLegacyFirstAgentWorkspacePin(agents, orderedEntries);
+  if (workspace !== undefined) {
+    orderedEntries[0]!.workspace = workspace;
   }
-  agents.entries = entries;
+  agents.entries = Object.fromEntries(projected.entries.map(({ id, config }) => [id, config]));
   delete agents.list;
   changes.push("Moved agents.list → keyed agents.entries.");
 }
@@ -60,5 +39,23 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
       },
     ],
     apply: migrateAgentEntries,
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.agents-explicit-ownership",
+    describe: "Persist explicit ownership for markerless multi-agent rosters",
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const entries = getRecord(agents?.entries);
+      if (!agents || agents.ownership !== undefined || !entries) {
+        return;
+      }
+      const roster = Object.values(entries);
+      if (roster.length < 2 || roster.some((entry) => getRecord(entry)?.default === true)) {
+        return;
+      }
+      // Recovery validates the registry's candidate before the later Doctor config flow.
+      agents.ownership = "explicit";
+      changes.push("Stamped the multi-agent roster for explicit per-surface ownership.");
+    },
   }),
 ];

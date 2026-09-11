@@ -1,6 +1,7 @@
 // Sidebar nav rows plus the More and pin-editor menus, split out of
 // app-sidebar.ts to keep that hot component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -14,11 +15,10 @@ import {
   sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { pluginTabSearch } from "../pages/plugin/route.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -93,15 +93,13 @@ export function renderSidebarPluginTab(params: {
   tab: GatewayControlUiPluginTab;
   basePath: string;
   active: boolean;
-  onNavigate: (search: string) => void;
+  onNavigate: (location: ReturnType<typeof pluginTabLocation>) => void;
 }) {
-  const search = pluginTabSearch({ pluginId: params.tab.pluginId, id: params.tab.id });
-  const iconName = Object.hasOwn(icons, params.tab.icon!)
-    ? (params.tab.icon as IconName)
-    : "puzzle";
+  const location = pluginTabLocation(params.tab, params.basePath);
+  const iconName = Object.hasOwn(icons, params.tab.icon!) ? (params.tab.icon as IconName) : "plug";
   return html`
     <a
-      href=${`${pathForRoute("plugin", params.basePath)}${search}`}
+      href=${`${location.pathname}${location.search}`}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
       aria-current=${params.active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
@@ -109,7 +107,7 @@ export function renderSidebarPluginTab(params: {
           return;
         }
         event.preventDefault();
-        params.onNavigate(search);
+        params.onNavigate(location);
       }}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
@@ -125,7 +123,7 @@ type SidebarMenuNavigationHandlers = {
 };
 
 type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
-  position: SidebarMenuPosition | null;
+  position: SidebarMenuPosition;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
   sidebarEntries: readonly string[];
@@ -165,9 +163,6 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
 
 export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const moreRoutes = sidebarMoreRoutes(params.sidebarEntries).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
@@ -216,14 +211,13 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 }
 
 type SidebarCustomizeMenuParams = {
-  position: SidebarMenuPosition | null;
+  position: SidebarMenuPosition;
   sidebarEntries: readonly string[];
   preferencesBrowserOnly: boolean;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  workboardRenderers?: SidebarWorkboardRenderers;
+  pluginNavigation: ControlUiRegistration<ControlUiNavigationItem>[];
   onToggleRoute: (routeId: SidebarNavRoute) => void;
-  onToggleWorkboardBoard: (boardId: string) => void;
+  onTogglePlugin: (key: string) => void;
   onReset: () => void;
   onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
@@ -231,9 +225,6 @@ type SidebarCustomizeMenuParams = {
 
 export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-pin-editor-menu"
@@ -246,10 +237,10 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         const value = event.detail.item.value;
         if (value === "reset") {
           params.onReset();
-        } else if (value?.startsWith("workboard:")) {
-          const boardId = value.slice("workboard:".length);
-          if (params.workboardBoards.some((board) => board.id === boardId)) {
-            params.onToggleWorkboardBoard(boardId);
+        } else if (value?.startsWith("plugin:")) {
+          const key = value.slice("plugin:".length);
+          if (params.pluginNavigation.some((entry) => entry.key === key)) {
+            params.onTogglePlugin(key);
           }
         } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
           params.onToggleRoute(value as SidebarNavRoute);
@@ -267,11 +258,13 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
       <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-      ${params.preferencesBrowserOnly
-        ? html`<div class="sidebar-customize-menu__provenance" role="note">
-            ${t("quickSettings.personal.browserOnly")}
-          </div>`
-        : nothing}
+      ${
+        params.preferencesBrowserOnly
+          ? html`<div class="sidebar-customize-menu__provenance" role="note">
+              ${t("quickSettings.personal.browserOnly")}
+            </div>`
+          : nothing
+      }
       ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
         const visible = params.sidebarEntries.includes(
           serializeSidebarEntry({ type: "route", route: routeId }),
@@ -290,9 +283,19 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           </wa-dropdown-item>
         `;
       })}
-      ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
-        ? params.workboardRenderers?.renderCustomize(params.workboardBoards, params.sidebarEntries)
-        : nothing}
+      ${params.pluginNavigation
+        .filter((entry) => entry.value.defaultVisible === false)
+        .map(
+          (entry) => html` <wa-dropdown-item
+            class="sidebar-customize-menu__item"
+            type="checkbox"
+            value=${`plugin:${entry.key}`}
+            .checked=${params.sidebarEntries.includes(`plugin:${entry.key}`)}
+          >
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plug}</span>
+            <span class="sidebar-customize-menu__text">${entry.value.label}</span>
+          </wa-dropdown-item>`,
+        )}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>

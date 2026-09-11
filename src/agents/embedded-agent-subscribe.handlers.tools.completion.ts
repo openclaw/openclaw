@@ -1,9 +1,9 @@
+import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import {
   emitAgentActivityEvent,
   type AgentCommandOutputEventData,
@@ -11,6 +11,8 @@ import {
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
+import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -43,7 +45,6 @@ import {
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
-import { runEmbeddedAfterToolCallHook } from "./embedded-agent-subscribe.handlers.tools.hooks.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
@@ -54,15 +55,14 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  hasTerminalControlCharacter,
   isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
+  loadHookRunnerGlobal,
   readApplyPatchSummary,
   readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
-  readProgressCardPlanInput,
   resolveFallbackToolTerminalObserver,
 } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -97,6 +97,7 @@ import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
+  hasTerminalControlCharacter,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
@@ -110,22 +111,23 @@ export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
 ) {
-  const toolName = normalizeToolPolicyName(evt.toolName);
-  const isExecTool = isExecToolName(toolName);
+  const rawToolName = evt.toolName;
+  const toolName = normalizeToolPolicyName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
-  const parentToolCallId = evt.parentToolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
+  const isError = evt.isError;
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
-  const observerIsError = evt.isError || isToolResultError(result);
+  const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
-    isExecTool && readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
+    isExecToolName(toolName) &&
+    readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
   const isToolError = observerIsError && !approvalUnavailable;
   if (!isToolError) {
     const channelView = readMcpAppChannelView(result);
@@ -147,24 +149,20 @@ export async function handleToolExecutionEnd(
   } catch (error) {
     ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
   }
-  const eventResult = isExecTool ? capLiveExecResult(sanitizedResult) : sanitizedResult;
+  const eventResult = isExecToolName(toolName)
+    ? capLiveExecResult(sanitizedResult)
+    : sanitizedResult;
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const initialCallSummary = ctx.state.toolMetaById.get(toolCallId);
-  const initialArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
+  const initialArgs = asRecord(startData?.args);
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
   const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
-  const startArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : initialArgs;
+  const startArgs = asOptionalObjectRecord(adjustedArgs) ?? initialArgs;
   const callSummary = buildToolCallSummary(
     toolName,
     startArgs,
@@ -172,16 +170,21 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.instanceReplaySafe === true,
     initialCallSummary?.ownerKey,
     structuredReplaySafe,
-    initialCallSummary?.codeModeControl ?? evt.codeModeControl,
   );
   // A racing observer can consume the active wrapper boundary. Settled and
   // custom producers use their terminal fact, while policy blocks override it.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
-  const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  // A Code Mode exec that returns "waiting" parked a run the model resumes via
+  // `wait`; record that here so recovery can tell parked nested work apart
+  // from any other still-active lifecycle item.
+  const codeModeSuspended =
+    !isToolError &&
+    ctx.params.codeModeExecToolNames?.has(toolName) === true &&
+    readToolResultDetails(sanitizedResult)?.status === "waiting";
   const terminate =
     result !== null &&
     typeof result === "object" &&
@@ -195,6 +198,7 @@ export async function handleToolExecutionEnd(
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
+    ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
   });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
@@ -222,8 +226,10 @@ export async function handleToolExecutionEnd(
     toolCallId,
     toolName,
     arguments: startArgs,
+    result,
     ...(meta ? { meta } : {}),
     executionStarted,
+    replaySafe: callSummary.replaySafe,
     outcome: isToolError ? "failure" : "success",
     ...(callSummary.ownerKey
       ? {
@@ -251,7 +257,7 @@ export async function handleToolExecutionEnd(
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
-  if (attemptedPotentialSideEffect || acceptedSessionSpawn || asyncStarted) {
+  if (terminal.sideEffectEvidence || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -267,6 +273,9 @@ export async function handleToolExecutionEnd(
   const messageDelivery = readEmbeddedMessageDeliveryFact(
     readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
   );
+  if (messageDelivery?.sourceReplyDelivered) {
+    ctx.state.sourceReplyDelivered = true;
+  }
   const didDeliverMessagingResult =
     isMessagingInvocation &&
     (messageDelivery
@@ -287,8 +296,7 @@ export async function handleToolExecutionEnd(
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId:
-          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentThreadId: ctx.params.currentThreadId,
         currentMessageId: ctx.params.currentMessageId,
         replyToMode: ctx.params.replyToMode,
         hasRepliedRef: startData?.hasRepliedRef,
@@ -308,6 +316,7 @@ export async function handleToolExecutionEnd(
       toolName,
       args: startArgs,
       result,
+      hookResult: toolSendReceiptResult,
       isError: isToolError,
       allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
         send: confirmedMessageTarget,
@@ -316,8 +325,7 @@ export async function handleToolExecutionEnd(
         currentAccountId: ctx.params.currentAccountId,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
-        currentThreadId:
-          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentThreadId: ctx.params.currentThreadId,
         sessionKey: ctx.params.sessionKey,
         deliveredPayload: extractionResult,
       }),
@@ -335,9 +343,6 @@ export async function handleToolExecutionEnd(
   const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
-  ctx.state.pendingMessagingTexts.delete(toolCallId);
-  ctx.state.pendingMessagingTargets.delete(toolCallId);
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
@@ -408,7 +413,9 @@ export async function handleToolExecutionEnd(
   }
 
   const planUpdate =
-    !isToolError && toolName === "progress_card" ? readProgressCardPlanInput(startArgs) : undefined;
+    !isToolError && toolName === "progress_card"
+      ? projectProgressCardChannelUpdate(startArgs)
+      : undefined;
   if (planUpdate) {
     const planEvent = {
       stream: "plan" as const,
@@ -430,8 +437,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
-      ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
@@ -452,17 +458,13 @@ export async function handleToolExecutionEnd(
     meta,
     commandBearing: callSummary.commandBearing,
     toolCallId,
-    ...(parentToolCallId ? { parentToolCallId } : {}),
-    ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
     startedAt: startData?.startTime,
     endedAt,
     ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(callSummary.commandBearing && !isExecToolName(toolName)
       ? { suppressChannelProgress: true }
       : {}),
-    ...(isToolError && extractToolErrorMessage(sanitizedResult)
-      ? { error: extractToolErrorMessage(sanitizedResult) }
-      : {}),
+    ...(errorMessage ? { error: errorMessage } : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
@@ -471,8 +473,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
-      ...(callSummary.codeModeControl ? { codeModeControl: callSummary.codeModeControl } : {}),
+      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
@@ -481,7 +482,7 @@ export async function handleToolExecutionEnd(
     },
   });
 
-  if (isExecTool && callSummary.commandBearing) {
+  if (isExecToolName(toolName)) {
     // Use sanitizedResult so `aggregated` is redacted before reaching command_output.
     const execDetails = readExecToolDetails(sanitizedResult);
     const commandItemId = buildCommandItemId(toolCallId);
@@ -530,7 +531,6 @@ export async function handleToolExecutionEnd(
         name: toolName,
         meta,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt: startData?.startTime,
         endedAt,
         ...(execDetails.status === "approval-pending"
@@ -557,20 +557,16 @@ export async function handleToolExecutionEnd(
         name: toolName,
         meta,
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         startedAt: startData?.startTime,
         endedAt,
         ...(output ? { summary: output } : {}),
-        ...(isToolError && extractToolErrorMessage(sanitizedResult)
-          ? { error: extractToolErrorMessage(sanitizedResult) }
-          : {}),
+        ...(errorMessage ? { error: errorMessage } : {}),
       });
       const outputData: AgentCommandOutputEventData = {
         itemId: commandItemId,
         phase: "end",
         title: buildCommandItemTitle(toolName, meta),
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: toolName,
         ...(output ? { output } : {}),
         status: commandStatus,
@@ -641,7 +637,6 @@ export async function handleToolExecutionEnd(
       name: toolName,
       meta,
       toolCallId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
       startedAt: startData?.startTime,
       endedAt,
       ...(summaryText ? { summary: summaryText } : {}),
@@ -655,7 +650,6 @@ export async function handleToolExecutionEnd(
         phase: "end",
         title: buildPatchItemTitle(meta),
         toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: toolName,
         added: patchSummary.added,
         modified: patchSummary.modified,
@@ -679,28 +673,47 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({
-    ctx,
-    toolName,
-    rawToolName: evt.toolName,
-    meta,
-    isToolError,
-    result,
-    sanitizedResult,
-  });
+  if (!planUpdate) {
+    await emitToolResultOutput({
+      ctx,
+      toolName,
+      rawToolName,
+      meta,
+      isToolError,
+      result,
+      sanitizedResult,
+    });
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 
-  await runEmbeddedAfterToolCallHook({
-    ctx,
-    toolName,
-    startArgs,
-    runId,
-    toolCallId,
-    result: sanitizedResult,
-    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-    startedAt: startData?.startTime,
-  });
-  return { executionStarted: terminal.executionStarted };
+  // Run after_tool_call plugin hook (fire-and-forget)
+  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+    const hookEvent: PluginHookAfterToolCallEvent = {
+      toolName,
+      params: startArgs,
+      runId,
+      toolCallId,
+      result: sanitizedResult,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      durationMs,
+    };
+    void hookRunnerAfter
+      .runAfterToolCall(hookEvent, {
+        toolName,
+        agentId: ctx.params.agentId,
+        sessionKey: ctx.params.sessionKey,
+        sessionId: ctx.params.sessionId,
+        runId,
+        toolCallId,
+      })
+      .catch((err: unknown) => {
+        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+      });
+  }
+  terminal.executedArguments ??= startArgs;
+  return Object.assign(terminal, { isError: observerIsError });
 }

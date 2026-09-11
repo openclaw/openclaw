@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { DurableMessageBatchSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
@@ -82,7 +83,7 @@ const sendDurableMessageBatch = vi.fn(
       readFile?: (filePath: string) => Promise<Buffer>;
       workspaceDir?: string;
     };
-  }) => {
+  }): Promise<DurableMessageBatchSendResult> => {
     const payload = params.payloads[0] ?? {};
     const mediaUrls = payload.mediaUrls?.length
       ? payload.mediaUrls
@@ -171,6 +172,8 @@ const sendDurableMessageBatch = vi.fn(
             index: 0,
           },
         ],
+        threadId: params.threadId == null ? undefined : String(params.threadId),
+        replyToId: params.reply?.replyToId ?? params.replyToId,
         sentAt: Date.now(),
       },
     } as const;
@@ -621,7 +624,9 @@ describe("handleTelegramAction", () => {
       added?: string;
     };
     expect(parsed.ok).toBe(false);
-    expect(parsed.warning).toBe("Reaction unavailable: ✅ This chat allows: 👍 🔥.");
+    expect(parsed.warning).toBe(
+      "Reaction unavailable: ✅ This chat allows: 👍 🔥; numeric custom IDs 5231419410191111111.",
+    );
     expect(parsed.warning).not.toContain("disallow list");
     expect(parsed.added).toBe("✅");
   });
@@ -629,7 +634,10 @@ describe("handleTelegramAction", () => {
   it("bounds allowed-reaction guidance when Telegram rejects a reaction", async () => {
     reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
     getTelegramAllowedReactions.mockResolvedValueOnce(
-      Array.from({ length: 25 }, () => ({ type: "emoji" as const, emoji: "👍" as const })),
+      Array.from({ length: 25 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
     );
 
     const details = resultDetails(
@@ -641,8 +649,70 @@ describe("handleTelegramAction", () => {
       reason: "REACTION_INVALID",
       hint: expect.stringContaining("This chat allows:"),
     });
-    expect(String(details.hint).match(/👍/gu)).toHaveLength(20);
+    expect(String(details.hint)).toContain("numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("20");
     expect(details.hint).not.toContain("disallow list");
+  });
+
+  it("keeps standard reactions ahead of custom IDs within the hint bound", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      ...Array.from({ length: 20 }, (_, index) => ({
+        type: "custom_emoji" as const,
+        custom_emoji_id: String(index),
+      })),
+      { type: "emoji" as const, emoji: "👍" as const },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details).toMatchObject({
+      ok: false,
+      reason: "REACTION_INVALID",
+      hint: expect.stringContaining("This chat allows:"),
+    });
+    expect(String(details.hint)).toContain("This chat allows: 👍; numeric custom IDs 0, 1, 2");
+    expect(String(details.hint)).not.toContain("19");
+  });
+
+  it("surfaces custom-only alternatives after a rejected reaction", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockResolvedValueOnce([
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
+    ]);
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: numeric custom IDs 5231419410191111111.",
+    );
+  });
+
+  it("offers standard alternatives when Telegram reports an unrestricted chat", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe(
+      "This reaction is unavailable. This chat allows: ❤ 👍 👎 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡.",
+    );
+  });
+
+  it("does not describe a failed allowed-reaction lookup as unrestricted", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(new Error("400: REACTION_INVALID"));
+    getTelegramAllowedReactions.mockRejectedValueOnce(new Error("getChat failed"));
+
+    const details = resultDetails(
+      await handleTelegramAction(defaultReactionAction, reactionConfig("minimal")),
+    );
+
+    expect(details.hint).toBe("This reaction is unavailable.");
   });
 
   it("lists permitted standard and custom reactions with an optional limit", async () => {
@@ -1017,6 +1087,7 @@ describe("handleTelegramAction", () => {
         action: "sendMessage",
         to: "@testchannel",
         content: "Hello, Telegram!",
+        messageThreadId: 77,
       },
       telegramConfig(),
       {
@@ -1036,12 +1107,14 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "text message options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBeUndefined();
+    expect(options.messageThreadId).toBe(77);
     const durableCall = mockCall(sendDurableMessageBatch, 0, "durable text message");
     expect(requireRecord(durableCall[0], "durable text message params")).toMatchObject({
       channel: "telegram",
       to: "@testchannel",
       durability: "required",
       gatewayClientScopes: ["operator.write"],
+      threadId: 77,
       // The gateway-owned plugin send must inherit the caller's retry ownership,
       // or the failed row stays replay-eligible and duplicates (#124279).
       deliveryRetryOwner: "caller",
@@ -1049,18 +1122,184 @@ describe("handleTelegramAction", () => {
       reply: { replyToId: "456", source: "implicit", mode: "first" },
       payloads: [{ text: "Hello, Telegram!" }],
     });
-    expect(result.content).toStrictEqual([
-      {
-        type: "text",
-        text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
-      },
-    ]);
-    expect(result.details).toStrictEqual({
+    const details = resultDetails(result);
+    // Source-reply reconciliation reads `receipt` off this result (#133051); dropping it
+    // makes a successfully delivered Telegram reply look unconfirmed and fail closed.
+    expect(details).toStrictEqual({
       ok: true,
       messageId: "789",
       chatId: "123",
+      receipt: {
+        threadId: "77",
+        replyToId: "456",
+      },
+    });
+    expect(result.content).toStrictEqual([
+      { type: "text", text: JSON.stringify(details, null, 2) },
+    ]);
+  });
+
+  it.each([
+    "cancelled_by_message_sending_hook",
+    "cancelled_by_reply_payload_sending_hook",
+    "empty_after_message_sending_hook",
+    "empty_after_reply_payload_sending_hook",
+    "no_visible_payload",
+    "adapter_returned_no_send",
+    "no_visible_result",
+  ] as const)("returns intentional %s without a tool error or hook diagnostics", async (reason) => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason,
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "suppressed",
+          reason,
+          hookEffect: { cancelReason: "dedupe" },
+        },
+      ],
+    });
+
+    const result = await handleTelegramAction(
+      { action: "sendMessage", to: "@testchannel", content: "Hello, Telegram!" },
+      telegramConfig(),
+    );
+    expect(result.details).toEqual({ status: "suppressed", reason });
+    expect(JSON.stringify(result)).not.toContain("dedupe");
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("preserves the required reason when optional payload diagnostics are absent", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason: "cancelled_by_message_sending_hook",
+    });
+    const result = await handleTelegramAction(
+      { action: "sendMessage", to: "123", content: "hello" },
+      telegramConfig(),
+    );
+    expect(result.details).toEqual({
+      status: "suppressed",
+      reason: "cancelled_by_message_sending_hook",
     });
   });
+
+  it.each<{
+    name: string;
+    reason: Extract<DurableMessageBatchSendResult, { status: "suppressed" }>["reason"];
+    payloadOutcomes: Extract<
+      DurableMessageBatchSendResult,
+      { status: "suppressed" }
+    >["payloadOutcomes"];
+    ambiguous: boolean;
+  }>([
+    {
+      name: "top-level identityless send",
+      reason: "adapter_returned_no_identity",
+      payloadOutcomes: undefined,
+      ambiguous: true,
+    },
+    {
+      name: "later identityless send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [{ index: 1, status: "suppressed", reason: "adapter_returned_no_identity" }],
+      ambiguous: true,
+    },
+    {
+      name: "later identified send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        { index: 1, status: "sent", results: [{ channel: "telegram", messageId: "accepted-1" }] },
+      ],
+      ambiguous: true,
+    },
+    {
+      name: "later partial failure",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 1,
+          status: "failed",
+          error: new Error("partial failure"),
+          stage: "platform_send",
+          sentBeforeError: true,
+        },
+      ],
+      ambiguous: true,
+    },
+    {
+      name: "failure before any send",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 1,
+          status: "failed",
+          error: new Error("pre-dispatch failure"),
+          stage: "platform_send",
+          sentBeforeError: false,
+        },
+      ],
+      ambiguous: false,
+    },
+  ])(
+    "preserves the delivery evidence for $name after cancellation",
+    async ({ reason, payloadOutcomes, ambiguous }) => {
+      sendDurableMessageBatch.mockResolvedValueOnce({
+        status: "suppressed",
+        results: [],
+        receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+        reason,
+        ...(payloadOutcomes
+          ? {
+              payloadOutcomes: [
+                { index: 0, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+                ...payloadOutcomes,
+              ],
+            }
+          : {}),
+      });
+      const result = handleTelegramAction(
+        { action: "sendMessage", to: "123", content: "hello" },
+        telegramConfig(),
+      );
+      if (ambiguous) {
+        await expect(result).rejects.toThrow(
+          "Telegram sendMessage was suppressed before delivery.",
+        );
+      } else {
+        await expect(result).resolves.toMatchObject({ details: { status: "suppressed", reason } });
+      }
+    },
+  );
+
+  it.each(["failed", "partial_failed"] as const)(
+    "preserves a %s delivery error",
+    async (status) => {
+      const error = new Error("Telegram transport failed");
+      sendDurableMessageBatch.mockResolvedValueOnce(
+        status === "failed"
+          ? { status, error }
+          : {
+              status,
+              error,
+              sentBeforeError: true,
+              results: [{ channel: "telegram", messageId: "accepted-1" }],
+              receipt: { platformMessageIds: ["accepted-1"], parts: [], sentAt: 1 },
+            },
+      );
+      await expect(
+        handleTelegramAction(
+          { action: "sendMessage", to: "123", content: "hello" },
+          telegramConfig(),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = openClawState.stateDir;
@@ -1960,19 +2199,35 @@ describe("handleTelegramAction", () => {
       expectedOptions: { mediaUrl: "https://example.com/image.jpg" },
     },
     {
-      name: "quoteText",
+      name: "quoteText preserving exact whitespace",
       params: {
         action: "sendMessage",
         to: "123456",
         content: "Replying now",
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
       },
       expectedTo: "123456",
       expectedContent: "Replying now",
       expectedOptions: {
         replyToMessageId: 144,
-        quoteText: "The text you want to quote",
+        quoteText: "  The text you want to quote\n  ",
+      },
+    },
+    {
+      name: "snake-case quoteText preserving exact whitespace",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        replyToMessageId: 144,
+        quote_text: " \nThe text you want to quote  ",
+      },
+      expectedTo: "123456",
+      expectedContent: "Replying now",
+      expectedOptions: {
+        replyToMessageId: 144,
+        quoteText: " \nThe text you want to quote  ",
       },
     },
     {

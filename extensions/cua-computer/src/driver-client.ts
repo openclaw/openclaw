@@ -28,7 +28,7 @@ export const EscalationReason = {
 } as const;
 export type EscalationReason = (typeof EscalationReason)[keyof typeof EscalationReason];
 
-// These numeric values are part of the pinned 0.20.0 SDK contract. Keeping
+// These numeric values are part of the pinned SDK contract. Keeping
 // them local avoids loading the native library while OpenClaw is only
 // registering the bundled plugin.
 export const ClickButton = {
@@ -49,6 +49,7 @@ export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirect
 export interface CuaDriverSession {
   readonly generation: string;
   isAvailable(): boolean;
+  prepareAvailability?(): Promise<void>;
   resetAvailabilityCache(): void;
   callTool(
     name: string,
@@ -84,8 +85,7 @@ function asyncOptions(signal?: AbortSignal) {
   return signal ? { signal } : undefined;
 }
 
-class DirectCuaDriverSession implements CuaDriverSession {
-  readonly generation = randomUUID();
+class DirectCuaDriverSession {
   private readonly runtime: CuaDriverLike;
   private readonly session: CuaDriverSessionLike;
   private readonly publicSession = `openclaw-${randomUUID()}`;
@@ -296,7 +296,8 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
 }
 
 class LazyCuaDriverSession implements CuaDriverSession {
-  private readonly unloadedGeneration = randomUUID();
+  // The execution owns this generation before and after its lazy runtime loads.
+  readonly generation = randomUUID();
   private runtime: DirectCuaDriverSession | undefined;
   private loadPromise: Promise<DirectCuaDriverSession> | undefined;
   private loadFailure: unknown;
@@ -304,10 +305,6 @@ class LazyCuaDriverSession implements CuaDriverSession {
   private disposed = false;
 
   constructor(private readonly loadSdk: () => CuaDriverSdk | Promise<CuaDriverSdk>) {}
-
-  get generation(): string {
-    return this.runtime?.generation ?? this.unloadedGeneration;
-  }
 
   private resolveRuntime(): DirectCuaDriverSession | undefined {
     if (this.disposed || this.hasLoadFailure || this.loadPromise) {
@@ -370,6 +367,13 @@ class LazyCuaDriverSession implements CuaDriverSession {
 
   isAvailable(): boolean {
     return this.resolveRuntime()?.isAvailable() ?? false;
+  }
+
+  async prepareAvailability(): Promise<void> {
+    this.resolveRuntime();
+    // Loading failure remains an unavailable capability with its original
+    // diagnostic; an optional driver must not prevent the node from starting.
+    await this.loadPromise?.catch(() => {});
   }
 
   resetAvailabilityCache(): void {

@@ -48,6 +48,10 @@ export const HookMappingSchema = z
     sessionMode: z.union([z.literal("isolated"), z.literal("persistent")]).optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
+    forEach: z
+      .string()
+      .regex(/^[^.[\]]+$/, "forEach must be a top-level payload key")
+      .optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
     // Keep this open-ended so runtime channel plugins (for example feishu) can be
@@ -68,6 +72,8 @@ export const HookMappingSchema = z
   })
   .strict()
   .optional();
+
+export type HookMappingConfigInput = NonNullable<z.input<typeof HookMappingSchema>>;
 
 const HookConfigSchema = z
   .object({
@@ -92,6 +98,8 @@ export const InternalHooksSchema = z
   })
   .strict()
   .optional();
+
+export type InternalHooksConfigInput = NonNullable<z.input<typeof InternalHooksSchema>>;
 
 export const HooksGmailSchema = z
   .object({
@@ -134,3 +142,5 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export type HooksGmailConfigInput = NonNullable<z.input<typeof HooksGmailSchema>>;

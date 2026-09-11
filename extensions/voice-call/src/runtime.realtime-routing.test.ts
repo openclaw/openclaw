@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -32,11 +32,8 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
 function createStateRuntime(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: (() => {
-      throw new Error("openKeyedStore is not used by realtime routing tests");
-    }) as VoiceCallStateRuntime["state"]["openKeyedStore"],
-    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("voice-call", options),
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by realtime routing tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
@@ -204,18 +201,16 @@ describe("voice-call realtime route ownership", () => {
       ).toEqual(["sales", "support"]);
 
       const hangupCall = vi.spyOn(runtime.provider, "hangupCall");
+      const closed = Promise.all(sockets.map((ws) => waitForClose(ws)));
       salesRequests[0]?.onClose?.("completed");
-      for (const ws of sockets) {
-        const closed = waitForClose(ws);
-        ws.close(1000);
-        await closed;
-      }
+      sockets[1]?.close(1000);
+      await closed;
       await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0), {
         timeout: 3_000,
       });
       expect(hangupCall).toHaveBeenCalledTimes(2);
       expect(hangupCall).toHaveBeenCalledWith(
-        expect.objectContaining({ providerCallId: "CA-sales", reason: "hangup-bot" }),
+        expect.objectContaining({ providerCallId: "CA-sales", reason: "completed" }),
       );
       expect(hangupCall).toHaveBeenCalledWith(
         expect.objectContaining({ providerCallId: "CA-support", reason: "hangup-bot" }),
@@ -223,9 +218,9 @@ describe("voice-call realtime route ownership", () => {
       await expect(runtime.manager.getCallHistory()).resolves.toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            endReason: "hangup-bot",
+            endReason: "completed",
             providerCallId: "CA-sales",
-            state: "hangup-bot",
+            state: "completed",
           }),
           expect.objectContaining({
             endReason: "hangup-bot",
@@ -235,14 +230,19 @@ describe("voice-call realtime route ownership", () => {
         ]),
       );
     } finally {
-      await runtime?.stop();
-      for (const ws of sockets) {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.terminate();
+      try {
+        await runtime?.stop();
+      } finally {
+        for (const ws of sockets) {
+          if (ws.readyState !== WebSocket.CLOSED) {
+            const closed = waitForClose(ws);
+            ws.terminate();
+            await closed;
+          }
         }
+        await Promise.all(servers.map((server) => server.close()));
+        resetPluginStateStoreForTests();
       }
-      await Promise.all(servers.map((server) => server.close()));
-      resetPluginStateStoreForTests();
     }
   });
 });

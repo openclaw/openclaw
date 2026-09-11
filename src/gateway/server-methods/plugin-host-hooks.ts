@@ -15,13 +15,14 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
-import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -58,7 +59,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
+    const registry = getPluginRegistryForContext();
     const descriptors = (registry?.controlUiDescriptors ?? []).map((entry) => {
       const descriptor: Record<string, unknown> = {
         id: entry.descriptor.id,
@@ -142,7 +143,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginSessionExtensionRegistry();
+    const registry = getPluginRegistryForContext();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
@@ -161,18 +162,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       return;
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    const hasAdmin = scopes.includes(ADMIN_SCOPE);
     const requiredScopes =
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
-    // Plugin actions default to write access, while read-only actions can opt
-    // down. Admin bypasses all checks and write includes read for UI callers.
+    // Recheck the selected registration after async router admission, using the same
+    // scope implications so the two authorization gates cannot diverge.
     const missingScope = requiredScopes.find(
-      (scope) =>
-        !hasAdmin &&
-        !scopes.includes(scope) &&
-        !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
+      (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
     );
     if (missingScope) {
       respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));

@@ -253,12 +253,13 @@ openclaw tasks cancel <taskId>
 
 ### Provider selection order
 
-OpenClaw tries providers in this order:
+For `music_generate`, OpenClaw tries providers in this order:
 
-1. `model` parameter from the tool call (if the agent specifies one).
+1. `model` parameter from the tool call. When set, only this model is tried.
 2. `agents.defaults.mediaModels.music.primary` from config.
 3. `agents.defaults.mediaModels.music.fallbacks` in order.
-4. Auto-detection using auth-backed provider defaults only:
+4. When neither a primary nor fallback model is configured, auto-detection using
+   configured provider defaults:
    - current default text-model provider first, if it also offers music
      generation;
    - remaining registered music-generation providers, alphabetically by
@@ -267,8 +268,8 @@ OpenClaw tries providers in this order:
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
 
-Automatic fallback across authenticated providers is always enabled. A per-call
-`model` remains authoritative.
+Explicit music model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ## Provider notes
 
@@ -391,3 +392,4 @@ sections are configured.
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models) — model configuration and failover
 - [Tools overview](/tools)
+- [Media overview](/tools/media-overview) — how the media tools fit together

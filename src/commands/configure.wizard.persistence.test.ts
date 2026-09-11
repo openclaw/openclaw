@@ -106,6 +106,7 @@ describe("configure wizard persistence before local side effects", () => {
       },
     });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.waitForGatewayReachable.mockResolvedValue({ ok: false });
     mocks.text.mockResolvedValue("18789");
   });
 
@@ -122,7 +123,7 @@ describe("configure wizard persistence before local side effects", () => {
     mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
       events.push("commit");
       writes.push(config);
-      return config;
+      return { path: "/tmp/openclaw.json", nextConfig: config };
     });
     if (section === "health") {
       mocks.waitForGatewayReachable.mockImplementationOnce(async () => {

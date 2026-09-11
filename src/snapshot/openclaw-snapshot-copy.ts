@@ -1,7 +1,10 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { resolveStateDir } from "../config/paths.js";
 import {
   createVerifiedSqliteSnapshot,
   type SqliteSnapshotValidator,
 } from "../infra/sqlite-snapshot.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
@@ -9,7 +12,6 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { containsAsciiControlCharacter } from "./manifest.js";
 import type { SnapshotDatabaseIdentity, SnapshotDatabaseRef } from "./snapshot-provider.js";
 
 export function normalizeSnapshotIdentity(
@@ -54,6 +56,7 @@ export async function createOpenClawSnapshotCopy(params: {
   database: SnapshotDatabaseRef;
   targetPath: string;
 }): Promise<{ identity: SnapshotDatabaseIdentity; path: string; userVersion: number }> {
+  assertNotUpdateCapturePath(params.database.path, resolveStateDir());
   const identity = normalizeSnapshotIdentity(params.database.identity);
   const result = await createVerifiedSqliteSnapshot({
     sourcePath: params.database.path,

@@ -10,12 +10,15 @@ import { readStringArrayParam, readToolStringParam } from "../../agents/tools/co
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
+import {
+  CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY,
+  readClawHubRecommendations,
+} from "../../shared/clawhub-recommendations.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import {
@@ -24,11 +27,11 @@ import {
 } from "./channel-selection.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
-import type {
-  MessageActionInput,
-  MessageActionNormalization,
-  MessageActionResult,
-  ResolvedActionContext,
+import {
+  resolveMessageActionOutcome,
+  type MessageActionInput,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
@@ -42,6 +45,7 @@ import {
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
+import { withSendNormalization } from "./message-action-send-payload.js";
 import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
 import type { MessageSendResult } from "./message.js";
 import {
@@ -53,44 +57,12 @@ import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
   () => import("../../gateway/internal-source-reply-persistence.js"),
 );
+const loadClawHubRecommendations = createLazyRuntimeModule(
+  () => import("./clawhub-recommendations.js"),
+);
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function withSendNormalization(
-  result: MessageActionResult,
-  normalization?: MessageActionNormalization,
-): MessageActionResult {
-  return normalization && result.kind === "send" ? { ...result, normalization } : result;
-}
-
-function deriveBroadcastEntryOutcome(
-  sendResult?: MessageSendResult,
-): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
-  if (
-    !sendResult ||
-    sendResult.deliveryStatus === undefined ||
-    sendResult.deliveryStatus === "sent"
-  ) {
-    return { ok: true };
-  }
-  switch (sendResult.deliveryStatus) {
-    case "suppressed":
-      return {
-        ok: false,
-        error: `Broadcast send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
-      };
-    case "failed":
-      return { ok: false, error: sendResult.error ?? "Broadcast send failed." };
-    case "partial_failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? "Broadcast send partially failed.",
-        sentBeforeError: true,
-      };
-  }
-  return sendResult.deliveryStatus satisfies never;
 }
 
 async function handleBroadcastAction(
@@ -195,9 +167,7 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ...deriveBroadcastEntryOutcome(
-            sendResult.kind === "send" ? sendResult.sendResult : undefined,
-          ),
+          ...resolveMessageActionOutcome(sendResult, "Broadcast"),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
@@ -246,6 +216,50 @@ async function handleInternalSourceReplySendAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
       : undefined);
+  let recommendations:
+    | Awaited<
+        ReturnType<typeof import("./clawhub-recommendations.js").resolveClawHubRecommendations>
+      >
+    | undefined;
+  if (params.clawhub !== undefined) {
+    if (
+      normalizeMessageChannel(input.toolContext?.currentChannelProvider) !==
+      INTERNAL_MESSAGE_CHANNEL
+    ) {
+      throw new Error("ClawHub recommendation cards require the current Control UI conversation.");
+    }
+    const { resolveClawHubRecommendations } = await loadClawHubRecommendations();
+    recommendations = await resolveClawHubRecommendations({
+      request: params.clawhub,
+      config: input.cfg,
+      agentId,
+      workspaceDir:
+        input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
+    });
+    throwIfAborted(input.abortSignal);
+    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+      params.message = recommendations.text;
+    }
+  }
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg: input.cfg,
+      agentId,
+      workspaceDir: input.workspaceDir,
+      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
+      workspaceMediaAccess: input.workspaceMediaAccess,
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
+      accountId: input.sessionKey ? input.requesterAccountId : undefined,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
+  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
+    ? mediaAccess.readFile
+    : undefined;
   await hydrateAttachmentParamsForAction({
     cfg: input.cfg,
     channel: INTERNAL_MESSAGE_CHANNEL,
@@ -254,8 +268,9 @@ async function handleInternalSourceReplySendAction(
     dryRun,
     mediaPolicy: resolveAttachmentMediaPolicy({
       sandboxRoot: input.sandboxRoot,
-      mediaAccess: input.mediaAccess,
-      mediaLocalRoots: getAgentScopedMediaLocalRoots(input.cfg, agentId),
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+      mediaAccess,
+      mediaReadFile: sandboxMediaReadFile,
     }),
   });
   const sourceReply = await buildMessagePayload({
@@ -265,12 +280,21 @@ async function handleInternalSourceReplySendAction(
     agentId,
   });
   let sourceReplyPayload = sourceReply.payload;
+  if (recommendations) {
+    sourceReplyPayload = {
+      ...sourceReplyPayload,
+      channelData: {
+        ...sourceReplyPayload.channelData,
+        [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
+      },
+    };
+  }
   const requestedMediaCount =
     resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
   if (!dryRun && requestedMediaCount > 0) {
     const workspaceDir =
       input.workspaceDir ??
-      input.mediaAccess?.workspaceDir ??
+      mediaAccess.workspaceDir ??
       (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined);
     if (!workspaceDir) {
       throw new Error("Current-source media requires an agent workspace.");
@@ -287,7 +311,9 @@ async function handleInternalSourceReplySendAction(
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      mediaAccess,
       sandboxRoot: input.sandboxRoot,
+      sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     })(sourceReplyPayload);
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
@@ -384,11 +410,20 @@ function buildInternalSourceReplyToolResult(payload: {
 }> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  const cards = readClawHubRecommendations(payload.sourceReply.channelData);
+  // The model sees content, not private details. Report verified state even when it supplied prose.
+  const recommendationSummary = cards.length
+    ? cards
+        .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
+        .join("\n")
+    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
+      ? payload.sourceReply.text
+      : undefined;
   return {
     content: [
       {
         type: "text",
-        text: `${action} visible reply to the current source conversation${sink}.`,
+        text: `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
       },
     ],
     details: {
@@ -429,6 +464,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     agentId: resolvedAgentId,
     action,
   });
+  if (params.clawhub !== undefined && action !== "send") {
+    throw new Error('ClawHub recommendations require action="send".');
+  }
   if (action === "broadcast") {
     return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
@@ -437,6 +475,11 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   }
   if (await shouldUseInternalSourceReplySink(input, params)) {
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
+  }
+  if (params.clawhub !== undefined) {
+    throw new Error(
+      'ClawHub recommendation cards require action="send" to the current Control UI conversation; omit channel and target.',
+    );
   }
 
   const route = await prepareMessageRoute({
@@ -447,10 +490,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   params = route.params;
   const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } = route;
 
-  const normalizationPolicy = resolveAttachmentMediaPolicy({
-    sandboxRoot: input.sandboxRoot,
-    mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
-  });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
     cfg,
     action,
@@ -465,14 +504,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   });
   const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
-  await normalizeSandboxMediaParams({
-    args: params,
-    mediaPolicy: normalizationPolicy,
-    extraParamKeys: extraActionMediaSourceParamKeys,
-    structuredAttachments: structuredAttachmentMode,
-  });
-
-  const mediaAccess =
+  const resolveMediaAccess = () =>
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg,
@@ -480,6 +512,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
         structuredAttachments: structuredAttachmentMode,
       }),
+      workspaceMediaAccess: input.workspaceMediaAccess,
       sessionKey: input.sessionKey,
       messageProvider: input.sessionKey ? undefined : channel,
       accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -488,9 +521,28 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       requesterSenderUsername: input.requesterSenderUsername,
       requesterSenderE164: input.requesterSenderE164,
     });
+  const mediaAccess = resolveMediaAccess();
+  const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
+    ? mediaAccess.readFile
+    : undefined;
+  const normalizationPolicy = resolveAttachmentMediaPolicy({
+    sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
+    mediaAccess,
+    mediaReadFile: sandboxMediaReadFile,
+  });
+
+  await normalizeSandboxMediaParams({
+    args: params,
+    mediaPolicy: normalizationPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
+    structuredAttachments: structuredAttachmentMode,
+  });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
     mediaAccess,
+    mediaReadFile: sandboxMediaReadFile,
   });
   const gateway = input.gateway;
   const preserveSendBuffer =

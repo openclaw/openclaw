@@ -4,65 +4,76 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMockUndiciRuntime } =
-  vi.hoisted(() => {
-    const undiciFetchMockLocal = vi.fn();
-    const agentSpyLocal = vi.fn();
-    const envHttpProxyAgentSpyLocal = vi.fn();
-    const proxyAgentSpyLocal = vi.fn();
-    const createMockUndiciRuntimeLocal = () => {
-      class Agent {
-        options: unknown;
-        constructor(options?: unknown) {
-          this.options = options;
-          agentSpyLocal(options);
-        }
+const {
+  undiciFetchMock,
+  agentSpy,
+  envHttpProxyAgentSpy,
+  proxyAgentSpy,
+  dispatchSpy,
+  createMockUndiciRuntime,
+} = vi.hoisted(() => {
+  const undiciFetchMockLocal = vi.fn();
+  const agentSpyLocal = vi.fn();
+  const envHttpProxyAgentSpyLocal = vi.fn();
+  const proxyAgentSpyLocal = vi.fn();
+  const dispatchSpyLocal = vi.fn(() => true);
+  const createMockUndiciRuntimeLocal = () => {
+    class Agent {
+      options: unknown;
+      dispatch = dispatchSpyLocal;
+      constructor(options?: unknown) {
+        this.options = options;
+        agentSpyLocal(options);
       }
-      class EnvHttpProxyAgent {
-        options: unknown;
-        constructor(options?: unknown) {
-          if (
-            typeof options === "object" &&
-            options !== null &&
-            ("httpsProxy" in options || "httpProxy" in options)
-          ) {
-            const proxyOptions = options as { httpsProxy?: unknown; httpProxy?: unknown };
-            if (proxyOptions.httpsProxy === "bad-proxy" || proxyOptions.httpProxy === "bad-proxy") {
-              throw new Error("bad env proxy");
-            }
+    }
+    class EnvHttpProxyAgent {
+      options: unknown;
+      dispatch = dispatchSpyLocal;
+      constructor(options?: unknown) {
+        if (
+          typeof options === "object" &&
+          options !== null &&
+          ("httpsProxy" in options || "httpProxy" in options)
+        ) {
+          const proxyOptions = options as { httpsProxy?: unknown; httpProxy?: unknown };
+          if (proxyOptions.httpsProxy === "bad-proxy" || proxyOptions.httpProxy === "bad-proxy") {
+            throw new Error("bad env proxy");
           }
-          this.options = options;
-          envHttpProxyAgentSpyLocal(options);
         }
+        this.options = options;
+        envHttpProxyAgentSpyLocal(options);
       }
-      class ProxyAgent {
-        options: unknown;
-        uri: string;
-        constructor(options: string | { uri: string; allowH2?: boolean }) {
-          const resolved = typeof options === "string" ? { uri: options } : options;
-          if (resolved.uri === "bad-proxy") {
-            throw new Error("bad proxy");
-          }
-          this.options = resolved;
-          this.uri = resolved.uri;
-          proxyAgentSpyLocal(resolved);
+    }
+    class ProxyAgent {
+      options: unknown;
+      uri: string;
+      dispatch = dispatchSpyLocal;
+      constructor(options: string | { uri: string; allowH2?: boolean }) {
+        const resolved = typeof options === "string" ? { uri: options } : options;
+        if (resolved.uri === "bad-proxy") {
+          throw new Error("bad proxy");
         }
+        this.options = resolved;
+        this.uri = resolved.uri;
+        proxyAgentSpyLocal(resolved);
       }
-      return {
-        Agent,
-        EnvHttpProxyAgent,
-        ProxyAgent,
-        fetch: undiciFetchMockLocal,
-      };
-    };
+    }
     return {
-      undiciFetchMock: undiciFetchMockLocal,
-      agentSpy: agentSpyLocal,
-      envHttpProxyAgentSpy: envHttpProxyAgentSpyLocal,
-      proxyAgentSpy: proxyAgentSpyLocal,
-      createMockUndiciRuntime: createMockUndiciRuntimeLocal,
+      Agent,
+      EnvHttpProxyAgent,
+      ProxyAgent,
+      fetch: undiciFetchMockLocal,
     };
-  });
+  };
+  return {
+    undiciFetchMock: undiciFetchMockLocal,
+    agentSpy: agentSpyLocal,
+    envHttpProxyAgentSpy: envHttpProxyAgentSpyLocal,
+    proxyAgentSpy: proxyAgentSpyLocal,
+    dispatchSpy: dispatchSpyLocal,
+    createMockUndiciRuntime: createMockUndiciRuntimeLocal,
+  };
+});
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -102,6 +113,18 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
     throw new Error(`expected ${field} to be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function dispatchRequest(dispatcher: unknown, origin: string): void {
+  const target = recordField(dispatcher, "dispatcher");
+  if (typeof target.dispatch !== "function") {
+    throw new Error("expected attached dispatcher.dispatch");
+  }
+  target.dispatch({ origin, path: "/", method: "GET" }, {});
+}
+
+function createRuntimeSpies() {
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
 }
 
 function installUndiciRuntimeDeps(): void {
@@ -147,6 +170,7 @@ describe("resolveDiscordRestFetch", () => {
     agentSpy.mockReset();
     envHttpProxyAgentSpy.mockReset();
     proxyAgentSpy.mockReset();
+    dispatchSpy.mockClear();
     installUndiciRuntimeDeps();
   });
 
@@ -166,11 +190,7 @@ describe("resolveDiscordRestFetch", () => {
   }
 
   it("uses undici proxy fetch when a proxy URL is configured", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://127.0.0.1:8080", runtime);
@@ -192,11 +212,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when the configured proxy is a DNS host", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
     const fetcher = resolveDiscordRestFetch("http://mitm-proxy:8080", runtime);
@@ -211,11 +227,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when proxy URL is arbitrary DNS", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
@@ -234,11 +246,7 @@ describe("resolveDiscordRestFetch", () => {
     vi.stubEnv("https_proxy", "https://127.0.0.1:8443");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("https://127.0.0.1:8443", runtime);
@@ -254,11 +262,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("falls back to global fetch when proxy URL is invalid", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     const fetcher = resolveDiscordRestFetch("bad-proxy", runtime);
 
     expect(fetcher).toBe(fetch);
@@ -267,11 +271,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when proxy URL is a non-loopback IP", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://10.0.0.10:8080", runtime);
@@ -285,11 +285,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici proxy fetch when the proxy URL is IPv6 loopback", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch("http://[::1]:8080", runtime);
@@ -303,11 +299,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
@@ -337,38 +329,45 @@ describe("resolveDiscordRestFetch", () => {
     vi.stubEnv("https_proxy", "https://proxy.example:8443");
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
     expect(agentSpy).not.toHaveBeenCalled();
-    const proxyOptions = objectArgAt(envHttpProxyAgentSpy, 0, 0);
-    expect(proxyOptions.httpsProxy).toBe("https://proxy.example:8443");
-    expect(recordField(proxyOptions.proxyTls, "proxyTls").ca).toBe("discord-rest-managed-proxy-ca");
     const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
-    const dispatcherOptions = recordField(
-      recordField(fetchOptions.dispatcher, "dispatcher").options,
-      "dispatcher.options",
-    );
-    expect(recordField(dispatcherOptions.proxyTls, "dispatcher.options.proxyTls").ca).toBe(
-      "discord-rest-managed-proxy-ca",
-    );
+    dispatchRequest(fetchOptions.dispatcher, "https://discord.com");
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const proxy = recordField(dispatchSpy.mock.contexts[0], "selected proxy");
+    expect(proxy).toMatchObject({
+      uri: "https://proxy.example:8443",
+      options: {
+        allowH2: false,
+        proxyTls: { ca: "discord-rest-managed-proxy-ca" },
+      },
+    });
+    expect(proxy.options).not.toHaveProperty("requestTls.ca");
+
+    vi.stubEnv("NO_PROXY", "discord.com");
+    dispatchRequest(fetchOptions.dispatcher, "https://discord.com");
+    expect(dispatchSpy).toHaveBeenCalledTimes(2);
+    const direct = recordField(dispatchSpy.mock.contexts[1], "selected direct dispatcher");
+    expect(direct).not.toBe(proxy);
+    expect(direct.options).toMatchObject({
+      allowH2: false,
+      connect: { lookup: expect.any(Function) },
+    });
+    expect(direct.options).not.toHaveProperty("proxyTls");
+    expect(direct.options).not.toHaveProperty("connect.ca");
+    expect(direct.options).not.toHaveProperty("requestTls.ca");
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("falls back to direct REST fetch when env proxy options are invalid", async () => {
     vi.stubEnv("https_proxy", "bad-proxy");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
@@ -379,18 +378,22 @@ describe("resolveDiscordRestFetch", () => {
     const agentOptions = objectArgAt(agentSpy, 0, 0);
     expect(agentOptions.allowH2).toBe(false);
     expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
-    expect(String(argAt(runtime.error, 0, 0))).toContain("bad env proxy");
+    const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+    dispatchRequest(fetchOptions.dispatcher, "https://discord.com");
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const direct = recordField(dispatchSpy.mock.contexts[0], "fallback dispatcher");
+    expect(direct).toBe(fetchOptions.dispatcher);
+    expect(direct.options).toBe(agentOptions);
+    expect(String(argAt(runtime.error, 0, 0))).toContain(
+      "discord: env proxy unavailable for REST fetch; using direct dispatcher: bad proxy",
+    );
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("uses debug proxy env when no discord proxy URL is configured", async () => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
+    const runtime = createRuntimeSpies();
     undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);

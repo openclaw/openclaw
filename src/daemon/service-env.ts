@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
+import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -47,6 +48,27 @@ export const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
+
+function readServiceSqliteEnvironment(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+  runtime: GatewayDaemonRuntime | undefined,
+): { OPENCLAW_SQLITE_LIBRARY?: string; HOMEBREW_PREFIX?: string } {
+  // Match the library selected by the installing shell and judged by the daemon
+  // probe (src/daemon/runtime-paths.ts RUNTIME_PROBE_ENV_KEYS); wrappers hide the runtime.
+  if (
+    platform !== "darwin" ||
+    (runtime !== "bun" && !normalizeOptionalString(env.OPENCLAW_WRAPPER))
+  ) {
+    return {};
+  }
+  const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
+  const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
+  return {
+    ...(library ? { OPENCLAW_SQLITE_LIBRARY: library } : {}),
+    ...(prefix && path.posix.isAbsolute(prefix) ? { HOMEBREW_PREFIX: prefix } : {}),
+  };
+}
 
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
@@ -333,6 +355,7 @@ export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
   existingNodeOptions?: string;
+  runtime?: GatewayDaemonRuntime;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -353,8 +376,17 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
-    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
+    ...readServiceSqliteEnvironment(env, platform, params.runtime),
+    // An empty assignment clears supervisor ambient options; omission would
+    // allow preloads/debug flags to bypass the heap-only service boundary.
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(
+      params.existingNodeOptions,
+      wrapperPath ? undefined : params.runtime,
+    ),
     OPENCLAW_PROFILE: profile,
+    ...(env.OPENCLAW_CONFIG_READONLY !== undefined
+      ? { OPENCLAW_CONFIG_READONLY: env.OPENCLAW_CONFIG_READONLY }
+      : {}),
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
@@ -368,6 +400,7 @@ export function buildServiceEnvironment(params: {
 
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
+  runtime?: GatewayDaemonRuntime;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
   execPath?: string;
@@ -387,11 +420,15 @@ export function buildNodeServiceEnvironment(params: {
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
     CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
     CF_ACCESS_CLIENT_SECRET: cloudflareAccessClientSecret,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
+    // launchd manager variables outlive the installer. Worker snapshots scope
+    // this host fence by the canonical managed-node service identity.
+    NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
     ...resolveNodeServiceIdentityEnvironment(),
   };
 }
