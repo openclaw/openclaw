@@ -319,6 +319,38 @@ describe("runDetachedWebhookWork", () => {
     expect(order).toEqual(["ack", "work"]);
   });
 
+  it("keeps tracked descendants alive after the requester scope closes", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { AsyncWorkScope, trackAsyncWork } = await import("../shared/async-work-scope.js");
+
+    let detached: Promise<number> | null = null;
+    let releaseCallback!: () => void;
+    const callbackGate = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+    const requester = new AsyncWorkScope();
+    await runWithGatewayHttpWorkAdmission(
+      new ServerResponse(new IncomingMessage(new Socket())),
+      async () => {
+        requester.run(() => {
+          detached = runDetachedWebhookWork(async () => {
+            await callbackGate;
+            return await trackAsyncWork(async () => 42);
+          });
+        });
+        await requester.drain();
+        releaseCallback();
+        return true;
+      },
+    );
+
+    if (!detached) {
+      throw new Error("detached webhook work was not started");
+    }
+    await expect(detached).resolves.toBe(42);
+  });
+
   it("keeps post-ack processing admitted after the request admission is released", async () => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");

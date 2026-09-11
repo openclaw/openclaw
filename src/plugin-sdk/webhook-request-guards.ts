@@ -15,7 +15,7 @@ import {
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
 export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
@@ -316,7 +316,7 @@ export function beginWebhookRequestPipelineOrReject(params: {
  * keeps the detached processing accepted and lets a restart drain wait for it.
  */
 export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
-  return runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayDetachedWorkAdmission(async () => {
     // Reserve the root now, but let the request handler write its acknowledgement
     // before any synchronous prefix in the detached callback can run.
     await Promise.resolve();
