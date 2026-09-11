@@ -68,19 +68,24 @@ export function resolveChatSendCallerContext(
   clientInfo: GatewayClientInfo | undefined = client?.connect?.client,
   originatingChannel: string = INTERNAL_MESSAGE_CHANNEL,
 ) {
+  const profileId = client?.internal?.syntheticClient
+    ? undefined
+    : normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
   return {
     Provider: INTERNAL_MESSAGE_CHANNEL,
     Surface: INTERNAL_MESSAGE_CHANNEL,
     OriginatingChannel: originatingChannel,
     ChatType: "direct",
     ApprovalReviewerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
-    ...(!isOperatorUiClient(clientInfo)
-      ? {
-          SenderId: clientInfo?.id,
-          SenderName: clientInfo?.displayName,
-          SenderUsername: clientInfo?.displayName,
-        }
-      : {}),
+    ...(profileId
+      ? { SenderId: profileId }
+      : !client?.internal?.syntheticClient && !isOperatorUiClient(clientInfo)
+        ? {
+            SenderId: clientInfo?.id,
+            SenderName: clientInfo?.displayName,
+            SenderUsername: clientInfo?.displayName,
+          }
+        : {}),
     GatewayClientScopes: client?.connect?.scopes ?? [],
     GatewayClientCaps: client?.connect?.caps ?? [],
   };
