@@ -265,6 +265,10 @@ export function buildComputerActParams(params: {
       }
       if (action === "get_window_state") {
         copyOptionalBooleanParam(wire, input, "includeScreenshot");
+        // Released nodes capture by default but reject the newer wire field.
+        if (wire.includeScreenshot === true) {
+          delete wire.includeScreenshot;
+        }
       }
       copyOptionalStringParam(wire, input, "query");
       copyOptionalIntegerParam(wire, input, "depth", { min: 0, max: 64 });

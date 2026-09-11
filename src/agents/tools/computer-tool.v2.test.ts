@@ -1,3 +1,5 @@
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
@@ -17,6 +19,24 @@ import {
   sleepMock,
   v2Descriptor,
 } from "./computer-tool.test-helpers.js";
+
+// Frozen from v2026.9.4 src/plugins/computer-use-contract.ts, including actionObject fields.
+// Keep independent of the current schema so mixed-version regressions remain visible.
+const releasedWindowStateSchema = Type.Object(
+  {
+    action: Type.Enum(["get_window_state"], { type: "string" }),
+    executionId: Type.Optional(
+      Type.String({
+        pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      }),
+    ),
+    windowRef: Type.String({ minLength: 1 }),
+    query: Type.Optional(Type.String()),
+    depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
+    maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
+  },
+  { additionalProperties: false },
+);
 
 describe("createComputerTool v2 execution", () => {
   beforeEach(resetComputerToolMocks);
@@ -214,6 +234,63 @@ describe("createComputerTool v2 execution", () => {
           expect(sent[action === "zoom" ? "y1" : "fromY"]).toBeCloseTo(expectedY / 2, 6);
         }
       }
+    },
+  );
+
+  it.each([undefined, true])(
+    "preserves capture on a released node with includeScreenshot=%s",
+    async (includeScreenshot) => {
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["get_window_state"]) }),
+      ]);
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+        const request = body as ComputerActBody;
+        if (
+          request.command !== COMPUTER_ACT_COMMAND ||
+          !Value.Check(releasedWindowStateSchema, request.params)
+        ) {
+          throw new Error("Released node rejected get_window_state params");
+        }
+        return {
+          payload: {
+            ok: true,
+            observation: {
+              kind: "window",
+              base64: createSolidPngBuffer(2, 1, { r: 70, g: 125, b: 180 }).toString("base64"),
+              format: "png",
+              width: 2,
+              height: 1,
+              observationId: "released-observation",
+            },
+            details: { coordinateSpace: "image-pixels" },
+          },
+        };
+      });
+      const tool = createVisionComputerTool();
+      const result = await tool.execute("observe", {
+        action: "get_window_state",
+        windowRef: "window-1",
+        includeScreenshot,
+      });
+      expect(result.content.some((block) => block.type === "image")).toBe(true);
+    },
+  );
+
+  it.each(["true", null, 0])(
+    "rejects invalid window screenshot option %s",
+    async (includeScreenshot) => {
+      listNodesMock.mockResolvedValue([
+        macComputerNode({ computerUse: v2Descriptor(["get_window_state"]) }),
+      ]);
+      const tool = createVisionComputerTool();
+      await expect(
+        tool.execute("observe", {
+          action: "get_window_state",
+          windowRef: "window-1",
+          includeScreenshot,
+        }),
+      ).rejects.toThrow("includeScreenshot must be a boolean");
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
     },
   );
 
