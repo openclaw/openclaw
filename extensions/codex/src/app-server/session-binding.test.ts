@@ -178,6 +178,86 @@ describe("Codex app-server binding store", () => {
     }
   });
 
+  it("removes retired fences from predecessor generations during session deletion (#144179)", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const predecessor = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "predecessor-uuid-1",
+      sessionKey: "agent:main:cron:rotated",
+    };
+    await store.mutate(predecessor, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    await store.retireSessionGeneration(predecessor);
+    expect(values.get(bindingStoreKey(predecessor))).toMatchObject({
+      state: "cleared",
+      retired: true,
+      sessionId: "predecessor-uuid-1",
+    });
+
+    const successor = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "successor-uuid-2",
+      sessionKey: "agent:main:cron:rotated",
+    };
+
+    // Deletion under successor identity successfully removes the retired tombstone of predecessor
+    await store.withSessionDeletion(
+      successor,
+      () => {},
+      async (binding, mutation) => {
+        expect(binding).toBeUndefined();
+        mutation.commit();
+      },
+    );
+    expect(values.size).toBe(0);
+
+    // Rollback properly restores the retired tombstone
+    const tombstone = {
+      version: 1 as const,
+      state: "cleared" as const,
+      retired: true as const,
+      sessionId: "predecessor-uuid-1",
+    };
+    state.register(bindingStoreKey(successor), tombstone);
+    await store.withSessionDeletion(
+      successor,
+      () => {},
+      async (_binding, mutation) => {
+        mutation.commit();
+        expect(values.size).toBe(0);
+        mutation.rollback();
+      },
+    );
+    expect(values.get(bindingStoreKey(successor))).toMatchObject({
+      state: "cleared",
+      retired: true,
+      sessionId: "predecessor-uuid-1",
+    });
+
+    // An active successor belonging to a different session is still protected and rejected
+    const activeDifferentGeneration = {
+      version: 1 as const,
+      state: "active" as const,
+      sessionId: "other-session-uuid",
+      binding: { threadId: "active-thread", cwd: "/repo" },
+    };
+    state.register(bindingStoreKey(successor), activeDifferentGeneration);
+    await expect(
+      store.withSessionDeletion(
+        successor,
+        () => {},
+        async (_binding, mutation) => {
+          mutation.commit();
+        },
+      ),
+    ).rejects.toThrow("Codex binding generation changed before session deletion");
+  });
+
   it("rejects revoked deletion authority and never restores over a successor", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

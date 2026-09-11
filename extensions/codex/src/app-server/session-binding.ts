@@ -1109,7 +1109,12 @@ export function createCodexAppServerBindingStore(
             const owner = leaseContext.getStore()!.get(key)!;
             const expected = state.lookup(key);
             const stored = readStoredCodexAppServerBinding(expected);
-            if (!stored || !ownsStoredSessionGeneration(identity, stored)) {
+            const isRetiredGenerationTombstone =
+              stored?.state === "cleared" && stored.retired === true;
+            if (
+              !stored ||
+              (!ownsStoredSessionGeneration(identity, stored) && !isRetiredGenerationTombstone)
+            ) {
               throw new Error("Codex binding generation changed before session deletion");
             }
             const { lease: _lease, ...expectedValue } = stored;
