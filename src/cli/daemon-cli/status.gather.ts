@@ -18,6 +18,7 @@ import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import type { ExtraGatewayService, FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import type { ServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type {
@@ -206,6 +207,7 @@ export type DaemonStatus = {
   cli?: CliStatusSummary;
   logFile?: string;
   service: LaunchdJobDiagnostics & {
+    inspectionReason?: ServiceInspectionReason;
     label: string;
     loaded: boolean | null;
     loadState: GatewayServiceLoadState;
@@ -655,6 +657,7 @@ export async function gatherDaemonStatus(
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
+      inspectionReason: serviceState.inspectionReason,
       label: service.label,
       loaded: loadState.status === "unknown" ? null : loaded,
       loadState,
