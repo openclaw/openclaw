@@ -138,6 +138,8 @@ const SERVICE_DEFINITION_REASONS = {
     "has unverifiable system-service ownership. Restore system service-manager and filesystem inspection access from the service account, then retry; do not create a competing user service.",
   "inspection-failed":
     "cannot be safely inspected. Inspect service definition access and native service-manager availability from the service account, then retry. Do not share config or environment contents.",
+  "busctl-incompatible":
+    "cannot be inspected with this host's busctl, which rejected the JSON invocation (systemd older than 240 has no busctl --json). Upgrade systemd to 240 or newer, or manage the user unit with systemctl from the service account, then retry. Do not share config or environment contents.",
 } as const;
 
 export type ServiceDefinitionMutationArtifact = keyof typeof SERVICE_DEFINITION_ARTIFACTS;

@@ -22,6 +22,7 @@ import {
   resolveSystemdUnitPath,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
+import { BUSCTL_JSON_UNSUPPORTED_CODE } from "./systemd-unavailable.js";
 
 type Snapshot = { contents: Buffer; mode: number } | null;
 type SystemdDefinitionMutation = {
@@ -176,7 +177,10 @@ async function inspect(
       }
     }
     return result({ kind: "writable" });
-  } catch {
+  } catch (error) {
+    if (hasErrnoCode(error, BUSCTL_JSON_UNSUPPORTED_CODE)) {
+      return result({ kind: "unknown", reason: "busctl-incompatible", artifact });
+    }
     return result({ kind: "unknown", reason: "inspection-failed", artifact });
   }
 }

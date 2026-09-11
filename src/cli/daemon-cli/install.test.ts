@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { BUSCTL_JSON_UNSUPPORTED_CODE } from "../../daemon/systemd-unavailable.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -352,6 +353,20 @@ describe("runDaemonInstall", () => {
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
     expect(randomTokenMock).not.toHaveBeenCalled();
     expect(service.readCommand).toHaveBeenCalledOnce();
+  });
+  it("reports busctl-incompatible when the initial read hits old busctl", async () => {
+    const unsupported: NodeJS.ErrnoException = new Error(
+      "busctl does not support --json output on this host.",
+    );
+    unsupported.code = BUSCTL_JSON_UNSUPPORTED_CODE;
+    service.readCommand.mockRejectedValueOnce(unsupported);
+    await runDaemonInstall({ json: true, force: true });
+    expect(actionState.failed[0]?.message).toContain(
+      "SERVICE_DEFINITION_UNKNOWN: [busctl-incompatible]",
+    );
+    expect(actionState.failed[0]?.message).toContain("systemd to 240 or newer");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(randomTokenMock).not.toHaveBeenCalled();
   });
 
   it("blocks non-default install identities before inspecting host services", async () => {

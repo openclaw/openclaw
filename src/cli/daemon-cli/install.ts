@@ -28,6 +28,7 @@ import {
 } from "../../daemon/service-types.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
+import { BUSCTL_JSON_UNSUPPORTED_CODE } from "../../daemon/systemd-unavailable.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
@@ -192,7 +193,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
     existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
-  } catch {
+  } catch (error) {
+    if (hasErrnoCode(error, BUSCTL_JSON_UNSUPPORTED_CODE)) {
+      try {
+        assertServiceDefinitionWritable({ kind: "unknown", reason: "busctl-incompatible" });
+      } catch (rendered) {
+        fail(rendered instanceof Error ? rendered.message : String(rendered));
+      }
+      return;
+    }
     fail("SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.");
     return;
   }

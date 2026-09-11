@@ -292,6 +292,20 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readdir(stateDir)).toEqual([]);
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
   });
+  it("reports busctl-incompatible when busctl rejects --json instead of generic inspection-failed", async () => {
+    busctl.mockResolvedValue({
+      code: 1,
+      termination: "exit",
+      stdout: "",
+      stderr: "busctl: unrecognized option '--json=short' (token-secret-canary)",
+    });
+    const capability = await readSystemdDefinitionMutationCapability(env);
+    expect(capability).toMatchObject({ kind: "unknown", reason: "busctl-incompatible" });
+    expect(JSON.stringify(capability)).not.toContain("secret-canary");
+    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [busctl-incompatible]");
+    expect(await fs.readdir(stateDir)).toEqual([]);
+    expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
+  });
 
   it.each(["unchanged", "changed", "first install"])(
     "reads root-owned type-wide defaults without write authority (%s)",

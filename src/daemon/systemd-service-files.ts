@@ -22,6 +22,7 @@ import type {
   SystemdCommandSnapshotParams,
   SystemdEnvironmentFilesParams,
 } from "./systemd-service-files.types.js";
+import { throwIfBusctlJsonUnsupported } from "./systemd-unavailable.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -118,6 +119,7 @@ async function readSystemdManagerCommand(
     }
     if (result.code !== 0) {
       const detail = result.stderr.trim();
+      throwIfBusctlJsonUnsupported(result);
       if (
         result.termination === "exit" &&
         ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||

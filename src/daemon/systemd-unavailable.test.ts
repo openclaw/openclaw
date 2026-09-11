@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../infra/errno.js";
 import * as processExec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { execFileUtf8 } from "./exec-file.js";
+import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import { isLaunchctlNotLoaded } from "./launchd-exec.js";
 import {
   assertSystemdAvailable,
@@ -18,9 +19,11 @@ import {
   uninstallUserSystemdGatewayUnit,
 } from "./systemd-lifecycle.js";
 import {
+  BUSCTL_JSON_UNSUPPORTED_CODE,
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
+  throwIfBusctlJsonUnsupported,
 } from "./systemd-unavailable.js";
 
 describe("classifySystemdUnavailableDetail", () => {
@@ -58,6 +61,39 @@ describe("classifySystemdUnavailableDetail", () => {
 
   it("returns null for unrelated details", () => {
     expect(classifySystemdUnavailableDetail("permission denied")).toBeNull();
+  });
+});
+describe("throwIfBusctlJsonUnsupported", () => {
+  it("throws the branded marker for old-busctl option rejection", () => {
+    const result: ExecResult = {
+      stdout: "",
+      stderr: "busctl: unrecognized option '--json=short'",
+      code: 1,
+      termination: "exit",
+    };
+    try {
+      throwIfBusctlJsonUnsupported(result);
+      expect.unreachable();
+    } catch (error) {
+      expect(hasErrnoCode(error, BUSCTL_JSON_UNSUPPORTED_CODE)).toBe(true);
+    }
+  });
+
+  it("passes through unit absence and non-exit terminations", () => {
+    const missing: ExecResult = {
+      stdout: "",
+      stderr: "Call failed: Unit openclaw-gateway.service not found.",
+      code: 1,
+      termination: "exit",
+    };
+    expect(() => throwIfBusctlJsonUnsupported(missing)).not.toThrow();
+    const timedOut: ExecResult = {
+      stdout: "",
+      stderr: "busctl: unrecognized option '--json=short'",
+      code: 1,
+      termination: "timeout",
+    };
+    expect(() => throwIfBusctlJsonUnsupported(timedOut)).not.toThrow();
   });
 });
 

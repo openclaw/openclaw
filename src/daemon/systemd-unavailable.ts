@@ -1,5 +1,6 @@
 /** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ExecResult } from "./exec-file.js";
 
 export type SystemdUnavailableKind =
   | "missing_systemctl"
@@ -32,6 +33,26 @@ export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
     normalized.includes("enomedium") ||
     normalized.includes("no medium found")
   );
+}
+/** True when busctl itself rejected the invocation, e.g. systemd < 240 has no --json flag. */
+function isBusctlJsonUnsupportedDetail(detail?: string): boolean {
+  const normalized = normalizeDetail(detail);
+  return normalized.includes("unrecognized option") && normalized.includes("--json");
+}
+/** errno-style marker: busctl rejected --json, so no JSON inspection is possible on this host. */
+export const BUSCTL_JSON_UNSUPPORTED_CODE = "BUSCTL_JSON_UNSUPPORTED";
+/**
+ * Throws the branded marker when busctl itself rejected the --json invocation.
+ * Native stderr never leaves the boundary; callers match the marker with hasErrnoCode.
+ */
+export function throwIfBusctlJsonUnsupported(result: ExecResult): void {
+  if (result.termination === "exit" && isBusctlJsonUnsupportedDetail(result.stderr.trim())) {
+    const unsupported: NodeJS.ErrnoException = new Error(
+      "busctl does not support --json output on this host.",
+    );
+    unsupported.code = BUSCTL_JSON_UNSUPPORTED_CODE;
+    throw unsupported;
+  }
 }
 
 export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavailableKind | null {
