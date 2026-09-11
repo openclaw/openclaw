@@ -753,11 +753,11 @@ wa-popover.new-session-page__project-popover::part(body) {
 
 /* Destination search and mode controls stay visible while the flat inventory scrolls. */
 wa-popover.new-session-page__where-popover {
-  --max-width: min(300px, calc(100vw - 24px));
+  --max-width: min(360px, calc(100vw - 24px));
 }
 
 wa-popover.new-session-page__where-popover::part(body) {
-  width: min(300px, calc(100vw - 24px));
+  width: min(360px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
@@ -766,11 +766,12 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__environment-picker {
   display: flex;
   flex-direction: column;
-  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+  max-height: min(360px, calc(var(--auto-size-available-height, 70vh) - 2px));
   overflow: hidden;
 }
 
 .new-session-page__environment-search {
+  background: var(--bg-hover);
   margin-bottom: var(--space-1);
   display: flex;
   flex: 0 0 auto;
@@ -808,7 +809,9 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-list {
+  flex: 1 1 auto;
   min-height: 0;
+  overscroll-behavior: contain;
   overflow-y: auto;
 }
 
@@ -855,7 +858,8 @@ wa-popover.new-session-page__where-popover::part(body) {
   flex: 0 0 auto;
   margin: var(--space-1) 8px 0;
   padding-top: var(--space-1);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-hover);
+  padding-bottom: var(--space-1);
 }
 
 .new-session-page__auto-device {
@@ -1406,6 +1410,8 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-details {
+  --openclaw-tooltip-popup-hide-duration: 0ms;
+  --openclaw-tooltip-popup-show-duration: 0ms;
   --openclaw-tooltip-padding: 12px;
   --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
 }
@@ -1474,14 +1480,163 @@ wa-popover.new-session-page__where-popover::part(body) {
   cursor: default;
 }
 
-.new-session-page__card-fields {
-  display: grid;
-  gap: 10px;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 10px;
+.new-session-page__environment-heading {
+  margin: 12px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
-.new-session-page__card-field {
+
+.new-session-page__cloud-configuration {
+  width: min(
+    calc(var(--cloud-choice-columns, 3) * 116px + (var(--cloud-choice-columns, 3) - 1) * 6px),
+    calc(100vw - 48px)
+  );
+  padding: 0;
+  overflow-y: auto;
+  max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
+}
+
+.new-session-page__cloud-choice-grid {
   display: grid;
-  gap: 4px;
+  grid-template-columns: repeat(var(--cloud-choice-columns, 3), minmax(0, 1fr));
+  gap: 6px;
+}
+
+.new-session-page__cloud-choice-grid .session-menu__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 32px;
+  padding: 7px 5px;
+  gap: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  font-size: 12px;
+}
+
+.new-session-page__cloud-choice-grid .session-menu__item[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.new-session-page__cloud-choice-grid .session-menu__text {
+  flex: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.new-session-page__cloud-choice-grid .session-menu__sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: normal;
+}
+
+.new-session-page__cloud-choice-grid .session-menu__check {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 10px;
+  height: 10px;
+}
+
+.new-session-page__cloud-choice-grid .new-session-page__menu-meta {
+  display: none;
+}
+
+.new-session-page__selected-summary {
+  display: block;
+  min-width: 0;
+  font-size: 11px;
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-page__environment-option .session-menu__text:has(.new-session-page__selected-summary) {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.new-session-page__cloud-config-card {
+  --openclaw-tooltip-background-color: var(--bg-elevated);
+  --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
+}
+
+.new-session-page__cloud-configuration .new-session-page__environment-heading:first-child {
+  margin-top: 0;
+}
+
+.new-session-page__submenu-chevron {
+  display: flex;
+  flex: 0 0 14px;
+  color: var(--muted);
+}
+
+.new-session-page__submenu-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__devices-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.new-session-page__connect-device {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+  opacity: 0.6;
+}
+
+.new-session-page__connect-device:hover {
+  background: var(--bg-hover);
+}
+
+.new-session-page__connect-device svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.new-session-page__cloud-choice-grid + .new-session-page__environment-heading {
+  margin-top: 20px;
+}
+
+.new-session-page__header-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.new-session-page__cloud-choice-grid .session-menu__item[data-suggested="true"] {
+  border-style: dashed;
+  border-color: var(--muted);
 }

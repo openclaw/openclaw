@@ -1009,7 +1009,7 @@ export const en: TranslationMap & {
     browse: "Browse folders",
     browseRequiresAdmin:
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-    connectMachine: "Connect a machine",
+    connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",

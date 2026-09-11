@@ -2,8 +2,11 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { SelectPicker } from "../../components/select-picker.ts";
-import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import {
+  renderSessionMenuItem,
+  renderCloudProfileMenuItems,
+  renderCloudConfiguration,
+} from "./cloud-target.ts";
 
 describe("cloud target menu", () => {
   it("renders explicit remediation commands on separate lines", () => {
@@ -29,7 +32,7 @@ describe("cloud target menu", () => {
     );
   });
 
-  it("uses the selected cloud OS and machine rather than the defaults", () => {
+  it("anchors selected cloud configuration beside its profile row", () => {
     const container = document.createElement("div");
     render(
       renderCloudProfileMenuItems({
@@ -56,12 +59,59 @@ describe("cloud target menu", () => {
       }),
       container,
     );
-    const card = container.querySelector('[slot="content"]');
-    const controls = card?.querySelectorAll<SelectPicker>("openclaw-select-picker");
-    expect(controls?.[0]?.params.value).toBe("windows");
-    expect(controls?.[1]?.params.value).toBe("large");
-    expect(controls?.[1]?.params.options.find((option) => option.value === "large")?.label).toBe(
-      "8 vCPU · 16 GB",
+    expect(container.querySelector('[data-value="cloud:aws"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    const wrapper = container.querySelector("openclaw-tooltip.new-session-page__cloud-config-card");
+    expect(wrapper?.getAttribute("placement")).toBe("right");
+    expect(wrapper?.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    expect(
+      wrapper
+        ?.querySelector('[slot="content"] [data-value="os:windows"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      wrapper
+        ?.querySelector('[slot="content"] [data-value="machine:large"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("shows unselected provider defaults as suggestions and selects the provider before an explicit choice", () => {
+    const container = document.createElement("div");
+    const onSelect = vi.fn();
+    const onSelectOs = vi.fn();
+    const params = {
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: true },
+            { id: "windows", label: "Windows" },
+          ],
+          machines: [{ id: "small", label: "Small", default: true }],
+        },
+      ],
+      selectedId: "",
+      compact: true,
+      submitting: false,
+      onSelect,
+      onSelectOs,
+    };
+    render(renderCloudProfileMenuItems(params), container);
+    const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
+    expect(suggested.dataset.suggested).toBe("true");
+    expect(suggested.getAttribute("aria-pressed")).toBe("false");
+    suggested.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws", true);
+    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("linux");
+    render(renderCloudProfileMenuItems({ ...params, selectedId: "aws" }), container);
+    expect(
+      container.querySelector('[data-value="os:linux"]')?.getAttribute("data-suggested"),
+    ).toBeNull();
+    expect(container.querySelector('[data-value="os:linux"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
     );
   });
 
@@ -101,25 +151,24 @@ describe("cloud target menu", () => {
   ])("includes available compute details in $machine.id option", ({ machine, expected }) => {
     const container = document.createElement("div");
     render(
-      renderCloudProfileMenuItems({
-        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
-        selectedId: "aws",
+      renderCloudConfiguration({
+        profile: { id: "aws", providerId: "aws" },
+        operatingSystems: [],
+        machines: [machine],
+        selectedOs: "",
         selectedMachine: machine.id,
-        compact: true,
         submitting: false,
-        onSelect: vi.fn(),
+        onSelectOs: vi.fn(),
+        onSelectMachine: vi.fn(),
       }),
       container,
     );
-    expect(
-      container.querySelector<SelectPicker>("openclaw-select-picker")?.params.options[0]?.label,
-    ).toBe(expected);
-    expect(container.querySelector<SelectPicker>("openclaw-select-picker")?.params.value).toBe(
-      machine.id,
-    );
+    const row = container.querySelector(`[data-value="machine:${machine.id}"]`);
+    expect(row?.textContent).toContain(expected);
+    expect(row?.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("selects profile defaults when no explicit choice is set", () => {
+  it("keeps the profile selected when configuration uses defaults", () => {
     const container = document.createElement("div");
     render(
       renderCloudProfileMenuItems({
@@ -144,77 +193,61 @@ describe("cloud target menu", () => {
       }),
       container,
     );
-    expect(
-      [...container.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(
-        (select) => select.params.value,
-      ),
-    ).toEqual(["linux", "standard"]);
-  });
-
-  it("forwards machine changes and disables the control while submitting", () => {
-    const container = document.createElement("div");
-    const onSelect = vi.fn();
-    const params = {
-      profiles: [
-        {
-          id: "aws",
-          providerId: "aws",
-          machines: [
-            { id: "small", label: "Small" },
-            { id: "large", label: "Large" },
-          ],
-        },
-      ],
-      selectedId: "aws",
-      selectedMachine: "small",
-      compact: true,
-      submitting: false,
-      onSelect: vi.fn(),
-      onSelectMachine: onSelect,
-    };
-    render(renderCloudProfileMenuItems(params), container);
-    const select = container.querySelector<SelectPicker>("openclaw-select-picker")!;
-    select.params.onChange("large");
-    expect(onSelect).toHaveBeenCalledWith("large");
-    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
-    expect(container.querySelector<SelectPicker>("openclaw-select-picker")?.params.disabled).toBe(
-      true,
+    expect(container.querySelector('[data-value="cloud:aws"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
     );
   });
 
-  it("retains unavailable OS repair hints and forwards eligible OS changes", () => {
+  it("forwards configuration choices and disables them while submitting", () => {
     const container = document.createElement("div");
-    const onSelect = vi.fn();
+    const onSelectMachine = vi.fn();
+    const onSelectOs = vi.fn();
     const params = {
-      profiles: [
-        {
-          id: "aws",
-          providerId: "aws",
-          operatingSystems: [
-            { id: "linux", label: "Linux" },
-            { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
-            { id: "macos", label: "macOS" },
-          ],
-        },
+      profile: { id: "aws", providerId: "aws" },
+      operatingSystems: [
+        { id: "linux", label: "Linux" },
+        { id: "macos", label: "macOS" },
       ],
-      selectedId: "aws",
+      machines: [
+        { id: "small", label: "Small" },
+        { id: "large", label: "Large" },
+      ],
       selectedOs: "linux",
-      compact: true,
+      selectedMachine: "small",
       submitting: false,
-      onSelect: vi.fn(),
-      onSelectOs: onSelect,
+      onSelectMachine,
+      onSelectOs,
     };
-    render(renderCloudProfileMenuItems(params), container);
-    const select = container.querySelector<SelectPicker>("openclaw-select-picker")!;
-    expect(select.params.value).toBe("linux");
-    expect(select.params.options[1]?.disabled).toBe(true);
-    expect(select.params.options[1]?.description).toBe("Install WSL2");
-    select.params.onChange("macos");
-    expect(onSelect).toHaveBeenCalledWith("macos");
-    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
-    expect(container.querySelector<SelectPicker>("openclaw-select-picker")?.params.disabled).toBe(
-      true,
+    render(renderCloudConfiguration(params), container);
+    container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
+    expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
+    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
+    render(renderCloudConfiguration({ ...params, submitting: true }), container);
+    expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+  });
+
+  it("omits unavailable OS choices even when they are the current selection", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudConfiguration({
+        profile: { id: "aws", providerId: "aws" },
+        operatingSystems: [
+          { id: "linux", label: "Linux" },
+          { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
+        ],
+        machines: [],
+        selectedOs: "windows",
+        selectedMachine: "",
+        submitting: false,
+        onSelectMachine: vi.fn(),
+        onSelectOs: vi.fn(),
+      }),
+      container,
     );
+    expect(container.querySelector('[data-value="os:linux"]')).not.toBeNull();
+    expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
+    expect(container.querySelector('[aria-pressed="true"]')).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {
