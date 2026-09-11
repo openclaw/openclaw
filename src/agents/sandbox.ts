@@ -53,6 +53,8 @@ export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 export type {
   CreateSandboxBackendParams,
+  CreateReservedSandboxBackendParamsV1,
+  ReservedSandboxBackendFactoryV1,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
@@ -80,3 +82,5 @@ export type {
   SandboxToolPolicy,
   SandboxWorkspaceAccess,
 } from "./sandbox/types.js";
+export { SandboxRuntimeRetiredError } from "./sandbox/provisioning-error.js";
+export { createSshSandboxBackend } from "./sandbox/ssh-backend.js";

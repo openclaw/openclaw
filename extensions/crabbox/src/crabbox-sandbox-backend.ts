@@ -2,30 +2,26 @@
 //
 // The Gateway, agent loop, channels, and model credentials stay on the host.
 // Only exec, file tools, and media reads run on a machine that Crabbox leases
-// with a fixed, scope-derived lease ID and that the built-in SSH backend then
-// drives. Replaying the same lease ID adopts the existing box, so a Gateway
-// restart or a second session in the same scope never allocates a duplicate.
+// with a registry-reserved lease ID. Crabbox owns provider replay and access;
+// the built-in SSH backend owns workspace seeding and remote I/O.
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   createRemoteShellSandboxFsBridge,
   getSandboxBackendWorkdirResolver,
-  requireSandboxBackendFactory,
+  createSshSandboxBackend,
+  SandboxRuntimeRetiredError,
   type CreateSandboxBackendParams,
-  type RemoteShellSandboxHandle,
-  type SandboxBackendFactory,
+  type ReservedSandboxBackendFactoryV1,
   type SandboxBackendHandle,
   type SandboxBackendManager,
+  type SshSandboxSettings,
 } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
-import {
-  candidateCrabboxSandboxLeaseIds,
-  CRABBOX_SANDBOX_LEASE_ID_PATTERN,
-  mintCrabboxSandboxLeaseId,
-} from "./crabbox-sandbox-lease.js";
+import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
 import {
   parseCrabboxSshCommand,
   type CrabboxSandboxEndpoint,
@@ -38,12 +34,6 @@ const CRABBOX_SANDBOX_INSPECT_TIMEOUT_MS = 60_000;
 const CRABBOX_SANDBOX_SSH_TIMEOUT_MS = 60_000;
 const CRABBOX_SANDBOX_STOP_TIMEOUT_MS = 5 * 60_000;
 const CRABBOX_SANDBOX_MAX_OUTPUT_BYTES = 64 * 1024;
-/**
- * Token-based providers (for example Daytona) mint a short-lived SSH user on
- * every `crabbox ssh`; the default token lifetime is 30 minutes, so endpoints
- * are re-resolved well before that.
- */
-const CRABBOX_SANDBOX_ENDPOINT_REFRESH_MS = 10 * 60_000;
 const READY_STATES = new Set(["started", "running", "ready"]);
 
 type CrabboxSandboxCommandRunner = (
@@ -61,8 +51,6 @@ export type CrabboxSandboxBackendDependencies = {
   openclawRoot: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
   runCommand?: CrabboxSandboxCommandRunner;
-  now?: () => number;
-  endpointRefreshMs?: number;
 };
 
 function crabboxSandboxConfigLabel(pluginConfig: ResolvedCrabboxSandboxConfig): string {
@@ -74,7 +62,11 @@ function providerArgs(pluginConfig: ResolvedCrabboxSandboxConfig): string[] {
 }
 
 function commandFailure(action: string, result: SpawnResult): Error {
-  const detail = result.stderr.trim() || result.stdout.trim() || `exit ${String(result.code)}`;
+  // Warmup and SSH output can contain provider credentials.
+  const detail =
+    action === "ssh" || action === "warmup"
+      ? `exit ${String(result.code)}`
+      : result.stderr.trim() || result.stdout.trim() || `exit ${String(result.code)}`;
   return new Error(`Crabbox sandbox ${action} failed: ${detail}`);
 }
 
@@ -138,12 +130,10 @@ async function inspectLease(
   leaseId: string,
   options: { cwd?: string; signal?: AbortSignal },
 ): Promise<LeaseState> {
-  const result = await runCrabbox(
-    client,
-    "inspect",
-    ["inspect", ...providerArgs(client.pluginConfig), "--id", leaseId, "--json"],
-    { ...options, timeoutMs: CRABBOX_SANDBOX_INSPECT_TIMEOUT_MS },
-  );
+  const result = await runCrabbox(client, "inspect", ["inspect", "--id", leaseId, "--json"], {
+    ...options,
+    timeoutMs: CRABBOX_SANDBOX_INSPECT_TIMEOUT_MS,
+  });
   return parseLeaseInspection(leaseId, result.stdout);
 }
 
@@ -154,12 +144,10 @@ async function resolveEndpoint(
 ): Promise<CrabboxSandboxEndpoint> {
   // `crabbox ssh` validates the repository claim, refreshes the lease, and
   // mints provider access; --show-secret is required for token users.
-  const result = await runCrabbox(
-    client,
-    "ssh",
-    ["ssh", ...providerArgs(client.pluginConfig), "--id", leaseId, "--show-secret"],
-    { ...options, timeoutMs: CRABBOX_SANDBOX_SSH_TIMEOUT_MS },
-  );
+  const result = await runCrabbox(client, "ssh", ["ssh", "--id", leaseId, "--show-secret"], {
+    ...options,
+    timeoutMs: CRABBOX_SANDBOX_SSH_TIMEOUT_MS,
+  });
   const endpoint = parseCrabboxSshCommand(result.stdout);
   await ensureKnownHost(client, endpoint);
   return endpoint;
@@ -195,47 +183,13 @@ async function ensureLease(
   }
 }
 
-// Crabbox's own wording for leases that are gone or terminal; anything else
-// (timeouts, provider errors, malformed output) leaves the outcome unknown.
-const MISSING_LEASE_PATTERN =
-  /\b(?:not found|no longer exists|is terminal|terminal and cannot|unknown lease|released|is not claimed by Crabbox|has no matching local ownership claim|has no active create attempt|cannot allocate a replacement)\b/iu;
-
-type SelectedLease = { leaseId: string; allocated: boolean };
-
-/**
- * Adopt the newest registered lease that is still alive; otherwise mint a new
- * fixed ID for this runtime generation. A stopped lease's ID is terminal in
- * Crabbox, so `openclaw sandbox recreate` always provisions under a fresh one.
- * Only a confirmed missing or terminal lease is skipped: an inspection whose
- * outcome is unknown propagates, so a live lease is never duplicated.
- */
-async function selectLease(
+async function stopLease(
   client: CrabboxSandboxClient,
-  params: CreateSandboxBackendParams,
-): Promise<SelectedLease> {
-  for (const candidate of candidateCrabboxSandboxLeaseIds(params.registeredRuntimeIds)) {
-    let lease: LeaseState;
-    try {
-      lease = await inspectLease(client, candidate, { cwd: params.workspaceDir });
-    } catch (error) {
-      if (error instanceof Error && MISSING_LEASE_PATTERN.test(error.message)) {
-        continue;
-      }
-      throw error;
-    }
-    if (!lease.ready) {
-      continue;
-    }
-    await ensureLease(client, candidate, { cwd: params.workspaceDir });
-    return { leaseId: candidate, allocated: false };
-  }
-  const leaseId = mintCrabboxSandboxLeaseId();
-  await ensureLease(client, leaseId, { cwd: params.workspaceDir });
-  return { leaseId, allocated: true };
-}
-
-async function stopLease(client: CrabboxSandboxClient, leaseId: string): Promise<void> {
-  await runCrabbox(client, "stop", ["stop", ...providerArgs(client.pluginConfig), leaseId], {
+  leaseId: string,
+  cwd: string | undefined,
+): Promise<void> {
+  await runCrabbox(client, "stop", ["stop", leaseId], {
+    cwd,
     timeoutMs: CRABBOX_SANDBOX_STOP_TIMEOUT_MS,
   });
 }
@@ -299,129 +253,75 @@ async function ensureKnownHost(
   await appendFile(endpoint.knownHostsFile, `${keys.join("\n")}\n`, { mode: 0o600 });
 }
 
-function sshParamsFor(
+function sshSettingsFor(
   params: CreateSandboxBackendParams,
   endpoint: CrabboxSandboxEndpoint,
-): CreateSandboxBackendParams {
+): SshSandboxSettings {
+  if (!endpoint.knownHostsFile) {
+    throw new Error("Crabbox sandbox requires a lease-owned SSH known_hosts file.");
+  }
   return {
-    ...params,
-    cfg: {
-      ...params.cfg,
-      backend: "ssh",
-      ssh: {
-        ...params.cfg.ssh,
-        target: endpoint.target,
-        identityFile: endpoint.identityFile,
-        identityData: undefined,
-        certificateFile: undefined,
-        certificateData: undefined,
-        // Crabbox recorded the lease's host key in its per-lease known_hosts on
-        // first contact (accept-new); every later connection must match it so a
-        // token carried in the SSH user cannot be captured by an impostor.
-        knownHostsFile: endpoint.knownHostsFile,
-        knownHostsData: undefined,
-        strictHostKeyChecking: endpoint.knownHostsFile !== undefined,
-        updateHostKeys: false,
-      },
-    },
+    ...params.cfg.ssh,
+    target: endpoint.target,
+    identityFile: endpoint.identityFile,
+    identityData: undefined,
+    certificateFile: undefined,
+    certificateData: undefined,
+    knownHostsFile: endpoint.knownHostsFile,
+    knownHostsData: undefined,
+    strictHostKeyChecking: true,
+    suppressConnectionDiagnostics: true,
+    updateHostKeys: false,
   };
 }
 
-function remoteShellField(
-  handle: SandboxBackendHandle,
-  field: "remoteWorkspaceDir" | "remoteAgentWorkspaceDir",
-): string | undefined {
-  // SAFETY: optional read of the ssh backend's remote-shell fields; a missing field yields undefined.
-  const value = (handle as Partial<RemoteShellSandboxHandle>)[field];
-  return typeof value === "string" && value ? value : undefined;
-}
-
-/**
- * Lease a box for the scope, then hand the endpoint to the built-in SSH
- * backend, which owns seeding, exec, file tools, and workdir validation. The
- * inner SSH handle is rebuilt whenever the provider endpoint may have expired.
- */
+/** The registry owns lease identity; SSH owns one-time seeding and remote I/O. */
 export function createCrabboxSandboxBackendFactory(
   dependencies: CrabboxSandboxBackendDependencies,
-): SandboxBackendFactory {
+): ReservedSandboxBackendFactoryV1 {
   const client = createClient(dependencies);
-  const now = dependencies.now ?? (() => Date.now());
-  const refreshMs = dependencies.endpointRefreshMs ?? CRABBOX_SANDBOX_ENDPOINT_REFRESH_MS;
-  return async (params: CreateSandboxBackendParams): Promise<SandboxBackendHandle> => {
+  return async (params): Promise<SandboxBackendHandle> => {
     if ((params.cfg.docker.binds?.length ?? 0) > 0) {
       throw new Error("Crabbox sandbox backend does not support sandbox.docker.binds.");
     }
-    const { leaseId, allocated } = await selectLease(client, params);
-    const sshFactory = requireSandboxBackendFactory("ssh");
-    let inner: SandboxBackendHandle;
+    const { runtimeId: leaseId, assertRuntimeCurrent } = params;
+    if (!CRABBOX_SANDBOX_LEASE_ID_PATTERN.test(leaseId)) {
+      throw new Error("Crabbox sandbox requires a fixed lease runtime ID.");
+    }
+    assertRuntimeCurrent();
     try {
-      inner = await sshFactory(
-        sshParamsFor(params, await resolveEndpoint(client, leaseId, { cwd: params.workspaceDir })),
-      );
+      // Replay also resumes native stopped/archived machines. Unknown outcomes
+      // retain the reservation so a restart retries the same provider request.
+      await ensureLease(client, leaseId, { cwd: params.workspaceDir });
     } catch (error) {
-      // A lease that never reached the registry would otherwise be orphaned.
-      if (allocated) {
-        await stopLease(client, leaseId).catch(() => undefined);
+      const lease = await inspectLease(client, leaseId, { cwd: params.workspaceDir }).catch(
+        () => undefined,
+      );
+      if (lease?.state === "released") {
+        throw new SandboxRuntimeRetiredError(leaseId);
       }
       throw error;
     }
-    let resolvedAt = now();
-    let refreshing: Promise<SandboxBackendHandle> | null = null;
-    const current = async (): Promise<SandboxBackendHandle> => {
-      if (now() - resolvedAt < refreshMs) {
-        return inner;
-      }
-      refreshing ??= (async () => {
-        try {
-          const endpoint = await resolveEndpoint(client, leaseId, { cwd: params.workspaceDir });
-          inner = await sshFactory(sshParamsFor(params, endpoint));
-          resolvedAt = now();
-          return inner;
-        } finally {
-          refreshing = null;
-        }
-      })();
-      return await refreshing;
-    };
-    const remoteShell: RemoteShellSandboxHandle = {
-      remoteWorkspaceDir: remoteShellField(inner, "remoteWorkspaceDir") ?? inner.workdir,
-      remoteAgentWorkspaceDir: remoteShellField(inner, "remoteAgentWorkspaceDir") ?? inner.workdir,
-      runRemoteShellScript: async (commandParams) => {
-        const handle = await current();
-        // The optional read below falls back to runShellCommand when the field is absent.
-        // SAFETY: the ssh backend handle also implements RemoteShellSandboxHandle.
-        const runner = handle as Partial<RemoteShellSandboxHandle>;
-        if (runner.runRemoteShellScript) {
-          return await runner.runRemoteShellScript(commandParams);
-        }
-        return await handle.runShellCommand(commandParams);
+    assertRuntimeCurrent();
+    const inner = await createSshSandboxBackend(params, {
+      resolveSettings: async () => {
+        assertRuntimeCurrent();
+        const endpoint = await resolveEndpoint(client, leaseId, { cwd: params.workspaceDir });
+        assertRuntimeCurrent();
+        return sshSettingsFor(params, endpoint);
       },
-    };
-    return {
+    });
+    const handle: SandboxBackendHandle = {
+      ...inner,
       id: CRABBOX_SANDBOX_BACKEND_ID,
       runtimeId: leaseId,
       runtimeLabel: leaseId,
-      workdir: inner.workdir,
-      env: inner.env,
       configLabel: crabboxSandboxConfigLabel(dependencies.pluginConfig),
       configLabelKind: "Lease",
-      workdirValidation: inner.workdirValidation,
-      workdirRoots: inner.workdirRoots,
-      capabilities: inner.capabilities,
-      validateWorkdir: async (workdir) => {
-        const handle = await current();
-        return handle.validateWorkdir ? await handle.validateWorkdir(workdir) : null;
-      },
-      discardPreparedWorkdir: (workdir) => inner.discardPreparedWorkdir?.(workdir),
-      buildExecSpec: async (execParams) => await (await current()).buildExecSpec(execParams),
-      finalizeExec: async (finalizeParams) => {
-        await inner.finalizeExec?.(finalizeParams);
-      },
-      runShellCommand: async (commandParams) =>
-        await (await current()).runShellCommand(commandParams),
       createFsBridge: ({ sandbox }) =>
-        createRemoteShellSandboxFsBridge({ sandbox, runtime: remoteShell }),
+        createRemoteShellSandboxFsBridge({ sandbox, runtime: inner }),
     };
+    return handle;
   };
 }
 
@@ -438,7 +338,7 @@ export function createCrabboxSandboxBackendManager(
       }
       let lease: LeaseState;
       try {
-        lease = await inspectLease(client, entry.containerName, {});
+        lease = await inspectLease(client, entry.containerName, { cwd: entry.workspaceDir });
       } catch {
         return { running: false, actualConfigLabel: entry.image, configLabelMatch: false };
       }
@@ -452,7 +352,18 @@ export function createCrabboxSandboxBackendManager(
       if (!CRABBOX_SANDBOX_LEASE_ID_PATTERN.test(entry.containerName)) {
         throw new Error(`Crabbox sandbox runtime ${entry.containerName} is not a fixed lease id`);
       }
-      await stopLease(client, entry.containerName);
+      try {
+        await stopLease(client, entry.containerName, entry.workspaceDir);
+      } catch (error) {
+        if (entry.runtimeState !== "removing-pending" || !entry.workspaceDir) {
+          throw error;
+        }
+        // A pre-submission failure may leave no Crabbox claim to stop. Replay
+        // the same ID through its owner, then release it; never infer absence
+        // from an error string or replace an uncertain provider attempt.
+        await ensureLease(client, entry.containerName, { cwd: entry.workspaceDir });
+        await stopLease(client, entry.containerName, entry.workspaceDir);
+      }
     },
   };
 }

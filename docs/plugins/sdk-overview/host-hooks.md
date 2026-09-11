@@ -318,3 +318,33 @@ normal OpenClaw plugin hooks for work that does not need pre-model tool-result
 timing. The old
 embedded-runner-only extension factory registration path has been removed.
 </Accordion>
+
+## Sandbox backends
+
+`openclaw/plugin-sdk/sandbox` owns backend registration, remote filesystem bridges,
+and SSH execution. Register a backend with `registerSandboxBackend(id, { factory,
+manager, resolveWorkdir })` and dispose the registration with the plugin lifecycle.
+
+A backend that allocates external resources can provide `reserveRuntimeId(params)`
+to generate a fresh candidate ID without contacting its provider. Core reserves
+one generation per backend/scope in the sandbox registry before calling the
+factory. The `ReservedSandboxBackendFactoryV1` contract requires `runtimeId` and
+`assertRuntimeCurrent` through `CreateReservedSandboxBackendParamsV1`. The
+authority check is synchronous: provision that exact ID and recheck after awaited
+work before side effects. Prepared exec specifications carry this check as
+`assertCurrent`, which the process supervisor retains through queued admission
+and native process construction. Recreate rejects work still awaiting admission;
+already-admitted commands follow the backend's normal shutdown lifecycle. Unknown provisioning failures retain the ID for replay. Throw
+`SandboxRuntimeRetiredError(runtimeId)` only after the provider confirms that exact
+generation is permanently released. Core replaces it at most once per request.
+Recreate and prune keep failed cleanup recorded and prevent late publication.
+
+Use `createSshSandboxBackend(params, { resolveSettings })` when a provider owns
+short-lived SSH access. The resolver supplies complete `SshSandboxSettings` for
+each SSH session; `params.cfg.ssh.workspaceRoot` still owns runtime paths. This
+keeps one workspace bootstrap owner while refreshing credentials. The SSH backend
+rechecks an optional `assertRuntimeCurrent` around session preparation and remote
+operations. For token-bearing endpoints, set `suppressConnectionDiagnostics` in the resolved
+settings to prevent SSH client diagnostics from repeating the token username.
+Remote-command stderr is unchanged. Static SSH callers can omit the options and
+keep using `cfg.ssh`.

@@ -35,6 +35,7 @@ import {
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
   type SshSandboxSession,
+  type SshSandboxSettings,
 } from "./ssh.js";
 
 type PendingExec = {
@@ -132,16 +133,23 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
 
 /** Create an SSH sandbox backend that mirrors the workspace to a remote target. */
 type PreprovisionedSshWorkdir = { runtimeId: string; remoteWorkspaceDir: string };
+type SshSandboxBackendOptions = {
+  /** Resolve current connection credentials for each operation without replacing workspace state. */
+  resolveSettings?: () => Promise<SshSandboxSettings>;
+};
 
 async function createSshSandboxBackendInternal(
   params: CreateSandboxBackendParams,
   preprovisionedSshWorkdir?: PreprovisionedSshWorkdir,
-): Promise<SandboxBackendHandle> {
+  options?: SshSandboxBackendOptions,
+): Promise<SandboxBackendHandle & RemoteShellSandboxHandle> {
   if ((params.cfg.docker.binds?.length ?? 0) > 0) {
     throw new Error("SSH sandbox backend does not support sandbox.docker.binds.");
   }
   const target = params.cfg.ssh.target;
-  if (!target) {
+  const resolveSettings =
+    options?.resolveSettings ?? (target ? async () => ({ ...params.cfg.ssh, target }) : undefined);
+  if (!resolveSettings) {
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');
   }
 
@@ -152,6 +160,7 @@ async function createSshSandboxBackendInternal(
     createParams: params,
     preprovisionedSshWorkdir,
     target,
+    resolveSettings,
     runtimePaths,
   });
   return impl.asHandle();
@@ -159,8 +168,9 @@ async function createSshSandboxBackendInternal(
 
 export async function createSshSandboxBackend(
   params: CreateSandboxBackendParams,
-): Promise<SandboxBackendHandle> {
-  return await createSshSandboxBackendInternal(params);
+  options?: SshSandboxBackendOptions,
+): Promise<SandboxBackendHandle & RemoteShellSandboxHandle> {
+  return await createSshSandboxBackendInternal(params, undefined, options);
 }
 
 /** Adopts a placement-owned remote worktree without mirroring local files into it. */
@@ -179,7 +189,8 @@ class SshSandboxBackendImpl {
     private readonly params: {
       createParams: CreateSandboxBackendParams;
       preprovisionedSshWorkdir?: PreprovisionedSshWorkdir;
-      target: string;
+      target?: string;
+      resolveSettings: () => Promise<SshSandboxSettings>;
       runtimePaths: ResolvedSshRuntimePaths;
     },
   ) {}
@@ -217,16 +228,24 @@ class SshSandboxBackendImpl {
           if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
             await this.refreshRemoteSkillsWorkspace(sshSession);
           }
+          this.params.createParams.assertRuntimeCurrent?.();
           const prepared = await prepareSshSandboxExec({
             session: sshSession,
             remoteCommand,
             env,
             tty: usePty,
           });
+          try {
+            this.params.createParams.assertRuntimeCurrent?.();
+          } catch (error) {
+            await prepared.cleanup();
+            throw error;
+          }
           return {
             argv: prepared.argv,
             env: sanitizeEnvVars(process.env).allowed,
             stdinMode: "pipe-open",
+            assertCurrent: this.params.createParams.assertRuntimeCurrent,
             finalizeToken: { sshSession, cleanup: prepared.cleanup } satisfies PendingExec,
           };
         } catch (error) {
@@ -255,10 +274,17 @@ class SshSandboxBackendImpl {
   }
 
   private async createSession(): Promise<SshSandboxSession> {
-    return await createSshSandboxSessionFromSettings({
-      ...this.params.createParams.cfg.ssh,
-      target: this.params.target,
-    });
+    this.params.createParams.assertRuntimeCurrent?.();
+    const settings = await this.params.resolveSettings();
+    this.params.createParams.assertRuntimeCurrent?.();
+    const session = await createSshSandboxSessionFromSettings(settings);
+    try {
+      this.params.createParams.assertRuntimeCurrent?.();
+      return { ...session, assertCurrent: this.params.createParams.assertRuntimeCurrent };
+    } catch (error) {
+      await disposeSshSandboxSession(session);
+      throw error;
+    }
   }
 
   private async ensureRuntime(): Promise<void> {
@@ -284,6 +310,7 @@ class SshSandboxBackendImpl {
     }
     const session = await this.createSession();
     try {
+      this.params.createParams.assertRuntimeCurrent?.();
       const exists = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
@@ -328,6 +355,7 @@ class SshSandboxBackendImpl {
         refreshedSkillsForWorkdir = workdir;
         this.refreshedSkillsForNextExecWorkdir = workdir;
       }
+      this.params.createParams.assertRuntimeCurrent?.();
       const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteWorkdirValidationCommand({
@@ -392,6 +420,7 @@ class SshSandboxBackendImpl {
     if (!(await isExistingDirectory(this.params.createParams.skillsWorkspaceDir))) {
       return;
     }
+    this.params.createParams.assertRuntimeCurrent?.();
     await uploadDirectoryToSshTarget({
       session,
       localDir: this.params.createParams.skillsWorkspaceDir,
@@ -401,6 +430,7 @@ class SshSandboxBackendImpl {
   }
 
   private async clearRemoteDirectory(session: SshSandboxSession, remoteDir: string): Promise<void> {
+    this.params.createParams.assertRuntimeCurrent?.();
     await runSshSandboxCommand({
       session,
       remoteCommand: buildRemoteCommand([
@@ -420,6 +450,7 @@ class SshSandboxBackendImpl {
     remoteDir: string,
   ): Promise<void> {
     await this.clearRemoteDirectory(session, remoteDir);
+    this.params.createParams.assertRuntimeCurrent?.();
     await uploadDirectoryToSshTarget({
       session,
       localDir,
@@ -435,6 +466,7 @@ class SshSandboxBackendImpl {
     const session = await this.createSession();
     try {
       await this.refreshRemoteSkillsWorkspace(session);
+      this.params.createParams.assertRuntimeCurrent?.();
       return await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([

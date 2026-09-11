@@ -8,6 +8,7 @@ import {
   resolveCrabboxSandboxWorkdir,
 } from "./src/crabbox-sandbox-backend.js";
 import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
+import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
@@ -79,6 +80,7 @@ export default definePluginEntry({
       };
       const unregister = registerSandboxBackend(CRABBOX_SANDBOX_BACKEND_ID, {
         factory: createCrabboxSandboxBackendFactory(backendDependencies),
+        reserveRuntimeId: mintCrabboxSandboxLeaseId,
         manager: createCrabboxSandboxBackendManager(backendDependencies),
         resolveWorkdir: resolveCrabboxSandboxWorkdir,
       });

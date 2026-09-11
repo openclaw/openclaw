@@ -1,558 +1,408 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
+import type {
+  CreateSandboxBackendParams,
+  CreateReservedSandboxBackendParamsV1,
+  SandboxBackendHandle,
+  SshSandboxSettings,
+} from "openclaw/plugin-sdk/sandbox";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
+  createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCrabboxSandboxBackendFactory,
   createCrabboxSandboxBackendManager,
-  resolveCrabboxSandboxWorkdir,
 } from "./crabbox-sandbox-backend.js";
 import { resolveCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
-import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
 import { parseCrabboxSshCommand } from "./crabbox-sandbox-ssh-command.js";
 
-type CrabboxSandboxCommandRunner = NonNullable<
-  Parameters<typeof createCrabboxSandboxBackendFactory>[0]["runCommand"]
->;
+const ssh = vi.hoisted(() => ({
+  create: vi.fn(),
+  targets: [] as string[],
+}));
+vi.mock("openclaw/plugin-sdk/sandbox", () => ({
+  createSshSandboxBackend: ssh.create,
+  requireSandboxBackendFactory: () => ssh.create,
+  createRemoteShellSandboxFsBridge: vi.fn(),
+  getSandboxBackendWorkdirResolver: vi.fn(),
+  SandboxRuntimeRetiredError: class extends Error {
+    constructor(readonly runtimeId: string) {
+      super(`Sandbox runtime ${runtimeId} is retired`);
+    }
+  },
+}));
 
-const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
-const SCOPE_KEY = "agent:main:session:abc";
+type Runner = NonNullable<Parameters<typeof createCrabboxSandboxBackendFactory>[0]["runCommand"]>;
 const LEASE_ID = "cbx_0123456789ab";
+const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crabbox-test-"));
+const KNOWN_HOSTS = path.join(temporaryRoot, "known_hosts");
+afterAll(async () => await fs.rm(temporaryRoot, { recursive: true, force: true }));
 
-function spawnResult(stdout: string, code = 0): SpawnResult {
-  return { stdout, stderr: "", code, signal: null, termination: "exit" } as SpawnResult;
+function result(stdout = "", code = 0): SpawnResult {
+  return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
-
-function inspectJson(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({
-    id: LEASE_ID,
-    provider: "daytona",
-    state: "started",
-    ready: true,
-    sshUser: "",
-    sshHost: "",
-    sshPort: "",
-    sshKey: "",
-    ...overrides,
-  });
+function inspect(state = "started", id = LEASE_ID): SpawnResult {
+  return result(JSON.stringify({ id, state, ready: state === "started" }));
 }
-
-const KEY_PATH = "/home/user/.config/crabbox/testboxes/lease/id_ed25519";
-const KNOWN_HOSTS = path.join(
-  fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-crabbox-test-")),
-  "known_hosts",
-);
-
-function sshCommand(
-  user = "token-abc",
-  host = "ssh.example.test",
-  port = 2222,
-  withKey = true,
-): string {
-  const key = withKey ? `'-i' '${KEY_PATH}' ` : "";
-  return `warning: something informational\n'ssh' '-o' 'BatchMode=yes' ${key}'-p' '${port}' '-o' 'StrictHostKeyChecking=accept-new' '-o' 'UserKnownHostsFile=${KNOWN_HOSTS}' '${user}@${host}'\n`;
+function endpoint(user = "fixture-token"): string {
+  return `'ssh' '-p' '2222' '-o' 'UserKnownHostsFile=${KNOWN_HOSTS}' '${user}@ssh.example.test'\n`;
 }
-
-function leaseIdFromArgv(argv: string[]): string {
-  const flag = argv.includes("--lease-id") ? "--lease-id" : "--id";
-  const index = argv.indexOf(flag);
-  return index >= 0 ? (argv[index + 1] ?? LEASE_ID) : LEASE_ID;
-}
-
-function respond(argv: string[], inspect?: string, ssh = sshCommand()): SpawnResult {
+function respond(argv: string[]): SpawnResult {
   if (argv[0] === "ssh-keygen") {
-    return spawnResult("");
+    return result("# Host found\n[ssh.example.test]:2222 ssh-ed25519 AAAA\n");
   }
   if (argv[0] === "ssh-keyscan") {
-    return spawnResult("ssh.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEY\n");
+    return result("ssh.example.test ssh-ed25519 AAAAFIXTURE\n");
   }
-  switch (argv[1]) {
-    case "inspect":
-      return spawnResult(inspect ?? inspectJson({ id: leaseIdFromArgv(argv) }));
-    case "ssh":
-      return spawnResult(ssh);
-    default:
-      return spawnResult(`leased ${leaseIdFromArgv(argv)} slug=openclaw-sandbox\n`);
+  if (argv[1] === "inspect") {
+    return inspect();
   }
+  return result(argv[1] === "ssh" ? endpoint() : "");
 }
-
-function createParams(
+function params(
   overrides: Partial<CreateSandboxBackendParams> = {},
-): CreateSandboxBackendParams {
+): CreateReservedSandboxBackendParamsV1 {
+  const context = createSandboxTestContext();
   return {
-    sessionKey: SCOPE_KEY,
-    scopeKey: SCOPE_KEY,
-    workspaceDir: path.resolve(path.sep, "workspace", "project"),
-    agentWorkspaceDir: path.resolve(path.sep, "workspace", "project"),
+    runtimeId: LEASE_ID,
+    assertRuntimeCurrent: vi.fn(() => {}),
+    scopeKey: "agent:main:session:fixture",
+    sessionKey: "agent:main:session:fixture",
+    workspaceDir: temporaryRoot,
+    agentWorkspaceDir: temporaryRoot,
     cfg: {
       mode: "all",
       backend: "crabbox",
       scope: "session",
       workspaceAccess: "rw",
-      workspaceRoot: "/workspace",
+      workspaceRoot: temporaryRoot,
       dockerTmpfsSource: "default",
-      docker: {
-        image: "unused",
-        binds: [],
-      } as unknown as CreateSandboxBackendParams["cfg"]["docker"],
+      docker: context.docker,
       ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
       browser: createSandboxBrowserConfig(),
-      tools: { allow: [], deny: [] } as CreateSandboxBackendParams["cfg"]["tools"],
+      tools: context.tools,
       prune: createSandboxPruneConfig(),
     },
     ...overrides,
   };
 }
-
-function createRunner(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult>) {
-  const calls: string[][] = [];
-  const runCommand = vi.fn<CrabboxSandboxCommandRunner>(async (argv) => {
-    calls.push(argv);
-    return await handler(argv);
-  });
-  return { calls, runCommand };
+function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> = respond) {
+  const runCommand = vi.fn<Runner>(async (argv) => await handler(argv));
+  const dependencies = {
+    openclawRoot: temporaryRoot,
+    pluginConfig: {
+      binary: "/fixture/crabbox",
+      provider: "daytona",
+      class: "small",
+      ttl: "2h",
+      idleTimeout: "30m",
+    },
+    runCommand,
+  };
+  return {
+    runCommand,
+    factory: createCrabboxSandboxBackendFactory(dependencies),
+    manager: createCrabboxSandboxBackendManager(dependencies),
+  };
 }
-
-describe("crabbox sandbox lease identity", () => {
-  it("mints a fresh fixed id when no live registered lease exists", async () => {
-    const seen: string[] = [];
-    const { runCommand } = createRunner((argv) => {
-      if (argv[1] === "warmup") {
-        seen.push(leaseIdFromArgv(argv));
-      }
-      return respond(argv);
-    });
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-    });
-    const first = await factory(createParams());
-    const second = await factory(createParams());
-    expect(first.runtimeId).toMatch(CRABBOX_SANDBOX_LEASE_ID_PATTERN);
-    expect(second.runtimeId).toMatch(CRABBOX_SANDBOX_LEASE_ID_PATTERN);
-    // Without a registry entry each generation mints its own single-use id.
-    expect(second.runtimeId).not.toBe(first.runtimeId);
-    expect(seen).toEqual([first.runtimeId, second.runtimeId]);
-  });
-
-  it("adopts the newest live registered lease and skips released ones", async () => {
-    const released = "cbx_deaddeaddead";
-    const { calls, runCommand } = createRunner((argv) => {
-      if (argv[1] === "inspect" && argv.includes(released)) {
-        return spawnResult(
-          `Daytona fixed lease ${released} has no active create attempt; it cannot allocate a replacement\n`,
-          4,
-        );
-      }
-      return respond(argv);
-    });
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-    });
-    const handle = await factory(
-      createParams({ registeredRuntimeIds: [released, LEASE_ID, "not-a-lease"] }),
-    );
-    expect(handle.runtimeId).toBe(LEASE_ID);
-    const warmups = calls.filter((argv) => argv[1] === "warmup");
-    expect(warmups).toHaveLength(1);
-    expect(warmups[0]).toContain(LEASE_ID);
-    expect(calls.filter((argv) => argv[1] === "inspect" && argv.includes(released))).toHaveLength(
-      1,
-    );
-  });
+beforeEach(() => {
+  ssh.targets.length = 0;
+  ssh.create.mockReset();
+  ssh.create.mockImplementation(
+    async (
+      _params: CreateSandboxBackendParams,
+      options?: { resolveSettings: () => Promise<SshSandboxSettings> },
+    ) => {
+      const runShellCommand: SandboxBackendHandle["runShellCommand"] = async () => {
+        if (options) {
+          const settings = await options.resolveSettings();
+          ssh.targets.push(settings.target);
+        }
+        return { stdout: Buffer.from("remote-ok"), stderr: Buffer.alloc(0), code: 0 };
+      };
+      return {
+        id: "ssh",
+        runtimeId: "ssh-fixture",
+        runtimeLabel: "ssh-fixture",
+        workdir: "/remote/workspace",
+        remoteWorkspaceDir: "/remote/workspace",
+        remoteAgentWorkspaceDir: "/remote/agent",
+        runShellCommand,
+        runRemoteShellScript: runShellCommand,
+        buildExecSpec: vi.fn(),
+      };
+    },
+  );
 });
 
-describe("crabbox sandbox backend factory", () => {
-  it("replays a fixed-id warmup and hands the inspected endpoint to the ssh backend", async () => {
-    const { calls, runCommand } = createRunner((argv) => respond(argv));
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: {
-        provider: "daytona",
-        class: "small",
-        ttl: "2h",
-        idleTimeout: "30m",
-        binary: "/opt/bin/crabbox",
-      },
-      runCommand,
-    });
-    const params = createParams({ registeredRuntimeIds: [LEASE_ID] });
-    const handle = await factory(params);
-    expect(handle.id).toBe("crabbox");
+describe("Crabbox sandbox provider lifecycle", () => {
+  it("uses the durable reservation and replays warmup with the owning workspace", async () => {
+    const { factory, runCommand } = setup();
+    const handle = await factory(params());
     expect(handle.runtimeId).toBe(LEASE_ID);
-    expect(handle.runtimeLabel).toBe(LEASE_ID);
     expect(handle.configLabel).toBe("daytona/small");
-    expect(handle.configLabelKind).toBe("Lease");
-    expect(handle.workdir.startsWith("/tmp/openclaw-sandboxes/")).toBe(true);
-    expect(calls[0]).toEqual([
-      "/opt/bin/crabbox",
-      "inspect",
-      "--provider",
-      "daytona",
-      "--id",
-      LEASE_ID,
-      "--json",
+    expect(runCommand.mock.calls[0]).toEqual([
+      [
+        "/fixture/crabbox",
+        "warmup",
+        "--provider",
+        "daytona",
+        "--class",
+        "small",
+        "--lease-id",
+        LEASE_ID,
+        "--slug",
+        "openclaw-sandbox",
+        "--keep",
+        "--ttl",
+        "2h",
+        "--idle-timeout",
+        "30m",
+      ],
+      expect.objectContaining({ cwd: temporaryRoot, killProcessTree: true }),
     ]);
-    expect(calls[1]).toEqual([
-      "/opt/bin/crabbox",
-      "warmup",
-      "--provider",
-      "daytona",
-      "--class",
-      "small",
-      "--lease-id",
-      LEASE_ID,
-      "--slug",
-      "openclaw-sandbox",
-      "--keep",
-      "--ttl",
-      "2h",
-      "--idle-timeout",
-      "30m",
-    ]);
-    expect(calls[2]).toEqual([
-      "/opt/bin/crabbox",
-      "inspect",
-      "--provider",
-      "daytona",
-      "--id",
-      LEASE_ID,
-      "--json",
-    ]);
-    expect(calls[3]).toEqual([
-      "/opt/bin/crabbox",
-      "ssh",
-      "--provider",
-      "daytona",
-      "--id",
-      LEASE_ID,
-      "--show-secret",
-    ]);
-    expect(runCommand.mock.calls[1]?.[1]).toMatchObject({
-      cwd: params.workspaceDir,
-      killProcessTree: true,
-    });
-    expect(runCommand.mock.calls[3]?.[1]).toMatchObject({ cwd: params.workspaceDir });
+  });
 
-    // A later creation for the same registered runtime replays the same lease id instead of allocating.
-    const again = await factory(params);
-    expect(again.runtimeId).toBe(LEASE_ID);
-    expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(2);
+  it("resumes a non-ready registered workspace by replaying the same ID", async () => {
+    let resumed = false;
+    const { factory, runCommand } = setup((argv) => {
+      if (argv[1] === "warmup") {
+        resumed = true;
+      }
+      return argv[1] === "inspect"
+        ? inspect(resumed ? "started" : "stopped", argv[argv.indexOf("--id") + 1])
+        : respond(argv);
+    });
+    expect((await factory(params({ registeredRuntimeIds: [LEASE_ID] }))).runtimeId).toBe(LEASE_ID);
     expect(
-      calls.filter((argv) => argv[1] === "warmup").every((argv) => argv.includes(LEASE_ID)),
-    ).toBe(true);
+      runCommand.mock.calls
+        .filter(([argv]) => argv[1] === "warmup")
+        .map(([argv]) => argv[argv.indexOf("--lease-id") + 1]),
+    ).toEqual([LEASE_ID]);
   });
 
-  it("omits provider and class when the plugin config leaves them to crabbox", async () => {
-    const { calls, runCommand } = createRunner((argv) => respond(argv));
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-    });
-    const handle = await factory(createParams({ registeredRuntimeIds: [LEASE_ID] }));
-    expect(handle.runtimeId).toBe(LEASE_ID);
-    expect(calls[3]).toEqual(["/opt/bin/crabbox", "ssh", "--id", LEASE_ID, "--show-secret"]);
-    expect(calls[1]).toEqual([
-      "/opt/bin/crabbox",
-      "warmup",
-      "--lease-id",
-      LEASE_ID,
-      "--slug",
-      "openclaw-sandbox",
-      "--keep",
-    ]);
+  it("retains the reserved ID after post-create inspection fails", async () => {
+    let unavailable = true;
+    const { factory, runCommand } = setup((argv) =>
+      argv[1] === "inspect" && unavailable ? result("provider unavailable", 1) : respond(argv),
+    );
+    await expect(factory(params())).rejects.toThrow(/inspect failed/);
+    unavailable = false;
+    expect((await factory(params())).runtimeId).toBe(LEASE_ID);
+    expect(
+      runCommand.mock.calls
+        .filter(([argv]) => argv[1] === "warmup")
+        .map(([argv]) => argv[argv.indexOf("--lease-id") + 1]),
+    ).toEqual([LEASE_ID, LEASE_ID]);
+    expect(runCommand.mock.calls.some(([argv]) => argv[1] === "stop")).toBe(false);
   });
 
-  it("fails closed when warmup fails or the lease has no SSH endpoint", async () => {
-    const failing = createRunner((argv) =>
-      argv[1] === "warmup" ? spawnResult("", 4) : respond(argv),
+  it("reports only a matching released inspection as retired", async () => {
+    for (const state of ["released", "stopped", "unknown"]) {
+      const { factory } = setup((argv) =>
+        argv[1] === "warmup"
+          ? result(endpoint("fixture-warmup-credential"), 4)
+          : argv[1] === "inspect"
+            ? inspect(state)
+            : respond(argv),
+      );
+      await expect(factory(params())).rejects.toThrow(
+        state === "released" ? /is retired/ : "Crabbox sandbox warmup failed: exit 4",
+      );
+    }
+    const { factory } = setup((argv) =>
+      argv[1] === "warmup" ? result("unresolved", 4) : inspect("released", "cbx_aaaaaaaaaaaa"),
     );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: failing.runCommand,
-      })(createParams()),
-    ).rejects.toThrow(/warmup failed/u);
-
-    const endpointless = createRunner((argv) =>
-      argv[1] === "ssh" ? spawnResult("warning: only a warning\n") : respond(argv),
-    );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: endpointless.runCommand,
-      })(createParams()),
-    ).rejects.toThrow(/did not print an ssh command/u);
-
-    const notReady = createRunner((argv) =>
-      respond(argv, inspectJson({ id: leaseIdFromArgv(argv), ready: false, state: "stopped" })),
-    );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: notReady.runCommand,
-      })(createParams()),
-    ).rejects.toThrow(/not ready/u);
-
-    const wrongLease = createRunner((argv) =>
-      respond(argv, inspectJson({ id: "cbx_000000000000" })),
-    );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: wrongLease.runCommand,
-      })(createParams()),
-    ).rejects.toThrow(/instead of/u);
+    await expect(factory(params())).rejects.toThrow(/warmup failed/);
   });
 
-  it("rejects docker binds", async () => {
-    const { runCommand } = createRunner((argv) => respond(argv));
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-    });
-    const params = createParams();
-    params.cfg.docker.binds = ["/host:/container"];
-    await expect(factory(params)).rejects.toThrow(/docker\.binds/u);
+  it("validates the lease ID and current authority before provisioning or returning a handle", async () => {
+    const { factory, runCommand } = setup();
+    await expect(factory(params({ runtimeId: "" }))).rejects.toThrow(/fixed lease/);
+    expect(runCommand).not.toHaveBeenCalled();
+    const assertRuntimeCurrent = vi
+      .fn()
+      .mockImplementationOnce(() => {})
+      .mockImplementation(() => {
+        throw new Error("runtime removed");
+      });
+    await expect(factory(params({ assertRuntimeCurrent }))).rejects.toThrow("runtime removed");
+    expect(ssh.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects Docker binds before provisioning", async () => {
+    const { factory, runCommand } = setup();
+    const input = params();
+    input.cfg.docker.binds = ["/host:/remote"];
+    await expect(factory(input)).rejects.toThrow(/docker.binds/);
     expect(runCommand).not.toHaveBeenCalled();
   });
-
-  it("resolves the remote workdir without starting the lease", () => {
-    const workdir = resolveCrabboxSandboxWorkdir(createParams());
-    expect(workdir.startsWith("/tmp/openclaw-sandboxes/")).toBe(true);
-  });
 });
 
-describe("crabbox ssh command parsing", () => {
-  it("splits quoted tokens and extracts the endpoint", () => {
-    expect(
-      parseCrabboxSshCommand(
-        `'ssh' '-o' 'UserKnownHostsFile=/tmp/known hosts' "-p" "2200" user@host`,
-      ),
-    ).toEqual({ target: "user@host:2200", knownHostsFile: "/tmp/known hosts" });
-    expect(parseCrabboxSshCommand(sshCommand())).toEqual({
-      target: "token-abc@ssh.example.test:2222",
-      identityFile: KEY_PATH,
-      knownHostsFile: KNOWN_HOSTS,
-    });
-    expect(parseCrabboxSshCommand(sshCommand("daytona", "10.0.0.5", 22, false))).toEqual({
-      target: "daytona@10.0.0.5:22",
-      knownHostsFile: KNOWN_HOSTS,
-    });
-    expect(parseCrabboxSshCommand("'ssh' '-p' '22' 'user@[fe80::1]'\n")).toMatchObject({
-      target: "user@[fe80::1]:22",
-    });
-    expect(() => parseCrabboxSshCommand("'ssh' '-p' '70000' 'user@host'")).toThrow(/invalid port/u);
-    expect(() => parseCrabboxSshCommand("'ssh' '-F' 'cfg' 'host'")).toThrow(/config-file/u);
-    expect(() => parseCrabboxSshCommand("'ssh' 'hostonly'")).toThrow(/user@host/u);
+describe("Crabbox sandbox SSH access", () => {
+  it("gets fresh access through Crabbox for consecutive operations on one SSH handle", async () => {
+    let sequence = 0;
+    const { factory } = setup((argv) =>
+      argv[1] === "ssh" ? result(endpoint(`fixture-${++sequence}`)) : respond(argv),
+    );
+    const handle = await factory(params());
+    await expect(handle.runShellCommand({ script: "true" })).resolves.toMatchObject({ code: 0 });
+    await expect(handle.runShellCommand({ script: "true" })).resolves.toMatchObject({ code: 0 });
+    expect(ssh.targets).toEqual([
+      "fixture-1@ssh.example.test:2222",
+      "fixture-2@ssh.example.test:2222",
+    ]);
+    expect(ssh.create).toHaveBeenCalledTimes(1);
+    expect(ssh.create.mock.calls[0]?.[1]).toHaveProperty("resolveSettings");
   });
-});
 
-describe("crabbox sandbox host keys", () => {
-  it("records the host key on first contact and skips the scan once known", async () => {
+  it("does not use an old endpoint when fresh access is refused", async () => {
+    let refused = false;
+    const { factory } = setup((argv) =>
+      argv[1] === "ssh" && refused
+        ? result("fixture-credential-must-not-escape", 4)
+        : respond(argv),
+    );
+    const handle = await factory(params());
+    await handle.runShellCommand({ script: "true" });
+    refused = true;
+    await expect(handle.runShellCommand({ script: "true" })).rejects.toThrow(
+      "Crabbox sandbox ssh failed: exit 4",
+    );
+    expect(ssh.targets).toHaveLength(1);
+  });
+
+  it("checks runtime ownership again after SSH access resolves", async () => {
+    let active = true;
+    const { factory } = setup((argv) => {
+      if (argv[1] === "ssh") {
+        active = false;
+      }
+      return respond(argv);
+    });
+    const handle = await factory(
+      params({
+        assertRuntimeCurrent: () => {
+          if (!active) {
+            throw new Error("runtime removed");
+          }
+        },
+      }),
+    );
+    await expect(handle.runShellCommand({ script: "true" })).rejects.toThrow("runtime removed");
+    expect(ssh.targets).toHaveLength(0);
+  });
+
+  it("records a new host key once and requires a lease-owned known_hosts file", async () => {
     let known = false;
-    const { calls, runCommand } = createRunner((argv) => {
-      if (argv[0] === "ssh-keygen") {
-        return known
-          ? spawnResult("# Host found\n[ssh.example.test]:2222 ssh-ed25519 AAAA\n")
-          : spawnResult("", 1);
+    const { factory, runCommand } = setup((argv) => {
+      if (argv[0] === "ssh-keygen" && !known) {
+        return result("", 1);
       }
       if (argv[0] === "ssh-keyscan") {
         known = true;
       }
       return respond(argv);
     });
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-      now: () => 0,
-      endpointRefreshMs: 0,
-    });
-    const handle = await factory(createParams({ registeredRuntimeIds: [LEASE_ID] }));
-    expect(calls.find((argv) => argv[0] === "ssh-keygen")).toEqual([
-      "ssh-keygen",
-      "-F",
-      "[ssh.example.test]:2222",
-      "-f",
-      KNOWN_HOSTS,
-    ]);
-    expect(calls.filter((argv) => argv[0] === "ssh-keyscan")).toEqual([
-      ["ssh-keyscan", "-p", "2222", "-T", "10", "ssh.example.test"],
-    ]);
-    // A refresh re-resolves the endpoint but the recorded key is reused.
-    await handle.buildExecSpec({ command: "true", env: {}, usePty: false }).catch(() => undefined);
-    expect(calls.filter((argv) => argv[0] === "ssh-keyscan")).toHaveLength(1);
-    expect(calls.filter((argv) => argv[0] === "ssh-keygen")).toHaveLength(2);
+    const handle = await factory(params());
+    await handle.runShellCommand({ script: "true" });
+    await handle.runShellCommand({ script: "true" });
+    expect(runCommand.mock.calls.filter(([argv]) => argv[0] === "ssh-keyscan")).toHaveLength(1);
+    expect(await fs.readFile(KNOWN_HOSTS, "utf8")).toContain("[ssh.example.test]:2222 ssh-ed25519");
+    const noKnownHosts = setup((argv) =>
+      argv[1] === "ssh" ? result("ssh user@ssh.example.test") : respond(argv),
+    );
+    const insecure = await noKnownHosts.factory(params());
+    await expect(insecure.runShellCommand({ script: "true" })).rejects.toThrow(/known_hosts/);
   });
 });
 
-describe("crabbox sandbox lease lifecycle safety", () => {
-  it("looks up port-22 hosts by bare name so recorded keys are reused", async () => {
-    const { calls, runCommand } = createRunner((argv) => {
-      if (argv[0] === "ssh-keygen") {
-        return spawnResult("ssh.example.test ssh-ed25519 AAAA\n");
-      }
-      return respond(argv, undefined, sshCommand("token", "ssh.example.test", 22, false));
-    });
-    await createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-    })(createParams({ registeredRuntimeIds: [LEASE_ID] }));
-    expect(calls.find((argv) => argv[0] === "ssh-keygen")).toEqual([
-      "ssh-keygen",
-      "-F",
-      "ssh.example.test",
-      "-f",
-      KNOWN_HOSTS,
-    ]);
-    expect(calls.filter((argv) => argv[0] === "ssh-keyscan")).toHaveLength(0);
+it("describes and removes the lease through Crabbox", async () => {
+  const { manager, runCommand } = setup();
+  const entry = {
+    containerName: LEASE_ID,
+    backendId: "crabbox",
+    sessionKey: "scope",
+    createdAtMs: 0,
+    lastUsedAtMs: 0,
+    image: "daytona/small",
+  };
+  await expect(manager.describeRuntime({ entry, config: {} })).resolves.toMatchObject({
+    running: true,
+    configLabelMatch: true,
   });
-
-  it("propagates an inspection whose outcome is unknown instead of allocating a duplicate", async () => {
-    const { calls, runCommand } = createRunner((argv) =>
-      argv[1] === "inspect" ? spawnResult("", 1) : respond(argv),
-    );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand,
-      })(createParams({ registeredRuntimeIds: [LEASE_ID] })),
-    ).rejects.toThrow(/inspect failed/u);
-    expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(0);
-  });
-
-  it("stops a newly allocated lease when initialization fails, but keeps an adopted one", async () => {
-    const fresh = createRunner((argv) => (argv[1] === "ssh" ? spawnResult("", 4) : respond(argv)));
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: fresh.runCommand,
-      })(createParams()),
-    ).rejects.toThrow(/ssh failed/u);
-    const minted = fresh.calls.find((argv) => argv[1] === "warmup");
-    expect(minted).toBeDefined();
-    expect(fresh.calls.at(-1)).toEqual(["/opt/bin/crabbox", "stop", leaseIdFromArgv(minted!)]);
-
-    const adopted = createRunner((argv) =>
-      argv[1] === "ssh" ? spawnResult("", 4) : respond(argv),
-    );
-    await expect(
-      createCrabboxSandboxBackendFactory({
-        openclawRoot: OPENCLAW_ROOT,
-        pluginConfig: { binary: "/opt/bin/crabbox" },
-        runCommand: adopted.runCommand,
-      })(createParams({ registeredRuntimeIds: [LEASE_ID] })),
-    ).rejects.toThrow(/ssh failed/u);
-    expect(adopted.calls.filter((argv) => argv[1] === "stop")).toHaveLength(0);
-  });
+  await manager.removeRuntime({ entry, config: {} });
+  expect(runCommand.mock.calls.at(-1)?.[0]).toEqual(["/fixture/crabbox", "stop", LEASE_ID]);
 });
 
-describe("crabbox sandbox endpoint refresh", () => {
-  it("re-resolves the endpoint through crabbox ssh once it may have expired", async () => {
-    let clock = 1_000_000;
-    let sshCalls = 0;
-    const { runCommand } = createRunner((argv) => {
-      if (argv[1] === "ssh") {
-        sshCalls += 1;
-        return spawnResult(sshCommand(`token-${sshCalls}`));
-      }
-      return respond(argv);
-    });
-    const factory = createCrabboxSandboxBackendFactory({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { binary: "/opt/bin/crabbox" },
-      runCommand,
-      now: () => clock,
-      endpointRefreshMs: 60_000,
-    });
-    const handle = await factory(createParams());
-    expect(sshCalls).toBe(1);
-    // Building exec specs does not connect; it only needs the current endpoint.
-    await handle.buildExecSpec({ command: "true", env: {}, usePty: false }).catch(() => undefined);
-    expect(sshCalls).toBe(1);
-    clock += 61_000;
-    await handle.buildExecSpec({ command: "true", env: {}, usePty: false }).catch(() => undefined);
-    expect(sshCalls).toBe(2);
-    await handle.buildExecSpec({ command: "true", env: {}, usePty: false }).catch(() => undefined);
-    expect(sshCalls).toBe(2);
+it("recovers an unpublished reservation through the original workspace before release", async () => {
+  let claimed = false;
+  const { manager, runCommand } = setup((argv) => {
+    if (argv[1] === "stop" && !claimed) {
+      return result("no local claim", 4);
+    }
+    if (argv[1] === "warmup") {
+      claimed = true;
+    }
+    return respond(argv);
   });
-});
-
-describe("crabbox sandbox backend manager", () => {
-  it("describes runtimes through inspect and removes them by stopping the lease", async () => {
-    const { calls, runCommand } = createRunner((argv) =>
-      argv[1] === "stop" ? spawnResult(`released ${LEASE_ID}\n`) : respond(argv),
-    );
-    const manager = createCrabboxSandboxBackendManager({
-      openclawRoot: OPENCLAW_ROOT,
-      pluginConfig: { provider: "daytona", binary: "/opt/bin/crabbox" },
-      runCommand,
-    });
-    const entry = {
+  await manager.removeRuntime({
+    entry: {
       containerName: LEASE_ID,
       backendId: "crabbox",
-      sessionKey: SCOPE_KEY,
+      sessionKey: "scope",
       createdAtMs: 0,
       lastUsedAtMs: 0,
-      image: "daytona/default",
-    };
-    const config = {} as Parameters<typeof manager.describeRuntime>[0]["config"];
-    await expect(manager.describeRuntime({ entry, config })).resolves.toEqual({
-      running: true,
-      actualConfigLabel: "daytona/default",
-      configLabelMatch: true,
-    });
-    await manager.removeRuntime({ entry, config });
-    expect(calls.at(-1)).toEqual(["/opt/bin/crabbox", "stop", "--provider", "daytona", LEASE_ID]);
-
-    await expect(
-      manager.describeRuntime({ entry: { ...entry, containerName: "not-a-lease" }, config }),
-    ).resolves.toEqual({ running: false, configLabelMatch: false });
-    await expect(
-      manager.removeRuntime({ entry: { ...entry, containerName: "not-a-lease" }, config }),
-    ).rejects.toThrow(/not a fixed lease id/u);
+      image: "unused",
+      runtimeState: "removing-pending",
+      workspaceDir: temporaryRoot,
+    },
+    config: {},
   });
+  expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual([
+    "stop",
+    "warmup",
+    "inspect",
+    "stop",
+  ]);
+  expect(runCommand.mock.calls.every(([, options]) => options.cwd === temporaryRoot)).toBe(true);
+  expect(runCommand.mock.calls[1]?.[0]).toContain(LEASE_ID);
 });
 
-describe("crabbox sandbox config", () => {
-  it("stays unregistered without a sandbox block and tolerates sibling warmImages config", () => {
-    expect(resolveCrabboxSandboxConfig(undefined)).toBeUndefined();
-    expect(resolveCrabboxSandboxConfig({ warmImages: { keepPrevious: 1 } })).toBeUndefined();
-    expect(
-      resolveCrabboxSandboxConfig({
-        warmImages: { keepPrevious: 1 },
-        sandbox: { provider: " daytona ", class: "small", ttl: "90m", idleTimeout: "15m" },
-      }),
-    ).toEqual({ provider: "daytona", class: "small", ttl: "90m", idleTimeout: "15m" });
-    expect(resolveCrabboxSandboxConfig({ sandbox: {} })).toEqual({});
+it("parses quoted SSH endpoints and rejects unusable commands", () => {
+  expect(
+    parseCrabboxSshCommand(
+      "'ssh' '-i' '/tmp/key file' '-p' '2200' '-o' 'UserKnownHostsFile=/tmp/known hosts' 'user@[fe80::1]'",
+    ),
+  ).toEqual({
+    target: "user@[fe80::1]:2200",
+    identityFile: "/tmp/key file",
+    knownHostsFile: "/tmp/known hosts",
   });
+  for (const command of [
+    "ssh -p 70000 user@host",
+    "ssh -F cfg host",
+    "ssh hostonly",
+    "ssh 'unterminated",
+  ]) {
+    expect(() => parseCrabboxSshCommand(command)).toThrow();
+  }
+});
 
-  it("rejects unknown keys, empty strings, and malformed durations", () => {
-    expect(() => resolveCrabboxSandboxConfig({ sandbox: { ttl: "soon" } })).toThrow(/duration/u);
-    expect(() => resolveCrabboxSandboxConfig({ sandbox: { region: "eu" } })).toThrow(
-      /not a supported option/u,
-    );
-    expect(() => resolveCrabboxSandboxConfig({ sandbox: { provider: " " } })).toThrow(/non-empty/u);
-    expect(() => resolveCrabboxSandboxConfig({ sandbox: "daytona" })).toThrow(/must be an object/u);
+it("resolves optional sandbox config independently from warm images", () => {
+  expect(resolveCrabboxSandboxConfig({ warmImages: { keepPrevious: 1 } })).toBeUndefined();
+  expect(resolveCrabboxSandboxConfig({ sandbox: {} })).toEqual({});
+  expect(resolveCrabboxSandboxConfig({ sandbox: { provider: " daytona ", ttl: "90m" } })).toEqual({
+    provider: "daytona",
+    ttl: "90m",
   });
+  for (const sandbox of [{ ttl: "soon" }, { provider: " " }, { region: "eu" }, "daytona"]) {
+    expect(() => resolveCrabboxSandboxConfig({ sandbox })).toThrow();
+  }
 });

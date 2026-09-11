@@ -25,6 +25,8 @@ export type SshSandboxSettings = {
   target: string;
   strictHostKeyChecking: boolean;
   updateHostKeys: boolean;
+  /** Suppress SSH client diagnostics when connection fields contain credentials. */
+  suppressConnectionDiagnostics?: boolean;
   identityFile?: string;
   certificateFile?: string;
   knownHostsFile?: string;
@@ -38,6 +40,8 @@ export type SshSandboxSession = {
   command: string;
   configPath: string;
   host: string;
+  /** Revalidate runtime authority after asynchronous upload preparation. */
+  assertCurrent?: () => void;
 };
 
 /** Parameters for one SSH sandbox command execution. */
@@ -668,7 +672,11 @@ export async function createSshSandboxSessionFromSettings(
 ): Promise<SshSandboxSession> {
   const parsed = parseSshTarget(settings.target);
   if (!parsed) {
-    throw new Error(`Invalid sandbox SSH target: ${settings.target}`);
+    throw new Error(
+      settings.suppressConnectionDiagnostics
+        ? "Invalid sandbox SSH target."
+        : `Invalid sandbox SSH target: ${settings.target}`,
+    );
   }
 
   return await createSshSandboxSession(
@@ -704,6 +712,7 @@ export async function createSshSandboxSessionFromSettings(
         "  ServerAliveCountMax 3",
         `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
         `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
+        ...(settings.suppressConnectionDiagnostics ? ["  LogLevel QUIET"] : []),
       ];
       if (parsed.user) {
         lines.push(`  User ${parsed.user}`);
@@ -842,6 +851,7 @@ export async function uploadDirectoryToSshTarget(params: {
   }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
+    params.session.assertCurrent?.();
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,

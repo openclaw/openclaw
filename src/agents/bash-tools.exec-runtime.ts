@@ -778,6 +778,7 @@ export async function runExecProcess({
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
+  let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
   let sandboxFinalized = false;
   const finalizeSandboxExec = async (params: {
@@ -873,6 +874,7 @@ export async function runExecProcess({
         usePty: opts.usePty,
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
+      assertSandboxCurrent = backendExecSpec.assertCurrent;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
       // double-finalize backend failures, while removing it leaks the registered exec session.
       sandboxPrepared = true;
@@ -922,11 +924,15 @@ export async function runExecProcess({
     }
   };
   const spawn = (input: SpawnInput) => {
-    // No await between source authority validation and supervisor admission.
-    assertSourceActive?.();
-    return withoutGatewayToolCallerIdentity(() =>
-      supervisor.spawn({ ...input, assertCurrent: assertSourceActive }),
-    );
+    const assertSourceCurrent = assertSourceActive;
+    const assertRuntimeCurrent = assertSandboxCurrent;
+    const assertCurrent = () => {
+      assertSourceCurrent?.();
+      assertRuntimeCurrent?.();
+    };
+    // Keep both owners through deferred supervisor admission and native construction.
+    assertCurrent();
+    return withoutGatewayToolCallerIdentity(() => supervisor.spawn({ ...input, assertCurrent }));
   };
 
   try {
@@ -993,6 +999,7 @@ export async function runExecProcess({
   } finally {
     beforeSpawn = undefined;
     assertSourceActive = undefined;
+    assertSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
   session.stdin = managedRun.stdin;
