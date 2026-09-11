@@ -44,7 +44,8 @@ Copilot CLI environment.
 
 The Copilot runtime ships as an external plugin so the core `openclaw`
 package does not carry `@github/copilot-sdk` or its platform-specific
-`@github/copilot-<platform>-<arch>` CLI binary (roughly 260 MB together).
+`@github/copilot-sdk-<platform>-<arch>` runtime package. Keep optional
+dependencies enabled during installation so the native runtime is included.
 Install it only for agents that opt into this runtime:
 
 ```bash
