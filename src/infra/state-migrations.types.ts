@@ -181,6 +181,8 @@ export type MigrationMessages = {
   notices?: string[];
   /** The owner completed its required work and classified every warning as advisory. */
   warningDisposition?: "recoverable";
+  /** Every blocking warning is an ownership refusal confined to these agent databases. */
+  refusedAgentDatabasePaths?: readonly string[];
 };
 
 export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =

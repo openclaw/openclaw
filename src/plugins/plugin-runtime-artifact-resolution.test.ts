@@ -79,6 +79,45 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it.each(["source", "package-local", "root-bundled"])(
+    "exposes the selected %s runtime entry to registration",
+    (layout) => {
+      const fixture = createBundledPluginFixture();
+      const entry =
+        layout === "source"
+          ? fixture.source
+          : layout === "package-local"
+            ? path.join(fixture.rootDir, "dist", "index.js")
+            : fixture.builtSource;
+      fs.mkdirSync(path.dirname(entry), { recursive: true });
+      fs.writeFileSync(
+        entry,
+        `export default {
+        id: "fixture",
+        register(api) {
+          api.registerService({ id: api.runtimeSource ?? "missing runtime source", start() {} });
+        }
+      };\n`,
+      );
+      const registry = withEnv(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(fixture.rootDir),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        },
+        () =>
+          loadOpenClawPlugins({
+            cache: false,
+            config: { plugins: { allow: ["fixture"], entries: { fixture: { enabled: true } } } },
+            onlyPluginIds: ["fixture"],
+            preferBuiltPluginArtifacts: layout !== "source",
+          }),
+      );
+      expect(registry.services.map(({ service }) => service.id)).toEqual([entry]);
+      expect(registry.plugins[0]?.source).toBe(fixture.source);
+    },
+  );
+
   it.each(["missing", "present", "staging-symlink", "canonical-directory-symlink"])(
     "keeps the execution entry and boundary together for a %s canonical entry",
     (layout) => {

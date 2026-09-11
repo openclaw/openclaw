@@ -107,6 +107,10 @@ Day boundaries and timeline clocks use the Gateway's local timezone, not the
 browser's timezone. Frames and the SQLite timeline database live under
 `<state-dir>/logbook/`.
 
+Startup completes storage recovery and pruning before capture begins. Shutdown
+stops new work and waits for admitted database and model operations before closing
+storage.
+
 ## Model and data flow
 
 Logbook uses two separate model routes:

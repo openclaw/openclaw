@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readBoardHtml } from "../boards/board-store.test-support.js";
 import { buildWidgetDocument } from "../canvas/wrap.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
@@ -81,11 +82,11 @@ it("keeps global boards and progress under each owner's canonical row across reo
   for (const agentId of ["main", "work"]) {
     const target = { sessionKey: "global", agentId };
     for (const params of [target, { sessionKey: `agent:${agentId}:main` }]) {
-      expect(boardStore.getSnapshot(params)).toMatchObject({
+      expect(await boardStore.getSnapshot(params)).toMatchObject({
         sessionKey: "global",
         widgets: [{ name: "status", revision: 1 }],
       });
-      expect(boardStore.readWidgetHtml(params, "status")?.html).toBe(
+      expect((await readBoardHtml(boardStore, params, "status"))?.html).toBe(
         buildWidgetDocument("status", `<p>${agentId}</p>`),
       );
       const snapshot = await invoke("board.get", params);
@@ -228,7 +229,7 @@ it("reopens separate boards and progress cards in a shared database owned by ano
       { agentId, sessionKey, storePath },
       { sessionId: `session-${agentId}`, updatedAt: Date.now() },
     );
-    boardStore.putWidget({
+    await boardStore.putWidget({
       sessionKey,
       name: agentId,
       content: { kind: "html", html: `<p>${agentId}</p>` },
@@ -240,7 +241,7 @@ it("reopens separate boards and progress cards in a shared database owned by ano
 
   for (const agentId of ["alpha", "beta"]) {
     const sessionKey = `agent:${agentId}:main`;
-    expect(boardStore.getSnapshot({ sessionKey }).widgets).toEqual([
+    expect((await boardStore.getSnapshot({ sessionKey })).widgets).toEqual([
       expect.objectContaining({ name: agentId, revision: 1 }),
     ]);
     expect(await progressCardStore.get(sessionKey)).toMatchObject({

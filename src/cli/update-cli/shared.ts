@@ -33,6 +33,7 @@ export type UpdateCommandOptions = {
   /** In-process executor only; workers must reacquire authority, never deserialize this. */
   /** Legacy live context is unsupported; its presence is refusal-only. */
   recovery?: unknown;
+  reapplyLocalOverrides?: boolean;
   /** Internal orchestration context, shared across update phases and child processes. */
   run?: {
     runId: string;

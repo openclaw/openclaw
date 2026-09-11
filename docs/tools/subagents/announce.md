@@ -27,7 +27,9 @@ For top-level requester sessions, completion-mode direct delivery first
 resolves any bound conversation/thread route and hook override, then fills
 missing channel-target fields from the requester session's stored route.
 That keeps completions on the right chat/topic even when the completion
-origin only identifies the channel.
+origin only identifies the channel. When an override selects a different
+chat or topic, it does not inherit the previous route's thread. An explicit
+thread from the binding or hook is preserved.
 
 Child completion aggregation is scoped to the current requester run when
 building nested completion findings, preventing stale prior-run child

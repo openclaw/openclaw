@@ -28,6 +28,7 @@ import {
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import { removeLegacyCopilotDiscovery } from "./legacy.github-copilot.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -136,7 +137,8 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
+  const copilotConfig = removeLegacyCopilotDiscovery(raw);
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
     homedir: params?.homedir,
@@ -164,8 +166,7 @@ function validateConfigObjectWithPluginMode(
     params?.env,
     manifestRegistry?.plugins,
   );
-  const config = materialized.config;
-  return { ...result, config };
+  return { ...result, config: materialized.config };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
@@ -222,6 +223,17 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
+  const ensureLoadedRegistryInfo = (): RegistryInfo => {
+    registryInfo ??= rememberRegistry(
+      opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
+        resolveConfigWidePluginManifestRegistry({
+          config: parsedConfig,
+          env: opts.env ?? process.env,
+        }),
+    );
+    return registryInfo;
+  };
+
   if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
@@ -235,6 +247,12 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry:
           registryInfo?.registry ??
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
+        // Catalog defaults must use the same metadata as later plugin validation;
+        // generic defaults erase omitted fields and create false runtime diffs.
+        loadManifestRegistry:
+          opts.pluginValidation === "core-only"
+            ? undefined
+            : () => ensureLoadedRegistryInfo().registry,
       })
     : parsedConfig;
   if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
@@ -280,22 +298,6 @@ function validateConfigObjectWithPluginsBase(
     }
   };
 
-  const loadValidationRegistry = (): RegistryInfo => {
-    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(config);
-    if (pluginMetadataSnapshot) {
-      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
-      return registryInfo;
-    }
-    const registry = resolveConfigWidePluginManifestRegistry({
-      config,
-      env: opts.env ?? process.env,
-    });
-    registryInfo = rememberRegistry(registry);
-    return registryInfo;
-  };
-
-  const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
-
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIds) {
       return compatPluginIds;
@@ -305,7 +307,7 @@ function validateConfigObjectWithPluginsBase(
       compatPluginIds = new Set<string>();
       return compatPluginIds;
     }
-    const { registry } = registryInfo ?? loadValidationRegistry();
+    const { registry } = ensureLoadedRegistryInfo();
     const overriddenBundledPluginIds = ensureOverriddenPluginIds();
     compatPluginIds = new Set(
       registry.plugins

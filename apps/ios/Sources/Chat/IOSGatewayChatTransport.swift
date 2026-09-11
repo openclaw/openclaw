@@ -279,6 +279,22 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard let route = await self.currentSessionMutationRoute(),
+              await self.gateway.supportsServerMethod("models.authLogin", ifCurrentRoute: route) == true,
+              let agentID = agentID ?? self.globalAgentId
+        else { return nil }
+        let gateway = self.gateway
+        return OpenClawChatModelSignInContext(
+            agentID: agentID,
+            request: { method, params in
+                try await gateway.request(
+                    OpenClawChatGatewayRequest(method: method, params: params, timeoutMs: 26 * 60 * 1000),
+                    ifCurrentRoute: route)
+            },
+            isCurrent: { await gateway.supportsServerMethod("models.authLogin", ifCurrentRoute: route) == true })
+    }
+
     func loadModelCatalog(
         sessionKey: String,
         agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
@@ -287,23 +303,15 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             throw CancellationError()
         }
         let sessionScoped = await self.gateway.supportsServerCapability(
-            .sessionScopedChatMetadata,
+            .publishedModelCatalog,
             ifCurrentRoute: route) == true
-        let request = if sessionScoped {
-            OpenClawChatGatewayRequests.chatMetadata(
-                sessionKey: sessionKey,
-                fallbackAgentID: agentID ?? self.globalAgentId,
-                includeSessionKey: true)
-        } else {
-            OpenClawChatGatewayRequests.modelsList(agentID: agentID)
+        guard sessionScoped else {
+            return OpenClawChatModelCatalogSnapshot(choices: [], availabilityIsSessionScoped: false)
         }
+        let request = OpenClawChatGatewayRequests.modelsList(
+            agentID: agentID ?? self.globalAgentId, sessionKey: sessionKey)
         let response = try await self.gateway.request(request, ifCurrentRoute: route)
-        let choices = try sessionScoped
-            ? OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(response)
-            : OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
-        return OpenClawChatModelCatalogSnapshot(
-            choices: choices,
-            availabilityIsSessionScoped: sessionScoped)
+        return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(response)
     }
 
     func isSwarmEnabled(sessionKey: String) async throws -> Bool {

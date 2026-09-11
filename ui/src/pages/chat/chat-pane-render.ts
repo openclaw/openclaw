@@ -31,7 +31,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -327,6 +327,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionKey: state.sessionKey,
       unarchiveAccess: mutationAccess.unarchive,
     });
+    const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const composerAvailability = {
       canSend:
         sessionDisabledBanner?.kind !== "composer-replacement" &&
@@ -337,7 +338,8 @@ export class ChatPane extends ChatPaneLayoutRender {
             !selectedSessionArchived &&
             !restartRecoveryTombstoned &&
             !placementComposer.blocksSend &&
-            !sendHoldReason),
+            (!sendHoldReason || initialHistoryUnavailable)),
+      submitDisabledReason: initialHistoryUnavailable ? t("chat.thread.loading") : null,
       disabledReason:
         catalogDisabledReason ??
         disabledReason ??
@@ -345,7 +347,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
           : null) ??
-        (placementStartup ? null : sendHoldReason),
+        (placementStartup || initialHistoryUnavailable ? null : sendHoldReason),
       disabledReasonTone:
         placementComposer.busyMessage || (sessionParticipationBlocked && !suggestionViewer)
           ? ("info" as const)
@@ -362,15 +364,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
-      onSessionKeyChange: (next) => {
-        this.onPaneSessionChange?.(this.paneId, next);
-      },
+      onSessionKeyChange: (next) => void this.onPaneSessionChange?.(this.paneId, next),
       thinkingLevel: state.chatThinkingLevel,
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
+      routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         placementStartupPending ||
         state.chatSending ||

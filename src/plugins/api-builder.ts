@@ -10,6 +10,7 @@ type BuildPluginApiParams = {
   version?: string;
   description?: string;
   source: string;
+  runtimeSource?: string;
   rootDir?: string;
   registrationMode: OpenClawPluginApi["registrationMode"];
   config: OpenClawConfig;
@@ -131,6 +132,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     version: params.version,
     description: params.description,
     source: params.source,
+    runtimeSource: params.runtimeSource,
     rootDir: params.rootDir,
     registrationMode: params.registrationMode,
     config: params.config,

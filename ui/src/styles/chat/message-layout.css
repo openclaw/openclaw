@@ -56,6 +56,12 @@
   background: transparent;
 }
 
+/* Keep the route's initial skeleton in the full transcript region as the real composer mounts. */
+.chat-thread:has(> .lazy-view-state--loading) {
+  display: flex;
+  padding: 0;
+}
+
 /* The transcript stays keyboard-focusable for scroll keys, but the owner chose
    no focus box: a ring around the whole main content reads as a broken border. */
 .chat-thread:focus-visible {

@@ -1,12 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
-import type { ConfigSchemaShape } from "./schema.field-metadata.js";
-import type { GatewayRemoteConfig } from "./types.gateway.js";
-import { SecretInputSchema } from "./zod-schema.core.js";
 import { McpServerSchema } from "./zod-schema.mcp-server.js";
 import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
+import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const EdgeAuthHeadersSchema = z
@@ -38,7 +36,7 @@ const GatewayRemoteSchemaShape = {
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),
   sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
-} satisfies ConfigSchemaShape<GatewayRemoteConfig>;
+};
 
 export const GatewayRemoteConfigSchema = z.strictObject(GatewayRemoteSchemaShape).optional();
 

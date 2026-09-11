@@ -94,7 +94,7 @@ function installShortResolver(
     : { ok: false },
 ) {
   const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve" || method === "chat.startup") {
+    if (method === "sessions.resolve") {
       const present = ({ key }: { key: string }) => {
         const session = rows.find((candidate) => candidate.key === key);
         return {
@@ -110,7 +110,7 @@ function installShortResolver(
             ok: false,
             ...(resolved.candidates ? { candidates: resolved.candidates.map(present) } : {}),
           };
-      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
+      return resolution;
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });

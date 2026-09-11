@@ -49,7 +49,7 @@ import {
   getRuntimeConfigWriteApplication,
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
-import { withConfigWriteLock } from "./write-lock.js";
+import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 export { createConfigIO };
 
@@ -242,8 +242,12 @@ export async function readConfigFileSnapshotForRuntimeTransaction(
 
 export async function readConfigFileSnapshotForWrite(options?: {
   skipPluginValidation?: boolean;
+  observe?: boolean;
 }): Promise<ReadConfigFileSnapshotForWriteResult> {
-  const readOptions = options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {};
+  const readOptions = {
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options?.observe === false ? { observe: false } : {}),
+  };
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const processIo = createConfigIO(readOptions);
@@ -274,6 +278,7 @@ export async function writeConfigFile(
   const ioOptions = {
     ...(options.ownedConfigPathForWrite ? { configPath: options.ownedConfigPathForWrite } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options.observe === false ? { observe: false } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
       : {}),
@@ -309,6 +314,9 @@ export async function writeConfigFile(
       }
       let runtimePreflightResult: unknown;
       let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
+      // Finalization outlives the nested factory lock. Its compensation keeps
+      // this original outer owner, never the closed factory scope or a later owner.
+      const assertPostCommitCurrent = captureConfigWriteLockGuard(io.configPath);
       const writeResult = await io.writeConfigFile(nextCfg, {
         // Preserve caller policy and provenance; runtime-owned fields take precedence below.
         ...options,
@@ -369,9 +377,14 @@ export async function writeConfigFile(
         deferRuntimeActivation,
         runtimePreflightResult,
         managedPreparedCandidates,
+        assertPostCommitCurrent,
+        rollbackWriteEffects: writeResult[configWritePostCommitRollback]?.bind(undefined, () =>
+          assertPostCommitCurrent?.(),
+        ),
       });
     },
     processIo.env,
+    options.assertCurrent,
   );
 }
 
@@ -386,6 +399,8 @@ async function finalizeCommittedConfigWrite(params: {
   deferRuntimeActivation: boolean;
   runtimePreflightResult: unknown;
   managedPreparedCandidates: Map<symbol, RuntimeConfigWritePreparedCandidate>;
+  assertPostCommitCurrent?: () => void;
+  rollbackWriteEffects?: () => void;
 }): Promise<ConfigWriteResult> {
   const {
     io,
@@ -494,6 +509,7 @@ async function finalizeCommittedConfigWrite(params: {
     }
     options.assertConfigPathForWrite?.();
     await finalizeRuntimeSnapshotWrite({
+      assertCurrent: params.assertPostCommitCurrent,
       nextSourceConfig: canonicalSourceConfig,
       refreshOptions: options.runtimeRefresh,
       hadRuntimeSnapshot: params.hadRuntimeSnapshot,
@@ -516,6 +532,7 @@ async function finalizeCommittedConfigWrite(params: {
         previousSnapshot: baseSnapshot,
         committedHash: writeResult.persistedHash,
         fsModule: fs,
+        assertCurrent: params.assertPostCommitCurrent,
       });
       if (rolledBackConfig) {
         restoreEnvChangesIfUnchanged({
@@ -523,7 +540,7 @@ async function finalizeCommittedConfigWrite(params: {
           before: envBeforeCanonicalRead,
           after: envAfterCanonicalRead,
         });
-        writeResult[configWritePostCommitRollback]?.();
+        params.rollbackWriteEffects?.();
       }
     } catch (rollbackError) {
       throw new ConfigRuntimeRefreshError(

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -8,7 +9,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { BoardValidationError } from "./board-layout.js";
 import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
-import { createTestBoardStore } from "./board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -16,8 +17,8 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function putHtml(store: BoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
-  return store.putWidget({ sessionKey, name, content: { kind: "html", html } });
+async function putHtml(store: BoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
+  return await store.putWidget({ sessionKey, name, content: { kind: "html", html } });
 }
 
 const widgetContents = [
@@ -42,10 +43,39 @@ const widgetContents = [
 ] satisfies BoardWidgetMaterializedPutParams["content"][];
 
 describe("board store", () => {
-  it("creates the implicit main tab and bumps board and widget revisions", () => {
+  it("releases SQLite before awaiting a widget consumer's external work", async () => {
+    const stateDir = tempDirs.make("openclaw-board-consume-");
+    const store = createTestBoardStore({ stateDir });
+    const target = { sessionKey: "agent:main:consume" };
+    await putHtml(store, target.sessionKey, "status", "original");
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const started = createDeferred();
+    const release = createDeferred();
+    const consumed = store.useWidgetDocument(target, "status", async (document) => {
+      expect(database.db.isTransaction).toBe(false);
+      started.resolve();
+      await release.promise;
+      return document;
+    });
+    try {
+      await started.promise;
+      await putHtml(store, target.sessionKey, "status", "replacement");
+    } finally {
+      release.resolve();
+    }
+    expect(await consumed).toMatchObject({ html: "original" });
+    expect(await readBoardHtml(store, target, "status")).toMatchObject({
+      html: "replacement",
+    });
+  });
+
+  it("creates the implicit main tab and bumps board and widget revisions", async () => {
     const store = createTestBoardStore();
-    const first = putHtml(store, "agent:main:main", "status");
-    const second = putHtml(store, "agent:main:main", "status", "<p>two</p>");
+    const first = await putHtml(store, "agent:main:main", "status");
+    const second = await putHtml(store, "agent:main:main", "status", "<p>two</p>");
     expect(first).toMatchObject({
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0 }],
@@ -57,10 +87,10 @@ describe("board store", () => {
 
   it.each(widgetContents)(
     "preserves $kind widget ownership across same-name updates",
-    (content) => {
+    async (content) => {
       const store = createTestBoardStore();
       const name = `${content.kind}-status`;
-      const created = store.putWidget({ sessionKey: "session", name, content });
+      const created = await store.putWidget({ sessionKey: "session", name, content });
 
       expect(created.widgets[0]).toMatchObject({
         contentOwner: content.kind,
@@ -70,43 +100,43 @@ describe("board store", () => {
       for (const replacement of widgetContents.filter(
         (candidate) => candidate.kind !== content.kind,
       )) {
-        expect(() =>
+        await expect(
           store.putWidget({ sessionKey: "session", name, content: replacement }),
-        ).toThrow(
+        ).rejects.toThrow(
           expect.objectContaining({
             code: "invalid_operation",
             message: expect.stringMatching(/same content kind.*remove/i),
           }),
         );
-        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
+        expect(await store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
       }
 
       if (content.kind === "plugin" || content.kind === "registered") {
-        expect(() =>
+        await expect(
           store.putWidget({
             sessionKey: "session",
             name,
             content: { ...content, pluginKind: "other:replacement" },
           }),
-        ).toThrow(expect.objectContaining({ code: "invalid_operation" }));
-        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
+        ).rejects.toThrow(expect.objectContaining({ code: "invalid_operation" }));
+        expect(await store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
       }
 
       if (content.kind === "registered") {
-        expect(() =>
+        await expect(
           store.putWidget({
             sessionKey: "session",
             name,
             content: { ...content, contentKind: "alternate" },
           }),
-        ).toThrow(expect.objectContaining({ code: "invalid_operation" }));
-        expect(store.getSnapshot({ sessionKey: "session" })).toMatchObject({
+        ).rejects.toThrow(expect.objectContaining({ code: "invalid_operation" }));
+        expect(await store.getSnapshot({ sessionKey: "session" })).toMatchObject({
           revision: created.revision,
           widgets: created.widgets,
         });
@@ -126,15 +156,17 @@ describe("board store", () => {
         ).toMatchObject({ contentOwner: "plugin", revision: 2 });
       }
 
-      expect(store.putWidget({ sessionKey: "session", name, content }).widgets[0]).toMatchObject({
+      expect(
+        (await store.putWidget({ sessionKey: "session", name, content })).widgets[0],
+      ).toMatchObject({
         name,
         revision: 2,
       });
 
-      store.applyOps({ sessionKey: "session" }, [{ kind: "widget_remove", name }]);
+      await store.applyOps({ sessionKey: "session" }, [{ kind: "widget_remove", name }]);
       const replacement = widgetContents.find((candidate) => candidate.kind !== content.kind)!;
       expect(
-        store.putWidget({ sessionKey: "session", name, content: replacement }).widgets[0],
+        (await store.putWidget({ sessionKey: "session", name, content: replacement })).widgets[0],
       ).toMatchObject({
         contentKind: replacement.kind === "registered" ? "plugin" : replacement.kind,
         contentOwner: replacement.kind,
@@ -143,7 +175,7 @@ describe("board store", () => {
     },
   );
 
-  it("upgrades registered ownership from its exact legacy descriptor and preserves it", () => {
+  it("upgrades registered ownership from its exact legacy descriptor and preserves it", async () => {
     const stateDir = tempDirs.make("openclaw-board-legacy-registered-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:legacy-registered";
@@ -154,45 +186,45 @@ describe("board store", () => {
       pluginKind: "diagram:diagram",
       source: "diagram:first",
     };
-    store.putWidget({ sessionKey, name: "status", content, declared: { tools: ["health"] } });
+    await store.putWidget({ sessionKey, name: "status", content, declared: { tools: ["health"] } });
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db
       .prepare(
         "UPDATE board_widgets SET manifest = json_set(manifest, '$.registeredContentKind', 'other') WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
-    expect(() => store.getSnapshot({ sessionKey })).toThrow(/content ownership/i);
+    await expect(store.getSnapshot({ sessionKey })).rejects.toThrow(/content ownership/i);
     database.db
       .prepare(
         "UPDATE board_widgets SET manifest = json_remove(manifest, '$.contentOwner', '$.registeredContentKind', '$.registeredInstanceId') WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
 
-    const legacy = store.getSnapshot({ sessionKey }).widgets[0]!;
+    const legacy = (await store.getSnapshot({ sessionKey })).widgets[0]!;
     expect(legacy).toMatchObject({ contentOwner: "registered", registeredContentKind: "diagram" });
     expect(legacy).not.toHaveProperty("instanceId");
-    expect(() =>
+    await expect(
       store.putWidget({
         sessionKey,
         name: "status",
         content: { kind: "plugin", pluginKind: "diagram:diagram" },
       }),
-    ).toThrow(/same content kind.*remove/i);
-    expect(() =>
+    ).rejects.toThrow(/same content kind.*remove/i);
+    await expect(
       store.putWidget({
         sessionKey,
         name: "status",
         content: { ...content, contentKind: "other" },
       }),
-    ).toThrow(/same content kind.*remove/i);
+    ).rejects.toThrow(/same content kind.*remove/i);
 
-    const refreshed = store.putWidget({
+    const refreshed = await store.putWidget({
       sessionKey,
       name: "status",
       content: { ...content, source: "diagram:refreshed" },
       declared: { tools: ["health"] },
     });
-    store.grant({ sessionKey }, "status", "granted", 2, refreshed.widgets[0]?.instanceId);
+    await store.grant({ sessionKey }, "status", "granted", 2, refreshed.widgets[0]?.instanceId);
     const row = database.db
       .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
       .get(sessionKey) as { manifest: string };
@@ -203,16 +235,20 @@ describe("board store", () => {
     });
   });
 
-  it("returns immutable snapshots and isolates session boards", () => {
+  it("returns immutable snapshots and isolates session boards", async () => {
     const store = createTestBoardStore();
-    putHtml(store, "session-b", "b");
-    putHtml(store, "session-a", "a");
-    const snapshot = store.getSnapshot({ sessionKey: "session-a" });
+    await putHtml(store, "session-b", "b");
+    await putHtml(store, "session-a", "a");
+    const snapshot = await store.getSnapshot({ sessionKey: "session-a" });
     snapshot.tabs[0]!.title = "Changed";
-    expect(store.getSnapshot({ sessionKey: "session-a" }).tabs[0]!.title).toBe("Main");
-    expect(store.getSnapshot({ sessionKey: "session-a" }).widgets).toMatchObject([{ name: "a" }]);
-    expect(store.getSnapshot({ sessionKey: "session-b" }).widgets).toMatchObject([{ name: "b" }]);
-    expect(store.getSnapshot({ sessionKey: "missing" })).toEqual({
+    expect((await store.getSnapshot({ sessionKey: "session-a" })).tabs[0]!.title).toBe("Main");
+    expect((await store.getSnapshot({ sessionKey: "session-a" })).widgets).toMatchObject([
+      { name: "a" },
+    ]);
+    expect((await store.getSnapshot({ sessionKey: "session-b" })).widgets).toMatchObject([
+      { name: "b" },
+    ]);
+    expect(await store.getSnapshot({ sessionKey: "missing" })).toEqual({
       sessionKey: "agent:main:missing",
       revision: 0,
       tabs: [],
@@ -220,10 +256,10 @@ describe("board store", () => {
     });
   });
 
-  it("stores HTML bytes with digest and keeps MCP descriptors non-HTML", () => {
+  it("stores HTML bytes with digest and keeps MCP descriptors non-HTML", async () => {
     const store = createTestBoardStore();
-    putHtml(store, "session", "html", "<main>ok</main>");
-    store.putWidget({
+    await putHtml(store, "session", "html", "<main>ok</main>");
+    await store.putWidget({
       sessionKey: "session",
       name: "app",
       content: {
@@ -237,13 +273,13 @@ describe("board store", () => {
         interactive: false,
       },
     });
-    expect(store.readWidgetHtml({ sessionKey: "session" }, "html")).toMatchObject({
+    expect(await readBoardHtml(store, { sessionKey: "session" }, "html")).toMatchObject({
       html: "<main>ok</main>",
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(store.readWidgetHtml({ sessionKey: "session" }, "app")).toBeUndefined();
-    expect(store.readWidgetMcpApp({ sessionKey: "session" }, "app")).toMatchObject({
+    expect(await readBoardHtml(store, { sessionKey: "session" }, "app")).toBeUndefined();
+    expect(await store.readWidgetMcpApp({ sessionKey: "session" }, "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
@@ -254,12 +290,12 @@ describe("board store", () => {
       instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
       interactive: false,
     });
-    expect(store.readWidgetHtml({ sessionKey: "session" }, "unknown")).toBeUndefined();
+    expect(await readBoardHtml(store, { sessionKey: "session" }, "unknown")).toBeUndefined();
   });
 
-  it("transitions declared widgets through pending grants", () => {
+  it("transitions declared widgets through pending grants", async () => {
     const store = createTestBoardStore();
-    const pending = store.putWidget({
+    const pending = await store.putWidget({
       sessionKey: "session",
       name: "networked",
       content: { kind: "html", html: "<p>ok</p>" },
@@ -267,15 +303,17 @@ describe("board store", () => {
     });
     expect(pending.widgets[0]!.grantState).toBe("pending");
     expect(
-      store.grant(
-        { sessionKey: "session" },
-        "networked",
-        "granted",
-        1,
-        pending.widgets[0]?.instanceId,
+      (
+        await store.grant(
+          { sessionKey: "session" },
+          "networked",
+          "granted",
+          1,
+          pending.widgets[0]?.instanceId,
+        )
       ).widgets[0]!.grantState,
     ).toBe("granted");
-    expect(() =>
+    await expect(
       store.grant(
         { sessionKey: "session" },
         "networked",
@@ -283,26 +321,26 @@ describe("board store", () => {
         1,
         pending.widgets[0]?.instanceId,
       ),
-    ).toThrow("not pending");
+    ).rejects.toThrow("not pending");
   });
 
-  it("survives reset/new boundaries", () => {
+  it("survives reset/new boundaries", async () => {
     const store = createTestBoardStore();
-    putHtml(store, "session", "status");
+    await putHtml(store, "session", "status");
     // Session reset has no BoardStore call; the stable session key remains authoritative.
-    expect(store.getSnapshot({ sessionKey: "session" }).widgets).toHaveLength(1);
+    expect((await store.getSnapshot({ sessionKey: "session" })).widgets).toHaveLength(1);
   });
 
-  it("rejects stale grant revisions and accepts the current revision", () => {
+  it("rejects stale grant revisions and accepts the current revision", async () => {
     const store = createTestBoardStore();
-    const pending = store.putWidget({
+    const pending = await store.putWidget({
       sessionKey: "session",
       name: "networked",
       content: { kind: "html", html: "ok" },
       declared: { tools: ["weather.refresh"] },
     });
     try {
-      store.grant({ sessionKey: "session" }, "networked", "granted", 2);
+      await store.grant({ sessionKey: "session" }, "networked", "granted", 2);
       throw new Error("expected stale grant to fail");
     } catch (error) {
       expect(error).toBeInstanceOf(BoardValidationError);
@@ -310,12 +348,14 @@ describe("board store", () => {
       expect((error as Error).message).toContain("revision changed");
     }
     expect(
-      store.grant(
-        { sessionKey: "session" },
-        "networked",
-        "granted",
-        1,
-        pending.widgets[0]?.instanceId,
+      (
+        await store.grant(
+          { sessionKey: "session" },
+          "networked",
+          "granted",
+          1,
+          pending.widgets[0]?.instanceId,
+        )
       ).widgets[0],
     ).toMatchObject({
       grantState: "granted",
@@ -323,54 +363,81 @@ describe("board store", () => {
     });
   });
 
-  it("enforces the board widget count and UTF-8 HTML byte limits", () => {
+  it("enforces the board widget count and UTF-8 HTML byte limits", async () => {
     const store = createTestBoardStore();
     for (let index = 0; index < 48; index += 1) {
-      putHtml(store, "session", `widget-${index}`, "ok");
+      await putHtml(store, "session", `widget-${index}`, "ok");
     }
     try {
-      putHtml(store, "session", "widget-48", "ok");
+      await putHtml(store, "session", "widget-48", "ok");
       throw new Error("expected widget cap to fail");
     } catch (error) {
       expect(error).toBeInstanceOf(BoardValidationError);
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    expect(() => putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073))).toThrow(
-      "262144 UTF-8 bytes",
-    );
+    await expect(
+      putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073)),
+    ).rejects.toThrow("262144 UTF-8 bytes");
   });
 
-  it("bumps once per applyOps transaction and removes widget bytes", () => {
+  it("bumps once per applyOps transaction and removes widget bytes", async () => {
     const store = createTestBoardStore();
-    putHtml(store, "session", "status");
-    const snapshot = store.applyOps({ sessionKey: "session" }, [
+    await putHtml(store, "session", "status");
+    const snapshot = await store.applyOps({ sessionKey: "session" }, [
       { kind: "widget_resize", name: "status", sizeW: 3, sizeH: 3 },
       { kind: "widget_remove", name: "status" },
     ]);
     expect(snapshot.revision).toBe(2);
     expect(snapshot.widgets).toEqual([]);
-    expect(store.readWidgetHtml({ sessionKey: "session" }, "status")).toBeUndefined();
+    expect(await readBoardHtml(store, { sessionKey: "session" }, "status")).toBeUndefined();
   });
 
-  it("preserves position on content updates and honors explicit after placement", () => {
+  it("preserves position on content updates and honors explicit after placement", async () => {
     const store = createTestBoardStore();
-    putHtml(store, "session", "first");
-    putHtml(store, "session", "second");
-    putHtml(store, "session", "third");
+    await putHtml(store, "session", "first");
+    await putHtml(store, "session", "second");
+    await putHtml(store, "session", "third");
 
     expect(
-      putHtml(store, "session", "first", "<p>updated</p>").widgets.map((widget) => widget.name),
+      (await putHtml(store, "session", "first", "<p>updated</p>")).widgets.map(
+        (widget) => widget.name,
+      ),
     ).toEqual(["first", "second", "third"]);
     expect(
-      store
-        .putWidget({
+      (
+        await store.putWidget({
           sessionKey: "session",
           name: "first",
           content: { kind: "html", html: "<p>moved</p>" },
           placement: { after: "third" },
         })
-        .widgets.map((widget) => widget.name),
+      ).widgets.map((widget) => widget.name),
     ).toEqual(["second", "third", "first"]);
   });
+});
+
+it("does not select the HTML BLOB when preparing board view metadata", async () => {
+  const stateDir = tempDirs.make("openclaw-board-projection-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const sessionKey = "agent:main:projection";
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const store = createTestBoardStore({ stateDir });
+  await store.putWidget({
+    sessionKey,
+    name: "status",
+    content: { kind: "html", html: "x".repeat(256 * 1024) },
+  });
+  const prepare = vi.spyOn(database.db, "prepare");
+
+  const prepared = await store.getSnapshotWithHtmlViewMetadata({ sessionKey });
+
+  const widgetSelects = prepare.mock.calls
+    .map(([sql]) => sql)
+    .filter((sql) => /select .* from "board_widgets"/iu.test(sql));
+  expect(widgetSelects).toHaveLength(1);
+  expect(widgetSelects[0]).toContain('"sha256"');
+  expect(widgetSelects[0]).not.toContain('"html"');
+  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  prepare.mockRestore();
 });

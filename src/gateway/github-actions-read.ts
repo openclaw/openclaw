@@ -13,7 +13,7 @@ import {
   readGitHubJsonResponse,
 } from "./control-ui-github-api.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 const CACHE_TTL_MS = 30_000;
 const CACHE_LIMIT = 32;
@@ -85,7 +85,8 @@ function actionsFailure(error: unknown): Error {
 /** Pinning and reads share the same source-config scrub, refresh, and current credential check. */
 export async function prepareBoardGitHubIdentity(
   context: GatewayRequestContext,
-  authority: Pick<BoardCapabilityAuthority, "boardSession" | "assertActive">,
+  authority: Pick<BoardCapabilityAuthority, "boardSession" | "assertActive"> &
+    Partial<Pick<BoardCapabilityAuthority, "useCurrent">>,
 ) {
   try {
     const config = context.getRuntimeConfig();
@@ -95,9 +96,9 @@ export async function prepareBoardGitHubIdentity(
       agentId: authority.boardSession.agentId,
       getCurrentConfig: () => context.getRuntimeConfig(),
       assertActive: authority.assertActive,
+      startActive: authority.useCurrent,
       refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
     });
-    await identity.revalidate();
     return identity;
   } catch (error) {
     if (
@@ -115,74 +116,76 @@ export async function readBoardGitHubActions(
   params: Record<string, unknown>,
   context: GatewayRequestContext,
   authority: BoardCapabilityAuthority,
-): Promise<ActionsResult> {
+  publish: RespondFn,
+): Promise<void> {
   const request = resolveGitHubActionsRequest(params);
-  authority.assertActive();
-  const cache: ActionsCache = gatewayCaches.get(context) ?? {
-    active: 0,
-    values: new Map(),
-    pending: new Map(),
-  };
-  gatewayCaches.set(context, cache);
-  if (cache.active >= MAX_CONCURRENT_READS) {
-    throw new Error("GitHub Actions reads are busy; retry shortly.");
-  }
-  cache.active += 1;
+  const cache = await authority.useCurrent(() => {
+    const admitted: ActionsCache = gatewayCaches.get(context) ?? {
+      active: 0,
+      values: new Map(),
+      pending: new Map(),
+    };
+    gatewayCaches.set(context, admitted);
+    if (admitted.active >= MAX_CONCURRENT_READS) {
+      throw new Error("GitHub Actions reads are busy; retry shortly.");
+    }
+    admitted.active += 1;
+    return admitted;
+  });
   try {
     const identity = await prepareBoardGitHubIdentity(context, authority);
-    identity.assertSelected();
     const key = JSON.stringify([authority.boardSession, identity.cacheScope, request.url]);
-    const cached = cache.values.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return structuredClone(cached.value);
-    }
-    cache.values.delete(key);
-    // Creation is synchronous, so the checked caller admits the fetch. Shared transport
-    // must not inherit that widget's lifetime; every caller gates delivery below.
-    const result = await getOrCreatePromise(
-      cache.pending,
-      key,
-      async () => {
-        const response = await fetchGitHubApi(request.url, fetch, identity.token, async () => {
-          // A redirect is a new target, not authority to read another repository or operation.
-          throw new BoardValidationError(
-            "invalid_operation",
-            "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
-          );
-        });
-        const raw = await readGitHubJsonResponse(response, ACTIONS_MAX_RESPONSE_BYTES);
-        const parsed = runsSchema.safeParse(raw);
-        if (
-          !parsed.success ||
-          parsed.data.workflow_runs.length > request.perPage ||
-          JSON.stringify(parsed.data).includes(identity.token)
-        ) {
-          throw new Error("Invalid Actions response");
-        }
-        for (const run of parsed.data.workflow_runs) {
-          const url = new URL(run.html_url);
+    const result = await identity.start(() => {
+      const cached = cache.values.get(key);
+      if (cached && cached.expiresAt > Date.now()) {
+        return structuredClone(cached.value);
+      }
+      cache.values.delete(key);
+      // Creation is synchronous, so the checked caller admits the fetch. Shared transport
+      // must not inherit that widget's lifetime; every caller gates delivery below.
+      return getOrCreatePromise(
+        cache.pending,
+        key,
+        async () => {
+          const response = await fetchGitHubApi(request.url, fetch, identity.token, async () => {
+            // A redirect is a new target, not authority to read another repository or operation.
+            throw new BoardValidationError(
+              "invalid_operation",
+              "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
+            );
+          });
+          const raw = await readGitHubJsonResponse(response, ACTIONS_MAX_RESPONSE_BYTES);
+          const parsed = runsSchema.safeParse(raw);
           if (
-            url.origin !== "https://github.com" ||
-            url.username ||
-            url.password ||
-            url.search ||
-            url.hash ||
-            url.pathname.toLowerCase() !== `/${request.repository}/actions/runs/${run.id}`
+            !parsed.success ||
+            parsed.data.workflow_runs.length > request.perPage ||
+            JSON.stringify(parsed.data).includes(identity.token)
           ) {
-            throw new Error("Invalid Actions run URL");
+            throw new Error("Invalid Actions response");
           }
-        }
-        // Internal, credential-scoped cache population is not delivery. No widget owns
-        // this transport result; every caller must validate its own authority below.
-        cache.values.set(key, { value: parsed.data, expiresAt: Date.now() + CACHE_TTL_MS });
-        pruneMapToMaxSize(cache.values, CACHE_LIMIT);
-        return parsed.data;
-      },
-      { evictOnSettled: true },
-    );
-    await identity.revalidate();
-    identity.assertSelected();
-    return structuredClone(result);
+          for (const run of parsed.data.workflow_runs) {
+            const url = new URL(run.html_url);
+            if (
+              url.origin !== "https://github.com" ||
+              url.username ||
+              url.password ||
+              url.search ||
+              url.hash ||
+              url.pathname.toLowerCase() !== `/${request.repository}/actions/runs/${run.id}`
+            ) {
+              throw new Error("Invalid Actions run URL");
+            }
+          }
+          // Internal, credential-scoped cache population is not delivery. No widget owns
+          // this transport result; every caller must validate its own authority below.
+          cache.values.set(key, { value: parsed.data, expiresAt: Date.now() + CACHE_TTL_MS });
+          pruneMapToMaxSize(cache.values, CACHE_LIMIT);
+          return parsed.data;
+        },
+        { evictOnSettled: true },
+      );
+    });
+    await identity.start(() => publish(true, structuredClone(result)));
   } catch (error) {
     throw actionsFailure(error);
   } finally {

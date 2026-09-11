@@ -122,6 +122,7 @@ overview counts. Each row opens a detail view; its overflow (`…`) menu enables
 or disables the plugin and offers **Remove** for externally installed plugins.
 It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
 and removing them inline. The same server controls live on **Settings → MCP**.
+Your selected detail tab stays open as additional plugin information loads.
 The **Discover** tab is the store: featured plugins included with OpenClaw,
 official external plugins, and one-click MCP connectors for popular services.
 Typing in the search box queries

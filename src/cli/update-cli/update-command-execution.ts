@@ -529,6 +529,7 @@ export async function executeMutableUpdate(
         await params.prepareMutableUpdate(admission?.managedEnv);
       }
       const packageUpdate: PackageInstallUpdateParams = {
+        reapplyLocalOverrides: opts.reapplyLocalOverrides,
         root: params.root,
         installKind: params.installKind,
         tag: params.tag,

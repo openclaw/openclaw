@@ -128,7 +128,6 @@ async function createTurnFixture(systemPromptOverride?: string) {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       sessionAgentId: "main",
-      setActiveSessionSystemPrompt,
       systemPromptText,
       toolResultPromptProjectionState: {
         replacements: new Map(),

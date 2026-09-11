@@ -2417,7 +2417,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",

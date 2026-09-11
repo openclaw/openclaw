@@ -123,8 +123,12 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
-  const { noteAuthProfileHealth, noteLegacyCodexProviderOverride, noteSharedAuthStoreStatus } =
-    await import("../commands/doctor-auth.js");
+  const {
+    noteAuthProfileHealth,
+    noteCopilotAmbientToken,
+    noteLegacyCodexProviderOverride,
+    noteSharedAuthStoreStatus,
+  } = await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
   await maybeRepairLegacyOAuthSidecarProfiles({
@@ -202,6 +206,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   noteLegacyCodexProviderOverride(ctx.cfg);
   noteSharedAuthStoreStatus(ctx.env);
+  noteCopilotAmbientToken(ctx.cfg, ctx.env);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
   if (ctx.gatewayDetails.remoteFallbackNote) {
     note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");

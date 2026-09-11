@@ -74,7 +74,10 @@ vi.mock("./io.js", async () => ({
   ...(await vi.importActual<typeof import("./io.js")>("./io.js")),
   ...ioMocks,
 }));
-vi.mock("./validation.js", () => validationMocks);
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
+  ...validationMocks,
+}));
 vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
   backupMocks.maintainConfigBackups.mockImplementation(actual.maintainConfigBackups);
@@ -1051,6 +1054,109 @@ describe("config mutate helpers", () => {
     expect(await fs.readFile(configPath, "utf-8")).toBe(rootRaw);
     expect(await fs.readFile(pluginsPath, "utf-8")).toBe(includedRaw);
   });
+
+  it.each([false, true])(
+    "refuses custom-IO include authority before effects (revoked: %s)",
+    async (revoke) => {
+      const home = await suiteRootTracker.make("custom-include-authority");
+      const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+      const includedRaw = '{"entries":{"demo":{"enabled":false}}}\n';
+      const backupRaw = "retained include backup\n";
+      await fs.writeFile(pluginsPath, includedRaw);
+      await fs.writeFile(`${pluginsPath}.bak`, backupRaw);
+      const rootRaw = await fs.readFile(configPath, "utf8");
+      const selectedPath = path.join(home, "unrelated", "openclaw.json");
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: selectedPath }, async () => {
+        const io = createActualConfigIO({
+          configPath,
+          env: { ...process.env },
+          observe: false,
+          pluginValidation: "skip",
+        });
+        const fallbackWrite = vi.fn(io.writeConfigFile);
+        const refusal = new Error("custom authority revoked during transform");
+        let current = true;
+        const assertCurrent = vi.fn(() => {
+          if (!current) {
+            throw refusal;
+          }
+        });
+        await expect(
+          mutateConfigFile({
+            io: { ...io, writeConfigFile: fallbackWrite },
+            writeOptions: {
+              assertCurrent,
+              observe: false,
+              skipPluginValidation: true,
+              skipRuntimeSnapshotRefresh: true,
+            },
+            mutate: async (draft) => {
+              await Promise.resolve();
+              current = !revoke;
+              draft.plugins = { entries: { demo: { enabled: true } } };
+            },
+          }),
+        ).rejects.toThrow("cannot update include-owned configuration. Use a trusted shell");
+        expect(assertCurrent).toHaveBeenCalledOnce();
+        expect(fallbackWrite).not.toHaveBeenCalled();
+        expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+        expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+        expect(await fs.readFile(pluginsPath, "utf8")).toBe(includedRaw);
+        expect(await fs.readFile(`${pluginsPath}.bak`, "utf8")).toBe(backupRaw);
+        await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(path.dirname(selectedPath))).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "forwards custom-IO authority to its own root destination (revoked: %s)",
+    async (revoke) => {
+      const home = await suiteRootTracker.make("custom-root-authority");
+      const configPath = path.join(home, "owned.json");
+      const selectedPath = path.join(home, "unrelated", "openclaw.json");
+      const original = '{"gateway":{"mode":"local","port":18789}}\n';
+      await fs.writeFile(configPath, original);
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: selectedPath }, async () => {
+        const io = createActualConfigIO({
+          configPath,
+          env: { ...process.env },
+          observe: false,
+          pluginValidation: "skip",
+        });
+        const refusal = new Error("custom root authority revoked");
+        let current = true;
+        const assertCurrent = vi.fn(() => {
+          if (!current) {
+            throw refusal;
+          }
+        });
+        const operation = mutateConfigFile({
+          io,
+          writeOptions: {
+            assertCurrent,
+            observe: false,
+            skipPluginValidation: true,
+            skipRuntimeSnapshotRefresh: true,
+          },
+          mutate: async (draft) => {
+            await Promise.resolve();
+            current = !revoke;
+            draft.gateway = { ...draft.gateway, port: 19001 };
+          },
+        });
+        if (revoke) {
+          await expect(operation).rejects.toBe(refusal);
+          expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        } else {
+          await operation;
+          expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19001);
+        }
+        expect(assertCurrent.mock.calls.length).toBeGreaterThan(1);
+        await expect(fs.stat(path.dirname(selectedPath))).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 
   it("repairs invalid config through a single-file top-level plugins include", async () => {
     const home = await suiteRootTracker.make("include");

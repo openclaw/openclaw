@@ -506,6 +506,7 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
 
 export async function readConfigFileSnapshotForWriteFromContext(
   context: ConfigIoContext,
+  options: Pick<ConfigSnapshotReadOptions, "observe"> = {},
 ): Promise<ReadConfigFileSnapshotForWriteResult> {
   const assertConfigPathForWrite = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
@@ -515,7 +516,11 @@ export async function readConfigFileSnapshotForWriteFromContext(
     }
   };
   assertConfigPathForWrite();
-  const result = await readConfigFileSnapshotInternal(context);
+  // Per-call observation policy must not recapture the factory's path or environment.
+  const readContext =
+    options.observe === false ? { ...context, deps: { ...context.deps, observe: false } } : context;
+  const read = () => readConfigFileSnapshotInternal(readContext);
+  const result = await (readContext.deps.observe ? read() : withArtifactPreservingStateReads(read));
   assertConfigPathForWrite();
   return {
     snapshot: result.snapshot,

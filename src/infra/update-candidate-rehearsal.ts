@@ -54,7 +54,7 @@ function isolatedConfig(
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
     if (!projected) {
-      throw new Error("Plugin locator was not included in the candidate snapshot");
+      throw new Error("Plugin locator was not included in the update snapshot");
     }
     return projected;
   };
@@ -134,7 +134,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
     params.signal?.throwIfAborted();
     const milliseconds = deadline - Date.now();
     if (milliseconds <= 0) {
-      throw new Error("Candidate snapshot deadline exceeded");
+      throw new Error("Update snapshot deadline exceeded");
     }
     return milliseconds;
   };
@@ -247,7 +247,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
     );
     if (snapshot.code !== 0) {
       throw new Error(
-        `Candidate state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+        `Update state snapshot failed (${snapshot.termination}): ${redactSupportString(snapshot.stderr.toString("utf8"), { env: sourceEnv, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
       );
     }
     const { pluginPaths } = UpdateCandidateStateSnapshotSchema.parse(
@@ -282,7 +282,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
       changedConfigKeys: async () => {
         const current: unknown = JSON5.parse(await fs.readFile(configPath, "utf8"));
         if (!isRecord(current)) {
-          throw new Error("Rehearsal config is not an object.");
+          throw new Error("Update validation config is not an object.");
         }
         // Compare against the same live config projection: private paths, the
         // canary token and disabled background services are isolation, not repairs.

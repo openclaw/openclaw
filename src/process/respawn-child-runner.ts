@@ -106,6 +106,10 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
+      if (process.platform !== "win32") {
+        process.kill(process.pid, signal);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"

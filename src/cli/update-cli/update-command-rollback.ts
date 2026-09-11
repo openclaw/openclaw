@@ -10,6 +10,7 @@ import {
 import { withConfigMutationLock } from "../../config/mutate.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { replaceFileAtomic } from "../../infra/replace-file.js";
@@ -34,7 +35,11 @@ import {
 import { readPackageUpdateIdentity } from "./update-command-package.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
-import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+import {
+  createWindowsTaskAutoStartGuard,
+  revalidateManagedGatewayServiceAfterUpdate,
+} from "./update-command-service-maintenance.js";
+import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   maybeRestartService,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -241,6 +246,7 @@ export async function rollbackFailedUpdate(params: {
         shouldRestart: true,
         jsonMode: opts.json === true,
         expectedService: before,
+        allowInstallRootChange: packageTransaction !== undefined,
         timeoutMs: params.timeoutMs,
       }),
     );
@@ -395,7 +401,7 @@ export async function rollbackFailedUpdate(params: {
     assertCurrent();
     // A failed candidate does not authorize its restart. The previous package's
     // pre-activation verification authorizes restarting this schema-neutral restoration.
-    const verdict = stopped.serviceUpdateVerdict ?? before?.serviceUpdateVerdict;
+    let verdict = stopped.serviceUpdateVerdict ?? before?.serviceUpdateVerdict;
     const nodeRunner = before?.serviceNodeRunner ?? params.nodeRunner;
     if (verdict?.kind === "owned" && verdict.refreshDefinition) {
       await runUpdatedInstallGatewayCommand(
@@ -411,6 +417,19 @@ export async function rollbackFailedUpdate(params: {
         },
         "install",
       );
+      const state = await readGatewayServiceState(resolveGatewayService(), {
+        env: recoveryEnv,
+        requireEffective: true,
+        requireLoadedCommand: true,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+        timeoutMs: params.timeoutMs,
+      });
+      assertCurrent();
+      verdict = await revalidateManagedGatewayServiceAfterUpdate({
+        state,
+        root: params.previousRoot,
+        preManagedServiceStop: stopped,
+      });
     }
     assertCurrent();
     result.recovery = {

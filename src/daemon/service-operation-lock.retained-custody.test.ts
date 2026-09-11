@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import {
   heldServiceLockCoordinate,
@@ -400,3 +401,94 @@ it.each(["missing", "unknown-phase", "unknown-version", "relative-source"] as co
     expect(rowBytes()).toBe(rows);
   },
 );
+
+function seedDatabase(sql: string) {
+  const file = path.join(fixture.root, "managed-update-handoffs.sqlite");
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
+  fs.chmodSync(file, 0o600);
+  return file;
+}
+
+function databaseSnapshot(file: string) {
+  const { dev, ino, mode, size, mtimeMs } = fs.lstatSync(file);
+  return { dev, ino, mode, size, mtimeMs, bytes: fs.readFileSync(file) };
+}
+
+it("admits ordinary source callbacks beside a healthy database without a handoff table", async () => {
+  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
+  const config = source.configPaths[0]!;
+  fs.writeFileSync(config, "before");
+  const before = databaseSnapshot(file);
+  const entries = fs.readdirSync(fixture.root).toSorted();
+  expect(() => store.assertSourceUnborrowed(config)).not.toThrow();
+  const mutateConfig = vi.fn(async () => fs.writeFileSync(config, "after"));
+  await withConfigWriteLock(config, mutateConfig, env);
+  const mutateService = vi.fn(async (assertCurrent: () => void) => assertCurrent());
+  await withGatewayServiceOperationLock(env, mutateService);
+  expect(mutateConfig).toHaveBeenCalledOnce();
+  expect(mutateService).toHaveBeenCalledOnce();
+  expect(fs.readFileSync(config, "utf8")).toBe("after");
+  expect(databaseSnapshot(file)).toEqual(before);
+  expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
+});
+
+it("keeps captured source inspection strict when the handoff table is missing", () => {
+  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
+  const existingIdentity = captureManagedUpdateLeaseDatabaseIdentity(file);
+  const captured = createManagedHandoffLeaseStore({
+    databasePath: file,
+    serviceManagerEnv: {},
+    existingIdentity,
+  });
+  const before = databaseSnapshot(file);
+  const entries = fs.readdirSync(fixture.root).toSorted();
+  expect(() => captured.assertSourceUnborrowed(source.configPaths[0]!)).toThrow(
+    /no such table: managed_update_handoffs/,
+  );
+  expect(databaseSnapshot(file)).toEqual(before);
+  expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
+});
+
+it.each(
+  (
+    [
+      "wrong-table",
+      "wrong-view",
+      "upper-case-table",
+      "same-named-index",
+      "corrupt",
+      "unsafe-mode",
+    ] as const
+  ).filter((kind) => kind !== "unsafe-mode" || process.platform !== "win32"),
+)("refuses %s storage without admitting source callbacks or repairing it", async (kind) => {
+  const sql =
+    kind === "wrong-table"
+      ? "CREATE TABLE managed_update_handoffs (wrong TEXT) STRICT"
+      : kind === "wrong-view"
+        ? "CREATE VIEW managed_update_handoffs AS SELECT 1 AS wrong"
+        : kind === "upper-case-table"
+          ? "CREATE TABLE MANAGED_UPDATE_HANDOFFS (wrong TEXT) STRICT"
+          : kind === "same-named-index"
+            ? "CREATE TABLE fixture_marker (id INTEGER); CREATE INDEX managed_update_handoffs ON fixture_marker(id)"
+            : "CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT";
+  const file = seedDatabase(sql);
+  if (kind === "corrupt") {
+    fs.writeFileSync(file, "not a SQLite database");
+  } else if (kind === "unsafe-mode") {
+    fs.chmodSync(file, 0o640);
+  }
+  const before = databaseSnapshot(file);
+  const entries = fs.readdirSync(fixture.root).toSorted();
+  const mutate = vi.fn(async () => undefined);
+  expect(() => store.assertSourceUnborrowed(source.configPaths[0]!)).toThrow();
+  await expect(withConfigWriteLock(source.configPaths[0]!, mutate, env)).rejects.toThrow();
+  await expect(withGatewayServiceOperationLock(env, mutate)).rejects.toThrow();
+  expect(mutate).not.toHaveBeenCalled();
+  expect(databaseSnapshot(file)).toEqual(before);
+  expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
+});
