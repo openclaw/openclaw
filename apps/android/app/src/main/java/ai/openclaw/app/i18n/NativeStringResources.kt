@@ -1349,6 +1349,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Snapping" to R.string.native_d77561a220212ca8,
     "Snapshot: \$snapshotLabel" to R.string.native_879cafd347609411,
     "Some channel status checks did not complete." to R.string.native_64f24041b18e3654,
+    "Some models could not be refreshed. Tap Refresh to retry." to R.string.native_40032c1c0e3b26eb,
     "Some shared images were omitted or could not be added." to R.string.native_f701a65268ba6ea2,
     "Soon" to R.string.native_cf0ee3547a4e51a5,
     "Sort: \$sortOrder" to R.string.native_8eb626078c16c726,
