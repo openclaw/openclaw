@@ -29,6 +29,7 @@ it("updates idle card times at their boundaries without replacing focused contro
     <time>${cardRelativeTime(now - 10_000, now)}</time>
     <time>${cardRelativeTime(now - 20_000, now)}</time>
   `, container);
+  expect(vi.getTimerCount()).toBe(1);
   const input = expectDefined(container.querySelector("input"));
   input.focus();
   input.setSelectionRange(2, 5);
@@ -36,7 +37,6 @@ it("updates idle card times at their boundaries without replacing focused contro
   const first = expectDefined(times[0]);
   const second = expectDefined(times[1]);
   expect(first.textContent).toBe("just now");
-  expect(vi.getTimerCount()).toBe(1);
   vi.advanceTimersByTime(40_000);
   expect(first.textContent).toBe("just now");
   expect(second.textContent).toBe("1m ago");
