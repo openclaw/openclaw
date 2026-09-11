@@ -5991,9 +5991,7 @@ setImmediate(() => {
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
-      // Same serial Chromium workload as checks-ui-e2e: hosted attempt 1 made it
-      // the run's slowest job (205s mean vs a 150-190s plateau).
-      "checks-ui-e2e-real-gateway": "blacksmith-16vcpu-ubuntu-2404",
+      "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-32vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
