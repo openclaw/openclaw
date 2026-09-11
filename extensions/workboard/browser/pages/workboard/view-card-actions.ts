@@ -32,7 +32,11 @@ import {
   type WorkboardProps,
 } from "./view-helpers.ts";
 
-function moveCardToStatus(props: WorkboardProps, card: WorkboardCard, status: WorkboardStatus) {
+export async function moveCardToStatus(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  status: WorkboardStatus,
+) {
   const state = getWorkboardState(props.host);
   if (
     !isActiveWorkboardCard(card) ||
@@ -45,7 +49,7 @@ function moveCardToStatus(props: WorkboardProps, card: WorkboardCard, status: Wo
   ) {
     return;
   }
-  void moveWorkboardCard({
+  await moveWorkboardCard({
     host: props.host,
     client: props.client,
     cardId: card.id,
@@ -73,7 +77,6 @@ export function renderCardMoveControl(
       class="workboard-card__move ${options.wide ? "workboard-card__move--wide" : ""}"
       title=${t("workboard.fieldStatus")}
     >
-      <span class="workboard-card__move-icon" aria-hidden="true">${icons.cornerDownRight}</span>
       <select
         class="workboard-card__move-select"
         aria-keyshortcuts="ArrowLeft ArrowRight"
@@ -81,7 +84,7 @@ export function renderCardMoveControl(
         .value=${card.status}
         ?disabled=${busy || !props.connected || !props.client}
         @change=${(event: Event) => {
-          moveCardToStatus(
+          void moveCardToStatus(
             props,
             card,
             (event.currentTarget as HTMLSelectElement).value as WorkboardStatus,
@@ -106,7 +109,7 @@ export function renderCardMoveControl(
             return;
           }
           event.preventDefault();
-          moveCardToStatus(props, card, status);
+          void moveCardToStatus(props, card, status);
         }}
       >
         ${statuses.map(
@@ -115,19 +118,8 @@ export function renderCardMoveControl(
           </option>`,
         )}
       </select>
+      <span class="workboard-card__move-chevron" aria-hidden="true">${icons.chevronDown}</span>
     </label>
-  `;
-}
-
-export function renderCardActionSlot(content: TemplateResult | typeof nothing) {
-  return html`
-    <span class="workboard-card__action-slot">
-      ${
-        content === nothing
-          ? html`<span class="workboard-card__action-placeholder" aria-hidden="true"></span>`
-          : content
-      }
-    </span>
   `;
 }
 
@@ -239,10 +231,19 @@ export function renderArchiveCardAction(
 export function renderOpenSessionCardAction(
   props: WorkboardProps,
   session: BoardGetParams | undefined,
-  options: { iconOnly?: boolean } = {},
+  options: { iconOnly?: boolean; quiet?: boolean } = {},
 ) {
   if (!session) {
     return nothing;
+  }
+  if (options.quiet) {
+    return html`<button
+      type="button"
+      class="workboard-detail__session-link"
+      @click=${() => props.onOpenSession(session)}
+    >
+      ${t("workboard.openSession")}
+    </button>`;
   }
   return renderCardActionButton({
     label: t("workboard.openSession"),
@@ -311,7 +312,7 @@ export function renderStartExecutionButton(
   card: WorkboardCard,
   engine: WorkboardExecutionEngine | null,
   mode: WorkboardExecutionMode,
-  options: { iconOnly?: boolean } = {},
+  options: { iconOnly?: boolean; engineLabelOnly?: boolean } = {},
 ) {
   const state = getWorkboardState(props.host);
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
@@ -350,13 +351,15 @@ export function renderStartExecutionButton(
     >
       ${
         engine
-          ? html`${renderEngineMark(engine)}${
-              options.iconOnly
-                ? nothing
-                : html`<span
-                    >${mode === "autonomous" ? t("workboard.run") : t("workboard.open")}</span
-                  >`
-            }`
+          ? options.engineLabelOnly
+            ? html`<span>${engineName}</span>`
+            : html`${renderEngineMark(engine)}${
+                options.iconOnly
+                  ? nothing
+                  : html`<span
+                      >${mode === "autonomous" ? t("workboard.run") : t("workboard.open")}</span
+                    >`
+              }`
           : html`${mode === "autonomous" ? icons.play : icons.penLine}${
               options.iconOnly ? nothing : html`<span>${t("workboard.start")}</span>`
             }`

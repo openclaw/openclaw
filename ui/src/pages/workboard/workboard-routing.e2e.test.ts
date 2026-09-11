@@ -118,9 +118,13 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}workboard/ops?agent=main`);
       expect(response?.status()).toBe(200);
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
-      const headerGlyph = page.locator(".workboard-board-glyph--header");
-      await expect.poll(() => headerGlyph.textContent()).toContain("⚙");
-      await expect.poll(() => headerGlyph.getAttribute("style")).toContain("#22c55e");
+      const headerGlyph = page.locator(".workboard-board-glyph--header openclaw-appearance-glyph");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => element.shadowRoot?.textContent ?? ""))
+        .toContain("⚙");
+      await expect
+        .poll(() => headerGlyph.evaluate((element) => getComputedStyle(element).color))
+        .toBe("rgb(34, 197, 94)");
       const filterTrigger = page.locator(".workboard-filter-trigger");
       await filterTrigger.click();
       await page.getByRole("button", { name: /^Filter by board:/u }).waitFor();

@@ -286,7 +286,10 @@ function saveDraft(client: WorkboardTestClient) {
 
 function moveCard(
   client: WorkboardTestClient,
-  options: Omit<Parameters<typeof moveWorkboardCard>[0], "host" | "client">,
+  options: Omit<
+    Extract<Parameters<typeof moveWorkboardCard>[0], { position: number }>,
+    "host" | "client"
+  >,
 ) {
   return moveWorkboardCard({ host, client, ...options });
 }
@@ -3493,6 +3496,88 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.start", { id: sampleCard.id });
     expect(getWorkboardState(host).error).toBe("provider unavailable");
   });
+
+  it.each([
+    {
+      name: "before another board in All",
+      boardFilter: "__all__",
+      beforeCardId: "b",
+      aPosition: 1000,
+      bPosition: 2000,
+      expected: 1500,
+    },
+    {
+      name: "at the end of All",
+      boardFilter: "__all__",
+      beforeCardId: null,
+      aPosition: 1000,
+      bPosition: 5000,
+      expected: 6000,
+    },
+    {
+      name: "within a specific board",
+      boardFilter: "a",
+      beforeCardId: "a",
+      aPosition: 2000,
+      bPosition: 1000,
+      expected: 999,
+    },
+  ])(
+    "places a dropped card $name without changing board membership",
+    async ({ boardFilter, beforeCardId, aPosition, bPosition, expected }) => {
+      const a = makeCard({
+        id: "a",
+        status: "todo",
+        position: aPosition,
+        metadata: { automation: { boardId: "a" } },
+      });
+      const b = makeCard({
+        id: "b",
+        status: "todo",
+        position: bPosition,
+        metadata: { automation: { boardId: "b" } },
+      });
+      const dragged = makeCard({
+        id: "dragged",
+        status: "todo",
+        position: 3000,
+        metadata: { automation: { boardId: "a" } },
+      });
+      state.cards = [a, b, dragged];
+      const moved = { ...dragged, position: expected };
+      const client = createClient({ "workboard.cards.move": { card: moved } });
+      await moveWorkboardCard({
+        host,
+        client,
+        cardId: dragged.id,
+        status: "todo",
+        beforeCardId,
+        boardFilter,
+      });
+      expect(client.request).toHaveBeenCalledTimes(1);
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
+        id: dragged.id,
+        status: "todo",
+        position: expected,
+      });
+      expect(state.cards.find((card) => card.id === dragged.id)).toMatchObject({
+        position: expected,
+        metadata: { automation: { boardId: "a" } },
+      });
+      expect(state.cards.find((card) => card.id === a.id)).toEqual(a);
+      expect(state.cards.find((card) => card.id === b.id)).toEqual(b);
+      const visible = state.cards.filter(
+        (card) => boardFilter === "__all__" || card.metadata?.automation?.boardId === boardFilter,
+      );
+      if (beforeCardId) {
+        expect(visible.findIndex((card) => card.id === dragged.id)).toBe(
+          visible.findIndex((card) => card.id === beforeCardId) - 1,
+        );
+      } else {
+        expect(visible.at(-1)?.id).toBe(dragged.id);
+      }
+    },
+  );
 
   it("moves cards through the plugin gateway method", async () => {
     const moved = makeCard({ status: "blocked", position: 2000 });

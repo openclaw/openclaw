@@ -316,9 +316,8 @@ function createDefaultState(): WorkboardUiState {
     donePeriod: "all",
     agentFilter: "all",
     boardFilter: "__all__",
-    activeHealthHighlight: null,
     showArchived: false,
-    layout: "compact",
+    layout: "comfortable",
     emptyColumnMode: "show",
     collapsedStatuses: new Set(),
     expandedEmptyStatuses: new Set(),
@@ -351,6 +350,8 @@ function createDefaultState(): WorkboardUiState {
     detailCommentBody: "",
     busyCardIds: new Set(),
     draggedCardId: null,
+    dragOverStatus: null,
+    dragBeforeCardId: null,
     capturingSessionKeys: new Set(),
   };
 }

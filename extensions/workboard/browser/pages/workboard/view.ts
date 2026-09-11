@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
+import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import "../../styles/workboard.css";
@@ -633,31 +634,33 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                 </div>
               `
             : html`
-                <div class="workboard-board-viewport">
-                  <div
-                    ${ref(boardScrollEdgesRef())}
-                    class="workboard-board workboard-board--page workboard-board--${state.layout} ${
-                      visibleStatuses.length === 1 ? "workboard-board--single-column" : ""
-                    }"
-                  >
-                    ${visibleStatuses.map((status) =>
-                      renderColumn(props, status, byStatus.get(status) ?? [], { surface: "page" }),
-                    )}
-                  </div>
+              <div
+                class="workboard-board-viewport"
+                  ? "workboard-board-viewport--list"
+                  : ""}"
+              >
+                <div
+                  ${ref(boardScrollEdgesRef())}
+                  class="workboard-board workboard-board--page workboard-board--${state.layout} ${visibleStatuses.length === 1 ? "workboard-board--single-column" : ""}"
+                >
+                  ${visibleStatuses.map((status) =>
+                    renderColumn(props, status, byStatus.get(status) ?? [], {
+                      surface: "page",
+                    }),
+                  )}
                 </div>
-              `
+              </div>
+            `
         }
       </div>
-      ${
-        visibleError && !dialogOpen
-          ? html`<div class="callout danger" role="alert">${visibleError}</div>`
-          : nothing
-      }
-      ${
-        !dialogOpen && dispatchSummaryMessage(state)
-          ? html`<div class="callout">${dispatchSummaryMessage(state)}</div>`
-          : nothing
-      }
+      ${renderWorkboardToast({
+        owner: state,
+        outcomeSource: true,
+        message: visibleError ?? dispatchSummaryMessage(state),
+        hidden: dialogOpen,
+        key: visibleError ?? state.lastDispatchSummary,
+        tone: visibleError ? "error" : "info",
+      })}
       ${renderCardModal(props)} ${renderCardDetailsPanel(props)}
     </section>
   `;

@@ -206,7 +206,10 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
       </header>
       <div class="workboard-board workboard-board--compact workboard-widget-board__columns">
         ${model.statuses.map((status) =>
-          renderColumn(props, status, byStatus.get(status) ?? [], { surface: "widget" }),
+          renderColumn(props, status, byStatus.get(status) ?? [], {
+            surface: "widget",
+            boardFilter: filter,
+          }),
         )}
       </div>
     </section>

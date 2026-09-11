@@ -1,5 +1,6 @@
 import { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
@@ -36,6 +37,51 @@ export function nextWorkboardCardPosition(
   return Math.max(0, ...positions) + 1000;
 }
 
+export function planWorkboardCardDrop(
+  cards: readonly WorkboardCard[],
+  card: WorkboardCard,
+  status: WorkboardStatus,
+  beforeCardId: string | null,
+  boardFilter: WorkboardUiState["boardFilter"],
+): Array<{ id: string; status: WorkboardStatus; position: number }> {
+  const peers = cards
+    .filter(
+      (candidate) =>
+        candidate.id !== card.id &&
+        candidate.status === status &&
+        matchesBoardFilter(candidate, boardFilter),
+    )
+    .toSorted((left, right) => left.position - right.position || left.createdAt - right.createdAt);
+  const beforeIndex = peers.findIndex((candidate) => candidate.id === beforeCardId);
+  const index = beforeIndex < 0 ? peers.length : beforeIndex;
+  const previous = peers[index - 1]?.position ?? -1;
+  const next = peers[index]?.position;
+  if (
+    card.status === status &&
+    card.position > previous &&
+    (next === undefined || card.position < next)
+  ) {
+    return [];
+  }
+  const position =
+    next === undefined
+      ? Math.max(0, previous) + 1000
+      : next - previous > 1
+        ? Math.floor((previous + next) / 2)
+        : previous + 1000;
+  const moves: Array<{ id: string; status: WorkboardStatus; position: number }> = [];
+  // Positions are nonnegative integers. Make room from the end when the gap is full.
+  let occupied = position;
+  for (const peer of peers.slice(index)) {
+    if (peer.position > occupied) {
+      break;
+    }
+    occupied += 1000;
+    moves.push({ id: peer.id, status, position: occupied });
+  }
+  return [...moves.toReversed(), { id: card.id, status, position }];
+}
+
 export function selectedWorkboardBoardParams(
   state: Pick<WorkboardUiState, "boards" | "boardFilter">,
 ): { boardId?: string } {
@@ -43,10 +89,17 @@ export function selectedWorkboardBoardParams(
   return boardId ? { boardId } : {};
 }
 
+export function setWorkboardCards(state: WorkboardUiState, cards: WorkboardCard[]) {
+  state.cards = cards;
+}
+
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);
-  state.cards = next.toSorted((left, right) => left.position - right.position);
+  setWorkboardCards(
+    state,
+    next.toSorted((left, right) => left.position - right.position),
+  );
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {
@@ -126,7 +179,7 @@ export function resetDraftState(state: WorkboardUiState) {
   }
 }
 
-function normalizeDraftLabels(value: string): string[] {
+export function normalizeDraftLabels(value: string): string[] {
   const labels: string[] = [];
   for (const label of value.split(",")) {
     const trimmed = label.trim();

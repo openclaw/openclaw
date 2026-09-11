@@ -16,9 +16,13 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
-import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
+import {
+  controlUiPluginAssetPrefix,
+  controlUiPluginAssetRoot,
+} from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   controlUiSessionPath,
@@ -86,7 +90,8 @@ type CliOptions = {
     | "update-available"
     | "update-blocked"
     | "update-failed"
-    | "workboard";
+    | "workboard"
+    | "workboard-states";
   host: string;
   operatorScopes?: string[];
   port: number;
@@ -406,7 +411,8 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "update-available" &&
     value !== "update-blocked" &&
     value !== "update-failed" &&
-    value !== "workboard"
+    value !== "workboard" &&
+    value !== "workboard-states"
   ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
@@ -1760,7 +1766,11 @@ async function createChatPickerScenario(
           }),
         ]
       : [];
-  const workboardMocks = buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER);
+  const workboardMocks = buildWorkboardMocks(
+    Date.now(),
+    MOCK_ACTOR_PETER,
+    fixture === "workboard-states",
+  );
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
   const dashboardGallerySessions =
@@ -1811,7 +1821,7 @@ async function createChatPickerScenario(
   const sessions = [
     ...activitySessions,
     ...dashboardGallerySessions,
-    ...(fixture === "workboard"
+    ...(fixture === "workboard" || fixture === "workboard-states"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
             boardFace: "dashboard",
@@ -2048,7 +2058,7 @@ async function createChatPickerScenario(
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
     swarmEnabled: fixture === "swarm",
-    workboardEnabled: fixture === "workboard",
+    workboardEnabled: fixture === "workboard" || fixture === "workboard-states",
   });
   const fixtureSessionKey =
     fixture === "approval"
@@ -2061,7 +2071,7 @@ async function createChatPickerScenario(
             ? "agent:main:model-budget"
             : fixture === "update-failed"
               ? "agent:main:cloud-refactor"
-              : fixture === "workboard"
+              : fixture === "workboard" || fixture === "workboard-states"
                 ? workboardMocks.sessionKey
                 : "agent:main:main";
   const summaryHistory = buildFixtureSummaryHistory(
@@ -2219,7 +2229,7 @@ async function createChatPickerScenario(
       "environments.list",
       "terminal.open",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
-      ...(fixture === "workboard"
+      ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             "board.get",
             "cron.get",
@@ -2236,10 +2246,10 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    ...(fixture === "workboard" ? workboardUi : {}),
+    ...(fixture === "workboard" || fixture === "workboard-states" ? workboardUi : {}),
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
-      ...(fixture === "workboard"
+      ...(fixture === "workboard" || fixture === "workboard-states"
         ? [
             { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
             { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
@@ -2293,7 +2303,9 @@ async function createChatPickerScenario(
       "agent:main:home-server": { messages: summaryHistory },
       "agent:main:cloud-refactor": { messages: summaryHistory },
       [workboardMocks.sessionKey]: { messages: summaryHistory },
-      ...(fixture === "workboard" ? workboardMocks.cardSessionHistories : {}),
+      ...(fixture === "workboard" || fixture === "workboard-states"
+        ? workboardMocks.cardSessionHistories
+        : {}),
     },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -3206,7 +3218,9 @@ async function createChatPickerScenario(
         ],
       },
       "sessions.search": { results: [] },
-      ...(fixture === "workboard" ? workboardMocks.methodResponses : {}),
+      ...(fixture === "workboard" || fixture === "workboard-states"
+        ? workboardMocks.methodResponses
+        : {}),
     },
     models: modelProviders.models,
     repeatingSessionEvents: {
@@ -3295,7 +3309,30 @@ async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
 ): Promise<Plugin> {
-  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  const prepared = await prepareControlUiMockGatewayScenario(
+    fixture === "workboard-states" ? { ...scenario, nativePlugins: [] } : scenario,
+  );
+  if (fixture === "workboard-states") {
+    const { assets, catalog } = await buildWorkboardStatesAssets();
+    for (const [url, asset] of assets) {
+      prepared.assets.set(url, asset);
+    }
+    prepared.scenario = {
+      ...prepared.scenario,
+      featureMethods: [
+        ...new Set([
+          ...(prepared.scenario.featureMethods ?? []),
+          "plugins.controlUi.list",
+          "plugins.controlUi.report",
+        ]),
+      ],
+      methodResponses: {
+        ...prepared.scenario.methodResponses,
+        "plugins.controlUi.list": catalog,
+        "plugins.controlUi.report": { ok: true },
+      },
+    };
+  }
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
@@ -3305,8 +3342,8 @@ async function createMockGatewayPlugin(
       skillWorkshopMockInitScript(Date.now()) +
       backgroundTasksMockInitScript(Date.now()) +
       approvalMockInitScript(fixture === "approval") +
-      (fixture === "workboard"
-        ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER))}); })();`
+      (fixture === "workboard" || fixture === "workboard-states"
+        ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
         : ""),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
@@ -3425,6 +3462,97 @@ async function createMockGatewayPlugin(
         "</head>",
         `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
+    },
+  };
+}
+
+async function buildWorkboardStatesAssets() {
+  const { build } = await import("esbuild");
+  const rootDir = path.join(repoRoot, "extensions/workboard");
+  const entry = path.join(rootDir, "browser/index.ts");
+  let transformed = false;
+  const result = await build({
+    absWorkingDir: rootDir,
+    entryPoints: { index: entry },
+    outdir: path.join(rootDir, "dist/control-ui/fixture"),
+    platform: "browser",
+    target: "es2022",
+    format: "esm",
+    bundle: true,
+    write: false,
+    minify: true,
+    legalComments: "none",
+    sourcemap: false,
+    tsconfigRaw: {
+      compilerOptions: { experimentalDecorators: true, useDefineForClassFields: false },
+    },
+    alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
+    plugins: [
+      {
+        name: "workboard-state-projections",
+        setup(builder) {
+          builder.onLoad(
+            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
+            async ({ path: sourcePath }) => {
+              const source = await fs.promises.readFile(sourcePath, "utf8");
+              const lifecycleImport =
+                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
+              const alertImport =
+                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
+              if (
+                [...source.matchAll(lifecycleImport)].length !== 1 ||
+                [...source.matchAll(alertImport)].length !== 1
+              ) {
+                throw new Error(
+                  "Workboard state fixture import seam changed; update its exact import transform.",
+                );
+              }
+              transformed = true;
+              return {
+                loader: "ts",
+                resolveDir: path.dirname(sourcePath),
+                contents:
+                  source.replace(lifecycleImport, "").replace(alertImport, "") +
+                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+              };
+            },
+          );
+        },
+      },
+    ],
+  });
+  if (!transformed) {
+    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  }
+  const revision = createHash("sha256");
+  for (const file of result.outputFiles) {
+    revision.update(file.contents);
+  }
+  const hash = revision.digest("hex");
+  const prefix = `${controlUiPluginAssetPrefix("workboard")}${hash}/`;
+  const assets = new Map(
+    result.outputFiles.map((file) => [
+      `${prefix}${path.basename(file.path)}`,
+      {
+        body: Buffer.from(file.contents),
+        contentType: file.path.endsWith(".css") ? "text/css" : "text/javascript",
+      },
+    ]),
+  );
+  return {
+    assets,
+    catalog: {
+      revision: hash,
+      diagnostics: [],
+      plugins: [
+        {
+          pluginId: "workboard",
+          name: "workboard",
+          revision: hash,
+          entryUrl: `${prefix}index.js`,
+          styles: [`${prefix}index.css`],
+        },
+      ],
     },
   };
 }

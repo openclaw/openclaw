@@ -1,28 +1,23 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
-import { clampText } from "../../lib/format.ts";
-import {
-  isActiveWorkboardCard,
-  nextWorkboardCardPosition,
-} from "../../lib/workboard/card-state.ts";
+import { getCardAlerts, visibleCardAlerts } from "../../lib/workboard/card-alerts.ts";
+import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import {
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
   moveWorkboardCard,
-  workboardCardMatchesHealthKey,
   type WorkboardCard,
-  type WorkboardDependencyState,
   type WorkboardStatus,
-  type WorkboardTaskSummary,
 } from "../../lib/workboard/index.ts";
-import { cardAgentLabel } from "./agent-filter.ts";
+import { matchesAgentScope } from "./agent-filter.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import {
   getCardActionState,
   renderArchiveCardAction,
-  renderCardActionSlot,
   renderCardMoveControl,
   renderDeleteCardAction,
   renderEditCardAction,
@@ -30,194 +25,31 @@ import {
   renderStartExecutionButton,
   renderStopCardAction,
 } from "./view-card-actions.ts";
+import {
+  renderCardAlert,
+  cardRelativeTime,
+  renderCardMeta,
+  renderCardCounts,
+  renderCardSession,
+} from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
+import { openCreateModal, workboardCardModalId } from "./view-card-modal.ts";
 import {
   canMutate,
-  formatAge,
-  formatDependencyBlockerTitle,
-  formatEventLabel,
-  formatLifecycle,
   formatPriorityLabel,
+  renderPriorityIcon,
   formatStatusLabel,
-  formatWorkboardDate,
   formatUpdatedTime,
-  taskDetail,
-  taskMatchesLifecycle,
   type WorkboardProps,
 } from "./view-helpers.ts";
-
-function renderEvents(card: WorkboardCard) {
-  const events = (card.events ?? []).toReversed().slice(0, 4);
-  if (events.length === 0) {
-    return nothing;
-  }
-  return html`
-    <ol class="workboard-events" aria-label=${t("workboard.eventsLabel")}>
-      ${events.map(
-        (event) => html`
-          <li>
-            <span>${formatEventLabel(event)}</span>
-            <time>${formatWorkboardDate(event.at)}</time>
-          </li>
-        `,
-      )}
-    </ol>
-  `;
-}
-
-function renderCountBadge(labelKey: string, count: number) {
-  return html`<span>${t(labelKey, { count: String(count) })}</span>`;
-}
-
-function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
-  const metadata = card.metadata;
-  const badges: TemplateResult[] = [];
-  const latestDiagnostic = metadata?.diagnostics?.toSorted(
-    (left, right) => right.lastSeenAt - left.lastSeenAt,
-  )[0];
-  const blockedReason =
-    card.status === "blocked"
-      ? (metadata?.notifications?.at(-1)?.message ??
-        metadata?.workerProtocol?.detail ??
-        latestDiagnostic?.detail)
-      : undefined;
-  if (metadata?.templateId) {
-    badges.push(html`<span>${t(`workboard.template.${metadata.templateId}`)}</span>`);
-  }
-  if (task ?? card.taskId) {
-    badges.push(html`<span>${t("workboard.badgeTaskLinked")}</span>`);
-  }
-  if (metadata?.attempts?.length) {
-    badges.push(renderCountBadge("workboard.badgeAttempts", metadata.attempts.length));
-  }
-  if (metadata?.failureCount) {
-    badges.push(html`
-      <span class="workboard-card__badge--warning">
-        ${icons.alertTriangle}${t("workboard.badgeFailures", {
-          count: String(metadata.failureCount),
-        })}
-      </span>
-    `);
-  }
-  if (metadata?.comments?.length) {
-    badges.push(renderCountBadge("workboard.badgeComments", metadata.comments.length));
-  }
-  if (metadata?.proof?.length) {
-    badges.push(renderCountBadge("workboard.badgeProof", metadata.proof.length));
-  }
-  if (metadata?.claim) {
-    badges.push(
-      html`<span>${t("workboard.badgeClaimed", { owner: metadata.claim.ownerId })}</span>`,
-    );
-    const heartbeatAge = formatAge(metadata.claim.lastHeartbeatAt);
-    if (heartbeatAge) {
-      badges.push(html`<span>${t("workboard.badgeHeartbeat", { age: heartbeatAge })}</span>`);
-    }
-  }
-  if (latestDiagnostic) {
-    badges.push(
-      html`<span
-        class="workboard-card__badge--warning"
-        title=${formatUiExternalText(latestDiagnostic.detail)}
-      >
-        ${icons.alertTriangle}${clampText(latestDiagnostic.title.trim(), 64)}
-      </span>`,
-    );
-  }
-  if (blockedReason) {
-    badges.push(
-      html`<span
-        class="workboard-card__badge--warning"
-        title=${formatUiExternalText(blockedReason)}
-      >
-        ${icons.alertTriangle}${clampText(formatUiExternalText(blockedReason), 64)}
-      </span>`,
-    );
-  }
-  if (metadata?.stale) {
-    badges.push(
-      html`<span class="workboard-card__badge--warning"
-        >${icons.alertTriangle}${t("workboard.badgeStale")}</span
-      >`,
-    );
-  }
-  return badges.length ? html` <div class="workboard-card__badges">${badges}</div> ` : nothing;
-}
+import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
+import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
+import { getSessionStatus } from "./view-session-status.ts";
 
 function isCardActionTarget(event: Event): boolean {
   return event.target instanceof Element
-    ? Boolean(event.target.closest("button, a, input, select, textarea"))
+    ? Boolean(event.target.closest("button, a, input, select, textarea, details"))
     : false;
-}
-
-function renderAgentChip(props: WorkboardProps, card: WorkboardCard) {
-  const label = cardAgentLabel(card, props.agentsList);
-  const title = card.agentId
-    ? t("workboard.agentLinked", { agent: label })
-    : t("workboard.agentDefaultLinked", { agent: label });
-  return html`<span class="workboard-agent-chip" title=${title}>${label}</span>`;
-}
-
-function renderDependencyBadges(dependencies: WorkboardDependencyState) {
-  if (dependencies.parents.length === 0) {
-    return nothing;
-  }
-  const blocked = dependencies.blockedParents.length;
-  const title =
-    formatDependencyBlockerTitle(dependencies) ??
-    t("workboard.dependenciesReadyTitle", { count: String(dependencies.parents.length) });
-  return html`
-    <div class="workboard-dependencies" title=${title}>
-      ${
-        blocked > 0
-          ? html`
-              <span class="workboard-dependency workboard-dependency--blocked">
-                ${icons.alertTriangle}${t("workboard.dependenciesBlocked", {
-                  count: String(blocked),
-                })}
-              </span>
-            `
-          : html`
-              <span class="workboard-dependency workboard-dependency--ready">
-                ${t("workboard.dependenciesReady", { count: String(dependencies.parents.length) })}
-              </span>
-            `
-      }
-    </div>
-  `;
-}
-
-function renderLifecycle(
-  card: WorkboardCard,
-  props: Pick<WorkboardProps, "sessions" | "sessionResolution">,
-  task?: WorkboardTaskSummary,
-) {
-  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
-  const formatted = formatLifecycle(lifecycle);
-  const stale = lifecycle.state === "stale";
-  const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
-  const taskStatus = task && taskIsAuthoritative ? t(`workboard.taskStatus.${task.status}`) : null;
-  return html`
-    <div class="workboard-card__lifecycle">
-      <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
-        ${
-          taskStatus ??
-          (stale || !card.execution
-            ? formatted.label
-            : `${card.execution.engine ? `${card.execution.engine} ` : ""}${card.execution.mode}`)
-        }
-      </span>
-      <span class="workboard-card__lifecycle-detail">
-        ${
-          task && taskIsAuthoritative
-            ? taskDetail(task)
-            : stale
-              ? formatted.detail
-              : (lifecycle.session?.displayName ?? lifecycle.session?.label ?? formatted.detail)
-        }
-      </span>
-    </div>
-  `;
 }
 
 type WorkboardCardSurface = "page" | "widget";
@@ -236,67 +68,131 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
     archived,
   } = getCardActionState(props, card);
   const widget = surface === "widget";
-  const healthHighlighted = state.activeHealthHighlight
-    ? workboardCardMatchesHealthKey(card, state.activeHealthHighlight, props.sessions, task)
-    : false;
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const topStartAction =
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
+  const now = Date.now();
+  const updatedAt = asDateTimestampMs(card.updatedAt);
+  const sessionStatus = getSessionStatus(card, lifecycle, task, now);
+  const alerts = visibleCardAlerts(
+    getCardAlerts(card, lifecycle, dependencies, now),
+    sessionStatus.visible || sessionStatus.state === "running" ? sessionStatus.state : undefined,
+  );
+  const startAction =
     !widget && showStartControls
-      ? renderStartExecutionButton(props, card, null, "autonomous", { iconOnly: true })
+      ? renderStartExecutionButton(props, card, null, "autonomous")
       : nothing;
-  const topEditAction =
-    !widget && writable && !archived
-      ? renderEditCardAction(props, card, { iconOnly: true })
-      : nothing;
-  const topArchiveAction =
-    !widget && writable
-      ? renderArchiveCardAction(props, card, busy, archived, { iconOnly: true })
-      : nothing;
+  const editAction = !widget && writable && !archived ? renderEditCardAction(props, card) : nothing;
+  const archiveAction =
+    !widget && writable ? renderArchiveCardAction(props, card, busy, archived) : nothing;
   const detailAction = widget
     ? nothing
     : html`
-        <span title=${t("workboard.viewDetails")}>
-          <button
-            class="btn btn--icon workboard-card__icon"
-            aria-label=${t("workboard.viewDetails")}
-            aria-haspopup="dialog"
-            aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
-            aria-controls=${workboardCardDetailDrawerId}
-            @click=${() => {
-              openCardDetails(state, card);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.panelRightOpen}
-          </button>
-        </span>
+        <button
+          class="btn"
+          type="button"
+          aria-label=${t("workboard.viewDetails")}
+          aria-haspopup="dialog"
+          aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
+          aria-controls=${workboardCardDetailDrawerId}
+          @click=${() => {
+            openCardDetails(state, card);
+            props.onRequestUpdate?.();
+          }}
+        >
+          ${icons.eye}<span>${t("workboard.viewDetails")}</span>
+        </button>
       `;
-  const sessionAction = widget
-    ? nothing
-    : renderOpenSessionCardAction(props, sessionTarget, { iconOnly: true });
+  const sessionAction = widget ? nothing : renderOpenSessionCardAction(props, sessionTarget);
   const stopAction =
     !widget && writable && (linkedSessionKey ? live : activeTask)
-      ? renderStopCardAction(props, card, busy, { iconOnly: true })
+      ? renderStopCardAction(props, card, busy)
       : nothing;
   const moveAction =
     !archived && (writable || widget)
       ? renderCardMoveControl(props, card, busy || !writable, { wide: widget })
       : nothing;
-  const deleteAction =
-    !widget && writable ? renderDeleteCardAction(props, card, busy, { iconOnly: true }) : nothing;
+  const deleteAction = !widget && writable ? renderDeleteCardAction(props, card, busy) : nothing;
+  const alertDescriptionId = `workboard-card-alert-${surface}-${card.id}`;
+  const actionsMenu =
+    !widget && (writable || linkedSessionKey)
+      ? html`
+          <div class="workboard-card__action-menu">
+            <button
+              type="button"
+              class="workboard-card__menu-trigger"
+              aria-label=${t("workboard.cardActions")}
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              popovertarget=${`workboard-card-menu-${card.id}`}
+            >
+              ${icons.moreHorizontal}
+            </button>
+            <div
+              id=${`workboard-card-menu-${card.id}`}
+              popover="auto"
+              role="dialog"
+              aria-label=${t("workboard.cardActions")}
+              class="workboard-card__action-menu-panel"
+              ${ref(workboardPopoverRef("end"))}
+              @click=${closeWorkboardPopoverOnAction}
+            >
+              <div class="workboard-card__menu-group">${detailAction} ${editAction}</div>
+              ${
+                startAction !== nothing || sessionAction !== nothing || stopAction !== nothing
+                  ? html`<div class="workboard-card__menu-group">
+                      ${startAction} ${sessionAction} ${stopAction}
+                    </div>`
+                  : nothing
+              }
+              ${
+                moveAction === nothing
+                  ? nothing
+                  : html`
+                      <div class="workboard-card__menu-status">
+                        <span>${t("workboard.moveTo")}</span>
+                        ${moveAction}
+                      </div>
+                    `
+              }
+              ${
+                archiveAction !== nothing || deleteAction !== nothing
+                  ? html`<div class="workboard-card__menu-group">
+                      ${archiveAction} ${deleteAction}
+                    </div>`
+                  : nothing
+              }
+            </div>
+          </div>
+        `
+      : nothing;
+  const updatedTime =
+    updatedAt === undefined
+      ? nothing
+      : html`<time
+          class="workboard-card__updated"
+          datetime=${new Date(updatedAt).toISOString()}
+          title=${t("workboard.detailUpdatedValue", { time: formatUpdatedTime(updatedAt) })}
+          >${cardRelativeTime(updatedAt, now)}</time
+        >`;
+  const priority =
+    card.priority === "normal"
+      ? nothing
+      : html`<span class="workboard-card__priority">
+          <span aria-hidden="true">${renderPriorityIcon(card.priority)}</span>${formatPriorityLabel(
+            card.priority,
+          )}
+        </span>`;
   return html`
     <article
-      class="workboard-card priority-${card.priority} ${
-        busy ? "workboard-card--busy" : ""
-      } ${archived ? "workboard-card--archived" : ""}
+      class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${
+        archived ? "workboard-card--archived" : ""
+      }
       ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${
-        healthHighlighted
-          ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
-          : ""
-      } ${widget ? "workboard-card--widget" : "workboard-card--openable"}"
+        widget ? "workboard-card--widget" : "workboard-card--openable"
+      }"
       role=${widget ? nothing : "button"}
       tabindex=${widget ? nothing : "0"}
-      title=${widget ? nothing : t("workboard.viewDetails")}
+      aria-describedby=${alerts.length ? alertDescriptionId : nothing}
       aria-haspopup=${widget ? nothing : "dialog"}
       aria-expanded=${widget ? nothing : state.detailCardId === card.id ? "true" : "false"}
       aria-controls=${widget ? nothing : workboardCardDetailDrawerId}
@@ -321,119 +217,196 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
           return;
         }
         state.draggedCardId = card.id;
-        event.dataTransfer?.setData("text/plain", card.id);
-        event.dataTransfer?.setDragImage(event.currentTarget as Element, 16, 16);
+        state.dragOverStatus = null;
+        state.dragBeforeCardId = null;
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", card.id);
+          const source = event.currentTarget;
+          if (!(source instanceof HTMLElement)) {
+            return;
+          }
+          const bounds = source.getBoundingClientRect();
+          event.dataTransfer.setDragImage(
+            source,
+            event.clientX - bounds.left,
+            event.clientY - bounds.top,
+          );
+        }
         props.onRequestUpdate?.();
       }}
       @dragend=${() => {
         state.draggedCardId = null;
+        state.dragOverStatus = null;
+        state.dragBeforeCardId = null;
         props.onRequestUpdate?.();
       }}
     >
-      <div class="workboard-card__top">
-        <div
-          class="workboard-card__updated"
-          title=${t("workboard.detailUpdatedValue", { time: formatUpdatedTime(card.updatedAt) })}
-          aria-label=${t("workboard.detailUpdatedValue", {
-            time: formatUpdatedTime(card.updatedAt),
-          })}
-        >
-          <span class="workboard-card__updated-icon" aria-hidden="true">${icons.clock}</span>
-          <span>${formatUpdatedTime(card.updatedAt)}</span>
-        </div>
-        <div class="workboard-card__quick-actions">
-          ${renderCardActionSlot(topStartAction)} ${renderCardActionSlot(topEditAction)}
-          ${renderCardActionSlot(topArchiveAction)}
-        </div>
-      </div>
-      <div class="workboard-card__chips">
-        <span class="workboard-card__priority">${formatPriorityLabel(card.priority)}</span>
-        ${renderAgentChip(props, card)}
+      ${html` <header class="workboard-card__title">
+          <h3 class="workboard-truncate-two" title=${card.title}>${card.title}</h3>
+          <div class="workboard-card__header-actions">${actionsMenu}</div>
+        </header>
+        ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+        ${renderCardMeta(card, archived)} ${renderCardAlert(alerts, alertDescriptionId)}
+        ${renderCardCounts(card)}
+        <footer class="workboard-card__footer">${priority} ${updatedTime}</footer>
         ${
-          archived
-            ? html`<span class="workboard-card__archived">${t("workboard.archived")}</span>`
+          widget
+            ? html`<div class="workboard-card__actions workboard-card__actions--widget">
+                ${moveAction}
+              </div>`
             : nothing
-        }
-        ${live ? html`<span class="workboard-live">${t("workboard.live")}</span>` : nothing}
-      </div>
-      <h3>${card.title}</h3>
-      ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props, task)}
-      ${renderDependencyBadges(dependencies)}
-      ${
-        card.labels.length
-          ? html`<div class="workboard-labels">
-              ${card.labels.map((label) => html`<span>${label}</span>`)}
-            </div>`
-          : nothing
-      }
-      ${renderCompactBadges(card, task)}
-      <div class="workboard-card__meta">
-        <span>${linkedSessionKey ?? t("workboard.noLinkedSession")}</span>
-      </div>
-      ${renderEvents(card)}
-      ${
-        widget
-          ? html`<div class="workboard-card__actions workboard-card__actions--widget">
-              ${moveAction}
-            </div>`
-          : html`<div class="workboard-card__actions">
-              ${renderCardActionSlot(detailAction)}
-              <div class="workboard-card__actions-primary">
-                ${renderCardActionSlot(sessionAction)} ${renderCardActionSlot(stopAction)}
-                ${renderCardActionSlot(moveAction)}
-              </div>
-              ${renderCardActionSlot(deleteAction)}
-            </div>`
-      }
+        }`}
     </article>
   `;
+}
+
+function dropBeforeCardId(event: DragEvent, draggedCardId: string | null): string | null {
+  const column = event.currentTarget;
+  if (!(column instanceof HTMLElement)) {
+    return null;
+  }
+  const items = column.querySelectorAll<HTMLElement>(".workboard-column__item");
+  for (const item of items) {
+    if (item.dataset.cardId === draggedCardId) {
+      continue;
+    }
+    const bounds = item.getBoundingClientRect();
+    if (event.clientY < bounds.top + bounds.height / 2) {
+      return item.dataset.cardId ?? null;
+    }
+  }
+  return null;
 }
 
 export function renderColumn(
   props: WorkboardProps,
   status: WorkboardStatus,
   cards: WorkboardCard[],
-  options: { surface?: WorkboardCardSurface } = {},
+  options: { surface?: WorkboardCardSurface; boardFilter?: string } = {},
 ) {
   const state = getWorkboardState(props.host);
   const writable = canMutate(props);
   const surface = options.surface ?? "page";
-  const collapsible = surface === "page";
+  const collapsible = surface !== "widget";
+  const canCreate = surface !== "widget" && writable;
   const label = formatStatusLabel(status);
+  const hasHiddenCards =
+    cards.length === 0 &&
+    state.cards.some(
+      (card) =>
+        card.status === status &&
+        (state.showArchived || isActiveWorkboardCard(card)) &&
+        matchesBoardFilter(card, state.boardFilter) &&
+        matchesAgentScope(
+          card,
+          props.agentsList?.defaultId ?? props.defaultAgentId,
+          props.scopeAgentId,
+        ),
+    );
+  const renderCreateButton = (className: string, withLabel = false) => html`
+    <button
+      class=${className}
+      type="button"
+      title=${withLabel ? nothing : t("workboard.newCardInColumn", { column: label })}
+      aria-label=${t("workboard.newCardInColumn", { column: label })}
+      aria-haspopup="dialog"
+      aria-expanded=${state.draftOpen ? "true" : "false"}
+      aria-controls=${workboardCardModalId}
+      ?disabled=${state.dispatching}
+      @click=${() => {
+        openCreateModal(state, props, status);
+        props.onRequestUpdate?.();
+      }}
+    >
+      <span aria-hidden="true">${icons.plus}</span>
+      ${withLabel ? html`<span>${t("workboard.newCard")}</span>` : nothing}
+    </button>
+  `;
   const autoCollapsed =
     state.emptyColumnMode === "collapse" &&
     cards.length === 0 &&
     !state.expandedEmptyStatuses.has(status);
   const collapsed = collapsible && (state.collapsedStatuses.has(status) || autoCollapsed);
-  const expandColumn = () => {
+  const dropTarget = Boolean(state.draggedCardId && state.dragOverStatus === status);
+  const lastDropCardId = cards.findLast((card) => card.id !== state.draggedCardId)?.id;
+  const restoreToggleFocus = (event: MouseEvent) => {
+    if (event.detail !== 0) {
+      return;
+    }
+    if (!(event.currentTarget instanceof HTMLElement)) {
+      return;
+    }
+    const column = event.currentTarget.closest(".workboard-column");
+    // The toggle is replaced on collapse; keep keyboard focus on its replacement.
+    queueMicrotask(() => {
+      column
+        ?.querySelector<HTMLButtonElement>(".workboard-column__rail, .workboard-column__collapse")
+        ?.focus({ preventScroll: true });
+    });
+  };
+  const expandColumn = (event: MouseEvent) => {
     state.collapsedStatuses.delete(status);
     if (cards.length === 0) {
       state.expandedEmptyStatuses.add(status);
     }
     props.onRequestUpdate?.();
+    restoreToggleFocus(event);
   };
-  const collapseColumn = () => {
+  const collapseColumn = (event: MouseEvent) => {
     state.collapsedStatuses.add(status);
     state.expandedEmptyStatuses.delete(status);
     props.onRequestUpdate?.();
+    restoreToggleFocus(event);
   };
   return html`
     <section
       class="workboard-column workboard-column--${status} ${
-        state.draggedCardId ? "workboard-column--drop" : ""
+        state.draggedCardId && state.dragOverStatus === status
+          ? "workboard-column--drop-target"
+          : ""
       } ${collapsed ? "workboard-column--collapsed" : ""}"
       aria-label=${`${label}, ${cards.length}`}
       @dragover=${(event: DragEvent) => {
         if (writable && state.draggedCardId) {
           event.preventDefault();
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = "move";
+          }
+          const beforeCardId = dropBeforeCardId(event, state.draggedCardId);
+          if (state.dragOverStatus !== status || state.dragBeforeCardId !== beforeCardId) {
+            state.dragOverStatus = status;
+            state.dragBeforeCardId = beforeCardId;
+            props.onRequestUpdate?.();
+          }
+        }
+      }}
+      @dragleave=${(event: DragEvent) => {
+        const column = event.currentTarget;
+        if (!(column instanceof HTMLElement)) {
+          return;
+        }
+        // Moving between cards in the same column keeps that destination active.
+        if (event.relatedTarget instanceof Node && column.contains(event.relatedTarget)) {
+          return;
+        }
+        if (state.dragOverStatus === status) {
+          state.dragOverStatus = null;
+          state.dragBeforeCardId = null;
+          props.onRequestUpdate?.();
         }
       }}
       @drop=${(event: DragEvent) => {
         event.preventDefault();
+        const cardId = event.dataTransfer?.getData("text/plain") || state.draggedCardId;
+        const beforeCardId = dropBeforeCardId(event, cardId);
+        state.draggedCardId = null;
+        state.dragOverStatus = null;
+        state.dragBeforeCardId = null;
+        props.onRequestUpdate?.();
         if (!writable) {
           return;
         }
-        const cardId = event.dataTransfer?.getData("text/plain") || state.draggedCardId;
         const card = state.cards.find((candidate) => candidate.id === cardId);
         if (!card || !isActiveWorkboardCard(card)) {
           return;
@@ -443,7 +416,8 @@ export function renderColumn(
           client: props.client,
           cardId: card.id,
           status,
-          position: nextWorkboardCardPosition(state.cards, card, status),
+          beforeCardId,
+          boardFilter: options.boardFilter ?? state.boardFilter,
           requestUpdate: props.onRequestUpdate,
         });
       }}
@@ -461,55 +435,85 @@ export function renderColumn(
                 <span class="workboard-column__rail-title">${label}</span>
                 <span class="workboard-column__count">${cards.length}</span>
                 <span class="workboard-column__rail-icon" aria-hidden="true">
-                  <span
-                    class="workboard-column__direction-icon workboard-column__direction-icon--expand-horizontal"
-                    >${icons.panelRightClose}</span
-                  >
-                  <span
-                    class="workboard-column__direction-icon workboard-column__direction-icon--expand-vertical"
-                    >${icons.panelBottomOpen}</span
-                  >
+                  <span class="workboard-column__direction-icon">${icons.maximize}</span>
                 </span>
               </button>
             `
           : html`
               <div class="workboard-column__header">
-                <h2>${label}</h2>
+                <div class="workboard-column__heading">
+                  <h2>${label}</h2>
+                  <span class="workboard-column__count">${cards.length}</span>
+                </div>
                 ${
                   collapsible
-                    ? html`
-                        <div class="workboard-column__header-actions">
-                          <span class="workboard-column__count">${cards.length}</span>
-                          <span title=${t("workboard.collapseColumn", { column: label })}>
-                            <button
-                              class="btn btn--icon workboard-column__collapse"
-                              type="button"
-                              aria-label=${t("workboard.collapseColumn", { column: label })}
-                              aria-expanded="true"
-                              @click=${collapseColumn}
-                            >
-                              <span class="workboard-column__collapse-icon" aria-hidden="true">
-                                <span
-                                  class="workboard-column__direction-icon workboard-column__direction-icon--collapse-horizontal"
-                                  >${icons.panelRightOpen}</span
-                                >
-                                <span
-                                  class="workboard-column__direction-icon workboard-column__direction-icon--collapse-vertical"
-                                  >${icons.panelBottomClose}</span
-                                >
-                              </span>
-                            </button>
-                          </span>
-                        </div>
-                      `
-                    : html`<span class="workboard-column__count">${cards.length}</span>`
+                    ? html`<div class="workboard-column__header-actions">
+                        <button
+                          class="workboard-column__control workboard-column__collapse"
+                          type="button"
+                          aria-label=${t("workboard.collapseColumn", { column: label })}
+                          title=${t("workboard.collapseColumn", { column: label })}
+                          aria-expanded="true"
+                          @click=${collapseColumn}
+                        >
+                          <span class="workboard-column__direction-icon" aria-hidden="true"
+                            >${icons.minimize}</span
+                          >
+                        </button>
+                        ${canCreate ? renderCreateButton("workboard-column__control") : nothing}
+                      </div>`
+                    : nothing
                 }
               </div>
-              <div class="workboard-column__cards">
+              <div class="workboard-column__cards" ${ref(workboardScrollFadeRef())}>
                 ${
                   cards.length
-                    ? cards.map((card) => renderCard(props, card, surface))
-                    : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`
+                    ? cards.map(
+                        (card) => html`
+                          <div
+                            class="workboard-column__item ${
+                              dropTarget && state.dragBeforeCardId === card.id
+                                ? "workboard-column__item--drop-before"
+                                : ""
+                            } ${
+                              dropTarget &&
+                              state.dragBeforeCardId === null &&
+                              card.id === lastDropCardId
+                                ? "workboard-column__item--drop-after"
+                                : ""
+                            }"
+                            data-card-id=${card.id}
+                          >
+                            ${renderCard(props, card, surface)}
+                          </div>
+                        `,
+                      )
+                    : state.draggedCardId
+                      ? html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`
+                      : !hasHiddenCards && canCreate
+                        ? renderCreateButton(
+                            "workboard-column__add workboard-column__add--empty",
+                            true,
+                          )
+                        : html`<div class="workboard-column__empty">
+                            <span
+                              >${t(
+                                hasHiddenCards
+                                  ? "workboard.emptyFilteredTitle"
+                                  : "workboard.emptyColumnTitle",
+                              )}</span
+                            >
+                            ${
+                              hasHiddenCards
+                                ? html`<span>${t("workboard.emptyFilteredHint")}</span>`
+                                : nothing
+                            }
+                          </div>`
+                }
+                ${
+                  canCreate && !state.draggedCardId && cards.length > 0
+                    ? renderCreateButton("workboard-column__add", true)
+                    : nothing
                 }
               </div>
             `

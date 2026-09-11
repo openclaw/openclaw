@@ -1,3 +1,4 @@
+import "../test/dom.setup.ts";
 import type { ControlUiHost, ControlUiWidget } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
@@ -442,6 +443,14 @@ it.each([
     hidden.setPresented(true);
     expect(hidden.container.textContent).toContain("Ready card");
     expect(hidden.container.querySelector("select")?.disabled).toBe(false);
+    if (input === "drop") {
+      const card = hidden.container.querySelector(".workboard-card");
+      if (!card) {
+        throw new Error("The presented board must render its draggable card.");
+      }
+      // The rejected hidden drop consumes the original drag; start a new gesture.
+      card.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
+    }
     move();
     expect(hidden.scopedRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
       id: "ready",

@@ -85,7 +85,6 @@ export type WorkboardUiState = {
   donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;
-  activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
   emptyColumnMode: "show" | "collapse" | "hide";
@@ -120,6 +119,8 @@ export type WorkboardUiState = {
   detailCommentBody: string;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
+  dragOverStatus: WorkboardStatus | null;
+  dragBeforeCardId: string | null;
   capturingSessionKeys: Set<string>;
 };
 
