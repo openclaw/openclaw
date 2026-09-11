@@ -5,6 +5,7 @@ import {
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
   ReplyToModeSchema,
+  buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -44,6 +45,7 @@ export const NextcloudTalkAccountSchemaBase = z
     webhookPath: z.string().optional(),
     webhookPublicUrl: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
+    mediaAllowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
@@ -65,6 +67,22 @@ export const NextcloudTalkConfigSchema = buildMultiAccountChannelSchema(
         ctx,
         requireOpenAllowFrom,
       });
+    },
+  },
+);
+
+export const NextcloudTalkChannelConfigSchema = buildChannelConfigSchema(
+  NextcloudTalkConfigSchema,
+  {
+    uiHints: {
+      mediaAllowFrom: {
+        label: "Nextcloud Talk Inbound Media Allowlist",
+        help: 'User IDs whose attachments may be processed after ordinary access and mention checks. Omitted or empty denies all media; use ["*"] for every otherwise-authorized sender.',
+      },
+      "accounts.*.mediaAllowFrom": {
+        label: "Nextcloud Talk Account Inbound Media Allowlist",
+        help: 'Per-account attachment allowlist. Omitted or empty denies all media; use ["*"] for every otherwise-authorized sender.',
+      },
     },
   },
 );

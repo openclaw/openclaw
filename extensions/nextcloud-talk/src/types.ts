@@ -64,7 +64,7 @@ type NextcloudTalkTarget = {
 
 /** Incoming webhook payload from Nextcloud Talk. */
 export type NextcloudTalkWebhookPayload = {
-  type: "Create" | "Update" | "Delete";
+  type: "Create" | "Update" | "Delete" | "Activity";
   actor: NextcloudTalkActor;
   object: NextcloudTalkObject;
   target: NextcloudTalkTarget;
@@ -78,6 +78,16 @@ export type NextcloudTalkSendResult = {
   timestamp?: number;
 };
 
+/** Signed but untrusted file metadata parsed from a Talk `file_shared` activity. */
+export type NextcloudTalkInboundAttachment = {
+  fileId?: string;
+  name: string;
+  mimeType: string;
+  declaredSizeBytes: number;
+  shareUrl: string;
+  hideDownload: boolean;
+};
+
 /** Parsed incoming message context. */
 export type NextcloudTalkInboundMessage = {
   messageId: string;
@@ -89,6 +99,8 @@ export type NextcloudTalkInboundMessage = {
   mediaType: string;
   timestamp: number;
   isGroupChat: boolean;
+  attachment?: NextcloudTalkInboundAttachment;
+  attachmentIssue?: "media_missing_metadata";
 };
 
 /** Headers sent by Nextcloud Talk webhook. */

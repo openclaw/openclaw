@@ -1,4 +1,7 @@
-import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundMediaUnavailableText,
+  resolveChannelInboundRouteEnvelope,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
@@ -31,6 +34,15 @@ import {
 } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
+  classifyNextcloudTalkMediaFailure,
+  isNextcloudTalkMediaSenderAllowed,
+  logNextcloudTalkMediaNonOutcome,
+  resolveNextcloudTalkAttachmentReference,
+  resolveNextcloudTalkAuthenticatedMediaSource,
+  resolveNextcloudTalkMediaMaxBytes,
+  saveNextcloudTalkInboundMedia,
+} from "./inbound-media.js";
+import {
   normalizeNextcloudTalkAllowEntry,
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
@@ -41,6 +53,7 @@ import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { canonicalizeNextcloudTalkNativeVoiceMedia } from "./voice-media.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -130,6 +143,8 @@ export async function handleNextcloudTalkInbound(params: {
   turnAdoptionLifecycle?: Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
+  const ingressAbortSignal = params.turnAdoptionLifecycle?.abortSignal;
+  ingressAbortSignal?.throwIfAborted();
   const core = getNextcloudTalkRuntime();
   const pairing = createChannelPairingController({
     core,
@@ -138,7 +153,8 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const rawBody = message.text?.trim() ?? "";
-  if (!rawBody) {
+  const hasInboundMedia = Boolean(message.attachment || message.attachmentIssue);
+  if (!rawBody && !hasInboundMedia) {
     logInboundDrop({
       log: (messageLocal) => runtime.log?.(messageLocal),
       channel: CHANNEL_ID,
@@ -265,7 +281,6 @@ export async function handleNextcloudTalkInbound(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (messageValue) => runtime.log?.(messageValue),
   });
-  const commandAuthorized = access.commandAccess.authorized;
   const accessReason =
     access.ingress.reasonCode === "route_blocked"
       ? "route blocked"
@@ -333,12 +348,13 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
   });
-  access = await resolveAccess(isGroup ? wasMentioned : undefined, {
+  const contextBinding: ChannelIngressContextBinding = {
     agentId: route.agentId,
     sessionKey: route.sessionKey,
     messageId: message.messageId,
     inboundEventKind: "user_request",
-  });
+  };
+  access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
     runtime.log?.(
@@ -349,12 +365,245 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
+  let stagedMedia: { path: string; contentType?: string } | undefined;
+  let stagedMediaId: string | undefined;
+  let sourceModality: "audio" | "voice" | undefined;
+  let authorizedMediaUnavailable = false;
+  let performedAsyncMediaWork = false;
+  // Claim retirement may race a store write that ignores or narrowly loses the abort.
+  // Clear local adoption state before best-effort deletion so no later branch can dispatch it.
+  const deleteStagedMedia = async () => {
+    const mediaId = stagedMediaId;
+    stagedMediaId = undefined;
+    stagedMedia = undefined;
+    if (!mediaId) {
+      return;
+    }
+    try {
+      await core.channel.media.deleteMediaBuffer(mediaId);
+    } catch {
+      logNextcloudTalkMediaNonOutcome({
+        log: (messageLocal) => runtime.log?.(messageLocal),
+        reason: "media_cleanup_failed",
+        accountId: account.accountId,
+        messageId: message.messageId,
+        senderId,
+      });
+    }
+  };
+  const cleanupAndThrowIfIngressAborted = async () => {
+    if (!ingressAbortSignal?.aborted) {
+      return;
+    }
+    await deleteStagedMedia();
+    ingressAbortSignal.throwIfAborted();
+  };
+  const throwIfIngressAborted = () => ingressAbortSignal?.throwIfAborted();
+  const mediaSenderAllowed =
+    hasInboundMedia &&
+    isNextcloudTalkMediaSenderAllowed({
+      mediaAllowFrom: account.config.mediaAllowFrom,
+      senderId,
+    });
+  if (hasInboundMedia && !mediaSenderAllowed) {
+    logNextcloudTalkMediaNonOutcome({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      reason: "media_sender_not_allowlisted",
+      accountId: account.accountId,
+      messageId: message.messageId,
+      senderId,
+    });
+    if (!rawBody) {
+      return;
+    }
+  } else if (message.attachmentIssue) {
+    authorizedMediaUnavailable = true;
+    logNextcloudTalkMediaNonOutcome({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      reason: message.attachmentIssue,
+      accountId: account.accountId,
+      messageId: message.messageId,
+      senderId,
+    });
+  } else if (message.attachment?.hideDownload) {
+    authorizedMediaUnavailable = true;
+    logNextcloudTalkMediaNonOutcome({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      reason: "media_hidden_download",
+      accountId: account.accountId,
+      messageId: message.messageId,
+      senderId,
+    });
+  } else if (message.attachment) {
+    const mediaMaxBytes = resolveNextcloudTalkMediaMaxBytes({
+      // SAFETY: runtime ingress receives full OpenClawConfig; local CoreConfig is narrower.
+      cfg: config as OpenClawConfig,
+      accountId: account.accountId,
+      mediaMaxMb: account.config.mediaMaxMb,
+    });
+    if (message.attachment.declaredSizeBytes > mediaMaxBytes) {
+      authorizedMediaUnavailable = true;
+      logNextcloudTalkMediaNonOutcome({
+        log: (messageLocal) => runtime.log?.(messageLocal),
+        reason: "media_declared_oversize",
+        accountId: account.accountId,
+        messageId: message.messageId,
+        senderId,
+        sizeBytes: message.attachment.declaredSizeBytes,
+        maxBytes: mediaMaxBytes,
+      });
+    } else {
+      const attachmentReference = resolveNextcloudTalkAttachmentReference({
+        baseUrl: account.baseUrl,
+        shareUrl: message.attachment.shareUrl,
+        fileName: message.attachment.name,
+      });
+      if (!attachmentReference.ok) {
+        authorizedMediaUnavailable = true;
+        logNextcloudTalkMediaNonOutcome({
+          log: (messageLocal) => runtime.log?.(messageLocal),
+          reason: attachmentReference.reason,
+          accountId: account.accountId,
+          messageId: message.messageId,
+          senderId,
+        });
+      } else {
+        performedAsyncMediaWork = true;
+        throwIfIngressAborted();
+        const authenticatedSource = await resolveNextcloudTalkAuthenticatedMediaSource({
+          baseUrl: account.baseUrl,
+          roomToken,
+          messageId: message.messageId,
+          senderId,
+          attachment: message.attachment,
+          accountConfig: account.config,
+          reference: attachmentReference,
+          signal: ingressAbortSignal,
+        });
+        throwIfIngressAborted();
+        if (!authenticatedSource.ok) {
+          authorizedMediaUnavailable = true;
+          logNextcloudTalkMediaNonOutcome({
+            log: (messageLocal) => runtime.log?.(messageLocal),
+            reason: authenticatedSource.reason,
+            accountId: account.accountId,
+            messageId: message.messageId,
+            senderId,
+            ...(authenticatedSource.status === undefined
+              ? {}
+              : { status: authenticatedSource.status }),
+          });
+        } else {
+          sourceModality = authenticatedSource.sourceModality;
+          access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+          throwIfIngressAborted();
+          if (access.ingress.admission !== "dispatch") {
+            runtime.log?.(
+              isGroup && access.activationAccess.shouldSkip
+                ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+                : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+            );
+            return;
+          }
+          try {
+            throwIfIngressAborted();
+            const saved = await saveNextcloudTalkInboundMedia({
+              saveRemoteMedia: core.channel.media.saveRemoteMedia,
+              url: authenticatedSource.url,
+              origin: authenticatedSource.origin,
+              hostname: authenticatedSource.hostname,
+              accountConfig: account.config,
+              maxBytes: mediaMaxBytes,
+              fileName: authenticatedSource.fileName,
+              mimeType: authenticatedSource.contentTypeOverride ?? message.attachment.mimeType,
+              authorization: authenticatedSource.authorization,
+              signal: ingressAbortSignal,
+            });
+            stagedMediaId = saved.id;
+            const canonicalized =
+              sourceModality === "voice"
+                ? await canonicalizeNextcloudTalkNativeVoiceMedia(saved)
+                : { ok: true as const, media: saved };
+            if (!canonicalized.ok) {
+              await deleteStagedMedia();
+              authorizedMediaUnavailable = true;
+              logNextcloudTalkMediaNonOutcome({
+                log: (messageLocal) => runtime.log?.(messageLocal),
+                reason: "media_unsupported",
+                accountId: account.accountId,
+                messageId: message.messageId,
+                senderId,
+              });
+            } else {
+              stagedMediaId = canonicalized.media.id;
+              stagedMedia = {
+                path: canonicalized.media.path,
+                ...(canonicalized.media.contentType
+                  ? { contentType: canonicalized.media.contentType }
+                  : {}),
+              };
+              if (!sourceModality && stagedMedia.contentType?.startsWith("audio/")) {
+                sourceModality = "audio";
+              }
+            }
+            if (ingressAbortSignal?.aborted) {
+              await cleanupAndThrowIfIngressAborted();
+            }
+          } catch (error) {
+            if (ingressAbortSignal?.aborted) {
+              await cleanupAndThrowIfIngressAborted();
+            }
+            authorizedMediaUnavailable = true;
+            const failure = classifyNextcloudTalkMediaFailure(error);
+            logNextcloudTalkMediaNonOutcome({
+              log: (messageLocal) => runtime.log?.(messageLocal),
+              reason: failure.reason,
+              accountId: account.accountId,
+              messageId: message.messageId,
+              senderId,
+              status: failure.status,
+              ...(failure.reason === "media_download_oversize" ? { maxBytes: mediaMaxBytes } : {}),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (performedAsyncMediaWork) {
+    if (ingressAbortSignal?.aborted) {
+      await cleanupAndThrowIfIngressAborted();
+    }
+    access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+    if (ingressAbortSignal?.aborted) {
+      await cleanupAndThrowIfIngressAborted();
+    }
+    if (access.ingress.admission !== "dispatch") {
+      await deleteStagedMedia();
+      runtime.log?.(
+        isGroup && access.activationAccess.shouldSkip
+          ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+          : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+      );
+      return;
+    }
+  }
+
+  if (ingressAbortSignal?.aborted) {
+    await cleanupAndThrowIfIngressAborted();
+  }
+  const agentBody = authorizedMediaUnavailable
+    ? formatInboundMediaUnavailableText({
+        body: rawBody,
+        notice: "[Nextcloud Talk attachment unavailable]",
+      })
+    : rawBody;
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
   const body = buildEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
-    body: rawBody,
+    body: agentBody,
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
@@ -380,17 +629,27 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: rawBody, rawBody, commandBody },
+    message: {
+      body,
+      bodyForAgent: agentBody,
+      rawBody,
+      commandBody,
+      ...(sourceModality ? { sourceModality } : {}),
+    },
     access: {
-      commands: { authorized: commandAuthorized },
+      commands: { authorized: access.commandAccess.authorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },
     },
+    ...(stagedMedia ? { media: [stagedMedia] } : {}),
     extra: {
       GroupSubject: isGroup ? roomName || roomToken : undefined,
       GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     },
   });
 
+  if (ingressAbortSignal?.aborted) {
+    await cleanupAndThrowIfIngressAborted();
+  }
   await core.channel.inbound.dispatch({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
