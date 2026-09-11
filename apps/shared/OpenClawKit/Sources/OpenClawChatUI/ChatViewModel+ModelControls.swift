@@ -43,7 +43,8 @@ extension OpenClawChatViewModel {
         }
         guard self.isCurrentSession(session) else { return nil }
         return OpenClawChatModelSignInContext(
-            agentID: context.agentID, request: context.request,
+            agentID: context.agentID,
+            request: context.request,
             isCurrent: { [weak self] in
                 guard let self, self.isCurrentSession(session) else { return false }
                 let current = await context.isCurrent()

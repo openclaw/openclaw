@@ -62,7 +62,8 @@ public struct OpenClawChatThinkingProfile: Sendable {
         model: OpenClawChatModelChoice?) -> Self?
     {
         if let profile = self.profile(
-            levels: session?.thinkingLevels, legacyOptions: session?.thinkingOptions,
+            levels: session?.thinkingLevels,
+            legacyOptions: session?.thinkingOptions,
             defaultLevel: session?.thinkingDefault)
         {
             return profile
@@ -71,7 +72,8 @@ public struct OpenClawChatThinkingProfile: Sendable {
             (session?.model == nil || session?.model == defaults?.model) &&
             self.routesMatch(session?.agentRuntime, defaults?.agentRuntime)
         if defaultsMatch, let profile = self.profile(
-            levels: defaults?.thinkingLevels, legacyOptions: defaults?.thinkingOptions,
+            levels: defaults?.thinkingLevels,
+            legacyOptions: defaults?.thinkingOptions,
             defaultLevel: defaults?.thinkingDefault)
         {
             return profile

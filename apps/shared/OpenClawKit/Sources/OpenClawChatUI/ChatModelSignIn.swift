@@ -94,7 +94,7 @@ final class ChatModelSignInModel {
             self
                 .message =
                 String(
-                    localized: "Could not load sign-in options. Check the connection or update the Gateway, then retry.")
+                    localized: "Could not load sign-in options. Check the connection or update your Gateway.")
         }
     }
 
@@ -198,7 +198,7 @@ final class ChatModelSignInModel {
                 self
                     .message =
                     String(
-                        localized: "Sign-in could not continue. Check the connection, then cancel this attempt and try again.")
+                        localized: "Sign-in stopped. Check the connection, then cancel this attempt and retry.")
             }
         }
     }
