@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const LITELLM_DEFAULT_MODEL = {
@@ -49,15 +50,11 @@ describe("litellm plugin", () => {
           litellmApiKey: "litellm-test-key",
           customBaseUrl: "https://litellm.example/v1/",
         },
-        runtime: {
-          error: vi.fn(),
-          exit: vi.fn(),
-          log: vi.fn(),
-        } as never,
+        runtime: createRuntimeSpies(),
         agentDir,
         resolveApiKey,
         toApiKeyCredential,
-      } as never);
+      });
 
       expect(result).toStrictEqual({
         auth: {
