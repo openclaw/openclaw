@@ -25,6 +25,23 @@ function parseNodeInvokeParams(value = "{}"): unknown {
   }
 }
 
+/**
+ * Resolve the optional --idempotency-key flag. An omitted flag generates a fresh
+ * key, but an explicitly blank value is operator error: forwarding "" or "   "
+ * reaches the Gateway as a real key, where node.invoke requires a non-empty
+ * string, so the whole request is rejected with a cryptic schema error.
+ */
+function resolveIdempotencyKey(value: unknown): string {
+  if (value === undefined) {
+    return randomIdempotencyKey();
+  }
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    throw new Error("--idempotency-key must not be blank.");
+  }
+  return normalized;
+}
+
 /** Register direct node command invocation. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
@@ -53,13 +70,14 @@ export function registerNodesInvokeCommands(nodes: Command) {
             opts.invokeTimeout,
             "--invoke-timeout",
           );
+          const idempotencyKey = resolveIdempotencyKey(opts.idempotencyKey);
           const nodeId = await resolveCliNodeId(opts, nodeQuery);
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command,
             params,
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
+            idempotencyKey,
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;

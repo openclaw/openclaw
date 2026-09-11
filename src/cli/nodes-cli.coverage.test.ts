@@ -287,6 +287,36 @@ describe("nodes-cli coverage", () => {
       message: "--node and --command required",
     },
     {
+      label: "invoke with an empty idempotency key",
+      command: "invoke",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--idempotency-key",
+        "",
+      ],
+      message: "--idempotency-key must not be blank.",
+    },
+    {
+      label: "invoke with a blank idempotency key",
+      command: "invoke",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--idempotency-key",
+        "   ",
+      ],
+      message: "--idempotency-key must not be blank.",
+    },
+    {
       label: "rename with a blank name",
       command: "rename",
       args: ["nodes", "rename", "--node", "mac-1", "--name", "   "],
@@ -371,6 +401,33 @@ describe("nodes-cli coverage", () => {
     expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
     expect(callGateway).not.toHaveBeenCalled();
     expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it("forwards a caller-supplied idempotency key and generates one when omitted", async () => {
+    const supplied = await runNodesCommand([
+      "nodes",
+      "invoke",
+      "--node",
+      "mac-1",
+      "--command",
+      "canvas.eval",
+      "--idempotency-key",
+      "  caller-key  ",
+    ]);
+    expect(supplied.params?.idempotencyKey).toBe("caller-key");
+    expect(randomIdempotencyKey).not.toHaveBeenCalled();
+
+    lastNodeInvokeCall = null;
+    const generated = await runNodesCommand([
+      "nodes",
+      "invoke",
+      "--node",
+      "mac-1",
+      "--command",
+      "canvas.eval",
+    ]);
+    expect(generated.params?.idempotencyKey).toBe("rk_test");
+    expect(randomIdempotencyKey).toHaveBeenCalledTimes(1);
   });
 
   it("invokes system.notify with provided fields", async () => {
