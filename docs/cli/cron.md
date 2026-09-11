@@ -359,6 +359,7 @@ openclaw automations runs <job-id> --limit 50
 openclaw automations runs <job-id> --limit 50 --json
 openclaw automations runs <job-id> --run-id <run-id>
 openclaw automations runs <job-id> --status error --query timeout
+openclaw automations runs <job-id> --statuses ok error
 openclaw automations runs <job-id> --delivery-status not-delivered
 openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 ```
@@ -372,6 +373,12 @@ with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 searches run summaries and errors. `--sort asc|desc` selects oldest-first or
 newest-first order, and `--offset <n>` advances through the result set using the
 page metadata returned by the previous command.
+
+To match several values at once, repeat them after the plural flags: `--statuses
+ok error` (from `ok`, `error`, `skipped`) and `--delivery-statuses delivered
+unknown` (same values as `--delivery-status`). The Gateway prefers the plural
+list and falls back to the singular flag. Because these flags consume every
+following argument, pass the `<job-id>` positional before them or use `--id`.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 

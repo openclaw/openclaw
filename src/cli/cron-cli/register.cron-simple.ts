@@ -224,6 +224,23 @@ export function registerCronSimpleCommands(cron: Command) {
           "not-requested",
         ]),
       )
+      // Plural forms map to the RPC's statuses[]/deliveryStatuses[] arrays, which
+      // OR the listed values. They coexist with the singular flags; the Gateway
+      // prefers the array and falls back to the scalar. Variadic, so the [id]
+      // positional must come before these flags (or use --id).
+      .addOption(
+        new Option("--statuses <status...>", "Filter by one or more run statuses").choices([
+          "ok",
+          "error",
+          "skipped",
+        ]),
+      )
+      .addOption(
+        new Option(
+          "--delivery-statuses <status...>",
+          "Filter by one or more delivery statuses",
+        ).choices(["delivered", "not-delivered", "unknown", "not-requested"]),
+      )
       .option("--query <text>", "Filter by run summary or error text")
       .option("--offset <n>", "Entries to skip before returning results")
       .addOption(new Option("--sort <direction>", "Sort by run time").choices(["asc", "desc"]))
@@ -256,6 +273,12 @@ export function registerCronSimpleCommands(cron: Command) {
             ...(typeof opts.status === "string" ? { status: opts.status } : {}),
             ...(typeof opts.deliveryStatus === "string"
               ? { deliveryStatus: opts.deliveryStatus }
+              : {}),
+            ...(Array.isArray(opts.statuses) && opts.statuses.length
+              ? { statuses: opts.statuses }
+              : {}),
+            ...(Array.isArray(opts.deliveryStatuses) && opts.deliveryStatuses.length
+              ? { deliveryStatuses: opts.deliveryStatuses }
               : {}),
             ...(typeof opts.query === "string" ? { query: opts.query } : {}),
             ...(offset !== undefined ? { offset } : {}),
