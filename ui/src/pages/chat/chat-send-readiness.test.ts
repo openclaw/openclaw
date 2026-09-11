@@ -23,20 +23,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([
-  { message: "/stop", action: "abort" },
-  { message: "/approve approval-123 allow-once", action: "approve" },
-  { message: "ordinary draft", action: "blocked" },
-  { message: "/stop after the next turn", action: "blocked" },
-  { message: "/stop", action: "goal" },
-] as const)(
-  "keeps $action admission separate from initial history",
-  async ({ message, action }) => {
+it.each(
+  [
+    { message: "/stop", action: "abort" },
+    { message: "/approve approval-123 allow-once", action: "approve" },
+    { message: "ordinary draft", action: "blocked" },
+    { message: "/stop after the next turn", action: "blocked" },
+    { message: "/stop", action: "goal" },
+  ].flatMap((test) =>
+    (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({ ...test, hydrated })),
+  ),
+)(
+  "keeps $action admission separate from initial history (run hydrated: $hydrated)",
+  async ({ message, action, hydrated }) => {
     const history = createDeferred<ChatHistoryResult>();
     const host = makeChatHost({
       chatMessage: message,
-      chatRunId: "waiting-run",
-      chatStream: "Waiting for approval",
+      chatRunId: hydrated ? "waiting-run" : null,
+      chatStream: hydrated ? "Waiting for approval" : null,
       requestHandlers: {
         "chat.startup": () => history.promise,
         "chat.abort": { aborted: true },
@@ -44,14 +48,21 @@ it.each([
       },
     });
     const loading = loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = handleSendChat(
+      host,
+      undefined,
+      action === "goal"
+        ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
+        : undefined,
+    );
     try {
-      await handleSendChat(
-        host,
-        undefined,
-        action === "goal"
-          ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
-          : undefined,
-      );
+      if (action === "approve") {
+        await vi.waitFor(() =>
+          expect(findChatSendPayload(host)).toMatchObject({ sessionKey: host.sessionKey, message }),
+        );
+      } else {
+        await sending;
+      }
       expect(host.chatLoading).toBe(true);
       if (action === "abort") {
         expect(host.request).toHaveBeenCalledWith("chat.abort", {
@@ -63,6 +74,7 @@ it.each([
       }
       if (action === "approve") {
         expect(findChatSendPayload(host)).toMatchObject({ sessionKey: host.sessionKey, message });
+        expect(host.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
       } else {
         expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
       }
@@ -73,6 +85,58 @@ it.each([
     } finally {
       history.resolve({ messages: [] });
       await loading;
+      await sending;
+    }
+  },
+);
+
+it.each(["replacement Gateway", "reconnected client", "offline pane"] as const)(
+  "keeps accepted-history admission scoped through a %s",
+  async (change) => {
+    const sessionKey = "agent:main:main";
+    const accepted: ChatHistoryResult = {
+      sessionId: "old-session",
+      messages: [],
+      sessionInfo: { key: sessionKey, sessionId: "old-session", kind: "direct", updatedAt: 1 },
+    };
+    const history = createDeferred<ChatHistoryResult>();
+    let initial = true;
+    const requestHandlers = {
+      "chat.startup": () => (initial ? accepted : history.promise),
+      "chat.history": accepted,
+      "chat.send": { runId: "new-run", status: "started" },
+    };
+    const host = makeChatHost({
+      sessionKey,
+      chatMessage: "Keep this draft unsent",
+      requestHandlers,
+    });
+    await loadChatHistory(host, { startup: true, deferBranches: true });
+    initial = false;
+    const next =
+      change === "replacement Gateway" ? makeChatHost({ sessionKey, requestHandlers }) : host;
+    host.client = next.client;
+    host.sessions = next.sessions;
+    host.connectionEpoch += 1;
+    if (change === "offline pane") {
+      host.connected = false;
+    }
+    const loading =
+      change === "offline pane"
+        ? Promise.resolve()
+        : loadChatHistory(host, { startup: true, deferBranches: true });
+    const sending = handleSendChat(host);
+    history.resolve(accepted);
+    await loading;
+    await sending;
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(next.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    if (change === "offline pane") {
+      expect(host.chatQueue).toEqual([expect.objectContaining({ text: "Keep this draft unsent" })]);
+      expect(host.chatMessage).toBe("");
+    } else {
+      expect(host.chatMessage).toBe("Keep this draft unsent");
+      expect(host.chatQueue).toEqual([]);
     }
   },
 );

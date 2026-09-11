@@ -209,15 +209,19 @@ export function getAcceptedChatHistorySession(state: ChatState) {
 }
 
 /** Cached identity alone cannot admit a send before the first authoritative history result. */
-export function isInitialChatHistoryUnavailable(
-  state: Pick<ChatState, "chatLoading" | "currentSessionId" | "sessionKey">,
-): boolean {
+export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
   const requests = chatHistoryRequests(state);
   const accepted = requests.acceptedHistory;
   // Established panes retain their existing refresh and offline queue behavior.
   if (
     state.currentSessionId &&
-    accepted?.sessionKey === state.sessionKey &&
+    accepted &&
+    state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
+    (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
+    accepted.sessionKey === state.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId === state.currentSessionId
   ) {
     return false;
