@@ -277,19 +277,33 @@ function migrateLegacyClaudeSessionField(
   return true;
 }
 
-function repairSessionAuthProfileReference(
+function repairSessionAuthProfileReferences(
   entry: SessionEntry,
   profileIdMap: ReadonlyMap<string, string> | undefined,
 ): boolean {
+  let changed = false;
   const replacement =
     typeof entry.authProfileOverride === "string"
-      ? profileIdMap?.get(entry.authProfileOverride)
+      ? profileIdMap?.get(entry.authProfileOverride.trim())
       : undefined;
-  if (replacement === undefined || replacement === entry.authProfileOverride) {
-    return false;
+  if (replacement !== undefined && replacement !== entry.authProfileOverride) {
+    entry.authProfileOverride = replacement;
+    changed = true;
   }
-  entry.authProfileOverride = replacement;
-  return true;
+  const fallback = entry.modelFallback;
+  const previousReplacement =
+    typeof fallback?.prevAuthProfileOverride === "string"
+      ? profileIdMap?.get(fallback.prevAuthProfileOverride.trim())
+      : undefined;
+  if (
+    fallback &&
+    previousReplacement !== undefined &&
+    previousReplacement !== fallback.prevAuthProfileOverride
+  ) {
+    fallback.prevAuthProfileOverride = previousReplacement;
+    changed = true;
+  }
+  return changed;
 }
 
 /** Complete account renames or repair legacy session bindings and model routes. */
@@ -311,7 +325,7 @@ function repairCodexSessionStoreRoutes(params: {
     if (params.authProfileOnly) {
       if (
         !isValidAgentHarnessSessionStoreEntry(sessionKey, entry) &&
-        repairSessionAuthProfileReference(entry, params.authProfileIdMap)
+        repairSessionAuthProfileReferences(entry, params.authProfileIdMap)
       ) {
         entry.updatedAt = now;
         sessionKeys.push(sessionKey);
@@ -378,7 +392,7 @@ function repairCodexSessionStoreRoutes(params: {
     );
     // Providerless route repair first needs the legacy profile prefix; only the
     // auth migration owner's exact collision-aware map may rewrite its identity.
-    const changedAuthProfile = repairSessionAuthProfileReference(entry, params.authProfileIdMap);
+    const changedAuthProfile = repairSessionAuthProfileReferences(entry, params.authProfileIdMap);
     const changedRetiredModel = params.retirement
       ? repairRetiredSessionModelRef(
           entry,

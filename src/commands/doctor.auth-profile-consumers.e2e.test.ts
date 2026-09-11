@@ -11,9 +11,11 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -26,6 +28,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 function runDoctor(env: NodeJS.ProcessEnv) {
+  closeOpenClawAgentDatabasesForTest();
   const result = spawnSync(
     process.execPath,
     ["openclaw.mjs", "doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
@@ -41,6 +44,7 @@ function runDoctor(env: NodeJS.ProcessEnv) {
 }
 
 async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
+  closeOpenClawAgentDatabasesForTest();
   const child = spawn(process.execPath, ["openclaw.mjs", "doctor"], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     cols: 240,
@@ -365,6 +369,51 @@ describe("doctor auth-profile consumers", () => {
           });
           clearUserProfileAuthLink({ profileId: person.id, provider: "openai" });
           const linkedAt = listUserProfileAuthLinks(person.id)[0]!.updatedAt;
+          const sessionEntry = {
+            updatedAt: 1,
+            modelProvider: "anthropic",
+            model: "test-model",
+            authProfileOverride: reference,
+            authProfileOverrideSource: "user" as const,
+            modelFallback: {
+              prevModel: "test-model",
+              prevProvider: "anthropic",
+              prevAuthProfileOverride: reference,
+              prevAuthProfileOverrideSource: "user-link" as const,
+              prevAuthProfileOverrideCompactionCount: 3,
+              prevThinkingLevel: "low",
+              lastValidatedPatchTs: 1,
+              ts: 2,
+              source: "agent-patch" as const,
+            },
+          };
+          const unmapped = " unrelated:account ";
+          const sessionEntries = {
+            pins: sessionEntry,
+            rollback: { ...sessionEntry, authProfileOverride: unmapped },
+            unmapped: {
+              ...sessionEntry,
+              authProfileOverride: unmapped,
+              modelFallback: { ...sessionEntry.modelFallback, prevAuthProfileOverride: unmapped },
+            },
+            protected: { ...sessionEntry, agentHarnessId: "openclaw", modelSelectionLocked: true },
+          };
+          const sessionScope = (name: string) => ({
+            agentId: "main",
+            sessionKey: `agent:main:${name}`,
+            env: state.env,
+          });
+          for (const [name, entry] of Object.entries(sessionEntries)) {
+            await replaceSessionEntry(sessionScope(name), { ...entry, sessionId: name });
+          }
+          const readSessions = () =>
+            Object.fromEntries(
+              Object.keys(sessionEntries).map((name) => [
+                name,
+                loadSessionEntry(sessionScope(name)),
+              ]),
+            );
+          const savedSessions = readSessions();
           await (interactive ? runInteractiveDoctor(state.env, true) : runDoctor(state.env));
 
           const snapshot = await readConfigFileSnapshot();
@@ -420,10 +469,23 @@ describe("doctor auth-profile consumers", () => {
             model: `anthropic/test-model@${renamed}`,
             fallbacks: [`anthropic/test-model@20260101@${renamed}`],
           });
+          const repairedSessions = readSessions();
+          for (const name of ["pins", "rollback"]) {
+            expect(repairedSessions[name]).toEqual({
+              ...savedSessions[name],
+              updatedAt: expect.any(Number),
+              authProfileOverride: name === "pins" ? renamed : unmapped,
+              modelFallback: { ...sessionEntry.modelFallback, prevAuthProfileOverride: renamed },
+            });
+          }
+          for (const name of ["unmapped", "protected"]) {
+            expect(repairedSessions[name]).toEqual(savedSessions[name]);
+          }
 
           await (interactive ? runInteractiveDoctor(state.env, false) : runDoctor(state.env));
 
           expect((await loadCronJobsStore(cronStorePath)).jobs[0]?.payload).toEqual(savedPayload);
+          expect(readSessions()).toEqual(repairedSessions);
           expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual(profiles);
           expect(readStoredLinks(person.id)).toEqual(links);
           const repeated = (await readConfigFileSnapshot()).config;
