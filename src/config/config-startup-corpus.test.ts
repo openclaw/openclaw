@@ -10,23 +10,76 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/le
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 import { createConfigIO } from "./io.js";
+import type { OpenClawConfig } from "./types.js";
 
 const corpusDir = fileURLToPath(new URL("../../test/fixtures/config-corpus/", import.meta.url));
 const fixtureNames = fs
   .readdirSync(corpusDir)
   .filter((name) => name.endsWith(".json"))
   .toSorted();
-const expectations: Record<string, { providers: string[]; model?: string }> = {
+const expectations: Record<
+  string,
+  { providers: string[]; model?: string; sourceConfig?: OpenClawConfig }
+> = {
   "agent-override.json": { providers: ["openai", "fixture-provider"] },
   "api-key-no-models.json": { providers: ["openai"] },
+  "coach-lassi.json": {
+    providers: ["openai"],
+    sourceConfig: {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              agentRuntime: { id: "openclaw" },
+              params: { responsesServerCompaction: true, responsesCompactEndpoint: true },
+            },
+          },
+        },
+      },
+    },
+  },
+  "crossclaw.json": {
+    providers: ["openai"],
+    sourceConfig: {
+      agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.4"] } } },
+      models: { providers: { openai: { baseUrl: "", models: [] } } },
+    },
+  },
   "custom-models.json": { providers: ["openai"], model: "fixture-model" },
   "empty-providers.json": { providers: ["openai"] },
   "enabled-only.json": { providers: ["openai"] },
+  "falc0n.json": {
+    providers: ["openai"],
+    sourceConfig: {
+      agents: {
+        defaults: { modelPolicy: { allow: [] } },
+        entries: { main: { model: "openai/gpt-5.4", models: {} } },
+      },
+    },
+  },
+  "hamverbot.json": {
+    providers: ["openai", "xai"],
+    model: "grok-4.3",
+    sourceConfig: {
+      agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+      auth: {
+        profiles: {
+          "openai:fixture3@example.invalid": { provider: "openai", mode: "oauth" },
+          "openai:fixture4@example.invalid": { provider: "openai", mode: "oauth" },
+        },
+      },
+    },
+  },
   "legacy-roster.json": { providers: ["openai"] },
   "models-allow.json": { providers: ["fixture-provider"], model: "fixture-model" },
   "oauth-only.json": { providers: ["openai"] },
-  "operator-container.json": { providers: ["xai"], model: "grok-4.3" },
+  "provider-partially-unavailable.json": { providers: ["openai"], model: "gpt-5.4" },
+  "operator-container.json": { providers: ["openai", "xai"], model: "grok-4.3" },
   "operator-host.json": { providers: ["xai"], model: "grok-4.3" },
+  "peanutto.json": {
+    providers: ["openai", "xai", "ollama"],
+    model: "minimax-m2.7",
+  },
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,7 +114,11 @@ describe("operator config startup corpus", () => {
         path.join(pluginDir, "openclaw.plugin.json"),
         JSON.stringify({
           id: "fixture-extension",
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { apiKey: { type: "string" } },
+          },
         }),
       );
       fs.writeFileSync(
@@ -108,12 +165,27 @@ describe("operator config startup corpus", () => {
         log: console,
       });
       const config = startup.snapshot.config;
-      if (["enabled-only.json", "api-key-no-models.json", "oauth-only.json"].includes(name)) {
+      if (
+        [
+          "enabled-only.json",
+          "api-key-no-models.json",
+          "oauth-only.json",
+          "peanutto.json",
+        ].includes(name)
+      ) {
         expect(startup.snapshot.sourceConfig.models?.providers?.openai).not.toHaveProperty(
           "models",
         );
       }
       const expected = expectations[name]!;
+      if (name === "peanutto.json") {
+        expect(startup.snapshot.sourceConfig.models?.providers?.openai?.apiKey).toBe(
+          "FAKE_CONFIG_CORPUS_CREDENTIAL",
+        );
+      }
+      if (expected.sourceConfig) {
+        expect(startup.snapshot.sourceConfig).toMatchObject(expected.sourceConfig);
+      }
       const agentIds = listAgentIds(config);
       expect(agentIds.length).toBeGreaterThan(0);
       if (name === "legacy-roster.json") {

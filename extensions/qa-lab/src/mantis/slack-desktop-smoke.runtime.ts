@@ -15,12 +15,10 @@ import {
   copyCrabboxArtifacts,
   type CommandRunner,
   defaultCommandRunner,
-  inspectCrabbox,
+  createMantisCrabboxSession,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  stopCrabbox,
-  warmupCrabbox,
 } from "./crabbox-runtime.js";
 import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
@@ -1265,13 +1263,19 @@ export async function runMantisSlackDesktopSmoke(
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? (gatewaySetup || isTruthyOptIn(env[CRABBOX_KEEP_ENV]));
-  const createdLease = explicitLeaseId === undefined;
   const remoteOutputDir = `/tmp/openclaw-mantis-slack-desktop-${startedAt
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
   let credentialLease: SlackGatewayCredentialLease | undefined;
   let leaseHeartbeat: SlackGatewayCredentialHeartbeat | undefined;
-  let leaseId = explicitLeaseId;
+  const session = createMantisCrabboxSession({
+    crabboxBin,
+    cwd: repoRoot,
+    env,
+    leaseId: explicitLeaseId,
+    provider,
+    runner,
+  });
   let summary: MantisSlackDesktopSmokeSummary | undefined;
   let screenshotPath: string | undefined;
   let slackQaDir: string | undefined;
@@ -1280,35 +1284,12 @@ export async function runMantisSlackDesktopSmoke(
   let approvalCheckpointArtifacts: MantisApprovalCheckpointArtifacts | undefined;
 
   try {
-    leaseId =
-      leaseId ??
+    const resolvedLeaseId =
+      session.leaseId ??
       (await timer.timePhase("crabbox.warmup", () =>
-        warmupCrabbox({
-          crabboxBin,
-          cwd: repoRoot,
-          env,
-          idleTimeout,
-          machineClass,
-          market,
-          provider,
-          runner,
-          ttl,
-        }),
+        session.acquire({ idleTimeout, machineClass, market, ttl }),
       ));
-    if (!leaseId) {
-      throw new Error("Crabbox lease id was not resolved.");
-    }
-    const resolvedLeaseId = leaseId;
-    const inspected = await timer.timePhase("crabbox.inspect", () =>
-      inspectCrabbox({
-        crabboxBin,
-        cwd: repoRoot,
-        env,
-        leaseId: resolvedLeaseId,
-        provider,
-        runner,
-      }),
-    );
+    const inspected = await timer.timePhase("crabbox.inspect", () => session.inspect());
     const preparedCredentialEnv = await timer.timePhase("credentials.prepare", () =>
       prepareGatewayCredentialEnv({
         credentialRole,
@@ -1421,15 +1402,7 @@ export async function runMantisSlackDesktopSmoke(
         summaryPath,
         videoPath,
       },
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: resolvedLeaseId,
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${resolvedLeaseId} --open`,
-      },
+      crabbox: session.describe(inspected),
       finishedAt: new Date().toISOString(),
       hydrateMode: normalizeHydrateMode(remoteMetadata?.hydrateMode) ?? hydrateMode,
       outputDir,
@@ -1460,15 +1433,7 @@ export async function runMantisSlackDesktopSmoke(
         summaryPath,
         videoPath,
       },
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId ?? "unallocated",
-        provider,
-        vncCommand: leaseId
-          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
-          : "unallocated",
-      },
+      crabbox: session.describe(),
       error: formatErrorMessage(error),
       finishedAt: new Date().toISOString(),
       hydrateMode,
@@ -1498,8 +1463,8 @@ export async function runMantisSlackDesktopSmoke(
       }
     } finally {
       try {
-        if (createdLease && leaseId && !keepLease) {
-          await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+        if (session.createdLease && session.leaseId && !keepLease) {
+          await session.stop();
         }
       } finally {
         try {

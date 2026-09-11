@@ -1,6 +1,9 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
   captureScreenshot,
   describeControlUiE2e,
@@ -27,6 +30,88 @@ import {
 describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("keeps category navigation while a search replaces pending category results", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const origin = new URL(server.baseUrl).origin;
+    const blockedRequests: string[] = [];
+    await context.route("**/*", async (route) => {
+      const url = route.request().url();
+      if (new URL(url).origin === origin) {
+        await route.continue();
+      } else {
+        blockedRequests.push(url);
+        await route.abort();
+      }
+    });
+    const gateway = await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      presenceUsers: [{ self: true, id: "catalog-proof", name: "Catalog Proof" }],
+      methodResponses: pluginMethodResponses(),
+    });
+    const proofDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? createControlUiE2eArtifactDir("plugin-search-category-navigation")
+        : undefined;
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      const catalog = page.getByRole("region", { name: "Explore plugins" });
+      const chips = catalog.locator(".plugin-catalog-chip");
+      const labels = async () => (await chips.allTextContents()).map((label) => label.trim());
+      await expect.poll(labels).toContain("Channels");
+      const categories = await labels();
+      await page.clock.install();
+      await pauseVirtualClock(page);
+      await gateway.deferNext("plugins.catalog.browse", { category: "channels" });
+      await gateway.deferNext("plugins.catalog.browse", { query: "matrix" });
+      await catalog.getByRole("button", { name: "Channels", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "channels" } });
+      await catalog.getByRole("searchbox", { name: "Search plugins" }).fill("matrix");
+      await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
+      const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
+      await expect.poll(() => cards.count()).toBe(1);
+      expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
+      const duringDebounce = await labels();
+      await page.clock.runFor(250);
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "matrix" } });
+      await gateway.resolveDeferred("plugins.catalog.browse", {
+        items: [
+          {
+            ...matrixDiscoveryPlugin,
+            catalog: { ...matrixDiscoveryPlugin.catalog, name: "Matrix search result" },
+          },
+        ],
+      });
+      await catalog.getByRole("link", { name: "Matrix search result", exact: true }).waitFor();
+      if (proofDir) {
+        expect(await page.locator(".community-invite-card").count()).toBe(0);
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(proofDir, "search-navigation.png"),
+        });
+        await writeFile(
+          path.join(proofDir, "search-navigation.json"),
+          JSON.stringify(
+            {
+              categories,
+              duringDebounce,
+              afterSearch: await labels(),
+              blockedRequests,
+              requests: await gateway.getRequests("plugins.catalog.browse"),
+            },
+            null,
+            2,
+          ),
+        );
+      }
+      expect.soft(duringDebounce).toEqual(categories);
+      expect.soft(await labels()).toEqual(categories);
+    } finally {
+      await context.close();
+    }
+  });
 
   it("renders unified discovery with focused search, category sections, and settings navigation", async () => {
     const context = await newContext();

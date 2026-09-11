@@ -1960,10 +1960,10 @@ internal class FullMessageGateway : AutoCloseable {
                 if (omitMethodCatalog) {
                   ""
                 } else {
-                  "\"methods\":[\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"health\",\"sessions.list\"],"
+                  "\"methods\":[\"chat.history\",${if (advertiseFullRead) "\"chat.message.get\"," else ""}\"chat.metadata\",\"models.list\",\"health\",\"sessions.list\"],"
                 }
               json.parseToJsonElement(
-                """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
+                """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
             }
 
@@ -2007,7 +2007,11 @@ internal class FullMessageGateway : AutoCloseable {
             }
 
             "chat.metadata" -> {
-              json.parseToJsonElement("""{"commands":[],"models":[]}""")
+              json.parseToJsonElement("""{"commands":[]}""")
+            }
+
+            "models.list" -> {
+              json.parseToJsonElement("""{"models":[]}""")
             }
 
             "sessions.list" -> {

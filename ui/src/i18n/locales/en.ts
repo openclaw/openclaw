@@ -5621,7 +5621,7 @@ export const en: TranslationMap & {
       positionUserMessage: "User message",
       positionAssistantMessage: "Assistant message",
       positionMarkerHint:
-        "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
+        "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
     pendingInputs: {
       waitingForWorkspaceSync: "Received · waiting for workspace sync",

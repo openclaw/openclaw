@@ -4261,7 +4261,12 @@ describe("runCodexAppServerSideQuestion", () => {
       }
       await expect(failure).resolves.toMatchObject(
         written
-          ? { message: "turn/start aborted" }
+          ? {
+              message: "turn/start aborted: side-start-cancelled",
+              cause: "side-start-cancelled",
+              reason: "aborted",
+              mayHaveWritten: true,
+            }
           : {
               name: "CodexThreadPolicyHandoffError",
               outcome: "acknowledged",

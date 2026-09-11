@@ -375,7 +375,7 @@ export async function buildReplyPayloads(params: {
       );
       const wasSent = hasRichContent
         ? params.blockReplyPipeline?.hasSentExactPayload?.(payload)
-        : params.blockReplyPipeline?.hasSentPayload(payload);
+        : params.blockReplyPipeline?.hasSentPayload(payload) || hasDirectlySentText(payload);
       if (wasSent) {
         return null;
       }
@@ -402,26 +402,19 @@ export async function buildReplyPayloads(params: {
       audioAsVoice: payload.audioAsVoice || undefined,
     });
   };
-  const preserveDirectlyUnsentPayload = (payload: ReplyPayload): ReplyPayload | null => {
-    const reply = resolveSendableOutboundReplyParts(payload);
-    if (!reply.hasMedia || !reply.trimmedText) {
-      return payload;
-    }
-    return preserveUnsentMediaAfterBlockSend(payload);
-  };
   const contentSuppressedPayloads = shouldDropFinalPayloads
     ? dedupedPayloads.flatMap((payload) => preserveUnsentMediaAfterBlockSend(payload) ?? [])
     : params.blockStreamingEnabled
       ? dedupedPayloads.flatMap((payload) =>
           params.blockReplyPipeline?.hasSentPayload(payload) || isDirectlySentBlockPayload(payload)
             ? []
-            : (preserveDirectlyUnsentPayload(payload) ?? []),
+            : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
         )
       : params.directlySentBlockKeys?.size
         ? dedupedPayloads.flatMap((payload) =>
             isDirectlySentBlockPayload(payload)
               ? []
-              : (preserveDirectlyUnsentPayload(payload) ?? []),
+              : (preserveUnsentMediaAfterBlockSend(payload) ?? []),
           )
         : dedupedPayloads;
   const blockSentMediaUrls = await normalizeSentMediaUrlsForDedupe({

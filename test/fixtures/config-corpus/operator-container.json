@@ -179,27 +179,27 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/fixture-model-6"
+        "primary": "openai/gpt-5.4"
       },
       "models": {
-        "openai/fixture-model-7": {
+        "openai/gpt-5.4-mini": {
           "agentRuntime": {
             "id": "openclaw"
           }
         },
-        "openai/fixture-model-8": {
+        "openai/gpt-5.4-nano": {
           "alias": "fixture-alias-9",
           "agentRuntime": {
             "id": "openclaw"
           }
         },
-        "openai/fixture-model-10": {
+        "openai/gpt-5.4-pro": {
           "alias": "fixture-alias-11",
           "agentRuntime": {
             "id": "openclaw"
           }
         },
-        "openai/fixture-model-6": {
+        "openai/gpt-5.4": {
           "alias": "fixture-alias-12",
           "params": {
             "responsesServerCompaction": true,
@@ -256,9 +256,9 @@
     "entries": {
       "main": {
         "models": {
-          "openai/fixture-model-6": {}
+          "openai/gpt-5.4": {}
         },
-        "model": "openai/fixture-model-6"
+        "model": "openai/gpt-5.4"
       }
     }
   },

@@ -66,7 +66,7 @@ describe("mantis desktop browser smoke runtime", () => {
           return {
             stdout: `${JSON.stringify({
               host: "203.0.113.10",
-              id: "cbx_abc123",
+              id: "cbx_decaf",
               provider: "hetzner",
               slug: "brisk-mantis",
               sshKey: "/tmp/key",
@@ -306,44 +306,65 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(summary.crabbox.provider).toBe("blacksmith-testbox");
   });
 
-  it("keeps an existing lease and writes failure reports when the remote run fails", async () => {
-    const commands: { args: readonly string[]; command: string }[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      commands.push({ command, args });
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return {
-          stdout: `${JSON.stringify({
-            host: "203.0.113.10",
-            id: "cbx_existing",
-            provider: "hetzner",
-            sshKey: "/tmp/key",
-            sshPort: "2222",
-            sshUser: "crabbox",
-          })}\n`,
-          stderr: "",
-        };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "run") {
-        throw new Error("remote chrome failed");
-      }
-      return { stdout: "", stderr: "" };
-    });
+  it.each([
+    ["run", "cbx_existing", "cbx_existing", ["inspect", "run"]],
+    ["warmup", undefined, "unallocated", ["warmup"]],
+    ["inspect", undefined, "cbx_abc123", ["warmup", "inspect"]],
+  ] as const)(
+    "retains the lease identity when %s fails",
+    async (failure, leaseId, expectedId, operations) => {
+      const commands: { args: readonly string[]; command: string }[] = [];
+      const runner = vi.fn(async (command: string, args: readonly string[]) => {
+        commands.push({ command, args });
+        if (command === "/tmp/crabbox" && args[0] === failure) {
+          throw new Error(`${failure} failed`);
+        }
+        if (command === "/tmp/crabbox" && args[0] === "warmup") {
+          return { stdout: "ready lease cbx_abc123\n", stderr: "" };
+        }
+        if (command === "/tmp/crabbox" && args[0] === "inspect") {
+          return {
+            stdout: `${JSON.stringify({
+              host: "203.0.113.10",
+              id: "cbx_decaf",
+              provider: "hetzner",
+              slug: "brisk-mantis",
+              state: "active",
+              sshKey: "/tmp/key",
+              sshPort: "2222",
+              sshUser: "crabbox",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const result = await runMantisDesktopBrowserSmoke({
-      commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
-      leaseId: "cbx_existing",
-      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-fail",
-      repoRoot,
-    });
+      const result = await runMantisDesktopBrowserSmoke({
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        leaseId,
+        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-fail",
+        repoRoot,
+      });
 
-    expect(result.status).toBe("fail");
-    expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
-      ["/tmp/crabbox", "inspect"],
-      ["/tmp/crabbox", "run"],
-    ]);
-    await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
-      "remote chrome failed",
-    );
-  });
+      expect(result.status).toBe("fail");
+      expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
+        bin: "/tmp/crabbox",
+        createdLease: leaseId === undefined,
+        id: expectedId,
+        provider: "hetzner",
+        vncCommand:
+          expectedId === "unallocated"
+            ? "unallocated"
+            : `/tmp/crabbox vnc --provider hetzner --id ${expectedId} --open`,
+      });
+      expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
+        operations.map((operation) => ["/tmp/crabbox", operation]),
+      );
+      await expect(
+        fs.readFile(path.join(result.outputDir, "error.txt"), "utf8"),
+      ).resolves.toContain(`${failure} failed`);
+    },
+  );
 });
