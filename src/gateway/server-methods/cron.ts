@@ -229,6 +229,7 @@ function compactCronListJob(job: CronJob) {
     ...(job.displayName ? { displayName: job.displayName } : {}),
     ...(job.owner ? { owner: job.owner } : {}),
     enabled: job.enabled,
+    ...(job.state.autoDisabled ? { autoDisabled: true } : {}),
     // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.
     nextRunAt: timestampMsToIsoString(job.state.nextRunAtMs) ?? null,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
