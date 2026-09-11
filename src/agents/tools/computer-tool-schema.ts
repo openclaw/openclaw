@@ -41,6 +41,7 @@ export function createComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
   targetScope: "paired" | "session" = "paired",
 ) {
+  const supportsHold = actions.includes("hold_key");
   return Type.Object({
     action: stringEnum(actions),
     ...(targetScope === "paired"
@@ -80,7 +81,7 @@ export function createComputerToolSchema(
     text: Type.Optional(
       Type.String({
         description:
-          'type: text to type; key/hold_key: key combo such as "cmd+shift+t" or "Return"; ' +
+          `type: text to type; ${supportsHold ? "key/hold_key" : "key"}: key combo such as "cmd+shift+t" or "Return"; ` +
           'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
       }),
     ),
@@ -92,7 +93,9 @@ export function createComputerToolSchema(
     duration: optionalFiniteNumberSchema({
       minimum: 0,
       maximum: MAX_WAIT_SECONDS,
-      description: `Seconds. hold_key: >0 to ${MAX_HOLD_SECONDS}; wait: 0 to ${MAX_WAIT_SECONDS}.`,
+      description: supportsHold
+        ? `Seconds. hold_key: >0 to ${MAX_HOLD_SECONDS}; wait: 0 to ${MAX_WAIT_SECONDS}.`
+        : `Seconds. wait: 0 to ${MAX_WAIT_SECONDS}; this does not extend a key tap.`,
     }),
     screenIndex: optionalNonNegativeIntegerSchema(),
     frameId: Type.Optional(
@@ -122,7 +125,10 @@ export function createComputerToolSchema(
           "Window/browser input: observation id from the latest targeted observation; a desktop frameId cannot replace it.",
       }),
     ),
-    deliveryMode: optionalStringEnum(["background", "foreground"] as const),
+    deliveryMode: optionalStringEnum(["background", "foreground"] as const, {
+      description:
+        "Window-targeted input delivery. This does not turn desktop input into background window input.",
+    }),
     query: Type.Optional(Type.String()),
     depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 64 })),
     maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
