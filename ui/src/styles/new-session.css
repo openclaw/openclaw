@@ -813,13 +813,15 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option,
-.new-session-page__auto-device {
+.new-session-page__auto-device,
+.new-session-page__connect-machine {
   min-height: 60px;
   gap: 12px;
   padding: 12px;
 }
 
-.new-session-page__environment-option {
+.new-session-page__environment-option,
+.new-session-page__connect-machine {
   min-height: 56px;
   padding-block: 8px;
 }
@@ -844,8 +846,10 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__environment-option .session-menu__icon,
 .new-session-page__auto-device .session-menu__icon,
+.new-session-page__connect-machine .session-menu__icon,
 .new-session-page__environment-option .session-menu__icon svg,
-.new-session-page__auto-device .session-menu__icon svg {
+.new-session-page__auto-device .session-menu__icon svg,
+.new-session-page__connect-machine .session-menu__icon svg {
   width: 20px;
   height: 20px;
 }
