@@ -56,7 +56,7 @@ afterEach(() => {
   fixture = undefined;
 });
 
-it("tracks an outstanding end command after same-key row measurement grows the sizer", async () => {
+async function mountEndFollowFixture() {
   await page.viewport(1200, 900);
   const host = new EndFollowFixture();
   fixture = host;
@@ -69,6 +69,27 @@ it("tracks an outstanding end command after same-key row measurement grows the s
   const dock = host.querySelector<HTMLElement>(".chat-prs")!;
   const distance = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop;
   await expect.poll(() => sizer.offsetHeight).toBe(1300);
+  return { host, thread, row, sizer, dock, distance };
+}
+
+async function settleFrames() {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function commitTask(host: EndFollowFixture, change: () => void) {
+  await new Promise<void>((resolve) => {
+    setTimeout(() => {
+      change();
+      host.requestUpdate();
+      void host.updateComplete.then(() => resolve());
+    }, 0);
+  });
+}
+
+it("tracks an outstanding end command after same-key row measurement grows the sizer", async () => {
+  const { host, thread, row, sizer, dock, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();
   await expect.poll(distance).toBe(0);
 
@@ -99,4 +120,53 @@ it("tracks an outstanding end command after same-key row measurement grows the s
     programmatic: false,
   });
   expect(geometry.overhang).toBeLessThanOrEqual(0);
+});
+
+it("does not yank a reader who left the end programmatically", async () => {
+  const { host, thread, sizer, distance } = await mountEndFollowFixture();
+  host.transcript.scrollToEnd();
+  await expect.poll(distance).toBe(0);
+  await settleFrames();
+  expect(host.transcript.isProgrammaticScroll).toBe(false);
+
+  const previousEnd = thread.scrollTop;
+  await commitTask(host, () => {
+    thread.scrollTop -= 300;
+  });
+  const movedPosition = thread.scrollTop;
+  expect(previousEnd - movedPosition).toBe(300);
+  await commitTask(host, () => {
+    host.lastRowHeight += 48;
+  });
+  await expect.poll(() => sizer.offsetHeight).toBe(1348);
+  await settleFrames();
+
+  // A never-moved instant end command may linger until reader input or the
+  // next end settle; the reader's position is the contract here.
+  const geometry = {
+    previousEnd,
+    movedPosition,
+    scrollTop: thread.scrollTop,
+    displacement: thread.scrollTop - movedPosition,
+  };
+  expect(Math.abs(geometry.displacement)).toBeLessThanOrEqual(1);
+});
+
+it("keeps a reader observed at the end pinned when a row grows without a follow", async () => {
+  const { host, thread, sizer, distance } = await mountEndFollowFixture();
+  // Reach the end through native observation without ever issuing an end command.
+  await commitTask(host, () => {
+    thread.scrollTop = thread.scrollHeight;
+  });
+  await expect.poll(distance).toBe(0);
+  await settleFrames();
+  expect(host.transcript.isProgrammaticScroll).toBe(false);
+
+  await commitTask(host, () => {
+    host.lastRowHeight += 48;
+  });
+  await expect.poll(() => sizer.offsetHeight).toBe(1348);
+  await settleFrames();
+  expect(distance()).toBe(0);
+  expect(host.transcript.isProgrammaticScroll).toBe(false);
 });

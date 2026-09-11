@@ -197,12 +197,9 @@ suite.define(() => {
           expect(await strokeColor(239)).toBe(colors.muted);
           await expect.poll(fades).toEqual({ top: true, bottom: false });
           await expect.poll(currentIsVisible).toBe(true);
-          const middleDelta = await transcript.evaluate(
-            (element) =>
-              Math.round((element.scrollHeight - element.clientHeight) / 2) - element.scrollTop,
-          );
-          await transcript.hover();
-          await page.mouse.wheel(0, middleDelta);
+          await transcript.evaluate((element) => {
+            element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
+          });
           await expect.poll(currentMarkerIndex).toBeGreaterThan(50);
           await expect.poll(currentMarkerIndex).toBeLessThan(200);
           await expect.poll(fades).toEqual({ top: true, bottom: true });

@@ -43,8 +43,10 @@ suite.define(() => {
     );
     expect(focusedRowKey).not.toBe("");
 
-    await thread.hover();
-    await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+    await thread.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
     await expect.poll(() => thread.evaluate((element) => Math.round(element.scrollTop))).toBe(0);
     await page.getByText(/^focus retention message 1\n/).waitFor();
     await expect

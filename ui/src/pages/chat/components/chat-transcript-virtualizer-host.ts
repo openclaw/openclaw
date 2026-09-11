@@ -80,6 +80,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private headerHeight = 0;
   private appliedHeaderHeight = 0;
   private implicitEndAnchorPending: boolean;
+  private endAnchor: number | null = null;
   private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
@@ -369,7 +370,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.reconcileImplicitEndAnchor();
     applyPendingScrollOffset(this.scrollRestoreHost);
-    this.reconcileEndScroll();
+    this.reconcileEndAnchor();
   }
 
   disconnect(): void {
@@ -544,33 +545,41 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.scrollCommand = {
       behavior,
       target: "end",
-      maxOffset: maxTranscriptScrollOffset(this.scrollElement),
     };
     this.virtualizerController.getVirtualizer().scrollToEnd({ behavior });
+    if (behavior !== "smooth") {
+      this.endAnchor = maxTranscriptScrollOffset(this.scrollElement);
+    }
     return true;
   }
 
-  private reconcileEndScroll(): void {
-    const { scrollCommand, pendingScrollOffset, touching, touchScrolling } = this.offsetState;
-    if (scrollCommand?.target !== "end" || pendingScrollOffset || touching || touchScrolling) {
+  private reconcileEndAnchor(): void {
+    const { pendingScrollOffset, touching, touchScrolling } = this.offsetState;
+    if (pendingScrollOffset || touching || touchScrolling) {
       return;
     }
     const element = this.scrollElement;
-    const maxOffset = maxTranscriptScrollOffset(element);
-    if (
-      !element ||
-      maxOffset === null ||
-      maxOffset === scrollCommand.maxOffset ||
-      Math.abs(maxOffset - element.scrollTop) <= 1
-    ) {
+    const max = maxTranscriptScrollOffset(element);
+    if (!element || max === null) {
       return;
     }
-    // Row measurement can commit a larger sizer after the command's first frame.
-    scrollCommand.maxOffset = maxOffset;
-    this.virtualizerController.getVirtualizer().scrollToEnd({ behavior: scrollCommand.behavior });
+    if (Math.abs(max - element.scrollTop) <= 1) {
+      this.endAnchor = max;
+      return;
+    }
+    if (this.endAnchor === null) {
+      return;
+    }
+    if (Math.abs(element.scrollTop - this.endAnchor) > 1) {
+      this.endAnchor = null;
+      return;
+    }
+    // Row measurement can move the end after a follow or without a new command.
+    this.scrollToEnd({ source: "auto", behavior: "auto" });
   }
 
   private cancelScroll(): void {
+    this.endAnchor = null;
     this.prependAnchor.clear();
     if (this.offsetState.scrollCommand === null && !this.offsetState.pendingScrollOffset) {
       return;
