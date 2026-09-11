@@ -93,6 +93,17 @@ describe("connection view rendering", () => {
     );
   });
 
+  it.each(["connecting", "starting", "reconnecting"] as const)(
+    "lets a corrected draft replace a connection stuck in %s",
+    (phase) => {
+      const container = document.createElement("div");
+      render(renderConnection(createConnectionProps({ phase, dirty: true })), container);
+      const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
+      expect(action?.textContent?.trim()).toBe("Apply and reconnect");
+      expect(action?.disabled).toBe(false);
+    },
+  );
+
   it("shows a secret for a new target even when the live Gateway uses trusted proxy auth", () => {
     const props = createConnectionProps({
       phase: "connected",

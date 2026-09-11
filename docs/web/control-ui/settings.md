@@ -75,8 +75,10 @@ Passwords stay in memory and are never persisted.
 **Settings → Gateway** shows **Connected** without a Connect action when the
 connection is healthy and unchanged. Editing the URL or secret reveals **Apply
 and reconnect** and **Discard changes**. While a connection attempt is running,
-the action shows **Connecting…** or **Reconnecting…** and cannot be submitted
-again. A disconnected connection offers **Connect** or **Retry connection**.
+unchanged settings show a disabled **Connecting…** or **Reconnecting…** action.
+Editing the URL or secret enables **Apply and reconnect**, so you can replace a
+connection that is stuck retrying. A disconnected connection offers **Connect**
+or **Retry connection**.
 Open **Connection details** for authentication and heartbeat information, or use
 its **Reconnect** action to troubleshoot the current connection.
 

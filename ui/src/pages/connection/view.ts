@@ -102,6 +102,7 @@ export function renderConnection(props: ConnectionProps) {
   const snapshot = props.hello?.snapshot as { authMode?: GatewayAuthMode } | undefined;
   const connected = props.phase === "connected";
   const busy = ["connecting", "starting", "reconnecting"].includes(props.phase);
+  const submitting = busy && !props.dirty;
   const reloadRequired = props.phase === "reload-required";
   const authMode = snapshot?.authMode;
   const draftAuthMode =
@@ -111,13 +112,13 @@ export function renderConnection(props: ConnectionProps) {
       : undefined;
   const isTrustedProxy = draftAuthMode === "trusted-proxy";
   const statusKey = connected ? "connected" : props.phase === "stopped" ? "offline" : props.phase;
-  const actionLabel = busy
+  const actionLabel = submitting
     ? t(
         props.phase === "reconnecting"
           ? "connection.access.status.reconnecting"
           : "connection.access.status.connecting",
       )
-    : connected
+    : connected || busy
       ? t("connection.access.applyReconnect")
       : t(props.lastError ? "connection.access.retry" : "common.connect");
   const tick = formatTick(props.hello?.policy?.tickIntervalMs);
@@ -182,8 +183,8 @@ export function renderConnection(props: ConnectionProps) {
                     </button>`
                   : nothing
               }
-              <button class="btn primary" ?disabled=${busy} @click=${props.onConnect}>
-                ${busy ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}
+              <button class="btn primary" ?disabled=${submitting} @click=${props.onConnect}>
+                ${submitting ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}
                 ${actionLabel}
               </button>
             </div>

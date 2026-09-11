@@ -153,4 +153,35 @@ suite.define(() => {
       await captureProof(page, "07-reconnected.png");
     });
   });
+  it("switches Gateway targets while the original connection is still retrying", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, { authMode: "token" });
+      await page.goto(`${suite.server.baseUrl}settings/connection`);
+      const connection = settingsSection(page, "Connection");
+      await connection.getByText("Connected", { exact: true }).waitFor();
+      const connectsBeforeRetry = (await gateway.getRequests("connect")).length;
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1006, "Original Gateway unavailable");
+      await gateway.waitForRequest("connect", { after: connectsBeforeRetry });
+      expect(
+        await connection.getByRole("button", { name: "Reconnecting…", exact: true }).isDisabled(),
+      ).toBe(true);
+
+      // Leave the original handshake unanswered while connecting to the replacement target.
+      const socketCount = await gateway.getSocketCount();
+      const replacementUrl = "ws://127.0.0.1:19998";
+      await connection.getByLabel("Gateway URL", { exact: true }).fill(replacementUrl);
+      await connection.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
+      await connection.getByText("Connected", { exact: true }).waitFor();
+      expect(await gateway.getSocketCount()).toBe(socketCount + 1);
+      expect((await gateway.getSocketUrls()).at(-1)).toBe(replacementUrl);
+      await gateway.resolveDeferred("connect");
+      expect(await connection.getByLabel("Gateway URL", { exact: true }).inputValue()).toBe(
+        replacementUrl,
+      );
+      expect(
+        await connection.getByRole("button", { name: "Apply and reconnect", exact: true }).count(),
+      ).toBe(0);
+    });
+  });
 });
