@@ -1,3 +1,12 @@
+export function closeWorkboardPopoverOnAction(event: Event) {
+  if (!(event.target instanceof Element) || !event.target.closest("button")) {
+    return;
+  }
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.hidePopover();
+  }
+}
+
 export function workboardPopoverRef(align: "start" | "end" = "start") {
   let dispose = () => {};
   return (element: Element | undefined) => {

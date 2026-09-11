@@ -29,6 +29,7 @@ import {
   formatStatusLabel,
   formatUpdatedTime,
   renderWorkboardError,
+  workboardErrorMessage,
   taskDetail,
   taskMatchesLifecycle,
   type WorkboardProps,
@@ -296,7 +297,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               </button>
             </span>
           </header>
-          ${renderWorkboardError(state.error)}
+          ${renderWorkboardError(workboardErrorMessage(state, props.pageError))}
 
           <section class="workboard-detail__section">
             <div class="workboard-card__lifecycle">

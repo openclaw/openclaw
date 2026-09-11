@@ -3,8 +3,18 @@ import {
   createControlUiChatHistoryMessage as chatHistoryMessage,
   createControlUiMockSessionRow as sessionRow,
 } from "./control-ui-session-fixtures.ts";
+import {
+  buildWorkboardStateCells,
+  buildWorkboardStateSessions,
+  MATRIX_STATES,
+} from "./control-ui-workboard-states.ts";
 
-export function buildWorkboardMocks(baseTime: number, actor: { id: string; label: string }) {
+export function buildWorkboardMocks(
+  baseTime: number,
+  actor: { id: string; label: string },
+  matrix = false,
+) {
+  const matrixCells = matrix ? buildWorkboardStateCells(baseTime) : [];
   const boardId = "peter-tasks";
   const briefSessionKey = "agent:main:workboard-brief";
   const launchSessionKey = "agent:main:workboard-launch";
@@ -302,14 +312,31 @@ export function buildWorkboardMocks(baseTime: number, actor: { id: string; label
       sessionKey: "global",
     },
   ];
-  const allCards = [...cards, ...stateCards];
+  const allCards = matrix
+    ? [
+        ...matrixCells.map((cell) => cell.card),
+        ...stateCards.filter((entry) => entry.id === "state-stale"),
+      ]
+    : [...cards, ...stateCards];
   const statesBoard = {
     id: "card-states",
     name: "Card states",
     description: "Synthetic examples of card content and execution states",
     ...summarizeBoard(stateCards),
   };
-  const boards = [board, statesBoard];
+  const boards = matrix
+    ? [
+        ...MATRIX_STATES.map((state) => ({
+          id: `matrix-${state}`,
+          name: `Matrix · ${state}`,
+          description: "Synthetic card presentation matrix",
+          ...summarizeBoard(
+            matrixCells.filter((cell) => cell.state === state).map((cell) => cell.card),
+          ),
+        })),
+        { ...statesBoard, name: "Natural stale regression", total: 1, active: 1 },
+      ]
+    : [board, statesBoard];
   const tasks = ["queued", "running", "timeout", "stopped", "completed", "failed"].map((id) =>
     Object.assign(
       {
@@ -337,6 +364,27 @@ export function buildWorkboardMocks(baseTime: number, actor: { id: string; label
       id === "failed" ? { runId: "state-current-failed-run" } : {},
     ),
   );
+  if (matrix) {
+    tasks.splice(
+      0,
+      tasks.length,
+      ...MATRIX_STATES.filter((state) => state === "cancelled" || state === "timed_out").map(
+        (state) => ({
+          id: `task-matrix-${state}`,
+          taskId: `task-matrix-${state}`,
+          agentId: "main",
+          sessionKey: `agent:main:matrix-${state}`,
+          status: state,
+          title: "Release verification",
+          createdAt: baseTime - 600_000,
+          updatedAt: baseTime - 120_000,
+          progressSummary: "",
+          terminalSummary:
+            state === "cancelled" ? "Stopped by the operator." : "Execution deadline elapsed.",
+        }),
+      ),
+    );
+  }
   const automationJob: CronJob = {
     id: board.automationJobId,
     agentId: "main",
@@ -407,6 +455,9 @@ export function buildWorkboardMocks(baseTime: number, actor: { id: string; label
       }),
     ),
   );
+  if (matrix) {
+    cardSessions.splice(0, cardSessions.length, ...buildWorkboardStateSessions(baseTime));
+  }
   const history = (...messages: Parameters<typeof chatHistoryMessage>[]) => ({
     messages: messages.map((message) => chatHistoryMessage(...message)),
   });

@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import {
   currentWorkboardLifecycleReconciliationEpoch,
@@ -114,7 +115,7 @@ async function refreshWorkboardLifecycleTasks(
       ) {
         return null;
       }
-      state.cards = taskLinkState.cards;
+      setWorkboardCards(state, taskLinkState.cards);
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
       for (const task of confirmationResult.tasks) {

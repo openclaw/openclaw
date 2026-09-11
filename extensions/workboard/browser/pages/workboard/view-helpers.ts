@@ -4,22 +4,24 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   getWorkboardState,
   workboardMutationsReady,
   type WorkboardCard,
-  type WorkboardDependencyState,
   type WorkboardEvent,
   type WorkboardExecutionEngine,
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTaskSummary,
+  type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
+import { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
+export { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 
 export type WorkboardProps = {
   heading?: TemplateResult;
@@ -42,10 +44,6 @@ export type WorkboardProps = {
   onBoardFilterChange?: (boardFilter: string) => void;
   onRequestUpdate?: () => void;
 };
-
-export function renderWorkboardError(error: string | null | undefined) {
-  return error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing;
-}
 
 const eventLabelKeys: Record<WorkboardEvent["kind"], string> = {
   created: "workboard.eventCreated",
@@ -84,7 +82,7 @@ const lifecycleCopy = {
   queued: ["sessionsView.statusQueued", undefined, "idle"],
   running: ["workboard.lifecycleRunning", "workboard.lifecycleRunningDetail", "live"],
   succeeded: ["workboard.lifecycleDone", "workboard.lifecycleDoneDetail", "done"],
-  failed: ["workboard.lifecycleNeedsReview", "workboard.lifecycleNeedsReviewDetail", "blocked"],
+  failed: ["workboard.lifecycleFailed", "workboard.lifecycleFailedDetail", "blocked"],
   stale: ["workboard.lifecycleStale", "workboard.lifecycleStaleDetail", "blocked"],
   idle: ["workboard.lifecycleLinked", "workboard.lifecycleIdleDetail", "idle"],
   unknown: ["workboard.lifecycleUnknown", "workboard.lifecycleUnknownDetail", "idle"],
@@ -98,9 +96,14 @@ export const formatStatusLabel = (status: WorkboardStatus) => t(`workboard.statu
 export const formatPriorityLabel = (priority: WorkboardPriority) =>
   priority.charAt(0).toUpperCase() + priority.slice(1);
 
-export function formatWorkboardDate(value: number | undefined): string {
-  return value ? formatDateMs(value, { month: "short", day: "numeric" }, "") : "";
-}
+const priorityIcons = {
+  low: icons.priorityLow,
+  normal: icons.priorityNormal,
+  high: icons.priorityHigh,
+  urgent: icons.priorityUrgent,
+} satisfies Record<WorkboardPriority, TemplateResult>;
+
+export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
 
 export function formatRefreshTime(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -119,11 +122,11 @@ export function formatUpdatedTime(value: number | undefined): string {
     : "";
 }
 
-export function formatAge(value: number | undefined): string {
-  if (!value) {
-    return "";
-  }
-  return formatDurationCompact(Math.max(0, Date.now() - value)) ?? "0ms";
+export function workboardErrorMessage(
+  state: Pick<WorkboardUiState, "error" | "lifecycleTaskRefreshError" | "lastRefreshError">,
+  pageError?: string | null,
+) {
+  return state.error ?? pageError ?? state.lifecycleTaskRefreshError ?? state.lastRefreshError;
 }
 
 export function canMutate(props: WorkboardProps): boolean {
@@ -235,11 +238,44 @@ export function engineBlockedByRuntime(
   });
 }
 
-export function formatLifecycle(lifecycle: WorkboardLifecycle): {
+export function formatLifecycle(
+  lifecycle: WorkboardLifecycle,
+  task?: WorkboardTaskSummary,
+): {
   label: string;
   detail: string | undefined;
   tone: "blocked" | "done" | "idle" | "live";
 } {
+  if (task && taskMatchesLifecycle(task, lifecycle)) {
+    return {
+      label: t(`workboard.taskStatus.${task.status}`),
+      detail: taskDetail(task),
+      tone:
+        task.status === "cancelled" || task.status === "queued"
+          ? "idle"
+          : task.status === "running"
+            ? "live"
+            : task.status === "completed"
+              ? "done"
+              : "blocked",
+    };
+  }
+  if (lifecycle.state === "failed") {
+    if (lifecycle.session?.status === "timeout") {
+      return {
+        label: t("workboard.lifecycleTimedOut"),
+        detail: t("workboard.lifecycleFailedDetail"),
+        tone: "blocked",
+      };
+    }
+    if (lifecycle.session?.status === "killed" || lifecycle.session?.abortedLastRun) {
+      return {
+        label: t("workboard.lifecycleStopped"),
+        detail: t("workboard.lifecycleStoppedDetail"),
+        tone: "idle",
+      };
+    }
+  }
   const [labelKey, detailKey, tone] = lifecycleCopy[lifecycle.state];
   return { label: t(labelKey), detail: detailKey === undefined ? undefined : t(detailKey), tone };
 }
@@ -249,24 +285,6 @@ export function taskDetail(task: WorkboardTaskSummary): string {
     return task.progressSummary ?? task.title ?? task.taskId;
   }
   return task.terminalSummary ?? task.error ?? task.progressSummary ?? task.title ?? task.taskId;
-}
-
-export function taskMatchesLifecycle(
-  task: WorkboardTaskSummary,
-  lifecycle: WorkboardLifecycle,
-): boolean {
-  switch (task.status) {
-    case "queued":
-    case "running":
-      return lifecycle.state === "running";
-    case "completed":
-      return lifecycle.state === "succeeded";
-    case "failed":
-    case "cancelled":
-    case "timed_out":
-      return lifecycle.state === "failed";
-  }
-  throw new Error("Unknown workboard task status.");
 }
 
 const taskIsActive = (task: WorkboardTaskSummary | undefined) =>
@@ -297,43 +315,30 @@ export function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
   return card.status === "running" && Boolean(sessionKey && runId);
 }
 
-export function formatDependencyBlockerTitle(
-  dependencies: WorkboardDependencyState,
-): string | null {
-  if (dependencies.blockedParents.length === 0) {
-    return null;
+export function renderLifecycleIcon(lifecycle: WorkboardLifecycle, task?: WorkboardTaskSummary) {
+  const authoritativeTask = task && taskMatchesLifecycle(task, lifecycle) ? task : undefined;
+  const queuedTask = authoritativeTask?.status === "queued";
+  if (lifecycle.state === "running" && !queuedTask) {
+    return html`<span class="session-run-spinner" aria-hidden="true"></span>`;
   }
-  return t("workboard.dependenciesBlockedTitle", {
-    parents: dependencies.blockedParents
-      .map((parent) => {
-        if (parent.missing) {
-          return t("workboard.dependencyMissing", { parent: parent.title });
-        }
-        const status = parent.status
-          ? formatStatusLabel(parent.status)
-          : t("workboard.unknownStatus");
-        return `${parent.title} (${status})`;
-      })
-      .join(", "),
-  });
+  const icon =
+    lifecycle.state === "failed" &&
+    (authoritativeTask
+      ? authoritativeTask.status === "cancelled"
+      : lifecycle.session?.status === "killed" || lifecycle.session?.abortedLastRun)
+      ? icons.stop
+      : lifecycle.state === "queued" || queuedTask
+        ? icons.hourglass
+        : lifecycle.state === "stale"
+          ? icons.alertTriangle
+          : lifecycle.state === "succeeded"
+            ? icons.check
+            : lifecycle.state === "idle" || lifecycle.state === "unlinked"
+              ? icons.messageSquare
+              : icons.alertTriangle;
+  return html`<span class="workboard-card__session-icon" aria-hidden="true">${icon}</span>`;
 }
 
-const priorityIcons = {
-  low: icons.priorityLow,
-  normal: icons.priorityNormal,
-  high: icons.priorityHigh,
-  urgent: icons.priorityUrgent,
-} satisfies Record<WorkboardPriority, TemplateResult>;
-
-export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
-
-export function workboardErrorMessage(
-  state: {
-    error: string | null;
-    lifecycleTaskRefreshError: string | null;
-    lastRefreshError: string | null;
-  },
-  pageError?: string | null,
-) {
-  return state.error ?? pageError ?? state.lifecycleTaskRefreshError ?? state.lastRefreshError;
+export function renderWorkboardError(error: string | null | undefined) {
+  return error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing;
 }

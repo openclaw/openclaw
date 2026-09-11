@@ -1,3 +1,4 @@
+import "../test/dom.setup.ts";
 import type { ControlUiHost, ControlUiWidget } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
@@ -442,6 +443,14 @@ it.each([
     hidden.setPresented(true);
     expect(hidden.container.textContent).toContain("Ready card");
     expect(hidden.container.querySelector("select")?.disabled).toBe(false);
+    if (input === "drop") {
+      const card = hidden.container.querySelector(".workboard-card");
+      if (!card) {
+        throw new Error("The presented board must render its draggable card.");
+      }
+      // The rejected hidden drop consumes the original drag; start a new gesture.
+      card.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
+    }
     move();
     expect(hidden.scopedRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
       id: "ready",
@@ -533,6 +542,12 @@ it.each(["mini", "board"] as const)(
       expect(all.container.querySelector("a")?.getAttribute("href")).toBe("/workboard");
     } else {
       expect(scoped.container.querySelectorAll(".workboard-column")).toHaveLength(3);
+      const product = mount("board", { boardId: "product" });
+      await vi.waitFor(() => expect(product.container.textContent).toContain("Other card"));
+      expect(product.container.querySelector(".workboard-column--running")?.textContent).toContain(
+        "No cards yet",
+      );
+      expect(product.container.textContent).not.toContain("No cards match this view");
     }
   },
 );

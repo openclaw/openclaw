@@ -2,7 +2,6 @@ import { html, nothing, render } from "lit";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { createWorkboardClient } from "../../api/gateway.ts";
 import { renderAgentPicker } from "../../components/host-components.ts";
-import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -136,13 +135,13 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
     const update = () => {
       synchronizeConnection();
       const agents = host.agents.rows;
+      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
       const defaultId = host.agents.defaultId;
       const defaultAgentId = defaultId ?? host.connection.assistantAgentId;
       const agentsList = defaultId === null ? null : { defaultId, agents: [...agents] };
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
-      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
       const missingScope =
         scope && !selectableAgents.some((agent) => agent.id === scope) ? scope : null;
       if (observedScope !== scope) {
@@ -202,6 +201,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         sessionResolution && sessionResolution.status !== "resolved"
           ? sessionResolution.error
           : undefined;
+      const pageError = [metadataError, sessionError].filter(Boolean).join("\n") || undefined;
       const candidates =
         sessionResolution?.status === "resolved"
           ? [sessionResolution.session]
@@ -213,16 +213,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
       ];
       render(
         html`
-          ${
-            metadataError
-              ? html`<div class="callout danger" role="alert">${metadataError}</div>`
-              : nothing
-          }
-          ${
-            sessionError
-              ? html`<div class="callout danger" role="alert">${sessionError}</div>`
-              : nothing
-          }
           ${renderWorkboard({
             heading: html`
               <div class="workboard-heading__identity">
@@ -233,21 +223,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                       : nothing
                   }
                   <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
-                  ${
-                    selectedBoard?.automationJobId
-                      ? html`<a
-                          class="chip workboard-automation-chip"
-                          href=${`${host.basePath}/automations`}
-                          title=${t("workboard.automationAttachedTitle")}
-                          aria-label=${t("workboard.automationAttachedTitle")}
-                          >${icons.calendarClock}<span
-                            >${t("workboard.automationAttached")}</span
-                          ></a
-                        >`
-                      : nothing
-                  }
                 </div>
-                ${selectedBoard ? html`<div class="page-subtitle">Workboard</div>` : nothing}
               </div>
             `,
             scopeControl:
@@ -279,6 +255,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
                     "workboard-scope",
                   )
                 : undefined,
+            pageError,
             host: workboard,
             client: connected ? client : null,
             connected,
@@ -290,7 +267,7 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             sessions,
             sessionResolution,
             scopeAgentId: scope,
-            showAgentFilter: scope === null,
+            showAgentFilter: false,
             onOpenSession: host.sessions.open,
             onRefresh: () => {
               void refreshMetadata();
