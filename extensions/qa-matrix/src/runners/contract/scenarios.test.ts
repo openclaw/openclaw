@@ -3515,6 +3515,53 @@ describe("matrix live qa scenarios", () => {
     );
   });
 
+  it("ignores late top-level finals from earlier Matrix progress scenarios", async () => {
+    const context = matrixQaScenarioContext();
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$tool-progress-mention-late-trigger");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(
+        async (params: { predicate: (event: MatrixQaObservedEvent) => boolean }) => {
+          const staleFinal = matrixQaMessageEvent({
+            kind: "message",
+            eventId: "$tool-progress-prior-final",
+            body: "MATRIX_QA_TOOL_PROGRESS_OPTOUT_PRIOR",
+          });
+          expect(params.predicate(staleFinal)).toBe(false);
+          const currentFinal = matrixQaMessageEvent({
+            kind: "message",
+            eventId: "$tool-progress-mention-late-final",
+            body: readMatrixQaReplyDirective(
+              mockMessageBody(sendTextMessage, "sendTextMessage"),
+              "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
+            ),
+          });
+          return { event: currentFinal, since: "driver-sync-final" };
+        },
+      )
+      .mockImplementationOnce(async () => ({
+        event: matrixQaMessageEvent({
+          kind: "message",
+          eventId: "$tool-progress-mention-late-progress",
+          body: "Working...\n- `read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed`",
+          formattedBody:
+            "Working...<br><ul><li><code>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed</code></li></ul>",
+          mentions: {},
+        }),
+        since: "driver-sync-progress",
+      }));
+    createMatrixQaClient.mockReturnValue({ primeRoom, sendTextMessage, waitForRoomEvent });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-mention-safety");
+    const result = await runMatrixQaScenario(scenario, context);
+
+    expect((result.artifacts as { previewEventId?: unknown }).previewEventId).toBe(
+      "$tool-progress-mention-late-progress",
+    );
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps Matrix-looking top-level tool errors inert after final-first replies", async () => {
     mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-mention-top-level-trigger",

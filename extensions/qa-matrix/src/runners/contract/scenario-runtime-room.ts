@@ -553,6 +553,11 @@ async function runMatrixToolProgressScenario(
 ) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
+  const preexistingEventIds = new Set(
+    context.observedEvents.slice(0, startObservedIndex).map((event) => event.eventId),
+  );
+  const isCurrentScenarioEvent = (event: MatrixQaObservedEvent) =>
+    !preexistingEventIds.has(event.eventId);
   await writeMatrixToolProgressTaskFile(context, params.finalText);
   const triggerBody = params.triggerBodyBuilder(context.sutUserId, params.finalText);
   const driverEventId = await client.sendTextMessage({
@@ -566,6 +571,7 @@ async function runMatrixToolProgressScenario(
   const getPreviewRootEventId = (event: MatrixQaObservedEvent) =>
     event.replacesEventId ?? event.eventId;
   const isFinalReply = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     event.type === "m.room.message" &&
@@ -578,11 +584,14 @@ async function runMatrixToolProgressScenario(
       isMatrixQaMessageLikeKind(event.kind) &&
       matchesExpectedProgress(event.body));
   const isProgressEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
-    (matchesExpectedProgress(event.body) || event.relatesTo === undefined);
+    (matchesExpectedProgress(event.body) ||
+      (event.relatesTo === undefined && hasMatrixQaToolProgressPreviewLine(event.body)));
   const isProgressProofEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
