@@ -90,7 +90,10 @@ describe("cloud target menu", () => {
             { id: "linux", label: "Linux", default: true },
             { id: "windows", label: "Windows" },
           ],
-          machines: [{ id: "small", label: "Small", default: true }],
+          machines: [
+            { id: "small", label: "Small", default: true },
+            { id: "standard", label: "Standard" },
+          ],
         },
       ],
       selectedId: "",
@@ -102,7 +105,10 @@ describe("cloud target menu", () => {
     render(renderCloudProfileMenuItems(params), container);
     const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
     expect(suggested.dataset.suggested).toBe("true");
-    expect(suggested.getAttribute("aria-pressed")).toBe("false");
+    expect(suggested.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
     suggested.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws", true);
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("linux");
@@ -148,7 +154,7 @@ describe("cloud target menu", () => {
     { machine: { id: "compute", label: "Compute", cpu: 48 }, expected: "48 vCPU" },
     { machine: { id: "memory", label: "Memory", memoryGb: 256 }, expected: "256 GB" },
     { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
-  ])("includes available compute details in $machine.id option", ({ machine, expected }) => {
+  ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
     const container = document.createElement("div");
     render(
       renderCloudConfiguration({
@@ -163,9 +169,10 @@ describe("cloud target menu", () => {
       }),
       container,
     );
-    const row = container.querySelector(`[data-value="machine:${machine.id}"]`);
-    expect(row?.textContent).toContain(expected);
-    expect(row?.getAttribute("aria-pressed")).toBe("true");
+    const machineLabel = container.querySelector(`[data-value="machine:${machine.id}"]`);
+    expect(machineLabel?.classList.contains("new-session-page__fixed-machine")).toBe(true);
+    expect(machineLabel?.textContent).toContain(expected);
+    expect(machineLabel?.tagName).toBe("SPAN");
   });
 
   it("keeps the profile selected when configuration uses defaults", () => {
@@ -245,7 +252,10 @@ describe("cloud target menu", () => {
       }),
       container,
     );
-    expect(container.querySelector('[data-value="os:linux"]')).not.toBeNull();
+    const fixedOs = container.querySelector('[data-value="os:linux"]');
+    expect(fixedOs?.textContent).toBe("Linux");
+    expect(fixedOs?.tagName).toBe("SPAN");
+    expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
     expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
     expect(container.querySelector('[aria-pressed="true"]')).toBeNull();
   });

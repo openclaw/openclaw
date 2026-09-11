@@ -114,141 +114,134 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
-  return html`${
-    nativeTerminal
-      ? renderNewSessionTerminalHost({
-          hosts: data?.terminalHosts,
-          hostId: place.terminalHostId,
-          submitting,
-          onSelect: (hostId) => place.selectTerminalHost(hostId),
-        })
-      : renderWhereChip({
-          state: whereState,
-          environmentQuery: browser.environmentQuery,
-          onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
-          gatewayName: gateway.gatewayName,
-          cloudProfileId: place.cloudProfileId,
-          machineClass,
-          os,
-          deviceId: place.deviceId,
-          autoDevice: place.autoDevice,
-          autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
-          worktreeAvailable: place.worktreeAvailable(),
-          cloudDisabledReason: resolveCloudPlacementDisabledReason(place),
-          cloudProfileDisabledReason: (profile) =>
-            place.modelControl.cloudRuntimeUnsupportedReason(profile),
-          submitting,
-          pendingPlacement,
-          isAdmin: place.isAdmin(),
-          ...browser.popoverCallbacks("where"),
-          onSelectDevice: (deviceId) => place.selectDevice(deviceId),
-          onSelectAutoDevice: () => place.selectDevice("", true),
-          onSelectCloudProfile: (profileId, useDefaults) => {
-            if (useDefaults) {
-              place.cloudMachines.applyPending(profileId);
+  return html`${nativeTerminal
+    ? renderNewSessionTerminalHost({
+        hosts: data?.terminalHosts,
+        hostId: place.terminalHostId,
+        submitting,
+        onSelect: (hostId) => place.selectTerminalHost(hostId),
+      })
+    : renderWhereChip({
+        state: whereState,
+        environmentQuery: browser.environmentQuery,
+        onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
+        gatewayName: gateway.gatewayName,
+        cloudProfileId: place.cloudProfileId,
+        machineClass,
+        os,
+        deviceId: place.deviceId,
+        autoDevice: place.autoDevice,
+        autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
+        worktreeAvailable: place.worktreeAvailable(),
+        cloudDisabledReason: resolveCloudPlacementDisabledReason(place),
+        cloudProfileDisabledReason: (profile) =>
+          place.modelControl.cloudRuntimeUnsupportedReason(profile),
+        submitting,
+        pendingPlacement,
+        isAdmin: place.isAdmin(),
+        ...browser.popoverCallbacks("where"),
+        onSelectDevice: (deviceId) => place.selectDevice(deviceId),
+        onSelectAutoDevice: () => place.selectDevice("", true),
+        onSelectCloudProfile: (profileId, useDefaults) => {
+          if (useDefaults) {
+            place.cloudMachines.applyPending(profileId);
+          }
+          place.selectCloudProfile(profileId);
+        },
+        onSelectCloudOs: (osId) =>
+          place.cloudMachines.selectOs(
+            place.cloudProfileId,
+            osId,
+            cloudProfiles,
+            submitting || pendingPlacement,
+            requestUpdate,
+          ),
+        onSelectCloudMachine: (machineId) =>
+          place.cloudMachines.select(
+            place.cloudProfileId,
+            machineId,
+            cloudProfiles,
+            submitting || pendingPlacement,
+            requestUpdate,
+          ),
+        onConnectMachine,
+        onManageCloudWorkers: () => {
+          browser.close();
+          context?.navigate("cloud-workers");
+        },
+      })}${nativeTerminal && place.terminalOnNode
+    ? html`<label class="new-session-page__select new-session-page__menu-field"
+        ><span>${t("newSession.terminalNodeFolder")}</span
+        ><input
+          aria-label=${t("newSession.terminalNodeFolder")}
+          .value=${place.folder}
+          ?disabled=${submitting}
+          @input=${(event: Event) => {
+            if (event.currentTarget instanceof HTMLInputElement) {
+              place.applyFolder(event.currentTarget.value);
             }
-            place.selectCloudProfile(profileId);
-          },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onConnectMachine,
-        })
-  }${
-    nativeTerminal && place.terminalOnNode
-      ? html`<label class="new-session-page__select new-session-page__menu-field"
-          ><span>${t("newSession.terminalNodeFolder")}</span
-          ><input
-            aria-label=${t("newSession.terminalNodeFolder")}
-            .value=${place.folder}
-            ?disabled=${submitting}
-            @input=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                place.applyFolder(event.currentTarget.value);
-              }
-            }}
-        /></label>`
-      : renderProjectChip({
-          state: projectState,
-          browseAvailable: place.browseAvailable(),
-          isAdmin: place.isAdmin(),
-          canWrite: place.canWrite(),
-          folder: place.folder,
-          workspace: place.workspacePath(),
-          projects,
-          projectQuery: browser.projectQuery,
-          projectSearchAvailable:
-            !nativeTerminal &&
-            canCallGatewayMethod(
-              context?.gateway.snapshot,
-              "projects.searchRemote",
-              "operator.read",
-            ),
-          projectAddAvailable:
-            !nativeTerminal &&
-            canCallGatewayMethod(
-              context?.gateway.snapshot,
-              place.remotePlacement ? "sessions.create" : "projects.add",
-              "operator.write",
-            ),
-          remoteProjects: browser.projectSearchResult?.projects ?? [],
-          selectedRemoteProject: browser.remoteProject,
-          projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
-          projectSearchLoading: browser.projectSearchLoading,
-          projectSearchError: browser.projectSearchError,
-          projectId: browser.projectId,
-          gatewayLabel,
-          submitting,
-          pendingPlacement,
-          ...browser.popoverCallbacks("project"),
-          browserOpen: browser.browserOpen,
-          browser: browser.browser,
-          registerProjectPath: browser.browserProjectPath,
-          registeringProject: browser.browserRegistering,
-          onSelectProject: (projectId) => place.selectProjectId(projectId),
-          onProjectQueryInput: (query) => browser.changeProjectQuery(query),
-          onSelectRemoteProject: (project) => place.selectRemoteProject(project),
-          onApplyFolder: (folder) => place.applyFolder(folder),
-          onBrowse: () =>
-            browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
-          onBrowserBack: () => browser.showRoot(),
-          onRegisterProject: (path) => void browser.registerBrowserProject(path),
-          onClose: () => browser.close(),
-        })
-  }${
-    checkoutState && !(nativeTerminal && place.terminalOnNode)
-      ? renderCheckoutChip({
-          state: checkoutState,
-          remotePlacement: place.remotePlacement,
-          repository: Boolean(place.remoteRepository),
-          folderLabel: projectState.label,
-          worktree: place.worktree,
-          worktreeAvailable: place.worktreeAvailable(),
-          repositoryUnavailable: place.repository.kind === "unavailable",
-          branches,
-          branchesLoading: place.repository.kind === "checking",
-          baseRef: place.baseRef,
-          worktreeName: place.worktreeName,
-          submitting,
-          pendingPlacement,
-          ...browser.popoverCallbacks("checkout"),
-          onSelectWorktree: (value) => place.selectWorktree(value),
-          onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
-          onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
-        })
-      : nothing
-  }`;
+          }}
+      /></label>`
+    : renderProjectChip({
+        state: projectState,
+        browseAvailable: place.browseAvailable(),
+        isAdmin: place.isAdmin(),
+        canWrite: place.canWrite(),
+        folder: place.folder,
+        workspace: place.workspacePath(),
+        projects,
+        projectQuery: browser.projectQuery,
+        projectSearchAvailable:
+          !nativeTerminal &&
+          canCallGatewayMethod(context?.gateway.snapshot, "projects.searchRemote", "operator.read"),
+        projectAddAvailable:
+          !nativeTerminal &&
+          canCallGatewayMethod(
+            context?.gateway.snapshot,
+            place.remotePlacement ? "sessions.create" : "projects.add",
+            "operator.write",
+          ),
+        remoteProjects: browser.projectSearchResult?.projects ?? [],
+        selectedRemoteProject: browser.remoteProject,
+        projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
+        projectSearchLoading: browser.projectSearchLoading,
+        projectSearchError: browser.projectSearchError,
+        projectId: browser.projectId,
+        gatewayLabel,
+        submitting,
+        pendingPlacement,
+        ...browser.popoverCallbacks("project"),
+        browserOpen: browser.browserOpen,
+        browser: browser.browser,
+        registerProjectPath: browser.browserProjectPath,
+        registeringProject: browser.browserRegistering,
+        onSelectProject: (projectId) => place.selectProjectId(projectId),
+        onProjectQueryInput: (query) => browser.changeProjectQuery(query),
+        onSelectRemoteProject: (project) => place.selectRemoteProject(project),
+        onApplyFolder: (folder) => place.applyFolder(folder),
+        onBrowse: () => browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
+        onBrowserBack: () => browser.showRoot(),
+        onRegisterProject: (path) => void browser.registerBrowserProject(path),
+        onClose: () => browser.close(),
+      })}${checkoutState && !(nativeTerminal && place.terminalOnNode)
+    ? renderCheckoutChip({
+        state: checkoutState,
+        remotePlacement: place.remotePlacement,
+        repository: Boolean(place.remoteRepository),
+        folderLabel: projectState.label,
+        worktree: place.worktree,
+        worktreeAvailable: place.worktreeAvailable(),
+        repositoryUnavailable: place.repository.kind === "unavailable",
+        branches,
+        branchesLoading: place.repository.kind === "checking",
+        baseRef: place.baseRef,
+        worktreeName: place.worktreeName,
+        submitting,
+        pendingPlacement,
+        ...browser.popoverCallbacks("checkout"),
+        onSelectWorktree: (value) => place.selectWorktree(value),
+        onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
+        onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
+      })
+    : nothing}`;
 }

@@ -43,9 +43,9 @@ openclaw-new-session-page {
 }
 
 :is(
-    .new-session-page__draft-toggle,
-    .new-session-page__incognito-toggle
-  ).shell-chrome-controls__button:hover:not(:disabled) {
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
   background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
 }
@@ -61,8 +61,8 @@ openclaw-new-session-page {
 
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
 :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
-    :disabled
-  ) {
+  :disabled
+) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -1420,64 +1420,27 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__cloud-configuration {
-  width: min(
-    calc(var(--cloud-choice-columns, 3) * 116px + (var(--cloud-choice-columns, 3) - 1) * 6px),
-    calc(100vw - 48px)
-  );
+  width: min(300px, calc(100vw - 48px));
   padding: 0;
   overflow-y: auto;
   max-height: min(560px, calc(var(--auto-size-available-height, 70vh) - 2px));
 }
 
-.new-session-page__cloud-choice-grid {
+.new-session-page__cloud-choice-list {
   display: grid;
-  grid-template-columns: repeat(var(--cloud-choice-columns, 3), minmax(0, 1fr));
-  gap: 6px;
+  gap: 2px;
 }
 
-.new-session-page__cloud-choice-grid .session-menu__item {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 0;
-  min-height: 32px;
-  padding: 7px 5px;
-  gap: 3px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  text-align: center;
-  font-size: 12px;
+.new-session-page__cloud-choice-list .session-menu__text {
+  flex: 0 1 auto;
 }
 
-.new-session-page__cloud-choice-grid .session-menu__item[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.new-session-page__cloud-choice-list .session-menu__sub {
+  flex: 0 1 auto;
 }
 
-.new-session-page__cloud-choice-grid .session-menu__text {
-  flex: none;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.new-session-page__cloud-choice-grid .session-menu__sub {
-  margin: 0;
-  color: var(--muted);
-  font-size: 10px;
-  white-space: normal;
-}
-
-.new-session-page__cloud-choice-grid .session-menu__check {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 10px;
-  height: 10px;
-}
-
-.new-session-page__cloud-choice-grid .new-session-page__menu-meta {
-  display: none;
+.new-session-page__cloud-choice-list .session-menu__check {
+  margin-left: auto;
 }
 
 .new-session-page__selected-summary {
@@ -1551,13 +1514,8 @@ wa-popover.new-session-page__where-popover::part(body) {
   height: 16px;
 }
 
-.new-session-page__cloud-choice-grid + .new-session-page__environment-heading {
+.new-session-page__cloud-choice-list + .new-session-page__environment-heading {
   margin-top: 20px;
-}
-
-.new-session-page__cloud-choice-grid .session-menu__item[data-suggested="true"] {
-  border-style: dashed;
-  border-color: var(--muted);
 }
 
 .new-session-page__environment-detail-trigger {
@@ -1595,64 +1553,23 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 }
 
-.new-session-page__auto-row {
-  position: relative;
+.new-session-page__fixed-os,
+.new-session-page__fixed-machine {
+  padding: 7px 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.new-session-page__fixed-machine {
   display: flex;
-  align-items: center;
-  padding-right: 28px;
-  border-radius: var(--menu-item-radius);
+  align-items: baseline;
+  gap: 8px;
 }
 
-.new-session-page__auto-row:hover,
-.new-session-page__auto-row:has([aria-pressed="true"]) {
-  background: var(--bg-hover);
+.new-session-page__fixed-machine span {
+  white-space: nowrap;
 }
 
-.new-session-page__auto-row > .session-menu__item {
-  flex: 0 1 auto;
-  width: auto;
-  min-width: 0;
-  padding-right: 0;
-  background: transparent;
-}
-
-.new-session-page__auto-row > .session-menu__item::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-}
-
-.new-session-page__auto-row .session-menu__check {
-  position: absolute;
-  right: 8px;
-}
-
-.new-session-page__auto-row > openclaw-tooltip {
-  position: relative;
-  z-index: 1;
-}
-
-.new-session-page__auto-info {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 7px;
-  border: 0;
-  border-radius: var(--radius-sm);
+.new-session-page__fixed-machine span:last-child {
   color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.new-session-page__auto-info:hover {
-  background: var(--bg-hover);
-}
-
-.new-session-page__auto-info svg {
-  width: 14px;
-  height: 14px;
 }

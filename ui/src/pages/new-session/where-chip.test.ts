@@ -7,9 +7,6 @@ import { readDraftCloudProfiles } from "./discovery.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 function hoverDetails(row: Element | null | undefined) {
-  if (row?.getAttribute("data-value") === "auto-device") {
-    return row.getAttribute("aria-description") ?? "";
-  }
   return [
     ...(row
       ?.closest("openclaw-tooltip")
@@ -89,6 +86,7 @@ function renderPicker(
       onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
+      onManageCloudWorkers: vi.fn(),
       ...presentation,
     }),
     container,
@@ -239,7 +237,7 @@ describe("Where chip", () => {
   });
 
   it.each([0, 1, 2])(
-    "shows Auto only for multiple paired devices and Connect only with none: %s",
+    "shows Auto only for multiple paired devices and always provides the admin add-device action: %s",
     (count) => {
       const environments = Array.from({ length: count }, (_, index) => ({
         id: `node:device${index}`,
@@ -251,14 +249,63 @@ describe("Where chip", () => {
       }));
       const container = renderPicker(true, undefined, { environments });
       expect(Boolean(container.querySelector('[data-value="auto-device"]'))).toBe(count > 1);
-      expect(Boolean(container.querySelector('[data-value="connect-machine"]'))).toBe(count === 0);
+      const connect = container.querySelector<HTMLButtonElement>('[data-action="connect-machine"]');
+      expect(connect).not.toBeNull();
+      expect(connect?.classList.contains("new-session-page__connect-device")).toBe(true);
     },
   );
+
+  it("keeps the gateway as a distinct home-icon option after selecting the device pool", () => {
+    const container = renderPicker(true, undefined, { autoDevice: true });
+    const gateway = container.querySelector<HTMLButtonElement>('[data-value="gateway"]');
+    const pool = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
+
+    expect(gateway?.getAttribute("aria-pressed")).toBe("false");
+    expect(pool?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelectorAll('[data-value="gateway"]')).toHaveLength(1);
+    expect(gateway?.querySelector(".session-menu__icon svg")).not.toBeNull();
+  });
+
+  it("uses the same device-pool icon in the Auto trigger and menu row", () => {
+    const container = renderPicker(true, undefined, { autoDevice: true });
+    for (const icon of [
+      container.querySelector('[data-value="auto-device"] .session-menu__icon svg'),
+      container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
+    ]) {
+      expect(icon?.querySelector('rect[x="2"][y="7"][width="14"]')).not.toBeNull();
+    }
+  });
+
+  it("omits the Cloud heading when no cloud profiles are configured", () => {
+    const container = renderPicker(true, undefined, { cloudProfiles: [] });
+    const headings = [...container.querySelectorAll(".new-session-page__environment-heading")].map(
+      (heading) => heading.textContent?.trim(),
+    );
+
+    expect(headings).toEqual(["Your devices"]);
+  });
+
+  it("shows the Cloud settings action only to admins when a cloud profile is available", () => {
+    const onManageCloudWorkers = vi.fn();
+    const admin = renderPicker(true, undefined, {}, { onManageCloudWorkers });
+    const action = admin.querySelector<HTMLButtonElement>('[data-action="manage-cloud-workers"]');
+    expect(action).not.toBeNull();
+    expect(action?.classList.contains("new-session-page__connect-device")).toBe(true);
+    action?.click();
+    expect(onManageCloudWorkers).toHaveBeenCalledOnce();
+
+    expect(renderPicker(false).querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
+    expect(
+      renderPicker(true, undefined, { cloudProfiles: [] }).querySelector(
+        '[data-action="manage-cloud-workers"]',
+      ),
+    ).toBeNull();
+  });
 
   it("does not offer Connect to non-admin users with no paired devices", () => {
     const onConnectMachine = vi.fn();
     const container = renderPicker(false, undefined, { environments: [] }, { onConnectMachine });
-    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+    expect(container.querySelector('[data-action="connect-machine"]')).toBeNull();
     expect(onConnectMachine).not.toHaveBeenCalled();
   });
 
@@ -275,23 +322,20 @@ describe("Where chip", () => {
     expect(container.querySelectorAll('[data-value^="device:"]')).toHaveLength(1);
   });
 
-  it("places Auto first in the device list with separate touch-accessible help", () => {
+  it("places Any available device first in Your devices with destination-card help", () => {
     const container = renderPicker(true);
     const row = container.querySelector('[data-value="auto-device"]');
     const choices = [
-      ...container.querySelectorAll('[data-value="auto-device"], [data-value^="device:"]'),
+      ...container.querySelectorAll(
+        '[data-value="auto-device"], [data-value="gateway"], [data-value^="device:"]',
+      ),
     ];
     expect(choices[0]).toBe(row);
     expect(row?.closest(".new-session-page__devices-heading")).toBeNull();
-    expect(row?.getAttribute("aria-description")).toContain(
-      "Chooses the least-busy connected device",
-    );
+    expect(hoverDetails(row)).toContain("Chooses the least-busy connected device");
     expect(
-      container
-        .querySelector(".new-session-page__auto-info")
-        ?.closest("openclaw-tooltip")
-        ?.hasAttribute("open-on-click"),
-    ).toBe(true);
+      row?.closest("openclaw-tooltip")?.querySelector(".new-session-page__environment-card"),
+    ).not.toBeNull();
   });
 
   it("explains the checkout requirement instead of provider details", () => {
@@ -386,7 +430,7 @@ describe("Where chip", () => {
 
   it("does not offer Connect when search hides already paired devices", () => {
     const container = renderPicker(true, undefined, {}, { environmentQuery: "no-such-runner" });
-    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+    expect(container.querySelector('[data-action="connect-machine"]')).toBeNull();
     expect(container.textContent).toContain("No matching environments");
   });
 
@@ -726,9 +770,7 @@ describe("Where chip", () => {
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
     const autoRow = writer.querySelector('[data-value="auto-device"]');
-    expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe(
-      "Choose automatically",
-    );
+    expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
     expect(autoRow?.tagName).toBe("BUTTON");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
@@ -746,12 +788,12 @@ describe("Where chip", () => {
     );
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
     expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
-    expect(writer.querySelector('[data-value="connect-machine"]')).toBeNull();
+    expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
 
     const admin = renderPicker(true);
     expect(admin.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(admin.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
-    expect(admin.querySelector('[data-value="connect-machine"]')).toBeNull();
+    expect(admin.querySelector('[data-action="connect-machine"]')).not.toBeNull();
   });
 
   it("disables device placements when the selected runtime cannot dispatch to devices", () => {
@@ -794,6 +836,7 @@ describe("Where chip", () => {
         onSelectAutoDevice: () => undefined,
         onSelectCloudProfile: () => undefined,
         onConnectMachine: () => undefined,
+        onManageCloudWorkers: () => undefined,
       }),
       container,
     );
@@ -836,6 +879,7 @@ describe("Where chip", () => {
         onSelectAutoDevice: vi.fn(),
         onSelectCloudProfile: vi.fn(),
         onConnectMachine: vi.fn(),
+        onManageCloudWorkers: () => undefined,
       }),
       emptyContainer,
     );
@@ -900,6 +944,7 @@ describe("Where chip", () => {
         onSelectAutoDevice: vi.fn(),
         onSelectCloudProfile: vi.fn(),
         onConnectMachine: vi.fn(),
+        onManageCloudWorkers: () => undefined,
       }),
       container,
     );
@@ -1019,6 +1064,7 @@ describe("Where chip", () => {
           onSelectAutoDevice: vi.fn(),
           onSelectCloudProfile: vi.fn(),
           onConnectMachine: vi.fn(),
+          onManageCloudWorkers: () => undefined,
         }),
         container,
       );
