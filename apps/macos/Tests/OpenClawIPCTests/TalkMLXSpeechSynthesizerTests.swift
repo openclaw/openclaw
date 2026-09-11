@@ -35,7 +35,8 @@ struct TalkMLXSpeechSynthesizerTests {
             let synthesizer = TalkMLXSpeechSynthesizer.shared
             await synthesizer.shutdown()
             let synthesis = Task {
-                try await synthesizer.synthesize(
+                try await self.collectSynthesis(
+                    synthesizer,
                     text: "hold transport open",
                     modelRepo: nil,
                     language: nil,
@@ -61,13 +62,14 @@ struct TalkMLXSpeechSynthesizerTests {
     @Test
     func `stale startup exit cannot discard the replacement helper`() async throws {
         let stale = TestMLXTransport(mode: .staleStartupClose)
-        let replacement = TestMLXTransport(mode: .audio)
+        let replacement = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([stale, replacement])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .seconds(60))
         let staleSynthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "stale startup",
                 modelRepo: nil,
                 language: nil,
@@ -76,14 +78,16 @@ struct TalkMLXSpeechSynthesizerTests {
         await factory.waitForCall()
         await synthesizer.shutdown()
 
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "replacement",
             modelRepo: nil,
             language: nil,
             voicePreset: nil)
         await stale.finishStaleClose()
         _ = try? await staleSynthesis.value
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "reuse replacement",
             modelRepo: nil,
             language: nil,
@@ -96,13 +100,14 @@ struct TalkMLXSpeechSynthesizerTests {
     @Test
     func `stale startup ready cannot discard the replacement helper`() async throws {
         let stale = TestMLXTransport(mode: .staleStartupReady)
-        let replacement = TestMLXTransport(mode: .audio)
+        let replacement = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([stale, replacement])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .seconds(60))
         let staleSynthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "stale startup",
                 modelRepo: nil,
                 language: nil,
@@ -111,14 +116,16 @@ struct TalkMLXSpeechSynthesizerTests {
         await factory.waitForCall()
         await synthesizer.shutdown()
 
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "replacement",
             modelRepo: nil,
             language: nil,
             voicePreset: nil)
         await stale.finishStaleReady()
         _ = try? await staleSynthesis.value
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "reuse replacement",
             modelRepo: nil,
             language: nil,
@@ -131,7 +138,7 @@ struct TalkMLXSpeechSynthesizerTests {
     @Test
     func `stale stream timeout cannot discard the replacement helper`() async throws {
         let stale = TestMLXTransport(mode: .staleStreamTimeout)
-        let replacement = TestMLXTransport(mode: .audio)
+        let replacement = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([stale, replacement])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
@@ -150,13 +157,15 @@ struct TalkMLXSpeechSynthesizerTests {
         await stale.waitForBlockedEvent()
         await synthesizer.shutdown()
 
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "replacement",
             modelRepo: nil,
             language: nil,
             voicePreset: nil)
         _ = try? await staleConsumption.value
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "reuse replacement",
             modelRepo: nil,
             language: nil,
@@ -166,27 +175,72 @@ struct TalkMLXSpeechSynthesizerTests {
         await synthesizer.shutdown()
     }
 
+    @Test(arguments: [false, true])
+    func `stale stream audio cannot survive shutdown or discard replacement`(_ legacyFrame: Bool) async throws {
+        let stale = TestMLXTransport(mode: legacyFrame ? .staleStreamLateAudio : .staleStreamLateChunk)
+        let replacement = TestMLXTransport(mode: .stream)
+        let factory = TestMLXTransportFactory([stale, replacement])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let staleSynthesis = Task {
+            try await self.collectSynthesis(
+                synthesizer,
+                text: "stale stream",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil)
+        }
+        await stale.waitForPendingEventRead()
+        await synthesizer.shutdown()
+        _ = try await self.collectSynthesis(
+            synthesizer,
+            text: "replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+        await stale.deliverLateOutput()
+        do {
+            _ = try await staleSynthesis.value
+            Issue.record("expected stale stream cancellation")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
+            #expect(await stale.closeCount == 1)
+        }
+        _ = try await self.collectSynthesis(
+            synthesizer,
+            text: "reuse replacement",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
+        #expect(await factory.callCount == 2)
+        await synthesizer.shutdown()
+    }
+
     @Test
     func `reuses resident helper across utterances`() async throws {
-        let transport = TestMLXTransport(mode: .audio)
+        let transport = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .seconds(60))
 
-        let first = try await synthesizer.synthesize(
+        let first = try await self.collectSynthesis(
+            synthesizer,
             text: "first",
             modelRepo: nil,
             language: nil,
             voicePreset: nil)
-        let second = try await synthesizer.synthesize(
+        let second = try await self.collectSynthesis(
+            synthesizer,
             text: "second",
             modelRepo: "repo-a",
             language: "en",
             voicePreset: "voice-a")
 
-        #expect(first.starts(with: Data("RIFF".utf8)))
-        #expect(second.starts(with: Data("RIFF".utf8)))
+        #expect(first.sampleRate == 32000)
+        #expect(first.pcm == Data([0x00, 0x00, 0xFF, 0x7F]))
+        #expect(second.sampleRate == 32000)
+        #expect(second.pcm == Data([0x00, 0x00, 0xFF, 0x7F]))
         #expect(await factory.callCount == 1)
         let requests = await transport.sent
         #expect(requests.count == 2)
@@ -287,19 +341,21 @@ struct TalkMLXSpeechSynthesizerTests {
     @Test
     func `retries once after helper crash`() async throws {
         let crashed = TestMLXTransport(mode: .crash)
-        let restarted = TestMLXTransport(mode: .audio)
+        let restarted = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([crashed, restarted])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .seconds(60))
 
-        let data = try await synthesizer.synthesize(
+        let data = try await self.collectSynthesis(
+            synthesizer,
             text: "retry me",
             modelRepo: nil,
             language: nil,
             voicePreset: nil)
 
-        #expect(data.starts(with: Data("RIFF".utf8)))
+        #expect(data.sampleRate == 32000)
+        #expect(data.pcm == Data([0x00, 0x00, 0xFF, 0x7F]))
         #expect(await factory.callCount == 2)
         #expect(await crashed.closeCount == 1)
         #expect(await restarted.sent.count == 1)
@@ -314,7 +370,8 @@ struct TalkMLXSpeechSynthesizerTests {
             idleDuration: .seconds(60))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "cancel me",
                 modelRepo: nil,
                 language: nil,
@@ -337,22 +394,26 @@ struct TalkMLXSpeechSynthesizerTests {
         }
     }
 
-    @Test
-    func `late audio after cancel is discarded`() async throws {
-        let transport = TestMLXTransport(mode: .audioAfterCancel)
+    @Test(arguments: [false, true])
+    func `late audio after cancel is discarded`(_ afterStreamStart: Bool) async throws {
+        let transport = TestMLXTransport(mode: afterStreamStart ? .streamAudioAfterCancel : .audioAfterCancel)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .seconds(60))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "discard me",
                 modelRepo: nil,
                 language: nil,
                 voicePreset: nil)
         }
         await transport.waitForSynthesisRequest()
+        if afterStreamStart {
+            await transport.waitForPendingEventRead()
+        }
         await synthesizer.cancelCurrent()
 
         do {
@@ -373,7 +434,8 @@ struct TalkMLXSpeechSynthesizerTests {
             cancelGraceDuration: .milliseconds(10))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "cancel me hard",
                 modelRepo: nil,
                 language: nil,
@@ -400,7 +462,8 @@ struct TalkMLXSpeechSynthesizerTests {
             idleDuration: .seconds(60))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "stop during shutdown",
                 modelRepo: nil,
                 language: nil,
@@ -427,7 +490,8 @@ struct TalkMLXSpeechSynthesizerTests {
             idleDuration: .seconds(60))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "fall back after pressure",
                 modelRepo: nil,
                 language: nil,
@@ -455,7 +519,8 @@ struct TalkMLXSpeechSynthesizerTests {
             cancelGraceDuration: .milliseconds(10))
 
         let synthesis = Task {
-            try await synthesizer.synthesize(
+            try await self.collectSynthesis(
+                synthesizer,
                 text: "never ready",
                 modelRepo: nil,
                 language: nil,
@@ -475,13 +540,14 @@ struct TalkMLXSpeechSynthesizerTests {
 
     @Test
     func `idle timeout shuts down resident helper`() async throws {
-        let transport = TestMLXTransport(mode: .audio)
+        let transport = TestMLXTransport(mode: .stream)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
             transportFactory: { try await factory.make() },
             idleDuration: .milliseconds(10))
 
-        _ = try await synthesizer.synthesize(
+        _ = try await self.collectSynthesis(
+            synthesizer,
             text: "brief",
             modelRepo: nil,
             language: nil,
@@ -492,16 +558,43 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func `pcm response becomes playable WAV`() throws {
-        let wav = try TalkMLXSpeechSynthesizer.makeWAV(audio: MLXTTSAudio(
-            id: "one",
-            sampleRate: 32000,
-            pcm: Data([0x00, 0x00, 0xFF, 0x7F])))
+    func `legacy audio response is delivered as PCM`() async throws {
+        let transport = TestMLXTransport(mode: .audio)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+        let audio = try await self.collectSynthesis(
+            synthesizer,
+            text: "legacy helper",
+            modelRepo: nil,
+            language: nil,
+            voicePreset: nil)
 
-        #expect(wav.count == 48)
-        #expect(wav.prefix(4) == Data("RIFF".utf8))
-        #expect(wav.subdata(in: 8..<12) == Data("WAVE".utf8))
-        #expect(wav.suffix(4) == Data([0x00, 0x00, 0xFF, 0x7F]))
+        #expect(audio.sampleRate == 32000)
+        #expect(audio.pcm == Data([0x00, 0x00, 0xFF, 0x7F]))
+        await synthesizer.shutdown()
+    }
+
+    private func collectSynthesis(
+        _ synthesizer: TalkMLXSpeechSynthesizer,
+        text: String,
+        modelRepo: String?,
+        language: String?,
+        voicePreset: String?) async throws -> (sampleRate: Double, pcm: Data)
+    {
+        let playback = try await synthesizer.synthesizeStream(
+            text: text,
+            modelRepo: modelRepo,
+            language: language,
+            voicePreset: voicePreset,
+            referenceAudioPath: nil,
+            referenceText: nil)
+        var pcm = Data()
+        for try await chunk in playback.chunks {
+            pcm.append(chunk)
+        }
+        return (playback.sampleRate, pcm)
     }
 }
 
@@ -518,6 +611,9 @@ private actor TestMLXTransport: MLXTTSTransport {
         case staleStartupClose
         case staleStartupReady
         case staleStreamTimeout
+        case staleStreamLateAudio
+        case staleStreamLateChunk
+        case streamAudioAfterCancel
         case startupHang
         case stream
         case streamWaitForCancel
@@ -529,6 +625,7 @@ private actor TestMLXTransport: MLXTTSTransport {
     private(set) var closeCount = 0
     private var events: [MLXTTSEvent] = [.ready]
     private var closed = false
+    private var pendingEventRead = false
 
     init(mode: Mode) {
         self.mode = mode
@@ -555,7 +652,8 @@ private actor TestMLXTransport: MLXTTSTransport {
                     id: synthesize.id,
                     pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
                 self.events.append(.completed(id: synthesize.id))
-            case .staleStreamTimeout, .streamWaitForCancel:
+            case .staleStreamTimeout, .streamWaitForCancel, .streamAudioAfterCancel,
+                 .staleStreamLateAudio, .staleStreamLateChunk:
                 self.events.append(.streamStarted(MLXTTSStreamStart(
                     id: synthesize.id,
                     sampleRate: 32000)))
@@ -566,7 +664,7 @@ private actor TestMLXTransport: MLXTTSTransport {
                 break
             }
         case let .cancel(id):
-            if self.mode == .audioAfterCancel {
+            if self.mode == .audioAfterCancel || self.mode == .streamAudioAfterCancel {
                 self.events.append(.audio(MLXTTSAudio(
                     id: id,
                     sampleRate: 32000,
@@ -574,6 +672,8 @@ private actor TestMLXTransport: MLXTTSTransport {
             } else if self.mode != .ignoreCancel,
                       self.mode != .staleStartupReady,
                       self.mode != .staleStreamTimeout,
+                      self.mode != .staleStreamLateAudio,
+                      self.mode != .staleStreamLateChunk,
                       self.mode != .startupHang
             {
                 self.events.append(.canceled(id: id))
@@ -581,7 +681,9 @@ private actor TestMLXTransport: MLXTTSTransport {
         case .shutdown:
             if self.mode != .staleStartupClose,
                self.mode != .staleStartupReady,
-               self.mode != .staleStreamTimeout
+               self.mode != .staleStreamTimeout,
+               self.mode != .staleStreamLateAudio,
+               self.mode != .staleStreamLateChunk
             {
                 self.closed = true
             }
@@ -589,6 +691,9 @@ private actor TestMLXTransport: MLXTTSTransport {
     }
 
     func nextEvent() async throws -> MLXTTSEvent {
+        if self.events.isEmpty {
+            self.pendingEventRead = true
+        }
         while self.events.isEmpty {
             if self.closed {
                 throw TestMLXTransportError.closed
@@ -602,7 +707,9 @@ private actor TestMLXTransport: MLXTTSTransport {
         self.closeCount += 1
         if self.mode != .staleStartupClose,
            self.mode != .staleStartupReady,
-           self.mode != .staleStreamTimeout
+           self.mode != .staleStreamTimeout,
+           self.mode != .staleStreamLateAudio,
+           self.mode != .staleStreamLateChunk
         {
             self.closed = true
         }
@@ -614,6 +721,26 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func finishStaleReady() {
         self.events.append(.ready)
+    }
+
+    func waitForPendingEventRead() async {
+        while !self.pendingEventRead {
+            await Task.yield()
+        }
+    }
+
+    func deliverLateOutput() {
+        guard let request = self.sent.first, case let .synthesize(synthesize) = request else {
+            Issue.record("expected a synthesis request before late output")
+            return
+        }
+        let pcm = Data([0x00, 0x00, 0xFF, 0x7F])
+        if self.mode == .staleStreamLateAudio {
+            self.events.append(.audio(MLXTTSAudio(id: synthesize.id, sampleRate: 32000, pcm: pcm)))
+        } else {
+            self.events.append(.audioChunk(MLXTTSAudioChunk(id: synthesize.id, pcm: pcm)))
+            self.events.append(.completed(id: synthesize.id))
+        }
     }
 
     func waitForBlockedEvent() async {
