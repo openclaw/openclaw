@@ -89,7 +89,6 @@ describe("Slack message handler thread resolution", () => {
             threadHistoryScope: "thread",
             threadInheritParent: false,
             slashCommand: {
-              enabled: false,
               name: "openclaw",
               ephemeral: true,
               sessionPrefix: "slack:slash",

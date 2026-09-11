@@ -929,13 +929,17 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
-  it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
+  it("accepts plugin action ids while reserving command menus for their own handler", () => {
     const { ctx, getActionMatcher } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const matcher = getActionMatcher();
     expect(matcher.test("openclaw:verify")).toBe(true);
     expect(matcher.test("codex")).toBe(true);
+    expect(matcher.test("openclaw:approval_button:1:1")).toBe(true);
+    expect(matcher.test("openclaw:question_button:1:1")).toBe(true);
+    expect(matcher.test("openclaw_cmdarg")).toBe(false);
+    expect(matcher.test("openclaw_cmdarg_0_1")).toBe(false);
   });
 
   it("routes matching Slack actions through the shared plugin interactive dispatcher", async () => {

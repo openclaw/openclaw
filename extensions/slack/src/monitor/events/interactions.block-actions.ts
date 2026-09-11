@@ -30,6 +30,7 @@ import {
   isSlackApprovalActionId,
   isSlackCallbackActionId,
   isSlackQuestionActionId,
+  SLACK_COMMAND_ARG_ACTION_ID,
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
@@ -1244,7 +1245,10 @@ export function registerSlackBlockActionHandler(params: {
   if (typeof params.ctx.app.action !== "function") {
     return;
   }
-  params.ctx.app.action(/.+/, async (args: SlackBlockActionHandlerArgs) => {
+  // Bolt runs every matching listener. Command menus have their own ack and
+  // dispatcher; matching them here would also enqueue an unintended agent turn.
+  const actionMatcher = new RegExp(`^(?!${SLACK_COMMAND_ARG_ACTION_ID}).+`);
+  params.ctx.app.action(actionMatcher, async (args: SlackBlockActionHandlerArgs) => {
     await handleSlackBlockAction({
       ctx: params.ctx,
       trackEvent: params.trackEvent,

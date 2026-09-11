@@ -303,7 +303,6 @@ const baseParams = () => ({
   reactionAllowlist: [],
   replyToMode: "off" as const,
   slashCommand: {
-    enabled: false,
     name: "openclaw",
     sessionPrefix: "slack:slash",
     ephemeral: true,

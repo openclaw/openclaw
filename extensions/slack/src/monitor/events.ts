@@ -33,14 +33,12 @@ export function registerSlackCommonEvents(params: {
 
 export function registerSlackWorkspaceEvents(params: {
   ctx: SlackMonitorContext;
-  appHomeSlashCommandName?: string;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
 }) {
   registerSlackChannelIdChangedEvent({ ctx: params.ctx, trackEvent: params.trackEvent });
   registerSlackHomeEvents({
     ctx: params.ctx,
-    slashCommandName: params.appHomeSlashCommandName,
     trackEvent: params.trackEvent,
   });
   registerSlackAgentEvents({ ctx: params.ctx, trackEvent: params.trackEvent });

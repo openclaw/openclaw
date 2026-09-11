@@ -48,6 +48,46 @@ const channelAllowMigration = defineKeyMoveMigration({
   to: ["enabled"],
 });
 
+const retiredCommandEnablementKeys = [
+  ["commands", "native"],
+  ["slashCommand", "enabled"],
+] as const;
+
+function hasRetiredCommandEnablement(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  return retiredCommandEnablementKeys.some(([parent, key]) =>
+    Object.hasOwn(asObjectRecord(entry?.[parent]) ?? {}, key),
+  );
+}
+
+function removeRetiredCommandEnablement(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  let entry = params.entry;
+  for (const [parent, key] of retiredCommandEnablementKeys) {
+    const value = asObjectRecord(entry[parent]);
+    if (!value || !Object.hasOwn(value, key)) {
+      continue;
+    }
+    const remaining = { ...value };
+    delete remaining[key];
+    if (entry === params.entry) {
+      entry = { ...params.entry };
+    }
+    if (Object.keys(remaining).length > 0) {
+      entry[parent] = remaining;
+    } else {
+      delete entry[parent];
+    }
+    params.changes.push(
+      `Removed retired ${params.pathPrefix}.${parent}.${key}; Slack slash commands are always handled.`,
+    );
+  }
+  return { entry, changed: entry !== params.entry };
+}
+
 function hasInteractiveRepliesCapability(value: unknown): boolean {
   const capabilities = asObjectRecord(value)?.capabilities;
   if (Array.isArray(capabilities)) {
@@ -117,6 +157,18 @@ function removeInteractiveRepliesCapability(params: {
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
   {
+    path: ["channels", "slack"],
+    message:
+      'Slack commands.native and slashCommand.enabled are retired; slash commands are always handled. Run "openclaw doctor --fix".',
+    match: hasRetiredCommandEnablement,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'Slack account commands.native and slashCommand.enabled are retired; slash commands are always handled. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasRetiredCommandEnablement),
+  },
+  {
     path: ["channels", "slack", "enterpriseOrgInstall"],
     message:
       'channels.slack.enterpriseOrgInstall is retired; Slack now detects org-wide installations automatically. Run "openclaw doctor --fix".',
@@ -183,7 +235,11 @@ function normalizeSlackEntry(params: {
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
-  const retiredInteractiveReplies = removeInteractiveRepliesCapability(params);
+  const commands = removeRetiredCommandEnablement(params);
+  const retiredInteractiveReplies = removeInteractiveRepliesCapability({
+    ...params,
+    entry: commands.entry,
+  });
   const dm = dmReplyModeMigration.normalize({
     ...params,
     entry: retiredInteractiveReplies.entry,
@@ -192,7 +248,12 @@ function normalizeSlackEntry(params: {
   const channels = channelAllowMigration.normalize({ ...params, entry: thread.entry });
   return {
     entry: channels.entry,
-    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed || channels.changed,
+    changed:
+      commands.changed ||
+      retiredInteractiveReplies.changed ||
+      dm.changed ||
+      thread.changed ||
+      channels.changed,
   };
 }
 

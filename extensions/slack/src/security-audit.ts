@@ -1,11 +1,7 @@
 // Slack plugin module implements security audit behavior.
-import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
+import { normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  resolveNativeCommandsEnabled,
-  resolveNativeSkillsEnabled,
-} from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 
 export async function collectSlackSecurityAuditFindings(params: {
@@ -22,28 +18,6 @@ export async function collectSlackSecurityAuditFindings(params: {
   }> = [];
   const slackCfg = params.account.config ?? {};
   const accountId = params.accountId?.trim() || params.account.accountId || "default";
-  const slashCommandConfigured =
-    (slackCfg.slashCommand as { enabled?: unknown } | undefined)?.enabled === true;
-  const slashCommandEnabled =
-    slashCommandConfigured ||
-    resolveNativeCommandsEnabled({
-      providerId: "slack",
-      providerSetting: coerceNativeSetting(
-        (slackCfg.commands as { native?: unknown } | undefined)?.native,
-      ),
-      globalSetting: params.cfg.commands?.native,
-    }) ||
-    resolveNativeSkillsEnabled({
-      providerId: "slack",
-      providerSetting: coerceNativeSetting(
-        (slackCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-      ),
-      globalSetting: params.cfg.commands?.nativeSkills,
-    });
-  if (!slashCommandEnabled) {
-    return findings;
-  }
-
   const allowFromRaw = slackCfg.allowFrom;
   const legacyAllowFromRaw = (params.account as { dm?: { allowFrom?: unknown } }).dm?.allowFrom;
   const allowFrom = Array.isArray(allowFromRaw)

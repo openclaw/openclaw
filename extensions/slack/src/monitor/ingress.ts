@@ -14,6 +14,7 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getSlackRuntime } from "../runtime.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
@@ -447,7 +448,10 @@ export function createSlackDurableIngress(
       if (!app) {
         throw new Error("Slack ingress receiver is not attached to a Bolt app.");
       }
-      await app.processEvent(event);
+      const boltApp = app;
+      // Commands and actions acknowledge before dispatch finishes. Retain their
+      // work root so the closed HTTP request cannot fence the continued turn.
+      await runDetachedWebhookWork(() => boltApp.processEvent(event));
       return;
     }
     await monitor.admit({

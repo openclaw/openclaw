@@ -188,7 +188,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":
-    "Registers native slash/menu commands with channels that support command registration (Discord, Slack, Telegram). Keep enabled for discoverability unless you intentionally run text-only command workflows.",
+    "Registers native slash/menu commands on Discord and Telegram. Ignored for Slack, which always handles its shared and individual slash commands; register the desired commands in the Slack app.",
   "commands.nativeSkills":
     "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
   "commands.text":

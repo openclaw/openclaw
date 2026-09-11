@@ -13,17 +13,14 @@ function stubSlackPlugin(params: {
     id: "slack",
     label: "Slack",
     commands: {
-      nativeCommandsAutoEnabled: false,
+      nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: false,
     },
     collectAuditFindings: async ({ account }) => {
-      const config =
-        (account as { config?: { slashCommand?: { enabled?: boolean }; allowFrom?: unknown } })
-          .config ?? {};
-      const slashCommandEnabled = config.slashCommand?.enabled === true;
+      const config = (account as { config?: { allowFrom?: unknown } }).config ?? {};
       const allowFrom =
         Array.isArray(config.allowFrom) && config.allowFrom.length > 0 ? config.allowFrom : [];
-      if (!slashCommandEnabled || allowFrom.length > 0) {
+      if (allowFrom.length > 0) {
         return [];
       }
       return [
@@ -46,7 +43,6 @@ function makeSlackHttpConfig(): OpenClawConfig {
         enabled: true,
         mode: "http",
         groupPolicy: "open",
-        slashCommand: { enabled: true },
       },
     },
   } as OpenClawConfig;

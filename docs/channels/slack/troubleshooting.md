@@ -116,12 +116,12 @@ openclaw pairing list slack
   </Accordion>
 
   <Accordion title="Native/slash commands not firing">
-    Verify whether you intended:
+    Verify the matching command is registered in your Slack app:
 
-    - native command mode (`channels.slack.commands.native: true`) with matching slash commands registered in Slack
-    - or single slash command mode (`channels.slack.slashCommand.enabled: true`)
+    - For `/openclaw /help`, register `/openclaw` (or your configured `channels.slack.slashCommand.name`).
+    - For direct `/help`, register `/help` separately.
 
-    Slack does not create or remove slash commands automatically. `commands.native: "auto"` does not enable Slack native commands; use `true` and create the matching commands in the Slack app. In HTTP mode, every Slack slash command must include the Gateway URL. In Socket Mode, command payloads arrive over the websocket and Slack ignores `slash_commands[].url`.
+    OpenClaw handles both forms automatically. If config validation reports the retired `channels.slack.slashCommand.enabled` or `channels.slack.commands.native` keys, run `openclaw doctor --fix` to remove them. Global `commands.native` does not control Slack command handling. Slack app commands remain administrator-managed. In HTTP mode, every Slack slash command must include the Gateway URL. In Socket Mode, command payloads arrive over the websocket and Slack ignores `slash_commands[].url`.
 
     Also check `commands.allowFrom` (when configured), DM authorization,
     channel allowlists, and per-channel `users` allowlists. Access-group

@@ -25,7 +25,6 @@ export function resolveSlackSlashCommandConfig(
   );
   const name = normalizedName || "openclaw";
   return {
-    enabled: raw?.enabled === true,
     name,
     sessionPrefix: normalizeOptionalString(raw?.sessionPrefix) ?? "slack:slash",
     ephemeral: raw?.ephemeral !== false,

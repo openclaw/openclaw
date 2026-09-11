@@ -7,6 +7,11 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 // Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
@@ -144,6 +149,7 @@ export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 export const getSlackClient = () => ensureSlackTestRuntime().client;
 
 export function disposeSlackTestRuntime(): void {
+  resetPluginRuntimeStateForTest();
   const globalState = globalThis as {
     __slackHandlers?: Map<string, SlackHandler>;
     __slackClient?: SlackClient;
@@ -310,6 +316,9 @@ export const defaultSlackTestConfig = () => ({
 let lastSlackTestStateDir: string | undefined;
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+  // Gateway startup supplies this registry before starting channel monitors.
+  // Each fixture owns it so native commands never depend on a sibling test.
+  setActivePluginRegistry(createEmptyPluginRegistry());
   // Fresh persistent state per test: the dispatch-dedupe guard writes logical
   // message keys to the state DB, and fixture ts values repeat across tests,
   // so a carried-over DB would dedupe unrelated test messages. realpath keeps

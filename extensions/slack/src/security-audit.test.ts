@@ -31,7 +31,6 @@ function createSlashCommandSlackConfig(): OpenClawConfig {
         botToken: "xoxb-test",
         appToken: "xapp-test",
         groupPolicy: "open",
-        slashCommand: { enabled: true },
       },
     },
   };

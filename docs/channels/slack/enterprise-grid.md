@@ -101,7 +101,6 @@ uses the org-installed bot token:
       mode: "socket",
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-      slashCommand: { enabled: true, name: "openclaw" },
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "allowlist",
@@ -205,7 +204,6 @@ the enterprise account with the same Request URL path:
         provider: "default",
         id: "SLACK_SIGNING_SECRET",
       },
-      slashCommand: { enabled: true, name: "openclaw" },
       webhookPath: "/slack/events",
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -238,7 +236,7 @@ modal, and configured shortcut and slash-command payloads plus
 workspace-qualified outbound messages and presence polling. Add any shortcuts to the app manifest's
 `features.shortcuts` list; OpenClaw accepts their callback IDs through the same
 interaction path. The manifest examples register the single `/openclaw`
-command; native command mode still requires the administrator-managed command
+command; individual native commands still require the administrator-managed command
 entries described in
 [Optional native slash commands](/channels/slack/manifest-and-scopes#optional-native-slash-commands).
 Relay mode, channel-ID-change events, App Home, Agent

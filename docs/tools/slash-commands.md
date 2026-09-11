@@ -94,8 +94,8 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
-  Registers native commands. Auto: on for Discord/Telegram. Off for Slack.
-  Ignored for providers without native support. Override per-channel with
+  Registers native commands. Auto: on for Discord/Telegram.
+  Ignored for Slack, which always handles slash commands, and for providers without native support. Override per-channel with
   `channels.<provider>.commands.native`. On Discord, `false` skips slash-command
   registration. Previously registered commands may stay visible until removed.
 </ParamField>
@@ -590,9 +590,10 @@ See [BTW side questions](/tools/btw) for the full behavior.
 
   </Accordion>
   <Accordion title="Slack specifics">
-    `channels.slack.slashCommand` supports a single `/openclaw`-style command.
-    With `commands.native: true`, create one Slack slash command per built-in
-    command. Register `/agentstatus` (not `/status`) because Slack reserves
+    Slack always handles both the shared `/openclaw`-style command and individual native commands.
+    Register `/openclaw` in the Slack app to use `/openclaw /help`, or register `/help` to invoke it directly; both can coexist.
+    `channels.slack.slashCommand.name` changes the shared command name. Run `openclaw doctor --fix` to remove the retired `channels.slack.slashCommand.enabled` and `channels.slack.commands.native` keys. Global `commands.native` does not disable Slack handlers.
+    Register `/agentstatus` (not `/status`) because Slack reserves
     `/status`. Text `/status` still works in Slack messages.
   </Accordion>
   <Accordion title="Fast path and inline shortcuts">

@@ -38,7 +38,7 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
 - This block configures command surfaces. For the current built-in + bundled command catalog, see [Slash Commands](/tools/slash-commands).
 - This page is a **config-key reference**, not the full command catalog. Channel/plugin-owned commands such as QQ Bot `/bot-ping` `/bot-help` `/bot-logs`, LINE `/card`, device-pair `/pair`, memory `/dreaming`, and Talk `/voice` are documented in their channel/plugin pages plus [Slash Commands](/tools/slash-commands).
 - Text commands must be **standalone** messages with leading `/`.
-- `native: "auto"` turns on native commands for Discord/Telegram, leaves Slack off.
+- `native: "auto"` turns on native commands for Discord/Telegram. Slack always handles its shared and individual slash commands; global `commands.native` is ignored there. Register the desired commands in the Slack app. The old `channels.slack.commands.native` and `channels.slack.slashCommand.enabled` keys are retired; run `openclaw doctor --fix` to remove them.
 - `nativeSkills: "auto"` turns on native skill commands for Discord/Telegram, leaves Slack off.
 - Override per channel: `channels.discord.commands.native` (bool or `"auto"`). For Discord, `false` skips native command registration and cleanup during startup.
 - Override native skill registration per channel with `channels.<provider>.commands.nativeSkills`.

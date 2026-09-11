@@ -24,9 +24,13 @@ function createHomeContext(params?: {
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
+  harness.ctx.slashCommand = {
+    name: params?.slashCommandName ?? "openclaw",
+    sessionPrefix: "slack:slash",
+    ephemeral: true,
+  };
   registerSlackHomeEvents({
     ctx: harness.ctx,
-    slashCommandName: params?.slashCommandName,
     trackEvent: params?.trackEvent,
   });
   return {
@@ -63,7 +67,7 @@ describe("registerSlackHomeEvents", () => {
     vi.clearAllMocks();
   });
 
-  it("publishes the Home tab without an inactive slash command hint", async () => {
+  it("publishes the Home tab with the default slash command hint", async () => {
     const trackEvent = vi.fn();
     const { publish, getHomeHandler } = createHomeContext({ trackEvent });
     const handler = getHomeHandler();
@@ -92,7 +96,7 @@ describe("registerSlackHomeEvents", () => {
     expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
       type: "section",
       text: {
-        text: "Send a DM or mention OpenClaw in a channel to start a session.",
+        text: "Send a DM, mention OpenClaw in a channel, or use `/openclaw` to start a session.",
       },
     });
   });

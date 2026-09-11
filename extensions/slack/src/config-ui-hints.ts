@@ -19,7 +19,6 @@ export const slackChannelConfigUiHints = {
       policyNote: "Native Slack @mentions still trigger even when regex patterns are denied.",
       denyNote: "Native @mentions still trigger.",
     },
-    nativeCommands: true,
     implicitMentions: true,
     streaming: {
       "": 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress" (default). Legacy boolean/streamMode keys are auto-mapped.',
@@ -41,6 +40,10 @@ export const slackChannelConfigUiHints = {
     },
     progress: { labels: "openclaw" },
   }),
+  "commands.nativeSkills": {
+    label: "Slack Native Skill Commands",
+    help: 'Override native skill commands for Slack (bool or "auto").',
+  },
   joinIntro: {
     label: "Slack Channel Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",

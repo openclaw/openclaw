@@ -69,7 +69,7 @@
         "warnOnEmptyGroupSenderAllowlist": false
       },
       "commands": {
-        "nativeCommandsAutoEnabled": false,
+        "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": false
       },
       "setup": {

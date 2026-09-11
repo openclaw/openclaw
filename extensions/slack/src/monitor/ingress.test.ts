@@ -193,7 +193,6 @@ function attachBoltMemberIngress(params: {
     reactionAllowlist: [],
     replyToMode: "off",
     slashCommand: {
-      enabled: false,
       name: "openclaw",
       sessionPrefix: "slack:slash",
       ephemeral: true,

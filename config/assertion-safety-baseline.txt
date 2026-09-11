@@ -1142,7 +1142,7 @@ extensions/slack/src/resolve-channels.ts	1
 extensions/slack/src/resolve-users.ts	1
 extensions/slack/src/scopes.ts	2
 extensions/slack/src/secret-contract.ts	1
-extensions/slack/src/security-audit.ts	6
+extensions/slack/src/security-audit.ts	3
 extensions/slack/src/send.ts	6
 extensions/slack/src/setup-core.ts	5
 extensions/slack/src/setup-surface.ts	1

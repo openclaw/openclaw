@@ -100,7 +100,7 @@ const SlackAccountSchema = z
     signingSecret: SecretInputSchema.optional(),
     webhookPath: z.string().optional(),
     execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
-    commands: ProviderCommandsSchema,
+    commands: ProviderCommandsSchema.unwrap().omit({ native: true }).optional(),
     botToken: SecretInputSchema.optional(),
     appToken: SecretInputSchema.optional(),
     userToken: SecretInputSchema.optional(),
@@ -135,7 +135,6 @@ const SlackAccountSchema = z
       .optional(),
     slashCommand: z
       .object({
-        enabled: z.boolean().optional(),
         name: z.string().optional(),
         sessionPrefix: z.string().optional(),
         ephemeral: z.boolean().optional(),

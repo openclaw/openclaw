@@ -372,7 +372,6 @@ describe("auth.test boot call", () => {
         slack: {
           dmPolicy: "disabled",
           groupPolicy: "open",
-          slashCommand: { enabled: true, name: "openclaw" },
           channels: {
             "team:TWORKSPACE:channel:C12345678": { allow: true, requireMention: true },
           },
@@ -396,9 +395,11 @@ describe("auth.test boot call", () => {
       appToken: "xapp-1-A1-opaque",
     });
     await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
-    expect([...getSlackTestState().interactionRegistrations].toSorted()).toEqual([
+    const registrations = getSlackTestState().interactionRegistrations;
+    expect(registrations).toContain("command");
+    expect(registrations.filter((kind) => kind !== "command").toSorted()).toEqual([
       "action",
-      "command",
+      "action",
       "shortcut",
       "view",
       "view",

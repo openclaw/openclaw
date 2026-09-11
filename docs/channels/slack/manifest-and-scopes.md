@@ -152,7 +152,7 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack/threads-and-sessions#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The command hint uses `channels.slack.slashCommand.name` (default `/openclaw`); keep that command registered in the Slack app. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack/threads-and-sessions#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
 
 OpenClaw drives Slack session status: `processing` while a turn runs, `suspended` while a native approval waits, and `active` when done. The native **Stop** button requires the `agent_session_stopped` event subscription and aborts the run like `/stop`, with the same authorization checks. Session titles follow the OpenClaw session display name; the `agent_session_title_changed` subscription lets user renames flow back to OpenClaw.
 
@@ -161,12 +161,12 @@ Existing apps that already use `features.assistant_view` can keep that feature s
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
 
-    Multiple [native slash commands](/channels/slack/messaging#commands-and-slash-behavior) can be used instead of a single configured command with nuance:
+    Add individual [native slash commands](/channels/slack/messaging#commands-and-slash-behavior) alongside the shared `/openclaw` command, or register only the individual commands you need:
 
     - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
     - No more than 25 slash commands can be registered on a Slack app at once (Slack platform limit).
 
-    OpenClaw registers handlers for enabled native commands, but Slack manifest entries remain administrator-managed and are not synchronized at runtime. Add `/login` to the manifest manually; the example below includes it instead of the optional `/side` alias to remain at 25 commands. `/login` can be surfaced anywhere, but it issues pairing codes only in private chats or the Web UI.
+    OpenClaw handles native commands automatically, but Slack manifest entries remain administrator-managed and are not synchronized at runtime. Add `/login` to the manifest to invoke it directly, or use `/openclaw /login` with the base manifest. The example below includes `/login` instead of the optional `/side` alias to remain at 25 commands; select at most 24 of these commands if you also keep `/openclaw`. `/login` can be surfaced anywhere, but it issues device codes only in private chats or the Web UI.
 
     Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
 

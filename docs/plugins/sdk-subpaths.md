@@ -262,7 +262,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/command-auth-native` | Native command auth, dynamic argument menu formatting, and native session-target helpers |
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
-    | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization and command-surface helpers |
+    | `plugin-sdk/command-surface` | Private-local after July 2026; Command-body normalization, text-command resolution, and routing helpers |
     | `plugin-sdk/allow-from` | Allow-from parsing, normalization, resolution, and matching helpers |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Private-local after July 2026; Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |

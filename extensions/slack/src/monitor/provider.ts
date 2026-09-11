@@ -692,9 +692,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     handleSlackMessage,
     trackEvent,
   });
-  const commandRegistration = await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
-  const appHomeSlashCommandName =
-    commandRegistration.mode === "single" ? commandRegistration.name : undefined;
+  await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
 
   const resolveSlackWorkspaceConfig = async () => {
     if (!resolveToken || opts.abortSignal?.aborted) {
@@ -823,7 +821,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     workspaceRuntimePromise = (async () => {
       registerSlackWorkspaceEvents({
         ctx,
-        appHomeSlashCommandName,
         trackEvent,
       });
       void resolveSlackWorkspaceConfig();

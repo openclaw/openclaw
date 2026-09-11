@@ -3,7 +3,7 @@ summary: "Acknowledgement reactions, live streaming previews, and slash commands
 read_when:
   - Changing how OpenClaw acknowledges an inbound Slack message
   - Configuring live progress cards or draft previews
-  - Choosing between one slash command and native commands
+  - Using the shared slash command or individual native commands
 title: "Slack message behavior"
 sidebarTitle: "Message behavior"
 ---
@@ -181,24 +181,27 @@ Notes:
 
 ## Commands and slash behavior
 
-Slash commands appear in Slack as either a single configured command or multiple native commands. Configure `channels.slack.slashCommand` to change command defaults:
+OpenClaw handles both the shared `/openclaw` command and individual native commands. Register the commands you want in your Slack app:
 
-- `enabled: false`
+- Register `/openclaw` to send messages or commands such as `/openclaw /help`.
+- Register `/help` to invoke that command directly. You can keep `/openclaw` and add individual commands alongside it.
+
+```txt
+/openclaw /help
+/help
+```
+
+Slack routes only the first command name. `/openclaw /login` therefore needs only `/openclaw` registered; direct `/login` needs its own [manifest entry](/channels/slack/manifest-and-scopes#optional-native-slash-commands). OpenClaw does not create or synchronize Slack app commands.
+
+The settings `channels.slack.slashCommand.enabled` and `channels.slack.commands.native` are retired. Run `openclaw doctor --fix` to remove them from existing channel and account configs. Both command forms are always handled, including after migrating an explicit `false`. Global `commands.native` controls other channels and does not disable Slack handlers. To stop exposing a command in Slack, remove its Slack app registration. DM policy, channel allowlists, and command authorization still apply. Native skill commands remain controlled by `commands.nativeSkills` or `channels.slack.commands.nativeSkills` and default to off for Slack.
+
+Configure `channels.slack.slashCommand` to change these defaults:
+
 - `name: "openclaw"`
 - `sessionPrefix: "slack:slash"`
 - `ephemeral: true`
 
-```txt
-/openclaw /help
-```
-
-Native commands require [additional manifest settings](/channels/slack/manifest-and-scopes#additional-manifest-settings) in your Slack app and are enabled with `channels.slack.commands.native: true` or `commands.native: true` in global configurations instead.
-
-- Native command auto-mode is **off** for Slack so `commands.native: "auto"` does not enable Slack native commands.
-
-```txt
-/help
-```
+If the configured `name` matches a native command, that name handles the shared command only. For example, `name: "help"` makes `/help /login` the shared entry point; it does not also run native `/help`.
 
 Native argument menus render as one of the following, in priority order:
 

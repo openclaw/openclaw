@@ -33,7 +33,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     nativeCommands: true,
   },
   commands: {
-    nativeCommandsAutoEnabled: false,
+    nativeCommandsAutoEnabled: true,
     nativeSkillsAutoEnabled: false,
     resolveNativeCommandName: ({ commandKey, defaultName }) =>
       commandKey === "status" ? "agentstatus" : defaultName,

@@ -1,7 +1,63 @@
+import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 describe("slack doctor contract", () => {
+  it.each([true, false, "auto"] as const)(
+    "removes command enablement flags (%s) without changing other settings",
+    (native) => {
+      const cfg = {
+        commands: { native: false },
+        channels: {
+          slack: {
+            commands: { native, nativeSkills: false },
+            slashCommand: {
+              enabled: native !== false,
+              name: "acme",
+              sessionPrefix: "custom",
+              ephemeral: false,
+            },
+            accounts: {
+              work: {
+                commands: { native, nativeSkills: true },
+                slashCommand: { enabled: false, name: "work" },
+              },
+            },
+          },
+          telegram: { commands: { native: false } },
+        },
+      };
+      // Raw file input may contain accounts with only retired settings.
+      asRecord(cfg.channels.slack.accounts).empty = {
+        commands: { native },
+        slashCommand: { enabled: true },
+      };
+      const original = structuredClone(cfg);
+      const result = normalizeCompatibilityConfig({ cfg });
+      expect(result.config).toEqual({
+        commands: { native: false },
+        channels: {
+          slack: {
+            commands: { nativeSkills: false },
+            slashCommand: { name: "acme", sessionPrefix: "custom", ephemeral: false },
+            accounts: {
+              work: { commands: { nativeSkills: true }, slashCommand: { name: "work" } },
+              empty: {},
+            },
+          },
+          telegram: { commands: { native: false } },
+        },
+      });
+      expect(cfg).toEqual(original);
+      expect(result.changes).toHaveLength(6);
+      expect(result.changes.every((change) => change.includes("always"))).toBe(true);
+      expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+        config: result.config,
+        changes: [],
+      });
+    },
+  );
+
   it("removes the retired Enterprise Grid setting from root and account config", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {

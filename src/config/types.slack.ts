@@ -90,8 +90,6 @@ export type SlackActionConfig = {
 };
 
 export type SlackSlashCommandConfig = {
-  /** Enable handling for the configured slash command (default: false). */
-  enabled?: boolean;
   /** Slash command name (default: "openclaw"). */
   name?: string;
   /** Session key prefix for slash commands (default: "slack:slash"). */
@@ -152,8 +150,8 @@ export type SlackAccountConfig = Omit<
     webhookPath?: string;
     /** Slack-native exec approval delivery + approver authorization. */
     execApprovals?: SlackExecApprovalConfig;
-    /** Override native command registration for Slack (bool or "auto"). */
-    commands?: ProviderCommandsConfig;
+    /** Native skill command controls. */
+    commands?: Omit<ProviderCommandsConfig, "native">;
     botToken?: SecretInput;
     appToken?: SecretInput;
     userToken?: SecretInput;

@@ -4,10 +4,8 @@ import type { HomeView } from "@slack/types";
 import { DEFAULT_SLACK_SUGGESTED_PROMPTS, type SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
-function buildSlackHomeView(slashCommandName?: string): HomeView {
-  const startSessionText = slashCommandName
-    ? `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`
-    : "Send a DM or mention OpenClaw in a channel to start a session.";
+function buildSlackHomeView(slashCommandName: string): HomeView {
+  const startSessionText = `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`;
   return {
     type: "home",
     callback_id: "openclaw:home",
@@ -41,10 +39,9 @@ function buildSlackHomeView(slashCommandName?: string): HomeView {
 
 export function registerSlackHomeEvents(params: {
   ctx: SlackMonitorContext;
-  slashCommandName?: string;
   trackEvent?: () => void;
 }) {
-  const { ctx, slashCommandName, trackEvent } = params;
+  const { ctx, trackEvent } = params;
 
   ctx.app.event(
     "app_home_opened",
@@ -79,7 +76,7 @@ export function registerSlackHomeEvents(params: {
       await ctx.app.client.views.publish({
         token: ctx.botToken,
         user_id: payload.user,
-        view: buildSlackHomeView(slashCommandName),
+        view: buildSlackHomeView(ctx.slashCommand.name),
       });
     },
   );

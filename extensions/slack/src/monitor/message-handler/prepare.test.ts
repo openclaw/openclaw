@@ -5128,7 +5128,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("prefixes channel bodies with sender label and annotates Slack mention tokens", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { name: "openclaw" },
     });
     ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" });
 
@@ -5145,7 +5145,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("keeps rendered mention names out of command text while retaining them for the agent", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { name: "openclaw" },
     });
     ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek (Ops)" });
 
@@ -5174,7 +5174,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("keeps user parenthetical text when a Slack mention name cannot resolve", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { name: "openclaw" },
     });
     ctx.resolveUserName = async (id: string) => ({
       name: id === "U1" ? "Alice" : undefined,
@@ -5231,7 +5231,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("keeps the complete multiline sender span separate from attachment context", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { name: "openclaw" },
     });
     ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" });
 
@@ -5355,7 +5355,6 @@ describe("prepareSlackMessage sender prefix", () => {
       allowFrom: ["U1"],
       useAccessGroups: true,
       slashCommand: {
-        enabled: false,
         name: "openclaw",
         sessionPrefix: "slack:slash",
         ephemeral: true,

@@ -122,6 +122,7 @@ beyond the grace period.
     | root `media`                                                                                     | `attachments`                                                                |
     | channel/account `heartbeat` visibility blocks                                                   | `heartbeatVisibility`                                                         |
     | `channels.slack.identity`                                                                        | `channels.slack.postAs`                                                       |
+    | `channels.slack.commands.native`, `channels.slack.slashCommand.enabled` (and per-account)          | removed (shared and individual Slack slash commands are always handled)      |
     | root `audit`                                                                                     | `logging.audit`                                                               |
     | `gateway.nodes.skills.enabled`                                                                   | `gateway.nodes.allowSkills`                                                   |
     | `gateway.nodes.allowCommands`/`denyCommands`                                                    | `gateway.nodes.commands.allow`/`deny`                                         |

@@ -54,7 +54,6 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       threadHistoryScope: "thread",
       threadInheritParent: false,
       slashCommand: {
-        enabled: false,
         name: "openclaw",
         ephemeral: true,
         sessionPrefix: "slack:slash",

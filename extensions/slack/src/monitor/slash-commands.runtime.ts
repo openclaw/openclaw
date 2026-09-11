@@ -7,6 +7,8 @@ import {
   resolveCommandArgMenu as resolveCommandArgMenuImpl,
 } from "openclaw/plugin-sdk/command-auth-native";
 
+export { resolveTextCommand } from "openclaw/plugin-sdk/command-surface";
+
 type BuildCommandTextFromArgs =
   typeof import("openclaw/plugin-sdk/command-auth-native").buildCommandTextFromArgs;
 type FindCommandByNativeName =

@@ -33,6 +33,29 @@ function expectSlackConfigKeyRejected(config: unknown, key: string) {
 }
 
 describe("slack config schema", () => {
+  it.each([
+    { config: { commands: { native: false } }, key: "native" },
+    { config: { slashCommand: { enabled: false } }, key: "enabled" },
+  ])("rejects retired slash command key $key at root and account scope", ({ config, key }) => {
+    expectSlackConfigKeyRejected(config, key);
+    expectSlackConfigKeyRejected({ accounts: { work: config } }, key);
+  });
+
+  it("preserves native skill and shared slash command settings at root and account scope", () => {
+    const shared = {
+      commands: { nativeSkills: false },
+      slashCommand: { name: "acme", sessionPrefix: "acme:slash", ephemeral: false },
+    };
+    const account = {
+      commands: { nativeSkills: true },
+      slashCommand: { name: "ops", sessionPrefix: "ops:slash", ephemeral: true },
+    };
+    expect(SlackConfigSchema.parse({ ...shared, accounts: { work: account } })).toMatchObject({
+      ...shared,
+      accounts: { work: account },
+    });
+  });
+
   it("accepts compact progress style", () => {
     expectSlackConfigValid({
       streaming: {
