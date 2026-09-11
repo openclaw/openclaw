@@ -114,6 +114,7 @@ type ExtractStructuredWithModelResult = Awaited<
 export type DescribeVideoFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
@@ -123,6 +124,7 @@ export type DescribeVideoFileParams = {
 export type TranscribeAudioFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   mime?: string;
