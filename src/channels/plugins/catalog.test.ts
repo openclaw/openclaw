@@ -276,7 +276,7 @@ describe("channel plugin catalog", () => {
     writeChannelCatalog(officialPath, "fixture", "Fixture");
     listChannelCatalogEntriesMock.mockReturnValue([
       {
-        pluginId: "pluginId" in scenario ? scenario.pluginId : "fixture",
+        pluginId: ("pluginId" in scenario ? scenario.pluginId : undefined) ?? "fixture",
         origin: scenario.origin,
         rootDir: root,
         packageName: "packageName" in scenario ? scenario.packageName : "@example/fixture",
