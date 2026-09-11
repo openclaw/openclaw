@@ -62,7 +62,7 @@ function modelCatalogKey(params: ModelsListParams): string {
   return JSON.stringify(
     Object.entries(projection)
       .filter(([, value]) => value !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b)),
+      .toSorted(([a], [b]) => a.localeCompare(b)),
   );
 }
 
