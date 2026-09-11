@@ -125,14 +125,8 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
   }) => stickyModelMock.persistBestEffort(params),
 }));
 
-vi.mock("./directive-handling.auth.js", () => ({
-  formatAuthLabel: (auth: { label: string; source: string }) => {
-    if (!auth.source || auth.source === auth.label || auth.source === "missing") {
-      return auth.label;
-    }
-    return `${auth.label} (${auth.source})`;
-  },
-  resolveAuthLabel: async (
+vi.mock("../../agents/model-catalog-auth-labels.js", () => {
+  const resolveAuthLabel = (
     provider: string,
     cfg: unknown,
     _modelsPath: string,
@@ -180,8 +174,35 @@ vi.mock("./directive-handling.auth.js", () => ({
       };
     }
     return { label: "missing", source: "missing" };
-  },
-}));
+  };
+  return {
+    formatModelCatalogAuthLabel: (label: string) => label,
+    prepareModelCatalogAuthLabels: (params: {
+      config: OpenClawConfig;
+      workspaceDir?: string;
+      providers: Iterable<string>;
+    }) =>
+      new Map(
+        [...params.providers].map((provider) => {
+          const format = (acceptedProfileTypes?: readonly string[]) => {
+            const auth = resolveAuthLabel(
+              provider,
+              params.config,
+              "",
+              undefined,
+              undefined,
+              params.workspaceDir,
+              { acceptedProfileTypes },
+            );
+            return auth.source && auth.source !== "missing"
+              ? `${auth.label} (${auth.source})`
+              : auth.label;
+          };
+          return [provider, { all: format(), apiKey: format(["api_key"]) }];
+        }),
+      ),
+  };
+});
 
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
   const store = () => ({
@@ -393,9 +414,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", async () => {
-  const { setPreparedModelRuntimeAuthStore } = await vi.importActual<
-    typeof import("../../agents/prepared-model-runtime-auth.js")
-  >("../../agents/prepared-model-runtime-auth.js");
+  const { setPreparedModelRuntimeAuthStore, setPreparedModelRuntimeAuthLabels } =
+    await vi.importActual<typeof import("../../agents/prepared-model-runtime-auth.js")>(
+      "../../agents/prepared-model-runtime-auth.js",
+    );
+  const { prepareModelCatalogAuthLabels } =
+    await import("../../agents/model-catalog-auth-labels.js");
   const { createPluginMetadataSnapshotFixture } =
     await import("../../plugins/plugin-metadata.test-support.js");
   const { loadPluginMetadataSnapshot } = await import("../../plugins/plugin-metadata-snapshot.js");
@@ -407,6 +431,9 @@ vi.mock("../../agents/prepared-model-catalog.js", async () => {
   return {
     readPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
+    loadPreparedModelCatalogOwnerSnapshot: vi.fn(() => {
+      throw new Error("Status should use the published catalog owner");
+    }),
     getPublishedPreparedModelCatalogOwnerSnapshot: (params: {
       config: OpenClawConfig;
       agentId?: string;
@@ -431,6 +458,23 @@ vi.mock("../../agents/prepared-model-catalog.js", async () => {
           : createPluginMetadataSnapshotFixture(),
         isCurrent: () => true,
       };
+      setPreparedModelRuntimeAuthLabels(
+        owner,
+        prepareModelCatalogAuthLabels({
+          config: params.config,
+          agentDir: owner.agentDir,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          store: { version: 1, profiles: authProfilesStoreMock.profiles },
+          providers: [
+            "openai",
+            "anthropic",
+            "openrouter",
+            "localai",
+            ...Object.keys(params.config.models?.providers ?? {}),
+          ],
+        }),
+      );
       setPreparedModelRuntimeAuthStore(owner, {
         version: 1,
         profiles: authProfilesStoreMock.profiles,

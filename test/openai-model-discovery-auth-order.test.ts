@@ -516,6 +516,7 @@ describe("Provider model discovery auth preparation", () => {
       }
       const auth = {
         authStore: store,
+        providerAuthLabels: new Map(),
         authModes: { [providerId]: "oauth" as const },
         credentials: { [providerId]: previousCredential },
       };

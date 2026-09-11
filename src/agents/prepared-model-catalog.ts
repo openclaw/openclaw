@@ -18,6 +18,7 @@ import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthMaterializations,
   loadPreparedModelRuntimeAuth,
+  setPreparedModelRuntimeAuthLabels,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
@@ -119,6 +120,7 @@ export function materializePreparedModelCatalogOwner(
     modelCatalog,
   });
   setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
+  setPreparedModelRuntimeAuthLabels(materialized, fullAuth.providerAuthLabels);
   // Later explicit auth refreshes stay bound to the original owner generation. Ordinary reads
   // consume the full worker's paired auth without invoking this loader.
   setPreparedModelRuntimeAuthLoader(

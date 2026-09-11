@@ -11,11 +11,17 @@ import {
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { loadPreparedModelCatalogView, prepareModelCatalogView } from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  setPreparedModelRuntimeAuthLabels,
+  setPreparedModelRuntimeAuthStore,
+} from "./prepared-model-runtime-auth.js";
 
 const mocks = vi.hoisted(() => ({ loadSnapshot: vi.fn(), loadOwner: vi.fn(), metadata: vi.fn() }));
 vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: mocks.loadSnapshot,
   loadPreparedModelCatalogOwnerSnapshot: mocks.loadOwner,
+  getPublishedPreparedModelCatalogOwnerSnapshot: () => undefined,
+  materializePreparedModelCatalogOwner: (owner: object) => owner,
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
@@ -48,6 +54,65 @@ describe("prepared model catalog view", () => {
     mocks.loadOwner.mockImplementation(() => {
       throw new Error("Scoped browsing acquired the full catalog");
     });
+  });
+
+  it("keeps missing runtime credentials labeled missing", async () => {
+    const prepared = facts();
+    const owner = { ...prepared, config: prepared.cfg, modelCatalog: prepared.snapshot };
+    const missing = {
+      provider: "openai",
+      profiles: {},
+      fallback: "missing",
+      source: "auth profile store",
+      apiKeyOnly: false,
+    };
+    setPreparedModelRuntimeAuthLabels(
+      owner,
+      new Map([["openai", { all: missing, apiKey: missing }]]),
+    );
+    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    mocks.loadOwner.mockResolvedValue(owner);
+    const view = await loadPreparedModelCatalogView({
+      kind: "status",
+      config: {},
+      agentId: "main",
+      agentDir: prepared.agentDir,
+      workspaceDir: prepared.workspaceDir,
+      entries: [row("codex", "unavailable")],
+      sessionEntry: { agentRuntimeOverride: "codex" },
+    });
+    expect(view.providerAuthLabels.get("codex")).toBe("missing");
+  });
+
+  it("keeps exact provider display endpoints separate from captured model routes", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "z.ai": {
+            baseUrl: " https://api.z.ai/api/paas/v4 ",
+            api: "openai-responses",
+            models: [],
+          },
+          zai: { baseUrl: "https://other.example/v1", models: [] },
+        },
+      },
+    };
+    const entries: ModelCatalogEntry[] = [
+      { ...row("z.ai", "first"), baseUrl: "https://first.example/v1", api: "openai-completions" },
+      { ...row("z.ai", "second"), baseUrl: "https://second.example/v1", api: "openai-responses" },
+      {
+        ...row("openai", "built-in"),
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+      },
+    ];
+    const view = prepareModelCatalogView({ ...facts(cfg), snapshot: snapshot(entries) });
+    expect(view.providerEndpoints.get("z.ai")).toEqual({
+      endpoint: "https://api.z.ai/api/paas/v4",
+      api: "openai-responses",
+    });
+    expect(view.providerEndpoints.get("openai")).toBeUndefined();
+    expect(view.catalog).toEqual(entries);
   });
 
   it("includes only configured static identities and preserves committed rows", () => {
