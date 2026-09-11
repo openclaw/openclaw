@@ -8,6 +8,11 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  formatUpdateDoctorConfigWriteRefusal,
+  type UpdateDoctorConfigChange,
+} from "../../infra/update-doctor-config.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -22,6 +27,8 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import type { UpdateRequester } from "../../infra/update-requester-authority.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import {
@@ -29,7 +36,7 @@ import {
   type UpdateRunResult,
   type UpdateStepResult,
 } from "../../infra/update-runner.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -48,6 +55,11 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import {
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor.js";
+import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
@@ -65,9 +77,21 @@ type PackageDoctorOptions = {
   invocationCwd?: string;
   nodeRunner?: string;
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
+  getDoctorContext?: () =>
+    | {
+        runId: string;
+        executorFence: UpdateRecoveryFence;
+        requester?: Readonly<UpdateRequester>;
+        inputHash: string;
+        changes: UpdateDoctorConfigChange[];
+        assertCurrent: () => void;
+      }
+    | undefined;
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const context = params.getDoctorContext?.();
+  context?.assertCurrent();
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
     return null;
@@ -88,10 +112,16 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   });
   const doctorArgv = [
     params.nodeRunner ?? resolveNodeRunner(),
-    entryPath,
-    "doctor",
-    "--non-interactive",
-    ...(doctorPolicy.fix ? ["--fix"] : []),
+    ...(context
+      ? [
+          path.join(
+            params.root,
+            "dist",
+            runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+          ),
+          "--doctor",
+        ]
+      : [entryPath, "doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])]),
   ];
   const doctorProgressInfo = {
     name: `${CLI_NAME} doctor`,
@@ -103,23 +133,62 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const configSnapshot = params.onConfigSnapshot
     ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
     : undefined;
-  const doctorStep = await runUpdateStep({
-    name: `${CLI_NAME} doctor`,
-    argv: doctorArgv,
-    cwd: params.root,
-    env: {
-      ...doctorEnv,
-      ...buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        deferConfiguredPluginInstallRepair: true,
-        serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-        compatibilityHostVersion: candidateHostVersion,
-      }),
-      [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
-    },
-    timeoutMs: params.timeoutMs,
-  });
+  const runDoctor = (executor?: UpdateCommandChildGrant, beforeInput?: (pid: number) => void) => {
+    context?.assertCurrent();
+    const input: UpdateDoctorInput | undefined =
+      context && executor
+        ? {
+            executor,
+            runId: context.runId,
+            root: params.root,
+            configInputHash: context.inputHash,
+            requester: context.requester,
+            repair: doctorPolicy.fix,
+          }
+        : undefined;
+    return runUpdateStep({
+      name: `${CLI_NAME} doctor`,
+      argv: doctorArgv,
+      cwd: params.root,
+      env: {
+        ...doctorEnv,
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          deferConfiguredPluginInstallRepair: true,
+          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+          compatibilityHostVersion: candidateHostVersion,
+        }),
+        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
+      },
+      timeoutMs: params.timeoutMs,
+      ...(input
+        ? {
+            runCommand: async (argv, options) => {
+              const result = await runUtf8CommandWithTimeout(argv, {
+                ...options,
+                input: JSON.stringify(input),
+                beforeInput,
+                killProcessTree: true,
+                requireProcessTreeExtinction: true,
+              });
+              if (result.cleanup !== "normal") {
+                throw new Error("Doctor executor did not settle its child processes.");
+              }
+              return result;
+            },
+          }
+        : {}),
+    });
+  };
+  const doctorStep = context
+    ? await withUpdateCommandExecutorChild(context.executorFence, params.root, (grant, bindChild) =>
+        runDoctor(grant, (pid) => {
+          context.assertCurrent();
+          bindChild(pid);
+        }),
+      )
+    : await runDoctor();
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
   if (configSnapshot) {
     // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
@@ -136,7 +205,33 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
             hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash),
     });
   }
-  const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
+  const refusal = doctorResult?.configWriteRefusal;
+  const configWriteRefusal = refusal
+    ? {
+        ...refusal,
+        keys: [
+          ...new Set([
+            ...refusal.keys,
+            ...(context?.changes.flatMap((change) => (change.kind === "key" ? [change.key] : [])) ??
+              []),
+          ]),
+        ].toSorted(),
+      }
+    : undefined;
+  const completedDoctorStep = markPackagePostInstallDoctorAdvisory(
+    {
+      ...doctorStep,
+      ...(doctorResult?.configChanges?.length ? { configChanges: doctorResult.configChanges } : {}),
+      ...(configWriteRefusal
+        ? {
+            configWriteRefusal,
+            exitCode: 1,
+            stderrTail: formatUpdateDoctorConfigWriteRefusal(configWriteRefusal),
+          }
+        : {}),
+    },
+    doctorResult,
+  );
   params.progress?.onStepComplete?.({
     ...doctorProgressInfo,
     durationMs: completedDoctorStep.durationMs,
@@ -148,6 +243,8 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     termination: completedDoctorStep.termination,
     advisory: completedDoctorStep.advisory,
     warnings: completedDoctorStep.warnings,
+    configChanges: completedDoctorStep.configChanges,
+    configWriteRefusal: completedDoctorStep.configWriteRefusal,
   });
   return completedDoctorStep;
 }
@@ -223,6 +320,7 @@ export type PackageInstallUpdateParams = {
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
+  getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
 };
 
 export async function runPackageInstallUpdate(
@@ -312,7 +410,11 @@ export async function runPackageInstallUpdate(
     mode: installTarget.manager,
     root: packageUpdate.activePackageRoot ?? undefined,
     reason:
-      packageUpdate.reason ??
+      (packageUpdate.failedStep?.configWriteRefusal
+        ? packageUpdate.failedStep.configWriteRefusal.reason === "requester-revoked"
+          ? "requester-revoked"
+          : "repair-requires-config-change"
+        : packageUpdate.reason) ??
       (packageUpdate.failedStep
         ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
         : undefined),

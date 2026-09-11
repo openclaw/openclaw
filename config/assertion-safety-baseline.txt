@@ -3083,7 +3083,6 @@ src/infra/tailscale.ts	9
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
-src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
 src/infra/update-runner-install-surface.ts	1

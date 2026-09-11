@@ -1,5 +1,6 @@
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { markPackagePostInstallDoctorAdvisory } from "./package-update-steps.js";
+import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -64,11 +65,25 @@ export async function runGitDoctorStep(params: {
       env: { ...options.env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath },
       progress: { ...options.progress, onStepComplete: undefined },
     });
+    const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    const configWriteRefusal = doctorResult?.configWriteRefusal;
     Object.assign(
       doctorStep,
       markPackagePostInstallDoctorAdvisory(
-        doctorStep,
-        await consumeUpdatePostInstallDoctorResult(doctorResultPath),
+        {
+          ...doctorStep,
+          ...(doctorResult?.configChanges?.length
+            ? { configChanges: doctorResult.configChanges }
+            : {}),
+          ...(configWriteRefusal
+            ? {
+                configWriteRefusal,
+                exitCode: 1,
+                stderrTail: formatUpdateDoctorConfigWriteRefusal(configWriteRefusal),
+              }
+            : {}),
+        },
+        doctorResult,
       ),
     );
     options.progress?.onStepComplete?.({

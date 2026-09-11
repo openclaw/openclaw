@@ -2,7 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -18,6 +20,13 @@ import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "./update-doctor-result.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -37,6 +46,8 @@ type CanaryResult = {
   logTail: string[];
   steps: UpdateStepResult[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  doctorConfigWrites?: boolean;
+  doctorConfigChanges?: UpdateDoctorConfigChange[];
 } & (
   | { status: "ok" }
   | {
@@ -128,6 +139,8 @@ export async function validateUpdateCandidateCanary(params: {
   const logTail: string[] = [];
   const steps: UpdateStepResult[] = [];
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let doctorConfigWrites = false;
+  let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
   let phase: CanaryPhase = "snapshot";
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const capture = (chunk: Buffer | string) => {
@@ -273,7 +286,8 @@ export async function validateUpdateCandidateCanary(params: {
       signal: params.signal,
     });
     env = { ...rehearsal.env };
-    const { port } = rehearsal;
+    const { port, stateDir: copiedStateDir } = rehearsal;
+    const doctorResultOptions = { tmpdir: () => copiedStateDir };
     const commands: Array<{ phase: CanaryPhase; name: string; args: string[]; entry?: string }> = [
       {
         phase: "doctor",
@@ -309,8 +323,17 @@ export async function validateUpdateCandidateCanary(params: {
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
       remaining();
       const commandStart = Date.now();
+      const doctorResultPath =
+        phase === "doctor"
+          ? createUpdatePostInstallDoctorResultPath(doctorResultOptions)
+          : undefined;
+      env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV] = doctorResultPath;
+      const configBeforeDoctor: unknown = doctorResultPath
+        ? JSON5.parse(await fs.readFile(rehearsal.configPath, "utf8"))
+        : undefined;
       const running = launch(command.entry ?? entry, command.args);
       let code: number | null = null;
+      let doctorAdvisory: UpdateStepResult["advisory"];
       try {
         await waitBounded(
           running.closed.then((value) => {
@@ -321,6 +344,34 @@ export async function validateUpdateCandidateCanary(params: {
         );
       } finally {
         await terminateCanary(running.child, running.closed, deadline);
+        if (doctorResultPath) {
+          const receipt = await consumeUpdatePostInstallDoctorResult(
+            doctorResultPath,
+            doctorResultOptions,
+          );
+          doctorConfigChanges = receipt?.configChanges ?? [];
+          // Shipped Doctors predate typed receipts; observe only their private write window.
+          if (!receipt?.configChanges && isRecord(configBeforeDoctor)) {
+            const after: unknown = JSON5.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+            if (isRecord(after)) {
+              doctorConfigChanges = [
+                ...new Set([...Object.keys(configBeforeDoctor), ...Object.keys(after)]),
+              ]
+                .filter((key) => !isDeepStrictEqual(configBeforeDoctor[key], after[key]))
+                .toSorted()
+                .map((key) => ({ kind: "key", key }));
+            }
+          }
+          if (
+            code === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+            receipt?.status === "advisory"
+          ) {
+            doctorAdvisory = {
+              kind: "recoverable-maintenance",
+              message: receipt.advisory.details.join("\n"),
+            };
+          }
+        }
       }
       if (code === 0 && phase === "plugins") {
         const inventory: unknown = running.outputExceeded()
@@ -350,6 +401,7 @@ export async function validateUpdateCandidateCanary(params: {
           ? undefined
           : JSON.parse(running.stdout());
         candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
+        doctorConfigWrites = isRecord(contract) && contract.doctorConfigWrites === "pid-start-v1";
         if (!candidateSchemaVersions) {
           code = 1;
           capture("Candidate migration continuation did not report its schema contract");
@@ -361,9 +413,10 @@ export async function validateUpdateCandidateCanary(params: {
         cwd: params.root,
         durationMs: Date.now() - commandStart,
         exitCode: code,
+        ...(doctorAdvisory ? { advisory: doctorAdvisory } : {}),
       };
       steps.push(step);
-      if (code !== 0) {
+      if (code !== 0 && !doctorAdvisory) {
         throw new Error(
           `Candidate ${phase} failed${running.hasExited() ? "" : " (deadline exceeded)"}`,
         );
@@ -434,6 +487,8 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      ...(doctorConfigWrites ? { doctorConfigWrites } : {}),
+      ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
       steps,
     };
   } catch (error) {
@@ -464,6 +519,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: Date.now() - started,
       logTail,
       candidateSchemaVersions,
+      ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
       steps,
     };
   } finally {

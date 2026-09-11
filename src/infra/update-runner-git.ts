@@ -6,6 +6,7 @@ import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { runStep } from "./update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
@@ -649,21 +650,43 @@ export async function updateGitCheckout(params: {
       });
       stateMigrationStarted = true;
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorStep = await runGitDoctorStep({
-        root: gitRoot,
-        entryPath: doctorEntry,
-        nodePath: doctorNodePath,
-        fix: doctorPolicy.fix,
-        step,
-        env: buildUpdateDoctorEnv({
-          allowGatewayServiceRepair,
-          allowGatewayActivation,
-          serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-          deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-        }),
-      });
+      const doctorStep = opts.runGitDoctor
+        ? await opts.runGitDoctor(gitRoot)
+        : await runGitDoctorStep({
+            root: gitRoot,
+            entryPath: doctorEntry,
+            nodePath: doctorNodePath,
+            fix: doctorPolicy.fix,
+            step,
+            env: buildUpdateDoctorEnv({
+              allowGatewayServiceRepair,
+              allowGatewayActivation,
+              serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
+              deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
+            }),
+          });
+      if (opts.runGitDoctor && doctorStep) {
+        steps.push(doctorStep);
+      }
+      if (!doctorStep) {
+        steps.push({
+          name: "openclaw doctor",
+          command: "run activation doctor",
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: "Required activation Doctor did not produce a result.",
+        });
+        return await rollbackError("doctor-entry-missing");
+      }
       if (doctorStep.exitCode !== 0 && !doctorStep.advisory) {
-        return await rollbackError("doctor-failed");
+        return await rollbackError(
+          doctorStep.configWriteRefusal
+            ? doctorStep.configWriteRefusal.reason === "requester-revoked"
+              ? "requester-revoked"
+              : "repair-requires-config-change"
+            : "doctor-failed",
+        );
       }
     }
 
@@ -714,7 +737,9 @@ export async function updateGitCheckout(params: {
       exitCode: 1,
       stderrTail: String(error),
     });
-    return await rollbackError("unexpected-error");
+    return await rollbackError(
+      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+    );
   } finally {
     await runtimePromotion?.cleanup();
   }

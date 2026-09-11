@@ -8,7 +8,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { UpdateRunRecordSchema, UPDATE_RUN_TEXT_LIMIT } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
 const RETAINED_STEP_NAMES = [
@@ -151,7 +151,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       for (const [pattern, replacement] of redactPaths) {
         text = text.replace(pattern, () => replacement);
       }
-      return truncateUtf16Safe(text, 1024);
+      return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
     }),
   );
   record.origin = UpdateRunRecordSchema.shape.origin.parse({

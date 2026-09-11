@@ -2,6 +2,11 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../commands/doctor/shared/update-phase.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  recordUpdateDoctorConfigMigration,
+  recordUpdateDoctorConfigWriteRefusal,
+} from "../infra/update-doctor-result.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -107,6 +112,11 @@ export async function runWriteConfigHealth(
         },
       });
     } catch (error) {
+      recordUpdateDoctorConfigWriteRefusal({
+        reason: "config-write-refused",
+        message: formatErrorMessage(error),
+        keys: [],
+      });
       const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
         await import("../config/io.write-errors.js");
       // A refused write persisted nothing. Queued "Doctor changes" panels stay
@@ -177,6 +187,9 @@ export async function runWriteConfigHealth(
       const { note } = await import("../../packages/terminal-core/src/note.js");
       for (const panel of pendingChangePanels) {
         note(panel, "Doctor changes");
+        for (const message of panel.split("\n")) {
+          recordUpdateDoctorConfigMigration(message);
+        }
       }
       delete ctx.configResult.pendingChangePanels;
     }

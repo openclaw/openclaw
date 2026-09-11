@@ -6,8 +6,14 @@ import {
   UPDATE_RUN_STEP_STATUSES,
   UPDATE_RUN_TRIGGERS,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import {
+  UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigWriteRefusalSchema,
+} from "./update-doctor-config.js";
 
-const text = z.string().max(1024);
+export const UPDATE_RUN_TEXT_LIMIT = 1024;
+export const UPDATE_RUN_DIAGNOSTIC_LIMIT = 32;
+const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
 const version = z.object({
   version: text.nullable().optional(),
@@ -21,6 +27,17 @@ const UpdateRunStepSchema = z.object({
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
   detail: text.optional(),
+  configChange: z
+    .discriminatedUnion("kind", [
+      UpdateDoctorConfigChangeSchema.options[0].extend({ key: text }),
+      UpdateDoctorConfigChangeSchema.options[1].extend({ message: text }),
+    ])
+    .optional(),
+  configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.extend({
+    reason: text,
+    message: text,
+    keys: z.array(text).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+  }).optional(),
 });
 
 const driver = z.object({

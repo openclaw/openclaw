@@ -33,6 +33,7 @@ import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
+import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -8035,6 +8036,49 @@ describe("update-cli", () => {
     expectNoSideEffects(serviceStart, serviceRestart);
   });
 
+  it.each(["config-input-changed", "config-lock-refused", "requester-revoked"])(
+    "reports a refused activation Doctor write with its keys (%s)",
+    async (reason) => {
+      const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
+        tempDirs.make("openclaw-update-doctor-refusal-"),
+        "2026.9.3",
+      );
+      primeNpmChannelTag("latest", "2026.9.4");
+      mockFileBackedPathExists();
+      const refusal = {
+        reason,
+        message: "The original write owner refused publication.",
+        keys: ["meta", "plugins", "wizard"],
+      };
+      mockNpmGlobalCommands(nodeModules, async (argv, options) => {
+        if (argv[1] === entryPath && argv[2] === "doctor") {
+          const env = typeof options === "number" ? undefined : options.env;
+          const resultPath = requireValue(
+            env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+            "Doctor receipt path",
+          );
+          await writeUpdatePostInstallDoctorResult({
+            resultPath,
+            result: { status: "error", configWriteRefusal: refusal },
+          });
+          return commandResult({ code: 1 });
+        }
+        if (argv[0] === "npm" && argv[1] === "i") {
+          await writeNpmPackageInstall(argv, pkgRoot, "2026.9.4");
+        }
+        return undefined;
+      });
+      await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
+        new ExitError(1),
+      );
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+        steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
+      });
+    },
+  );
+
   it("continues package post-core work for explicit post-update doctor advisories", async () => {
     const tempDir = tempDirs.make("openclaw-update-package-doctor-warning-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
@@ -8195,6 +8239,10 @@ describe("update-cli", () => {
     "valid",
     "repaired",
     "config-change",
+    "legacy-config-change",
+    "legacy-valid-config-change",
+    "legacy-initial-config-change",
+    "legacy-repair-config-change",
     "state-only",
     "live-config-change",
     "unrepaired",
@@ -8204,8 +8252,9 @@ describe("update-cli", () => {
   ] as const)(
     "validates and repairs the staged candidate while the previous gateway serves (%s)",
     async (outcome) => {
-      const valid = outcome === "valid";
-      const succeeds = valid || outcome === "repaired";
+      const valid = outcome === "valid" || outcome === "legacy-valid-config-change";
+      const legacyConfigChange = outcome.startsWith("legacy-");
+      const succeeds = outcome === "valid" || outcome === "repaired" || outcome === "config-change";
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
         path.join(tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
         "1.0.0",
@@ -8213,6 +8262,32 @@ describe("update-cli", () => {
       mockNpmGlobalRoot(nodeModules);
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      const doctorChanges: UpdateDoctorConfigChange[] = [
+        { kind: "key", key: "meta" },
+        { kind: "key", key: "plugins" },
+        { kind: "key", key: "wizard" },
+        { kind: "migration", message: "Enabled the configured provider plugin." },
+      ];
+      if (outcome === "config-change") {
+        const runCommand = requireValue(
+          vi.mocked(runCommandWithTimeout).getMockImplementation(),
+          "configured updater commands",
+        );
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+          if (argv[2] === "doctor") {
+            const env = typeof options === "number" ? undefined : options.env;
+            const resultPath = requireValue(
+              env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+              "Doctor receipt path",
+            );
+            await writeUpdatePostInstallDoctorResult({
+              resultPath,
+              result: { status: "ok", configChanges: doctorChanges },
+            });
+          }
+          return runCommand(argv, options);
+        });
+      }
       let liveConfigPath: string | undefined;
       if (outcome === "live-config-change") {
         liveConfigPath = path.join(tempDirs.make("openclaw-update-live-config-"), "openclaw.json");
@@ -8293,13 +8368,19 @@ describe("update-cli", () => {
         repairApplied =
           outcome === "repaired" ||
           outcome === "config-change" ||
+          legacyConfigChange ||
           outcome === "state-only" ||
           outcome === "live-config-change";
-        if (outcome === "config-change") {
+        if (outcome === "config-change" || legacyConfigChange) {
           const config = JSON.parse(
             await fs.readFile(repair.target.configPath, "utf8"),
           ) as OpenClawConfig;
-          config.logging = { ...config.logging, level: "debug" };
+          config.meta = { ...config.meta, lastTouchedVersion: "9999.0.0" };
+          config.wizard = { lastRunCommand: "doctor" };
+          config.plugins = {
+            ...config.plugins,
+            entries: { ...config.plugins?.entries, openai: { enabled: true } },
+          };
           await fs.writeFile(repair.target.configPath, JSON.stringify(config));
         }
         if (outcome === "live-config-change") {
@@ -8324,12 +8405,18 @@ describe("update-cli", () => {
           validation,
         };
         repair.onEvent?.({ type: "turn-finished", ...attempt });
-        const repairStatus =
-          outcome === "valid" || outcome === "state-only" || outcome === "live-config-change"
+        const repairStatus = validation.stopReason
+          ? "unrepaired"
+          : outcome === "valid" ||
+              outcome === "state-only" ||
+              outcome === "live-config-change" ||
+              outcome === "config-change" ||
+              outcome === "legacy-config-change" ||
+              outcome === "legacy-valid-config-change" ||
+              outcome === "legacy-initial-config-change" ||
+              outcome === "legacy-repair-config-change"
             ? "repaired"
-            : outcome === "config-change"
-              ? "unrepaired"
-              : outcome;
+            : outcome;
         const reason = validation.stopReason;
         repair.onEvent?.({ type: "stopped", status: repairStatus, reason });
         return { status: repairStatus, attempts: [attempt], finalValidation: validation, reason };
@@ -8365,6 +8452,13 @@ describe("update-cli", () => {
             state: OPENCLAW_STATE_SCHEMA_VERSION,
             agent: OPENCLAW_AGENT_SCHEMA_VERSION,
           },
+          ...((legacyConfigChange &&
+            outcome !== "legacy-initial-config-change" &&
+            outcome !== "legacy-repair-config-change") ||
+          (outcome === "legacy-initial-config-change" && !repairApplied) ||
+          (outcome === "legacy-repair-config-change" && options.rehearsal)
+            ? { doctorConfigChanges: doctorChanges }
+            : {}),
           steps: [
             {
               name: "candidate gateway canary",
@@ -8418,9 +8512,11 @@ describe("update-cli", () => {
       } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(events).toEqual(
-          outcome === "state-only" || outcome === "live-config-change"
-            ? ["validate", "repair", "validate", "validate"]
-            : ["validate", "repair", "validate"],
+          valid
+            ? ["validate"]
+            : outcome === "state-only" || outcome === "live-config-change" || legacyConfigChange
+              ? ["validate", "repair", "validate", "validate"]
+              : ["validate", "repair", "validate"],
         );
         expectNoSideEffects(serviceStop, serviceStart, serviceRestart, runRestartScript);
         expect(
@@ -8430,12 +8526,11 @@ describe("update-cli", () => {
         });
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
-          reason:
-            outcome === "config-change"
-              ? "repair-requires-config-change"
-              : outcome === "live-config-change"
-                ? "invalid-config"
-                : "runtime-verification-failed",
+          reason: legacyConfigChange
+            ? "doctor-config-promotion-unavailable"
+            : outcome === "live-config-change"
+              ? "invalid-config"
+              : "runtime-verification-failed",
         });
         await expect(
           fs.access(requireValue(candidateRoot, "candidate root")),
@@ -8446,7 +8541,10 @@ describe("update-cli", () => {
       if (!valid) {
         expect(unattendedRepair).toHaveBeenCalledOnce();
         expect(record?.steps).toContainEqual(
-          expect.objectContaining({ step: "repairing", status: succeeds ? "completed" : "failed" }),
+          expect.objectContaining({
+            step: "repairing",
+            status: succeeds ? "completed" : "failed",
+          }),
         );
         expect(record?.repair).toContainEqual(
           expect.objectContaining({
@@ -8455,13 +8553,17 @@ describe("update-cli", () => {
           }),
         );
         if (outcome === "config-change") {
-          expect(record?.repair[0]).toMatchObject({ reason: "repair-requires-config-change" });
-          expect(record?.steps).toContainEqual(
-            expect.objectContaining({
-              step: "repairing",
-              detail: expect.stringContaining("logging"),
-            }),
-          );
+          expect(record?.repair[0]).toMatchObject({ status: "succeeded" });
+          expect(record?.reason).toBeNull();
+          expect(
+            record?.steps.flatMap((step) => (step.configChange ? [step.configChange] : [])),
+          ).toEqual(doctorChanges);
+        }
+        if (legacyConfigChange) {
+          expect(record?.repair[0]).toMatchObject({ status: "succeeded" });
+          expect(
+            record?.steps.find((step) => step.step === "candidate Doctor promotion")?.detail,
+          ).toContain("meta, plugins, wizard");
         }
         if (outcome === "live-config-change") {
           expect(record?.repair[0]).toMatchObject({ status: "succeeded" });
