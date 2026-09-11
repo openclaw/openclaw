@@ -33,7 +33,7 @@ final class DashboardManager {
     @ObservationIgnored private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
     @ObservationIgnored private var auxiliaryWindowOrder: [UUID] = []
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
-    @ObservationIgnored private var presentationTask: Task<Void, Error>?
+    @ObservationIgnored private var presentationTask: (task: Task<Void, Error>, userGesture: Bool)?
     @ObservationIgnored private var pendingOpenCommands: [DashboardNativeCommand] = []
     @ObservationIgnored private var openForCommandTask: Task<Void, Never>?
     @ObservationIgnored private var navigationIntents: [DashboardGatewayTarget: NavigationIntent] = [:]
@@ -383,8 +383,7 @@ final class DashboardManager {
         if self.showConfiguredWindowIfPossible() {
             return
         }
-        if userGesture { self.retirePresentation() }
-        guard self.presentationTask == nil else { return }
+        if let presentationTask, !userGesture || presentationTask.userGesture { return }
         let presentation = currentPresentationTask(userGesture: userGesture)
         Task { @MainActor [weak self] in
             do {
@@ -1014,8 +1013,9 @@ extension DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
-        let browserStore: DashboardBrowserSessionStore? = if configuration.browserSession != nil,
-                                                             case let .profile(profileID) = target
+        let browserStore: DashboardBrowserSessionStore? = if case let .profile(profileID) = target,
+                                                             configuration.browserSession != nil ||
+                                                             configuration.signedOut != nil
         {
             self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
         } else {
@@ -1306,7 +1306,6 @@ extension DashboardManager {
     }
 
     func show() async throws {
-        self.retirePresentation()
         try await self.currentPresentationTask().value
     }
 
@@ -1409,7 +1408,8 @@ extension DashboardManager {
 
     private func currentPresentationTask(userGesture: Bool = true) -> Task<Void, Error> {
         if let presentationTask {
-            return presentationTask
+            guard userGesture, !presentationTask.userGesture else { return presentationTask.task }
+            self.retirePresentation()
         }
         self.presentationGeneration &+= 1
         let generation = self.presentationGeneration
@@ -1422,13 +1422,13 @@ extension DashboardManager {
             }
             try await self.showResolvedDashboard(userGesture: userGesture)
         }
-        self.presentationTask = presentationTask
+        self.presentationTask = (presentationTask, userGesture)
         return presentationTask
     }
 
     private func retirePresentation() {
         self.presentationGeneration &+= 1
-        self.presentationTask?.cancel()
+        self.presentationTask?.task.cancel()
         self.presentationTask = nil
     }
 
