@@ -11,7 +11,7 @@ import { validateUpdateCandidateCanary } from "../../infra/update-candidate-cana
 import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  createUpdateDoctorPromotionUnavailableStep,
+  createUpdateDoctorConfigWarningStep,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
 import {
@@ -465,10 +465,9 @@ export async function executeMutableUpdate(
       }
     }
     if (validation.status === "ok" && !doctorConfigWrites && doctorConfigChanges.length) {
-      candidateFailureReason = "doctor-config-promotion-unavailable";
-      const refusal = createUpdateDoctorPromotionUnavailableStep(root, doctorConfigChanges);
-      validation.steps.push(refusal);
-      params.progress?.onStepComplete?.({ ...refusal, index: 0, total: 0 });
+      const warning = createUpdateDoctorConfigWarningStep(root, doctorConfigChanges);
+      validation.steps.push(warning);
+      params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
     }
     return validation.steps;
   };

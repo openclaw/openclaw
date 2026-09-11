@@ -269,8 +269,10 @@ remain excluded. The run ledger and update summary identify changed top-level
 keys and migration messages; the warning log retains the full messages.
 If the writer refuses promotion, `repair-requires-config-change` names the keys
 and the refusal reason. Revoked chat authority remains `requester-revoked`.
-Older candidates without guarded Doctor support stop before activation with
-`doctor-config-promotion-unavailable` if validation requires config changes.
+Older candidates without guarded Doctor support continue through their normal
+activation Doctor. When candidate validation changes config, the ledger and
+summary warn with the changed keys that promotion receipts are unavailable for
+that candidate version.
 Ledger entries and summaries retain their existing diagnostic limits; the warning
 log retains full migration messages.
 

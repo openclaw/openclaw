@@ -44,6 +44,7 @@ import {
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -8455,7 +8456,8 @@ describe("update-cli", () => {
     async (outcome) => {
       const valid = outcome === "valid" || outcome === "legacy-valid-config-change";
       const legacyConfigChange = outcome.startsWith("legacy-");
-      const succeeds = outcome === "valid" || outcome === "repaired" || outcome === "config-change";
+      const succeeds =
+        valid || outcome === "repaired" || outcome === "config-change" || legacyConfigChange;
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
         path.join(tempDirs.make("openclaw-update-candidate-order-"), "lib", "node_modules"),
         "1.0.0",
@@ -8715,7 +8717,7 @@ describe("update-cli", () => {
         expect(events).toEqual(
           valid
             ? ["validate"]
-            : outcome === "state-only" || outcome === "live-config-change" || legacyConfigChange
+            : outcome === "state-only" || outcome === "live-config-change"
               ? ["validate", "repair", "validate", "validate"]
               : ["validate", "repair", "validate"],
         );
@@ -8727,11 +8729,8 @@ describe("update-cli", () => {
         });
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
-          reason: legacyConfigChange
-            ? "doctor-config-promotion-unavailable"
-            : outcome === "live-config-change"
-              ? "invalid-config"
-              : "runtime-verification-failed",
+          reason:
+            outcome === "live-config-change" ? "invalid-config" : "runtime-verification-failed",
         });
         await expect(
           fs.access(requireValue(candidateRoot, "candidate root")),
@@ -8762,9 +8761,6 @@ describe("update-cli", () => {
         }
         if (legacyConfigChange) {
           expect(record?.repair[0]).toMatchObject({ status: "succeeded" });
-          expect(
-            record?.steps.find((step) => step.step === "candidate Doctor promotion")?.detail,
-          ).toContain("meta, plugins, wizard");
         }
         if (outcome === "live-config-change") {
           expect(record?.repair[0]).toMatchObject({ status: "succeeded" });
@@ -8778,6 +8774,21 @@ describe("update-cli", () => {
         }
       } else {
         expect(unattendedRepair).not.toHaveBeenCalled();
+      }
+      if (legacyConfigChange) {
+        const warning =
+          "Candidate Doctor changed keys meta, plugins, wizard; promotion receipts unavailable for this candidate version.";
+        expect(record?.steps).toContainEqual(
+          expect.objectContaining({
+            step: expect.stringMatching(/^warning:/),
+            status: "completed",
+            detail: warning,
+          }),
+        );
+        expect(renderUpdateRunReport(requireValue(record, "update run")).lines).toContain(
+          `Warning: ${warning}`,
+        );
+        expect(doctorCommandCall()).toBeDefined();
       }
     },
   );
