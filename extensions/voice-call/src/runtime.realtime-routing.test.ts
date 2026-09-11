@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -12,7 +12,6 @@ import type {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { finalizeTestManagerCalls } from "./manager.test-harness.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -33,11 +32,8 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
 function createStateRuntime(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: (() => {
-      throw new Error("openKeyedStore is not used by realtime routing tests");
-    }) as VoiceCallStateRuntime["state"]["openKeyedStore"],
-    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("voice-call", options),
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by realtime routing tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
@@ -234,20 +230,17 @@ describe("voice-call realtime route ownership", () => {
         ]),
       );
     } finally {
-      await runtime?.stop();
-      for (const ws of sockets) {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          const closed = waitForClose(ws);
-          ws.terminate();
-          await closed;
-        }
-      }
-      await Promise.all(servers.map((server) => server.close()));
       try {
-        if (runtime) {
-          finalizeTestManagerCalls(runtime.manager);
-        }
+        await runtime?.stop();
       } finally {
+        for (const ws of sockets) {
+          if (ws.readyState !== WebSocket.CLOSED) {
+            const closed = waitForClose(ws);
+            ws.terminate();
+            await closed;
+          }
+        }
+        await Promise.all(servers.map((server) => server.close()));
         resetPluginStateStoreForTests();
       }
     }

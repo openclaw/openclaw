@@ -389,13 +389,13 @@ export function registerVoiceCallCli(params: {
       ensureHistoryStateRuntime();
       const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const call = findCallInStore(storePath, options.callId);
+        const call = await findCallInStore(storePath, options.callId);
         writeCliJson(call ?? { found: false });
         return;
       }
       writeCliJson({
         found: true,
-        calls: Array.from(loadActiveCallsFromStore(storePath).activeCalls.values()),
+        calls: Array.from((await loadActiveCallsFromStore(storePath)).activeCalls.values()),
       });
     });
 
