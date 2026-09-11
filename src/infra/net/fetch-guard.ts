@@ -290,42 +290,13 @@ export function retainSafeHeadersForCrossOriginRedirectHeaders(
   return retainSafeRedirectHeaders(headers);
 }
 
-async function captureGuardedFetchExchange(params: {
-  url: string;
-  method: string;
-  requestHeaders?: Headers | Record<string, string> | undefined;
-  requestBody?: BodyInit | Buffer | string | null;
-  response: Response;
-  transport?: "http" | "sse";
-  capture: GuardedFetchOptions["capture"];
-  auditContext?: string;
-  capturedByGlobalFetchPatch?: boolean;
-}): Promise<void> {
+async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
-    return;
+    return { fetchImpl };
   }
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
-  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
-    return;
-  }
-  captureHttpExchange({
-    url: params.url,
-    method: params.method,
-    requestHeaders: params.requestHeaders,
-    requestBody: params.requestBody,
-    response: params.response,
-    transport: params.transport,
-    flowId: params.capture?.flowId,
-    meta: {
-      captureOrigin: "guarded-fetch",
-      ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-      ...params.capture?.meta,
-      ...(params.capture?.sensitiveRequestHeaderNames
-        ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
-        : {}),
-    },
-  });
+  return { fetchImpl: resolveDebugProxyFetchTransport(fetchImpl), capture: prepareHttpCapture() };
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -468,6 +439,7 @@ async function fetchWithSsrFGuardInternal(
     throw new Error("fetch is not available");
   }
   const isUsingMockedFetch = isMockedFetch(defaultFetch);
+  const captureAdmission = await prepareGuardedFetchCapture(params, defaultFetch);
 
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
@@ -686,28 +658,25 @@ async function fetchWithSsrFGuardInternal(
           : requestController.signal,
       };
 
-      response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
-      const capturedByGlobalFetchPatch =
-        !shouldUseRuntimeFetch &&
-        isAmbientGlobalFetch({
-          fetchImpl: defaultFetch,
-          globalFetch: globalThis.fetch,
-        });
-
-      await captureGuardedFetchExchange({
+      const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
         requestBody:
           (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
-        response,
-        transport: "http",
-        capture: params.capture,
-        auditContext: params.auditContext,
-        capturedByGlobalFetchPatch,
-      });
+        transport: "http" as const,
+        flowId: params.capture === false ? undefined : params.capture?.flowId,
+        meta: { captureOrigin: "guarded-fetch" },
+      };
+      try {
+        response = shouldUseRuntimeFetch
+          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+          : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
+      } catch (error) {
+        captureAdmission.capture?.({ ...captureParams, error });
+        throw error;
+      }
+      captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;
