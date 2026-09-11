@@ -154,7 +154,7 @@ describe("ConnectionPage credentials", () => {
     expect(labels()).toEqual([]);
     editInput(page, "Gateway secret", "draft-token");
     await settleLitElement(page);
-    actions()[0].click();
+    control(page, ".connection-actions button").click();
     await settleLitElement(page);
     expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("");
     expect(labels()).toEqual([]);
@@ -171,9 +171,14 @@ describe("ConnectionPage session selection", () => {
       current.publish({ ...current.gateway.snapshot, sessionKey: sessionKey.trim() });
     });
     const { page } = await mount(current.gateway);
-    const sessionSection = () => [...page.querySelectorAll<HTMLElement>(".settings-section")][1];
+    const sessionSection = control(page, 'input[aria-label="Default session"]').closest(
+      ".settings-section",
+    );
+    if (!sessionSection) {
+      throw new Error("Missing Session section");
+    }
     const button = (name: string) => {
-      const found = [...sessionSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      const found = [...sessionSection.querySelectorAll<HTMLButtonElement>("button")].find(
         (item) => item.textContent?.trim() === name,
       );
       if (!found) throw new Error(`Missing session action: ${name}`);
@@ -184,7 +189,7 @@ describe("ConnectionPage session selection", () => {
     await settleLitElement(page);
     editInput(page, "Default session", "main");
     await settleLitElement(page);
-    expect(sessionSection().querySelector("button")).toBeNull();
+    expect(sessionSection.querySelector("button")).toBeNull();
     editInput(page, "Default session", "  saved-session  ");
     await settleLitElement(page);
     button("Save").click();
