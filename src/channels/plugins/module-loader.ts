@@ -60,13 +60,22 @@ function loadModule(modulePath: string, rootDir: string): unknown {
   }
 }
 
-function resolveSourceModuleCandidates(rootDir: string, specifier: string): string[] {
+// Node's CJS resolver implicitly appends only .js, .json, and .node. Built plugin
+// runtimes may ship .cjs (runtimeFormat "cjs") or .mjs artifacts, so extensionless
+// specifiers need an explicit fallback for the extensions Node never tries.
+const PLUGIN_BUILT_MODULE_EXTENSIONS: readonly string[] = [".cjs", ".mjs"];
+
+function resolveExtensionlessModuleCandidates(
+  rootDir: string,
+  specifier: string,
+  extensions: readonly string[],
+): string[] {
   const normalizedSpecifier = specifier.replace(/\\/g, "/");
   const resolvedPath = path.resolve(rootDir, normalizedSpecifier);
   if (path.extname(resolvedPath)) {
     return [];
   }
-  return PLUGIN_SOURCE_MODULE_EXTENSIONS.map((extension) => `${resolvedPath}${extension}`);
+  return extensions.map((extension) => `${resolvedPath}${extension}`);
 }
 
 /**
@@ -88,14 +97,17 @@ function resolvePluginModulePath(rootDir: string, specifier: string): string {
   const resolvedPath = path.resolve(rootDir, specifier.replace(/\\/g, "/"));
   try {
     // Match Node package semantics for explicit files, extensionless JavaScript,
-    // package mains, and directory indexes before applying source-only fallbacks.
+    // package mains, and directory indexes before applying extensionless fallbacks.
     return nodeRequire.resolve(resolvedPath);
   } catch (error) {
     if (!hasErrnoCode(error, "MODULE_NOT_FOUND")) {
       throw error;
     }
   }
-  for (const candidate of resolveSourceModuleCandidates(rootDir, specifier)) {
+  for (const candidate of [
+    ...resolveExtensionlessModuleCandidates(rootDir, specifier, PLUGIN_SOURCE_MODULE_EXTENSIONS),
+    ...resolveExtensionlessModuleCandidates(rootDir, specifier, PLUGIN_BUILT_MODULE_EXTENSIONS),
+  ]) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
