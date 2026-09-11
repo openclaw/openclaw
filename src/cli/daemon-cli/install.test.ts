@@ -175,26 +175,12 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    const installCalls = service.install.mock.calls as unknown as Array<
-      [
-        {
-          environment?: Record<string, string>;
-          environmentValueSources?: Record<string, string>;
-        },
-      ]
-    >;
-    const installOptions = installCalls[0]?.[0] as
-      | {
-          environment?: Record<string, string>;
-          environmentValueSources?: Record<string, string>;
-        }
-      | undefined;
-    expect(installOptions?.environment).toEqual({
-      OPENROUTER_API_KEY: "or-operator-key",
-    });
-    expect(installOptions?.environmentValueSources).toEqual({
-      OPENROUTER_API_KEY: "file",
-    });
+    expect(service.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: { OPENROUTER_API_KEY: "or-operator-key" },
+        environmentValueSources: { OPENROUTER_API_KEY: "file" },
+      }),
+    );
   });
 
   it("captures service install warnings in json install output", async () => {
@@ -228,9 +214,14 @@ describe("runDaemonInstall", () => {
     expectFirstInstallPlanCallOmitsToken();
   });
 
-  it.each(["local", "remote"])(
-    "auto-mints a local auth token with %s primary mode",
-    async (mode) => {
+  it.each([
+    { mode: "local", allowUnconfigured: false },
+    { mode: "remote", allowUnconfigured: true },
+    { mode: "local", allowUnconfigured: undefined },
+    { mode: "remote", allowUnconfigured: undefined },
+  ])(
+    "auto-mints a local auth token with $mode primary and override $allowUnconfigured",
+    async ({ mode, allowUnconfigured }) => {
       randomTokenMock.mockReturnValue("minted-token");
       readConfigFileSnapshotMock.mockResolvedValue({
         exists: true,
@@ -239,7 +230,7 @@ describe("runDaemonInstall", () => {
         sourceConfig: { gateway: { mode, auth: { mode: "token" } } },
       });
 
-      await runDaemonInstall({ json: true, allowUnconfigured: mode === "remote" });
+      await runDaemonInstall({ json: true, force: true, allowUnconfigured });
 
       expect(actionState.failed).toStrictEqual([]);
       expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
@@ -248,7 +239,7 @@ describe("runDaemonInstall", () => {
       expect(writeParams.sourceConfig?.gateway?.mode).toBe(mode);
       expectFields(readFirstInstallPlanArg(), {
         port: 18789,
-        allowUnconfigured: mode === "remote",
+        allowUnconfigured,
       });
       expectFirstInstallPlanCallOmitsToken();
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);

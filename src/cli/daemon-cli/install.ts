@@ -336,7 +336,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded && !opts.force) {
     autoRefreshMessage ??= await getGatewayServiceAutoRefreshMessage({
-      allowUnconfigured: Boolean(opts.allowUnconfigured),
+      allowUnconfigured: opts.allowUnconfigured,
       currentCommand: existingServiceCommand,
       env: process.env,
       installEnv,
@@ -423,7 +423,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildGatewayInstallPlan({
-      allowUnconfigured: Boolean(opts.allowUnconfigured),
+      allowUnconfigured: opts.allowUnconfigured,
       env: installEnv,
       port,
       runtime: runtimeRaw,
@@ -473,12 +473,6 @@ async function getGatewayServiceAutoRefreshMessage(params: {
     if (!currentCommand) {
       return undefined;
     }
-    if (
-      currentCommand.programArguments.includes("--allow-unconfigured") !==
-      Boolean(params.allowUnconfigured)
-    ) {
-      return "Gateway service start-mode argument differs from the current install plan; refreshing the install.";
-    }
     const getPlannedInstall = createLazyPromise(() =>
       buildGatewayInstallPlan({
         allowUnconfigured: params.allowUnconfigured,
@@ -493,6 +487,17 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         config: params.config,
       }),
     );
+    const currentAllowsUnconfigured =
+      currentCommand.programArguments.includes("--allow-unconfigured");
+    if (currentAllowsUnconfigured || params.allowUnconfigured) {
+      const plannedInstall = await getPlannedInstall();
+      if (
+        currentAllowsUnconfigured !==
+        plannedInstall.programArguments.includes("--allow-unconfigured")
+      ) {
+        return "Gateway service start-mode argument differs from the current install plan; refreshing the install.";
+      }
+    }
     const currentEmbeddedToken = readEmbeddedGatewayToken(currentCommand);
     if (currentEmbeddedToken) {
       const plannedInstall = await getPlannedInstall();

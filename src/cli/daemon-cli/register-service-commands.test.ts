@@ -119,6 +119,17 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "preserves an omitted service start-mode override during updater reinstall",
+      argv: ["install", "--force", "--json"],
+      assert: () => {
+        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+          force: true,
+          json: true,
+          allowUnconfigured: undefined,
+        });
+      },
+    },
+    {
       name: "forwards an explicit service start-mode override",
       argv: ["install", "--allow-unconfigured"],
       assert: () => {
