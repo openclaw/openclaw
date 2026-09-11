@@ -203,21 +203,43 @@ function registerCodexHealthChecks(
     }
     // Doctor must inspect the selected runtime's artifact, including official external installs.
     // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
-    if (!owner || (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true)) {
+    if (!owner) {
       throw new MissingPublicSurfaceError(
-        "Unable to resolve Codex doctor health API: install the official Codex plugin with openclaw plugins install @openclaw/codex",
+        "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex.",
+      );
+    }
+    if (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true) {
+      throw new MissingPublicSurfaceError(
+        "The selected Codex plugin is not a bundled or verified official installation. Run openclaw plugins inspect codex --runtime --json to inspect its source; install the official plugin with openclaw plugins install @openclaw/codex.",
       );
     }
     // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
     // Only load an advertised surface; a broken declaration must still fail visibly.
     if (owner.doctorHealthChecks === true) {
-      loadPluginPublicArtifactModuleSync<
-        Required<Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">>
-      >({
-        pluginRoot: owner.rootDir,
-        artifactBasename: "api.js",
-        origin: owner.origin === "bundled" ? "bundled" : "global",
-      }).registerCodexManagedAppServerDoctorChecks({
+      let api: Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">;
+      try {
+        api = loadPluginPublicArtifactModuleSync({
+          pluginRoot: owner.rootDir,
+          artifactBasename: "api.js",
+          origin: owner.origin === "bundled" ? "bundled" : "global",
+        });
+      } catch (cause) {
+        throw new MissingPublicSurfaceError(
+          "The selected Codex plugin declares Doctor health checks but its health API could not be loaded. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
+          { cause },
+        );
+      }
+      if (typeof api.registerCodexManagedAppServerDoctorChecks !== "function") {
+        throw new MissingPublicSurfaceError(
+          "The selected Codex plugin's Doctor health checks are incomplete. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
+          {
+            cause: new TypeError(
+              "Codex health API must export registerCodexManagedAppServerDoctorChecks",
+            ),
+          },
+        );
+      }
+      api.registerCodexManagedAppServerDoctorChecks({
         getHealthCheck,
         registerHealthCheck: registerCheck,
       });

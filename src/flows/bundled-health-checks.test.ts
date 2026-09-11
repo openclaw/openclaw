@@ -609,11 +609,13 @@ describe("registerBundledHealthChecks", () => {
       writeFileSync(join(workspaceDir, "api.js"), 'throw new Error("selected artifact failed");');
     }
     expect(() => registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toThrow(
-      state === "broken-api"
-        ? "selected artifact failed"
-        : state === "missing-export"
-          ? TypeError
-          : MissingPublicSurfaceError,
+      state === "missing"
+        ? "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex."
+        : state.startsWith("untrusted")
+          ? "The selected Codex plugin is not a bundled or verified official installation. Run openclaw plugins inspect codex --runtime --json to inspect its source; install the official plugin with openclaw plugins install @openclaw/codex."
+          : state === "missing-export"
+            ? "The selected Codex plugin's Doctor health checks are incomplete. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help."
+            : "The selected Codex plugin declares Doctor health checks but its health API could not be loaded. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
     );
     expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
     expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
