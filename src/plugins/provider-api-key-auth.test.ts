@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createProviderApiKeyAuthMethod } from "./provider-api-key-auth.js";
 
@@ -23,7 +23,7 @@ describe("createProviderApiKeyAuthMethod", () => {
         baseConfig: {},
         agentDir: state.agentDir(),
         opts: { exampleApiKey: "test-token" },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+        runtime: createTestRuntime(),
         resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "flag" as const })),
         toApiKeyCredential: () => credential,
       });
@@ -54,7 +54,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       config: {},
       baseConfig: {},
       opts: { exampleApiKey: "test-token" },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createTestRuntime(),
       resolveApiKey,
     });
 
@@ -86,7 +86,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       config: {},
       baseConfig: {},
       opts: { exampleApiKey: "test-token" },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createTestRuntime(),
       resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "profile" as const })),
       toApiKeyCredential: vi.fn(() => null),
     });
@@ -126,7 +126,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       config: {},
       baseConfig: {},
       opts: { exampleApiKey: "test-token" },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createTestRuntime(),
       resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "profile" as const })),
       toApiKeyCredential: vi.fn(() => null),
     });
@@ -153,7 +153,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       env: {},
       opts: { exampleApiKey: "test-token" },
       prompter: { note: vi.fn() },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      runtime: createTestRuntime(),
       secretInputMode: "plaintext",
     } as never);
 

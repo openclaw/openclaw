@@ -728,8 +728,8 @@ export function setupRunAttemptTestHooks(): void {
     clearRuntimeAuthProfileStoreSnapshots();
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
-    nativeHookRelayUnregisterQueue.clear();
-    nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    await nativeHookRelayUnregisterQueue.clear();
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();
     resetAgentEventsForTest();

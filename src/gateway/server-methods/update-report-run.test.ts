@@ -219,7 +219,7 @@ describe("Report action from the authoritative update ledger", () => {
       expect(result.body).toContain("build");
       expect(result.body).toContain("2026.9.1");
       expect(result.body).toContain("2026.9.2");
-      expect(result.body).toContain("Rollback outcome: not recorded");
+      expect(result.body).toContain("Recovery outcome: not recorded");
       expect(result.body).not.toContain("private-");
       expect(Buffer.byteLength(result.body)).toBeLessThan(16_000);
       expect(await reportFiles()).toEqual([]);

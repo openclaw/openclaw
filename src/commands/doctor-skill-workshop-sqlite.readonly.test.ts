@@ -124,7 +124,7 @@ describe("read-only Skill Workshop migration inspection", () => {
       closeOpenClawStateDatabaseForTest();
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const databaseBefore = await snapshotDatabase(databasePath);
-      const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
+      const filesBefore = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
       const destination = path.join(
         resolveWorkshopSkillsDir(config, "main", state.env),
         "relocated",
@@ -156,7 +156,9 @@ describe("read-only Skill Workshop migration inspection", () => {
         expect(find("condition", "payload.message")?.message).not.toContain("Private prose");
         expect(await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).toEqual(before);
         expect(await snapshotDatabase(databasePath)).toEqual(databaseBefore);
-        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
+        expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
+          filesBefore,
+        );
       }
     });
   });
@@ -271,7 +273,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         closeOpenClawStateDatabaseForTest();
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         const databaseBefore = proposal ? await snapshotDatabase(databasePath) : undefined;
-        const filesBefore = await fs.readdir(state.stateDir, { recursive: true });
+        const filesBefore = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
 
         const result = await runDoctorLintChecks(
           { mode: "lint", runtime: { log() {}, error() {}, exit() {} }, cfg: config },
@@ -296,7 +298,9 @@ describe("read-only Skill Workshop migration inspection", () => {
             expect(finding.fixHint).toContain("manifests");
           }
         }
-        expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(filesBefore);
+        expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
+          filesBefore,
+        );
         expect(await fs.readFile(state.configPath)).toEqual(configBefore);
         for (const manifest of manifests) {
           expect(await fs.readFile(manifest.file, "utf8")).toBe(manifest.contents);

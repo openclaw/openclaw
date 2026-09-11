@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -30,10 +33,21 @@ const mocks = vi.hoisted(() => ({
   revalidateSchemaContext:
     vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
   validateCanary: vi.fn(),
+  nativeSupport:
+    vi.fn<
+      typeof import("./update-command-service-command.js").isUpdatedInstallGatewayExecutorSupported
+    >(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
   verifyPackageRecovery: vi.fn(),
 }));
+
+vi.mock("./update-command-service-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
+  isUpdatedInstallGatewayExecutorSupported: mocks.nativeSupport,
+}));
+
+afterEach(() => vi.restoreAllMocks());
 
 vi.mock("../../infra/update-global.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
@@ -212,6 +226,64 @@ beforeEach(() => {
 });
 
 describe("mutable update execution", () => {
+  it.each(["package", "staged", "git"] as const)(
+    "refuses an unsupported native receiver before activation: %s",
+    async (route) =>
+      withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
+        const control = path.join(dir, "leases");
+        await fs.mkdir(control);
+        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+        const env = { OPENCLAW_STATE_DIR: dir };
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+        const params = executionParams(route === "git" ? "git" : "package");
+        params.root = dir;
+        params.opts.run = { runId, env };
+        if (route === "staged") {
+          params.packageInstallSpec = path.join(dir, "candidate.tgz");
+        }
+        const events: string[] = [];
+        mocks.nativeSupport.mockImplementation(async ({ executor }) => {
+          executor.assertCurrent();
+          events.push("native-admission");
+          return false;
+        });
+        const candidate = async ({
+          validateCandidate,
+        }: {
+          validateCandidate: (root: string) => Promise<unknown>;
+        }) => {
+          await validateCandidate(dir);
+          // Models the package/Git publisher which follows successful validation.
+          events.push("publish");
+          return successfulUpdate;
+        };
+        mocks.runPackageUpdate.mockImplementation(candidate);
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            if (!options.inspectGitTarget || !options.validateCandidate) {
+              throw new Error("Missing actual Git admission callbacks");
+            }
+            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
+            return candidate({ validateCandidate: options.validateCandidate });
+          },
+        );
+        const result = await withUpdateCommandExecutor(runId, async (executor) => {
+          mocks.prepareMutableUpdate.mockImplementation(async () => {
+            params.opts.run!.executorFence = await executor.enter(dir);
+          });
+          return executeMutableUpdate(params);
+        });
+        expect(result?.result).toMatchObject({
+          status: "error",
+          reason: "target-native-unsupported",
+        });
+        expect(events).toEqual(["native-admission"]);
+        expect(mocks.serviceStopped).toBe(false);
+        expect(mocks.validateCanary).not.toHaveBeenCalled();
+      }),
+  );
   it("refuses service admission before mutable startup housekeeping", async () => {
     mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
       if (handoffFromGateway) {

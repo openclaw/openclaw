@@ -124,6 +124,8 @@ export type UpdateRunnerOptions = {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;
   }) => Promise<void>;
+  /** Admit the built candidate after validation, before retention or activation. */
+  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
   validateCandidate?: (root: string) => Promise<void>;
   prepareGitExposure?: (
     candidateRoot: string,

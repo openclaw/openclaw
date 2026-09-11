@@ -109,8 +109,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     }
     return completed;
   };
+  let pendingNativeHookRenewal: Promise<void> | undefined;
   const renewNativeHookRelayForTurnProgress = () => {
-    if (!resourceState.nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
+    if (
+      !resourceState.nativeHookRelay ||
+      options.nativeHookRelay?.ttlMs !== undefined ||
+      pendingNativeHookRenewal
+    ) {
       return;
     }
     const now = Date.now();
@@ -121,14 +126,27 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     if (renewsRecently && !expiresSoon) {
       return;
     }
-    state.nativeHookRelayLastRenewedAt = now;
-    resourceState.nativeHookRelay.renew(
+    const relay = resourceState.nativeHookRelay;
+    relay.renew(
       resolveCodexNativeHookRelayTtlMs({
         explicitTtlMs: undefined,
         attemptTimeoutMs: params.timeoutMs,
         startupTimeoutMs,
         turnStartTimeoutMs: params.timeoutMs,
       }),
+    );
+    pendingNativeHookRenewal = relay.drain();
+    void pendingNativeHookRenewal.then(
+      () => {
+        pendingNativeHookRenewal = undefined;
+        if (resourceState.nativeHookRelay === relay) {
+          state.nativeHookRelayLastRenewedAt = now;
+        }
+      },
+      (error: unknown) => {
+        pendingNativeHookRenewal = undefined;
+        embeddedAgentLog.debug("native hook relay renewal did not drain", { error });
+      },
     );
   };
   const noteProgress = (reason: string) => {

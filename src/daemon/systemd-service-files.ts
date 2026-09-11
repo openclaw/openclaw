@@ -9,6 +9,7 @@ import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { resolveGatewaySystemdServiceName } from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -17,7 +18,7 @@ import type {
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
 } from "./service-types.js";
-import { bindSystemdManagerOwner, execBusctlUser } from "./systemd-exec.js";
+import { bindSystemdManagerOwner, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import type {
   SystemdCommandSnapshotParams,
   SystemdEnvironmentFilesParams,
@@ -114,7 +115,7 @@ async function readSystemdManagerCommand(
     );
     assertCurrent?.();
     if (inspection && (result.termination !== "exit" || performance.now() >= deadlineAt)) {
-      throw unavailable();
+      throw systemdInspectionError(result, unavailable().message);
     }
     if (result.code !== 0) {
       const detail = result.stderr.trim();
@@ -129,7 +130,7 @@ async function readSystemdManagerCommand(
       ) {
         return null;
       }
-      throw unavailable();
+      throw systemdInspectionError(result, unavailable().message);
     }
     const properties = result.stdout
       .trim()
@@ -416,11 +417,8 @@ export async function readSystemdServiceExecStart(
     const unsetEnvironment: string[] = [];
     for (const rawLine of splitSystemdLogicalLines(content ?? "")) {
       const line = rawLine.trim();
-      if (!line || line.startsWith("#")) {
-        continue;
-      }
       const separator = line.indexOf("=");
-      if (separator < 0) {
+      if (separator < 0 || line.startsWith("#")) {
         continue;
       }
       const directive = line.slice(0, separator).trim();
@@ -463,18 +461,21 @@ export async function readSystemdServiceExecStart(
     const managerRead = readSystemdManagerCommand(env, localDefinition, unsetEnvironment, opts);
     const manager = opts?.requireEffective
       ? await managerRead
-      : await managerRead.catch(() => null);
-    if (manager || opts?.requireEffective) {
+      : await managerRead.catch((error: unknown) => {
+          if (error instanceof ServiceInspectionError) {
+            opts?.onInspectionFailure?.(error.reason);
+          }
+          return null;
+        });
+    if (manager || opts?.requireEffective || !managedDefinition.programArguments.length) {
       return manager;
     }
-    return managedDefinition.programArguments.length
-      ? {
-          ...managedDefinition,
-          managedDefinition,
-          managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
-          sourcePath: unitPath,
-        }
-      : null;
+    return {
+      ...managedDefinition,
+      managedDefinition,
+      managedOverrides: UNKNOWN_SYSTEMD_OVERRIDES,
+      sourcePath: unitPath,
+    };
   } catch (error) {
     if (opts?.requireEffective) {
       throw error;

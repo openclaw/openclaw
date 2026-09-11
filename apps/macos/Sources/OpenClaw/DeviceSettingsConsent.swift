@@ -7,6 +7,7 @@ enum DeviceSettingsConsent: Equatable {
     case cookieDomains([String])
     case cookieProfile(String)
     case computerControl
+    case unattendedDesktop
     case peekabooBridge
     case camera
     case activityReporting
@@ -26,6 +27,7 @@ enum DeviceSettingsConsent: Equatable {
         switch (key, value) {
         case (.cookieSyncEnabled, .boolean(true)): .cookieSync
         case (.computerControlEnabled, .boolean(true)): .computerControl
+        case (.unattendedDesktopEnabled, .boolean(true)): .unattendedDesktop
         case (.peekabooBridgeEnabled, .boolean(true)): .peekabooBridge
         case (.cameraEnabled, .boolean(true)): .camera
         case (.activeComputerPresenceEnabled, .boolean(true)): .activityReporting
@@ -66,6 +68,8 @@ enum DeviceSettingsConsent: Equatable {
             String(localized: "Change the browser cookie sync destination?")
         case .computerControl:
             String(localized: "Allow the Gateway to control this Mac?")
+        case .unattendedDesktop:
+            String(localized: "Keep this Mac available for unattended desktop work?")
         case .peekabooBridge:
             String(localized: "Enable the Peekaboo bridge on this Mac?")
         case .camera:
@@ -85,6 +89,12 @@ enum DeviceSettingsConsent: Equatable {
 
     var detail: String {
         switch self {
+        case .unattendedDesktop:
+            String(
+                localized: """
+                While connected and hosting sessions, OpenClaw keeps the unlocked desktop awake between jobs. \
+                Manual lock and logout still stop Computer work. Disabling this setting restores normal idle behavior.
+                """)
         case .cookieSync:
             String(
                 localized: """

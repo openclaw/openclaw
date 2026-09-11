@@ -295,6 +295,8 @@ describe("chat page split layout host", () => {
       select: vi.fn(),
       openWindow: vi.fn(),
       setPrimary: vi.fn(),
+      reconnect: vi.fn(),
+      reconnectCancel: vi.fn(),
       openSettings: vi.fn(),
     };
     const page = new ChatPage();

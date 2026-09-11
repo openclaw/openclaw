@@ -4,12 +4,13 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -29,6 +30,11 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt native hook relay retention", () => {
+  beforeEach(() => {
+    // Retention owns this clock; cold preparation must not consume the execution budget.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it.each([
     {
       name: "Codex multi-agent V1",
@@ -76,8 +82,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const deferredTurnStart = new Promise<undefined>((resolve) => {
         resolveTurnStart = resolve;
       });
+      const turnStarted = createDeferred<void>();
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
+          turnStarted.resolve();
           return await deferredTurnStart;
         }
         return undefined;
@@ -112,7 +120,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       });
       let relayId: string | undefined;
       try {
-        await harness.waitForMethod("turn/start");
+        await turnStarted.promise;
         if (bindBeforeClaim) {
           resolveTurnStart?.(undefined);
           await new Promise<void>((resolve) => {
@@ -359,7 +367,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           },
         } as CodexServerNotification;
         await harness.notify(childTerminal);
-        nativeHookRelayUnregisterQueue.flush();
+        await nativeHookRelayUnregisterQueue.flush();
         expect(
           nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
         ).toBeUndefined();
@@ -376,6 +384,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           }),
         ).rejects.toThrow(/not found|inactive/);
       } finally {
+        resolveTurnStart?.(undefined);
         fixture.closeHost();
         fixture.closeAdmission();
       }
@@ -386,7 +395,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     const childThreadId = "child-failed-parent";
     const sessionFile = path.join(tempDir, `${childThreadId}-session.jsonl`);
     const workspaceDir = path.join(tempDir, `${childThreadId}-workspace`);
-    const harness = createStartedThreadHarness();
+    const turnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStarted.resolve();
+      }
+    });
     const params = createParams(sessionFile, workspaceDir);
     await attachSqliteSessionTarget(
       params,
@@ -408,7 +422,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     try {
-      await harness.waitForMethod("turn/start");
+      await turnStarted.promise;
       const startRequest = harness.requests.find((request) => request.method === "thread/start");
       const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
       await harness.notify({

@@ -124,6 +124,9 @@ function summarizeNodeEnvironment(
     ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
+    ...(liveNode?.desktopAvailability
+      ? { desktopAvailability: { ...liveNode.desktopAvailability } }
+      : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
     ...(requiredNodeCommand ? { requiredNodeCommand } : {}),

@@ -354,7 +354,6 @@ const enSettings = {
       placeholder: "Enter provider API key",
       replacePlaceholder: "Secret saved. Enter a new key to replace it.",
       set: "Set API key",
-      replace: "Replace key",
       remove: "Remove key",
       saved: "Secret saved.",
       removed: "Saved API keys removed.",
@@ -583,6 +582,15 @@ const enSettings = {
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
       computerControlProvider: "Computer Control provider",
+      unattendedDesktop: "Unattended desktop hosting",
+      unattendedDesktopHint:
+        "Keep this Mac awake between jobs while it is connected and hosting. Manual lock and logout are still respected; OpenClaw never unlocks the Mac.",
+      desktopAvailability: "Desktop availability",
+      desktopStates: {
+        locked: "Locked",
+        unlocked: "Unlocked",
+        unknown: "Unknown",
+      },
       peekaboo: "Peekaboo",
       cua: "CUA",
       cuaUnavailable: "CUA (driver not bundled)",

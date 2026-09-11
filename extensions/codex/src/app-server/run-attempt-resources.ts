@@ -269,10 +269,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   });
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
-  const buildNativeHookRelayFinalConfigPatch = (
+  const buildNativeHookRelayFinalConfigPatch = async (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
-    state.nativeHookRelay?.unregister();
+    const previousRelay = state.nativeHookRelay;
+    previousRelay?.unregister();
+    await previousRelay?.drain();
+    connection.assertCurrent();
     if (params.pluginHarnessToolPolicyRestricted === true) {
       state.nativeHookRelay = undefined;
       return {
@@ -324,6 +327,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         }
       },
     });
+    await state.nativeHookRelay?.prepareInvocation();
+    connection.assertCurrent();
     return {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({

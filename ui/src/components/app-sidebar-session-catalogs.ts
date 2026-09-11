@@ -4,8 +4,10 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { repoName } from "../lib/session-display.ts";
 import type {
@@ -118,7 +120,45 @@ export function visibleSessionCatalogProjection(
   return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
 }
 
-export function visibleCatalogHosts(
+export function catalogErrorMessages(catalog: SessionCatalog): string[] {
+  const messages = new Set<string>();
+  const add = (error: SessionCatalog["error"]) => {
+    if (error) {
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
+    }
+  };
+  add(catalog.error);
+  for (const host of catalog.hosts) {
+    // A disconnected empty host is normal fleet state, not a provider failure.
+    // Cached rows still expose the host-level offline badge when the host is visible.
+    if (host.error?.code !== "NODE_OFFLINE") {
+      add(host.error);
+    }
+  }
+  return [...messages];
+}
+
+export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
+
+/** Section peers and rendering share owner-filtered rows; paging and failures remain visible. */
+export function projectSidebarSessionCatalogs(
+  catalogs: readonly SessionCatalog[],
+  ownerId: string | null,
+  liveRows: readonly GatewaySessionRow[],
+): SidebarSessionCatalog[] {
+  // The current list wins over cached agent lists, including an unset live owner.
+  const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
+  return catalogs.flatMap((catalog) => {
+    const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
+    return visibleHosts.length > 0 ||
+      catalog.hosts.some((host) => Boolean(host.nextCursor)) ||
+      catalogErrorMessages(catalog).length > 0
+      ? [{ ...catalog, visibleHosts }]
+      : [];
+  });
+}
+
+function visibleCatalogHosts(
   hosts: readonly SessionCatalogHost[],
   ownerId?: string | null,
   liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),

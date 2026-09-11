@@ -25,6 +25,7 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   adoptedCatalogSessionKeys,
+  projectSidebarSessionCatalogs,
   visibleSessionCatalogProjection,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -177,6 +178,18 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.sessionData.sessionCatalogs,
       this.hiddenSessionCatalogIds,
       this.sessionsStatusFilter === "archived",
+    );
+
+  protected catalogLiveRows = () => [
+    ...(this.sessionData.sessionsResult?.sessions ?? []),
+    ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
+  ];
+
+  protected sidebarSessionCatalogs = () =>
+    projectSidebarSessionCatalogs(
+      this.visibleSessionCatalogs(),
+      this.activeSessionOwnerId,
+      this.catalogLiveRows(),
     );
 
   private sessionSelectionAnchor: string | null = null;
@@ -343,7 +356,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   };
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
-  protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
+  protected zonedVisibleSections(
+    rows: SidebarRecentSession[],
+    catalogs = this.sidebarSessionCatalogs(),
+  ): SidebarVisibleSections {
     const grouping = this.effectiveSessionsGrouping();
     return this.sessionProjection.project({
       rows,
@@ -352,10 +368,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       selfOwnerId: this.context?.gateway.snapshot.selfUser?.id ?? null,
       // Normalize gateway order without dropping catalog-lagging categories.
       sectionOrder: this.knownSectionOrder(),
-      catalogIds:
-        this.sessionsStatusFilter === "archived"
-          ? []
-          : this.visibleSessionCatalogs().map((catalog) => catalog.id),
+      catalogIds: catalogs.map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,

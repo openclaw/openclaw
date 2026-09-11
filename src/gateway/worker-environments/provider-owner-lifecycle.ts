@@ -207,6 +207,29 @@ export function createWorkerProviderOwnerLifecycle(
     throw serviceError(failureCode, `${failureLabel}: ${detail}`);
   };
 
+  const finishConfirmedProvisionCleanup = async (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupComplete>,
+  ): Promise<never> => {
+    const current = store.get(record.environmentId);
+    // Enrollment may bind a node while this same provisioning operation is awaiting cleanup.
+    if (
+      !current ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      current.ownerEpoch !== record.ownerEpoch
+    ) {
+      throw serviceError("invalid_state", "Worker provisioning owner changed during cleanup");
+    }
+    const detail = boundedWorkerError(error.provisionError);
+    const destroying = store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    await finishProvenDestroy(await stopOwner(destroying, "provider-destroyed"));
+    throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
+  };
+
   const preserveIndeterminateProvisionCleanup = (
     record: WorkerEnvironmentRecord,
     error: ReturnType<typeof WorkerProviderError.cleanupIndeterminate>,
@@ -367,6 +390,7 @@ export function createWorkerProviderOwnerLifecycle(
     lifecycleLease,
     finishDestroy,
     failBootstrap,
+    finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
   };

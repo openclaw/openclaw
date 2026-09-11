@@ -28,7 +28,7 @@ import {
   type SessionsDirFileStat,
 } from "./disk-budget-files.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
-import { resolveSessionFilePathCore } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionFilePathCore } from "./paths.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { timeArchivePruningAsync } from "./session-history-archive-pruning-diagnostics.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
@@ -209,7 +209,7 @@ function resolveReferencedSessionArtifactPaths(params: {
 }
 
 export async function hasRetainedSessionTranscriptArchives(storePath: string): Promise<boolean> {
-  const files = await readSessionsDirFiles(path.dirname(storePath));
+  const files = await readSessionsDirFiles(resolveSessionArtifactDirectory(storePath));
   return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
 }
 
@@ -225,7 +225,7 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   // over evicting additional sessions' searchable rows to spare a copy.
   const { diagnostics } = params;
   const files = await timeArchivePruningAsync(diagnostics, "legacyInventoryMs", async () =>
-    (await readSessionsDirFiles(path.dirname(params.storePath)))
+    (await readSessionsDirFiles(resolveSessionArtifactDirectory(params.storePath)))
       .filter(
         (file) =>
           isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
@@ -429,7 +429,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
 }): Promise<SessionUnreferencedArtifactSweepResult> {
   const olderThanMs =
     Number.isFinite(params.olderThanMs) && params.olderThanMs > 0 ? params.olderThanMs : 0;
-  const sessionsDir = path.dirname(params.storePath);
+  const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
   const fileSizesByPath = new Map(
@@ -540,7 +540,7 @@ export async function enforceSessionDiskBudget(params: {
   }
   const log = params.log ?? NOOP_LOGGER;
   const dryRun = params.dryRun === true;
-  const sessionsDir = path.dirname(params.storePath);
+  const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
   const fileSizesByPath = new Map(

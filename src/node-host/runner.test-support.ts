@@ -91,9 +91,9 @@ vi.mock("../gateway/credentials-secret-inputs.js", () => ({
 
 vi.mock("../infra/device-identity.js", () => ({
   loadOrCreateDeviceIdentity: vi.fn(() => ({
-    id: "device-test",
-    publicKey: "public-key-test",
-    privateKey: "private-key-test",
+    deviceId: "device-test",
+    publicKeyPem: "public-key-test",
+    privateKeyPem: "private-key-test",
   })),
 }));
 

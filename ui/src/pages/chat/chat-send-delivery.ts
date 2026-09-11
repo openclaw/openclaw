@@ -286,6 +286,7 @@ async function sendQueuedChatMessage(
     // Keep the current run intact until an ACK or live event owns its replacement.
     if (!host.chatRunId) {
       resetToolStream(host);
+      host.providerPolicyNotice = null;
     }
     setChatError(host, null);
     reconcileChatRunLifecycle(host, {

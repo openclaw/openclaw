@@ -73,6 +73,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     lifecycleLease,
     finishDestroy,
     failBootstrap,
+    finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
   } = createWorkerProviderOwnerLifecycle({ ...options, providerFor, requireWorkerProfile });
@@ -307,6 +308,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // A cancelled attempt may already own a paid allocation, even when its late
       // provider error looks permanent. Keep it available for canonical teardown.
       cancellation?.assertActive();
+      if (WorkerProviderError.isCleanupComplete(error)) {
+        return await finishConfirmedProvisionCleanup(record, error);
+      }
       const detail = boundedError(error);
       const permanent =
         error instanceof WorkerProviderError || options.isServiceError(error, "invalid_profile");
