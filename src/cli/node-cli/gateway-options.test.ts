@@ -71,4 +71,24 @@ describe("node gateway options", () => {
       "Invalid TLS fingerprint",
     );
   });
+
+  it("rejects explicitly blank --host values instead of falling back to the baseline", () => {
+    expect(() => resolveNodeGatewayOptions({ host: "" }, null)).toThrow("--host must not be blank");
+    expect(() => resolveNodeGatewayOptions({ host: "   " }, null)).toThrow(
+      "--host must not be blank",
+    );
+    expect(() => resolveNodeGatewayOptions({ host: "\t" }, null)).toThrow(
+      "--host must not be blank",
+    );
+  });
+
+  it("falls back to the baseline host only when --host is omitted", () => {
+    expect(resolveNodeGatewayOptions({}, null).host).toBe("127.0.0.1");
+    expect(
+      resolveNodeGatewayOptions({}, { gateway: { host: "config.example", port: 18789 } }).host,
+    ).toBe("config.example");
+    expect(resolveNodeGatewayOptions({ host: "explicit.example" }, null).host).toBe(
+      "explicit.example",
+    );
+  });
 });

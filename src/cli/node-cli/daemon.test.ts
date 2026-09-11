@@ -267,6 +267,7 @@ describe("runNodeDaemonInstall", () => {
 
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
+    ["a blank host", { host: "" }, "--host must not be blank"],
     ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
   ])("rejects %s before building an install plan", async (_name, opts, error) => {
     await runNodeDaemonInstall(opts);
