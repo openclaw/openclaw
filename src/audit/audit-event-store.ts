@@ -30,6 +30,7 @@ import {
 } from "./audit-event-store.row-helpers.js";
 import {
   listSkillSelectionAuditEvents,
+  pruneExpiredSkillSelectionAuditEvents,
   recordSkillSelectionAuditEvent,
 } from "./audit-event-store.skill-selection-storage.js";
 import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
@@ -649,8 +650,11 @@ export function pruneExpiredAuditEvents(
   } = {},
 ): number {
   return runOpenClawStateWriteTransaction(({ db }) => {
-    const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
+    const now = params.now ?? Date.now();
+    const deleted = deleteExpiredAuditEvents(db, now);
+    const retainedAfter = now - AUDIT_EVENT_RETENTION_MS;
+    const deletedSkillSelections = pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter });
     auditEventRowCounts.delete(db);
-    return Number(deleted.numAffectedRows ?? 0n);
+    return Number(deleted.numAffectedRows ?? 0n) + deletedSkillSelections;
   }, params.database);
 }

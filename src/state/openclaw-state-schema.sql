@@ -234,6 +234,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_run_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_status_sequence
   ON audit_skill_selection_events(status, sequence DESC);
 
+CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_occurred_sequence
+  ON audit_skill_selection_events(occurred_at, sequence);
+
 CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings (
   event_id TEXT NOT NULL PRIMARY KEY,
   context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),

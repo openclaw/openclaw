@@ -92,6 +92,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_audit_skill_selection_events_session_sequence",
   "idx_audit_skill_selection_events_run_sequence",
   "idx_audit_skill_selection_events_status_sequence",
+  "idx_audit_skill_selection_events_occurred_sequence",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

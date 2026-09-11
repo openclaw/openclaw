@@ -183,7 +183,7 @@ export const auditHandlers: GatewayRequestHandlers = {
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
         includeMessages: true,
-        ...(params.kind === undefined || params.kind === "skill_selection"
+        ...(params.kind === "skill_selection" || params.status === "observed"
           ? { includeSkillSelections: true }
           : {}),
         ...(agentId ? { agentId } : {}),

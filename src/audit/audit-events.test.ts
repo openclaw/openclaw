@@ -276,6 +276,85 @@ describe("audit event persistence", () => {
     expect(skillOnly.events).toEqual([expect.objectContaining({ kind: "skill_selection" })]);
   });
 
+  it("prunes expired skill selection records during bounded audit maintenance", () => {
+    const database = createDatabaseOptions();
+    const occurredAt = Date.now();
+    const { db } = openOpenClawStateDatabase(database);
+    recordAuditEvent(skillSelectionInput({ occurredAt }), database);
+    db.prepare("DELETE FROM audit_skill_selection_events").run();
+    const insert = db.prepare(
+      `INSERT INTO audit_skill_selection_events (
+         sequence, event_id, source_id, source_sequence, occurred_at, action, status,
+         actor_type, actor_id, agent_id, run_id, tool_name
+       ) VALUES (?, ?, ?, ?, ?, 'skill.selection.observed', 'observed',
+                 'agent', 'main', 'main', ?, 'debug-toolkit')`,
+    );
+    for (let index = 0; index < AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT + 1; index += 1) {
+      insert.run(
+        index + 1,
+        `skill-event-${index}`,
+        `skill-source-${index}`,
+        index + 1,
+        occurredAt,
+        `run-${index}`,
+      );
+    }
+    const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
+
+    expect(
+      listAuditEvents({ database, limit: 10, now: expiredAt, filters: { kind: "skill_selection" } })
+        .events,
+    ).toEqual([]);
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(
+      AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get()).toEqual({
+      count: 1,
+    });
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(1);
+    expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(0);
+  });
+
+  it("caps skill selection companion rows in bounded batches", () => {
+    const database = createDatabaseOptions();
+    const occurredAt = Date.now();
+    const { db } = openOpenClawStateDatabase(database);
+    recordAuditEvent(skillSelectionInput({ occurredAt }), database);
+    db.prepare("DELETE FROM audit_skill_selection_events").run();
+    db.prepare(
+      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+            numbers(n) AS (
+              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
+              FROM digits a, digits b, digits c, digits d, digits e, digits f
+            )
+       INSERT INTO audit_skill_selection_events (
+         sequence, event_id, source_id, source_sequence, occurred_at, action, status,
+         actor_type, actor_id, agent_id, run_id, tool_name
+       )
+       SELECT n, 'skill-event-' || n, 'skill-source-' || n, n, ? + n,
+              'skill.selection.observed', 'observed', 'agent', 'main', 'main',
+              'run-' || n, 'debug-toolkit'
+       FROM numbers
+       WHERE n <= ?`,
+    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT + 1);
+    db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'audit_events'").run(
+      AUDIT_EVENT_MAX_ROWS_CONTRACT + 1,
+    );
+
+    expect(
+      recordAuditEvent(
+        skillSelectionInput({
+          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
+          occurredAt: occurredAt + AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
+        }),
+        database,
+      ),
+    ).toBeDefined();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get()).toEqual({
+      count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
+    });
+  });
+
   it("rejects persisted run lifecycle tuples outside the closed contract", () => {
     const database = createDatabaseOptions();
     recordAuditEvent(auditInput(), database);

@@ -9,6 +9,9 @@ import {
   type AuditEventRecord,
 } from "./audit-event-types.js";
 
+const SKILL_SELECTION_AUDIT_MAX_ROWS = 100_000;
+const SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS = 1_024;
+
 type SkillSelectionAuditRow = {
   sequence: number | bigint;
   event_id: string;
@@ -54,24 +57,106 @@ function ensureSkillSelectionAuditSchema(db: DatabaseSync): void {
       ON audit_skill_selection_events(run_id, sequence DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_status_sequence
       ON audit_skill_selection_events(status, sequence DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_skill_selection_events_occurred_sequence
+      ON audit_skill_selection_events(occurred_at, sequence);
   `);
 }
 
-function readAuditSequenceHighWater(db: DatabaseSync): number {
-  const row = db
-    .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
-    .get() as { seq?: unknown } | undefined;
-  if (row === undefined) {
+function countSkillSelectionAuditEvents(db: DatabaseSync): number {
+  const row = db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get() as
+    | { count?: unknown }
+    | undefined;
+  if (typeof row?.count === "number") {
+    return row.count;
+  }
+  if (typeof row?.count === "bigint" && row.count <= BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number(row.count);
+  }
+  return 0;
+}
+
+function deleteExpiredSkillSelectionAuditEvents(db: DatabaseSync, retainedAfter: number): number {
+  ensureSkillSelectionAuditSchema(db);
+  const result = db
+    .prepare(
+      `DELETE FROM audit_skill_selection_events
+        WHERE sequence IN (
+          SELECT sequence FROM audit_skill_selection_events
+          WHERE occurred_at < ?
+          ORDER BY occurred_at ASC, sequence ASC
+          LIMIT ?
+        )`,
+    )
+    .run(retainedAfter, SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS);
+  return Number(result.changes ?? 0);
+}
+
+function pruneSkillSelectionAuditEventsAfterInsert(db: DatabaseSync, retainedAfter: number): void {
+  deleteExpiredSkillSelectionAuditEvents(db, retainedAfter);
+  const rowCount = countSkillSelectionAuditEvents(db);
+  if (rowCount <= SKILL_SELECTION_AUDIT_MAX_ROWS) {
+    return;
+  }
+  const retainedRows = Math.max(
+    0,
+    SKILL_SELECTION_AUDIT_MAX_ROWS - SKILL_SELECTION_AUDIT_PRUNE_BATCH_ROWS,
+  );
+  const cutoff = db
+    .prepare(
+      `SELECT sequence FROM audit_skill_selection_events
+        ORDER BY sequence DESC
+        LIMIT 1 OFFSET ?`,
+    )
+    .get(retainedRows) as { sequence?: unknown } | undefined;
+  const sequenceCutoff =
+    typeof cutoff?.sequence === "number"
+      ? cutoff.sequence
+      : typeof cutoff?.sequence === "bigint" && cutoff.sequence <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(cutoff.sequence)
+        : undefined;
+  if (sequenceCutoff === undefined) {
+    return;
+  }
+  db.prepare("DELETE FROM audit_skill_selection_events WHERE sequence <= ?").run(sequenceCutoff);
+}
+
+function normalizeSequenceHighWater(value: unknown): number {
+  if (value === null || value === undefined) {
     return 0;
   }
-  if (typeof row.seq !== "string" || !/^\d+$/u.test(row.seq)) {
-    throw new Error("audit event sequence high-water mark is invalid");
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
   }
-  const sequence = BigInt(row.seq);
-  if (sequence > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error("audit event sequence high-water mark exceeds the supported integer range");
+  if (typeof value === "bigint" && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number(value);
   }
-  return Number(sequence);
+  if (typeof value === "string" && /^\d+(?:\.0+)?$/u.test(value)) {
+    const sequence = BigInt(value.split(".")[0] ?? "0");
+    if (sequence > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error("audit event sequence high-water mark exceeds the supported integer range");
+    }
+    return Number(sequence);
+  }
+  throw new Error("audit event sequence high-water mark is invalid");
+}
+
+function readAuditSequenceHighWater(db: DatabaseSync): number {
+  const sequenceRow = db
+    .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
+    .get() as { seq?: unknown } | undefined;
+  const auditRow = db.prepare("SELECT MAX(sequence) AS sequence FROM audit_events").get() as
+    | { sequence?: unknown }
+    | undefined;
+  const skillRow = tableExists(db, "audit_skill_selection_events")
+    ? (db.prepare("SELECT MAX(sequence) AS sequence FROM audit_skill_selection_events").get() as
+        | { sequence?: unknown }
+        | undefined)
+    : undefined;
+  return Math.max(
+    normalizeSequenceHighWater(sequenceRow?.seq),
+    normalizeSequenceHighWater(auditRow?.sequence),
+    normalizeSequenceHighWater(skillRow?.sequence),
+  );
 }
 
 function allocateAuditSequence(db: DatabaseSync): number {
@@ -148,10 +233,7 @@ export function recordSkillSelectionAuditEvent(
   if (Number(result.changes ?? 0) === 0) {
     return undefined;
   }
-  db.prepare(
-    `DELETE FROM audit_skill_selection_events
-      WHERE occurred_at < ?`,
-  ).run(retainedAfter);
+  pruneSkillSelectionAuditEventsAfterInsert(db, retainedAfter);
   const inserted = db
     .prepare("SELECT * FROM audit_skill_selection_events WHERE sequence = ?")
     .get(sequence) as SkillSelectionAuditRow | undefined;
@@ -214,4 +296,11 @@ export function listSkillSelectionAuditEvents(params: {
     )
     .all(...values, params.limit) as SkillSelectionAuditRow[];
   return rows.map(parseSkillSelectionAuditRow);
+}
+
+export function pruneExpiredSkillSelectionAuditEvents(params: {
+  db: DatabaseSync;
+  retainedAfter: number;
+}): number {
+  return deleteExpiredSkillSelectionAuditEvents(params.db, params.retainedAfter);
 }

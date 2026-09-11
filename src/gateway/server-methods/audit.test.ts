@@ -158,6 +158,14 @@ describe("audit gateway methods", () => {
 
     const respond = await runAuditHandler("audit.activity.list", { kind: "skill_selection" });
 
+    expect(listAuditEvents).toHaveBeenCalledWith({
+      limit: 100,
+      filters: {
+        includeMessages: true,
+        includeSkillSelections: true,
+        kind: "skill_selection",
+      },
+    });
     expect(respond).toHaveBeenCalledWith(true, {
       events: [
         {
@@ -178,6 +186,28 @@ describe("audit gateway methods", () => {
           redaction: "metadata_only",
         },
       ],
+    });
+  });
+
+  it("keeps skill selection records opt-in on audit.activity.list for V1 reader compatibility", async () => {
+    await runAuditHandler("audit.activity.list", {});
+
+    expect(listAuditEvents).toHaveBeenCalledWith({
+      limit: 100,
+      filters: { includeMessages: true },
+    });
+  });
+
+  it("allows observed status to opt into skill selection activity", async () => {
+    await runAuditHandler("audit.activity.list", { status: "observed" });
+
+    expect(listAuditEvents).toHaveBeenCalledWith({
+      limit: 100,
+      filters: {
+        includeMessages: true,
+        includeSkillSelections: true,
+        status: "observed",
+      },
     });
   });
 
