@@ -29,6 +29,7 @@ import {
   type ManagedHandoffLeaseAction,
   type ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
+import { hasManagedHandoffSchemaObject } from "./update-managed-service-handoff-source-inspection.js";
 
 const text = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -627,8 +628,12 @@ export function createManagedHandoffLeaseStore(
       }
       throw error;
     }
-    return withDatabase(false, (db) =>
-      executeSqliteQuerySync(
+    return withDatabase(false, (db) => {
+      // Only ordinary inspection may accept an uninitialized store.
+      if (!options.existingIdentity && !hasManagedHandoffSchemaObject(db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
         db,
         leaseQueries(db)
           .selectFrom("managed_update_handoffs")
@@ -640,9 +645,10 @@ export function createManagedHandoffLeaseStore(
         isRetiredManagedHandoffLeasePayload(entry.payload_json)
           ? []
           : [handle(entry.install_root, entry)],
-      ),
-    );
+      );
+    });
   }
+
   function assertSourceUnborrowed(resource: string) {
     assertNoRetainedSourceBorrower(resource, readRetainedSources());
   }

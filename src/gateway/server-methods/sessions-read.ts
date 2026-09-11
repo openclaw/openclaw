@@ -69,7 +69,7 @@ import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
-import { listFilter } from "./sessions-board-inventory.js";
+import { listBoardSessionKeys } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -283,7 +283,17 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           }
           const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
           diagnostics?.mark("filterSetup");
-          const visibleEntryFilter = listFilter({ p, loaded, client, cfg, options });
+          const boardSessionKeys =
+            p.hasBoard === undefined ? undefined : await listBoardSessionKeys(targetsBySessionKey);
+          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
+          const excludedSessionKeys = options.excludedKeys;
+          const visibleEntryFilter =
+            !visibilityFilter && !boardSessionKeys && !excludedSessionKeys?.size
+              ? undefined
+              : (key: string, entry: SessionEntry) =>
+                  !excludedSessionKeys?.has(key) &&
+                  (visibilityFilter?.(key, entry) ?? true) &&
+                  (p.hasBoard === undefined || boardSessionKeys?.has(key) === p.hasBoard);
           const selectionRuns =
             p.activeOnly === true || p.search?.trim()
               ? createVisibleActiveSessionRunProjector(context)

@@ -44,6 +44,13 @@ reported cause, then run the warning's exact cleanup command or
 that cannot boot or pass readiness still block completion. See
 [Status and history](/cli/update/status-and-history) to inspect recorded warnings.
 
+The baseline package fingerprint is best effort. If its bounded scan times out,
+the update records a warning and continues with the retained package copy.
+Rollback then verifies the restored directory identity, package version, and
+affected launchers, and records that full fingerprint verification was unavailable.
+A timeout alone does not fail the update or rollback; detected changes to the
+retained copy still refuse restoration.
+
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
 An interrupted update is not a successful update or a verified rollback.
@@ -476,3 +483,46 @@ Switching a pnpm- or Bun-owned package install to Git with `--channel dev` is
 also rejected before activation. Staged source-checkout exposure currently
 requires an npm-owned package symlink; package-to-package updates remain
 supported through the owning manager.
+
+### Local packaged overrides
+
+Package updates preserve local `dist` edits in a recovery bundle before replacing
+the old package. Capture happens after service drain and the old-tree move, so
+edits made while the candidate installs are included. The report names the bundle
+under the selected state directory's `update-recovery/` directory. Keep it until
+you have checked the updated installation; removal is manual.
+
+By default, the update installs the new package without replaying local code.
+To replay edits you trust during that update:
+
+```bash
+openclaw update --reapply-local-overrides
+```
+
+Packages that advertise a content inventory record shipped file hashes and
+executable status. Replay requires the new package's corresponding baseline and
+actual bytes to match; upstream changes, unsafe paths, and hardlinked targets
+prevent replay. A conflict leaves the whole override set in the recovery bundle.
+Unreferenced content-hashed additions also require manual recovery. Replay runs
+against the private candidate before it replaces the live package. Publication
+and restoration refuse to overwrite a destination created concurrently. Replay
+does not establish that local code remains compatible with the new release.
+
+Older packages without content inventories cannot distinguish local edits from
+vendor files. Their regular `dist` files are preserved for manual inspection,
+with no automatic replay, even when the flag is set. Keep enough free space for
+that copy; recovery bundles are not automatically pruned. Dependency trees and
+inventory metadata are not local override payloads. Symlinks and other unsupported
+entries can refuse the update, including entries in otherwise excluded `dist`
+subtrees; repair those entries before retrying. Normal package-manager permission changes,
+such as applying the installer's umask, are not treated as local edits.
+
+Preserved overrides are separate from automatic package rollback. A failed update
+still follows the existing ownership, configuration, schema, and retained-package
+checks. If late edits invalidate rollback verification, keep both the named package
+backup and override bundle; the report does not authorize restarting an unverified
+installation.
+
+This behavior belongs to the updater already running. Back up local edits before
+the first upgrade from an older updater that does not include it. Git checkouts
+continue to use the existing clean-worktree and Git update rules.

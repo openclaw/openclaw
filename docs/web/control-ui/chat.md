@@ -17,7 +17,7 @@ While you watch a running session, the Gateway shows the model's latest safe pre
 
 Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset or deletion, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
 
-Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
@@ -55,6 +55,13 @@ In **Connectors**, administrators can select **Add MCP server…** and choose a 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
 ## Chat behavior
+
+When you open an existing session, you can start typing as soon as its identity
+is resolved, while the transcript still shows its loading skeleton. The same
+composer keeps your draft and focus when the conversation appears. Send shows
+**Loading chat** until the initial history is ready; text typed during that wait
+stays in the composer and is not queued for automatic sending. Existing `/stop`
+and `/approve` controls remain available while history loads.
 
 On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. At rest, all marks are identical 8 × 2px strokes at 12px spacing. They stay faint; marks for messages currently visible in the transcript light up together as you scroll. Hovering a mark grows it to 32px and lights only that mark in text color, with progressively shorter strokes across three neighbors on either side. The other marks keep their resting colors. Outside that hover range, widths stay fixed. An empty message preview shows “Preview unavailable.” Every message keeps its own mark. Long rails scroll internally within 45% of the viewport height, with fades only at ends that hide more messages. Scrolling the transcript keeps the current mark visible; you can also scroll the rail to explore other messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. A jump briefly tints the target message with a soft background, fading over 1.2 seconds without a border or ring. Reduced motion disables mark transitions and shows the target tint statically for one second.
 
@@ -310,6 +317,13 @@ the disclosure until a later answer follows them. This is display grouping, not 
 change to stored history. Live turns, search results, and turns without an answer
 stay expanded. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
+
+On wide desktop panes, the conversation position rail provides keyboard shortcuts
+to messages. Tab enters at the current message, or the first marker if no message
+is current. ArrowUp and ArrowDown move focus; Home and End go to the first and last
+markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves the
+rail in one step, and Escape closes the preview and returns focus to the transcript.
+Focusing a marker also shows its preview without jumping to the message.
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 

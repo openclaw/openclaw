@@ -685,3 +685,9 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
 
   return { command, args };
 }
+
+/** Stop and approval controls must remain usable while transcript admission is held. */
+export function isChatControlCommand(text: string): boolean {
+  const key = parseSlashCommand(text)?.command.key;
+  return normalizeLowercaseStringOrEmpty(text.trim()) === "/stop" || key === "approve";
+}

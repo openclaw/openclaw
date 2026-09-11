@@ -142,8 +142,10 @@ class ChatControllerCommandControlsTest {
       val controller =
         createChatController(
           requestGatewayForGateway = { gatewayId, method, _ ->
-            require(method == "chat.metadata")
-            if (gatewayId == "gateway-a") {
+            require(method == "chat.metadata" || method == "models.list")
+            if (method == "models.list") {
+              """{"models":[]}"""
+            } else if (gatewayId == "gateway-a") {
               gatewayAResponse.await()
             } else {
               commandResponse("gateway-b")

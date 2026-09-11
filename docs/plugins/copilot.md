@@ -167,9 +167,10 @@ Precedence, applied per agent during `runCopilotAttempt`:
    profile (`src/infra/provider-usage.auth.ts:resolveProviderAuths`) before
    invoking the harness, so a `github-copilot:<profile>` auth profile works
    end-to-end for headless, cron, or multi-profile setups without env vars.
-4. **Env-var fallback**, checked in this order (first non-empty value wins,
-   empty strings count as absent; mirrors the shipped `github-copilot`
-   provider precedence in `extensions/github-copilot/auth.ts`):
+4. **Harness env-var fallback**, checked in this order (first non-empty value
+   wins; empty strings count as absent). This applies to the explicitly selected
+   Copilot harness. The `github-copilot` provider accepts only
+   `COPILOT_GITHUB_TOKEN` as its automatic environment credential:
    1. `OPENCLAW_GITHUB_TOKEN` — harness-specific override; lets you pin a
       token for the OpenClaw harness without disturbing system-wide `gh` /
       Copilot CLI config.

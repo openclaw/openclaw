@@ -19,12 +19,11 @@ const PREVIEW_LENGTH = 140;
 type RailInteraction = {
   hoveredId: string | null;
   focusedId: string | null;
-  rovingId: string | null;
   dismissed: boolean;
 };
 
 function initialInteraction(): RailInteraction {
-  return { hoveredId: null, focusedId: null, rovingId: null, dismissed: false };
+  return { hoveredId: null, focusedId: null, dismissed: false };
 }
 
 // The directive owns transient DOM interaction; the session owns reader position.
@@ -222,15 +221,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.syncVisibilityTargets();
     // Reader offsets can move the anchor without changing any intersections.
     this.syncVisibleMarks();
-    const rovingId = this.interaction.rovingId ?? this.activeId ?? this.markerIds[0];
-    const previousTabStop = scroller.querySelector<HTMLElement>('[tabindex="0"]');
-    const tabStop = this.markerElements.get(rovingId ?? "");
-    if (tabStop && tabStop !== previousTabStop) {
-      if (previousTabStop) {
-        previousTabStop.tabIndex = -1;
-      }
-      tabStop.tabIndex = 0;
-    }
+    this.syncTabStop();
     if (this.followActive) {
       this.followActive = false;
       const current = this.markerElements.get(this.activeId ?? "");
@@ -265,6 +256,19 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
   }
 
+  private syncTabStop() {
+    // Reenter at the reader position; arrow navigation owns focus only while inside the rail.
+    const rovingId = this.interaction.focusedId ?? this.activeId ?? this.markerIds[0];
+    const previousTabStop = this.scrollElement?.querySelector<HTMLElement>('[tabindex="0"]');
+    const tabStop = this.markerElements.get(rovingId ?? "");
+    if (tabStop && tabStop !== previousTabStop) {
+      if (previousTabStop) {
+        previousTabStop.tabIndex = -1;
+      }
+      tabStop.tabIndex = 0;
+    }
+  }
+
   private readonly bindScroller = (element?: Element) => {
     this.resizeObserver?.disconnect();
     this.disconnectVisibility();
@@ -286,7 +290,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   };
 
   private readonly dismissPreview = (event: KeyboardEvent) => {
-    const rail = this.previewElement?.closest(".chat-position-rail");
+    const rail = this.scrollElement?.closest(".chat-position-rail");
     if (
       event.key !== "Escape" ||
       event.defaultPrevented ||
@@ -300,6 +304,10 @@ class ChatPositionRailDirective extends AsyncDirective {
     event.stopImmediatePropagation();
     this.interaction.hoveredId = null;
     this.interaction.dismissed = true;
+    if (rail.contains(rail.ownerDocument.activeElement)) {
+      // Every marker reveals a message in this transcript. Hover-only dismissal keeps focus.
+      rail.closest<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+    }
     this.requestUpdate?.();
   };
 
@@ -358,9 +366,6 @@ class ChatPositionRailDirective extends AsyncDirective {
     if (!candidates.some((candidate) => candidate.id === interaction.hoveredId)) {
       interaction.hoveredId = null;
     }
-    if (!candidates.some((candidate) => candidate.id === interaction.rovingId)) {
-      interaction.rovingId = null;
-    }
     const markers = candidates.map(({ id, message }) => ({
       id,
       message,
@@ -394,7 +399,7 @@ class ChatPositionRailDirective extends AsyncDirective {
             PREVIEW_LENGTH,
           )
         : "";
-    const rovingId = interaction.rovingId ?? this.activeId ?? markers[0]!.id;
+    const rovingId = interaction.focusedId ?? this.activeId ?? markers[0]!.id;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =
         event.key === "Home"
@@ -433,6 +438,8 @@ class ChatPositionRailDirective extends AsyncDirective {
           <div
             ${ref(this.bindScroller)}
             class="chat-position-rail__marks"
+            role="list"
+            aria-label=${t("chat.thread.positionRail")}
             @scroll=${this.scheduleLayout}
             @wheel=${this.stopScrollInput}
             @touchstart=${this.stopScrollInput}
@@ -444,51 +451,61 @@ class ChatPositionRailDirective extends AsyncDirective {
                 markers,
                 (marker) => marker.id,
                 (marker, index) => html`
-                  <button
-                    class="chat-position-rail__marker"
-                    type="button"
-                    data-position-marker-id=${marker.id}
-                    tabindex=${marker.id === rovingId ? "0" : "-1"}
-                    aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
-                    aria-description=${t("chat.thread.positionMarkerHint")}
-                    aria-current="false"
-                    @pointerenter=${() => {
-                      interaction.hoveredId = marker.id;
-                      interaction.dismissed = false;
-                      this.requestUpdate?.();
-                    }}
-                    @focus=${(event: FocusEvent) => {
-                      // Pointer focus must not move the target before pointer-up.
-                      if (
-                        event.currentTarget instanceof HTMLElement &&
-                        event.currentTarget.matches(":focus-visible")
-                      ) {
-                        this.revealMarker(event.currentTarget);
-                      }
-                      interaction.focusedId = marker.id;
-                      interaction.rovingId = marker.id;
-                      interaction.dismissed = false;
-                      this.requestUpdate?.();
-                    }}
-                    @blur=${() => {
-                      interaction.focusedId = null;
-                      this.requestUpdate?.();
-                    }}
-                    @keydown=${(event: KeyboardEvent) => {
-                      if (
-                        ["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "End", "Home"].includes(
-                          event.key,
-                        )
-                      ) {
-                        moveFocus(event, index);
-                      } else if (event.key === "PageUp" || event.key === "PageDown") {
-                        event.stopPropagation();
-                      }
-                    }}
-                    @click=${() => transcript.revealMessage(marker.id)}
-                  >
-                    <span class="chat-position-rail__tick" aria-hidden="true"></span>
-                  </button>
+                  <div class="chat-position-rail__item" role="listitem">
+                    <button
+                      class="chat-position-rail__marker"
+                      type="button"
+                      data-position-marker-id=${marker.id}
+                      tabindex=${marker.id === rovingId ? "0" : "-1"}
+                      aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
+                      aria-description=${t("chat.thread.positionMarkerHint")}
+                      aria-current="false"
+                      @pointerenter=${() => {
+                        interaction.hoveredId = marker.id;
+                        interaction.dismissed = false;
+                        this.requestUpdate?.();
+                      }}
+                      @focus=${(event: FocusEvent) => {
+                        // Pointer focus must not move the target before pointer-up.
+                        if (
+                          event.currentTarget instanceof HTMLElement &&
+                          event.currentTarget.matches(":focus-visible")
+                        ) {
+                          this.revealMarker(event.currentTarget);
+                        }
+                        interaction.focusedId = marker.id;
+                        interaction.dismissed = false;
+                        this.syncTabStop();
+                        this.requestUpdate?.();
+                      }}
+                      @blur=${() => {
+                        interaction.focusedId = null;
+                        this.syncTabStop();
+                        this.requestUpdate?.();
+                      }}
+                      @keydown=${(event: KeyboardEvent) => {
+                        if (
+                          [
+                            "ArrowDown",
+                            "ArrowLeft",
+                            "ArrowRight",
+                            "ArrowUp",
+                            "End",
+                            "Home",
+                          ].includes(event.key)
+                        ) {
+                          moveFocus(event, index);
+                        } else if (event.key === "Escape") {
+                          this.dismissPreview(event);
+                        } else if (event.key === "PageUp" || event.key === "PageDown") {
+                          event.stopPropagation();
+                        }
+                      }}
+                      @click=${() => transcript.revealMessage(marker.id)}
+                    >
+                      <span class="chat-position-rail__tick" aria-hidden="true"></span>
+                    </button>
+                  </div>
                 `,
               ),
             )}

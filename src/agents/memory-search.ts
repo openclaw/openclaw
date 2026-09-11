@@ -3,16 +3,13 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SecretInput } from "../config/types.secrets.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
   resolveRememberAcrossConversations,
 } from "../memory-host-sdk/host/config-utils.js";
-import type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
@@ -22,92 +19,41 @@ import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "./memory-search-source-policy.js";
 
-export type ResolvedMemorySearchConfig = {
-  enabled: boolean;
-  rememberAcrossConversations: boolean;
-  /** Sources indexed by the manager. */
-  sources: Array<"memory" | "sessions">;
-  /** Sources searched when memory_search omits an explicit corpus. */
-  searchSources: Array<"memory" | "sessions">;
-  extraPaths: MemoryExtraPath[];
-  multimodal: MemoryMultimodalSettings;
-  provider: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-    nonBatchConcurrency?: number;
-    batch?: {
-      enabled: boolean;
-      wait: boolean;
-      concurrency: number;
-      pollIntervalMs: number;
-      timeoutMinutes: number;
-    };
-  };
-  experimental: {
-    sessionMemory: boolean;
-  };
-  fallback: string;
-  model: string;
+type ProducedMemorySearchConfig = NonNullable<ReturnType<typeof produceMemorySearchConfig>>;
+
+export type ResolvedMemorySearchConfig = Omit<
+  ProducedMemorySearchConfig,
+  | "cache"
+  | "documentInputType"
+  | "inputType"
+  | "local"
+  | "outputDimensionality"
+  | "queryInputType"
+  | "remote"
+  | "store"
+  | "sync"
+> & {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
   outputDimensionality?: number;
-  local: {
+  cache: Omit<ProducedMemorySearchConfig["cache"], "maxEntries"> & { maxEntries?: number };
+  local: Omit<ProducedMemorySearchConfig["local"], "modelPath"> & {
     modelPath?: string;
     modelCacheDir?: string;
     contextSize?: number | "auto";
   };
-  store: {
-    driver: "sqlite";
-    databasePath: string;
-    fts: {
-      tokenizer: "unicode61" | "trigram";
-    };
-    vector: {
-      enabled: boolean;
+  remote?: Omit<Partial<NonNullable<ProducedMemorySearchConfig["remote"]>>, "batch"> & {
+    batch?: NonNullable<ProducedMemorySearchConfig["remote"]>["batch"];
+    nonBatchConcurrency?: number;
+  };
+  store: Omit<ProducedMemorySearchConfig["store"], "vector"> & {
+    vector: Omit<ProducedMemorySearchConfig["store"]["vector"], "extensionPath"> & {
       extensionPath?: string;
     };
   };
-  chunking: {
-    tokens: number;
-    overlap: number;
-  };
-  sync: {
-    onSessionStart: boolean;
-    onSearch: boolean;
-    watch: boolean;
-    watchDebounceMs: number;
-    intervalMinutes: number;
+  sync: Omit<ProducedMemorySearchConfig["sync"], "embeddingBatchTimeoutSeconds"> & {
     embeddingBatchTimeoutSeconds: number | undefined;
-    sessions: {
-      deltaBytes: number;
-      deltaMessages: number;
-      postCompactionForce: boolean;
-    };
-  };
-  query: {
-    maxResults: number;
-    minScore: number;
-    hybrid: {
-      enabled: boolean;
-      vectorWeight: number;
-      textWeight: number;
-      candidateMultiplier: number;
-      mmr: {
-        enabled: boolean;
-        lambda: number;
-      };
-      temporalDecay: {
-        enabled: boolean;
-        halfLifeDays: number;
-      };
-    };
-  };
-  cache: {
-    enabled: boolean;
-    maxEntries?: number;
   };
 };
 
@@ -202,10 +148,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   };
 }
 
-export function resolveMemorySearchConfig(
-  cfg: OpenClawConfig,
-  agentId: string,
-): ResolvedMemorySearchConfig | null {
+function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
   if (!indexConfig) {
     return null;
@@ -291,7 +234,7 @@ export function resolveMemorySearchConfig(
     maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
   };
 
-  const resolved: ResolvedMemorySearchConfig = {
+  const resolved = {
     ...indexConfig,
     multimodal,
     provider,
@@ -327,7 +270,14 @@ export function resolveMemorySearchConfig(
   return resolved;
 }
 
-function resolveSyncConfig(): ResolvedMemorySearchSyncConfig {
+export function resolveMemorySearchConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): ResolvedMemorySearchConfig | null {
+  return produceMemorySearchConfig(cfg, agentId);
+}
+
+function resolveSyncConfig() {
   return {
     onSessionStart: true,
     onSearch: true,

@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Model } from "../llm/types.js";
 import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
@@ -16,6 +15,7 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import {
   getPreparedModelFullCatalogAuth,
+  hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
@@ -173,23 +173,11 @@ export function prepareModelCatalogPublication(
       ) {
         return [];
       }
-      const providerProfiles = (value: PreparedModelCatalogAuth) =>
-        Object.fromEntries(
-          Object.entries(value.authStore.profiles).filter(
-            ([, profile]) => normalizeProvider(profile.provider) === provider,
-          ),
-        );
-      const providerCredentials = (
-        credentials: NonNullable<PreparedModelCatalogAuth["credentials"]>,
-      ) =>
-        Object.entries(credentials)
-          .filter(([candidate]) => normalizeProvider(candidate) === provider)
-          .map(([, credential]) => credential);
-      return isDeepStrictEqual(providerProfiles(previousAuth), providerProfiles(auth)) &&
-        isDeepStrictEqual(
-          providerCredentials(previousAuth.credentials),
-          providerCredentials(auth.credentials),
-        )
+      return hasSamePreparedModelCatalogAuth(
+        previousAuth,
+        auth,
+        (candidate) => normalizeProvider(candidate) === provider,
+      )
         ? [provider]
         : [];
     }),

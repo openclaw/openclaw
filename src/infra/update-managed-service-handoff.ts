@@ -1892,10 +1892,14 @@ function resolveUpdateCliArgv(params: {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  reapplyLocalOverrides?: boolean;
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
+  if (params.reapplyLocalOverrides) {
+    updateArgs.push("--reapply-local-overrides");
+  }
   if (params.acceptCapabilities) {
     updateArgs.push("--accept-capabilities");
   }
@@ -1933,6 +1937,7 @@ export function formatManagedServiceUpdateCommand(
     channel?: UpdateChannel;
     tag?: string;
     acceptCapabilities?: boolean;
+    reapplyLocalOverrides?: boolean;
   },
   env: NodeJS.ProcessEnv = process.env,
 ): string {
@@ -1961,6 +1966,7 @@ type ManagedServiceUpdateHandoffParams = {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  reapplyLocalOverrides?: boolean;
   meta: UpdateRestartSentinelMeta;
   requester?: { channel?: string; accountId?: string; senderId?: string };
   handoffId?: string;
@@ -2125,6 +2131,7 @@ async function spawnManagedServiceUpdateHandoff(
     ? [params.action.nodeRunner, params.action.entrypoint, "triage"]
     : resolveUpdateCliArgv({
         acceptCapabilities: params.acceptCapabilities,
+        reapplyLocalOverrides: params.reapplyLocalOverrides,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
         tag: params.tag,
@@ -2139,6 +2146,7 @@ async function spawnManagedServiceUpdateHandoff(
           channel: params.channel,
           tag: params.tag,
           acceptCapabilities: params.acceptCapabilities,
+          reapplyLocalOverrides: params.reapplyLocalOverrides,
         },
         params.env,
       );

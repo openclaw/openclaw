@@ -79,37 +79,52 @@ suite.define(() => {
           () =>
             new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
               const started = performance.now();
-              let animationStart: number | undefined;
+              let revealAnimation: Animation | undefined;
               let previousVisible = false;
+              // Reduced-motion animations can finish before the first sampled frame.
+              // Retain their clock before getAnimations() drops the finished effect.
+              const observer = new MutationObserver(() => {
+                const skeleton = document.querySelector(
+                  ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
+                );
+                revealAnimation ??= skeleton?.getAnimations()[0];
+                if (revealAnimation) {
+                  observer.disconnect();
+                }
+              });
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["class"],
+              });
               const sample = () => {
                 const skeleton = document.querySelector(
                   ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
                 );
                 if (skeleton) {
-                  const startTime = skeleton.getAnimations()[0]?.startTime;
-                  if (typeof startTime === "number") {
-                    animationStart = startTime;
-                  }
+                  revealAnimation ??= skeleton.getAnimations()[0];
                   previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                     (pane) =>
                       getComputedStyle(pane).opacity !== "0" &&
                       pane.getAttribute("aria-hidden") === "false" &&
                       pane.textContent.includes("Previous conversation."),
                   );
-                  if (getComputedStyle(skeleton).visibility === "visible") {
-                    // Use the animation clock: the first sampled frame may arrive late on CI.
-                    const now = document.timeline.currentTime;
+                  const currentTime = revealAnimation?.currentTime;
+                  if (
+                    getComputedStyle(skeleton).visibility === "visible" &&
+                    typeof currentTime === "number"
+                  ) {
+                    observer.disconnect();
                     resolve({
-                      delay:
-                        typeof now === "number" && animationStart !== undefined
-                          ? now - animationStart
-                          : 0,
+                      delay: currentTime,
                       previousVisible,
                     });
                     return;
                   }
                 }
                 if (performance.now() - started > 3_000) {
+                  observer.disconnect();
                   resolve({ delay: -1, previousVisible });
                   return;
                 }
@@ -234,9 +249,7 @@ suite.define(() => {
           sessionKey,
         );
         expect(await gateway.getRequests("chat.startup")).toHaveLength(initialStartups + 1);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(
-          reference === "named" ? 1 : 0,
-        );
+        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
         await captureHistoryIssuanceProof(page, `canonical-${reference}-history`);
       } finally {
         await suite.closeBrowserContext(context);

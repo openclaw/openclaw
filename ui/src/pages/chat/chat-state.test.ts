@@ -4487,15 +4487,15 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
-    expect(state.chatModelCatalogError).toBe(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBe(true);
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([model]);
     expect(state.chatModelCatalogError).toBe("catalog transport failed");
     await refreshChatModelCatalogOnDemand(state);
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelCatalogError).toBeNull();
+    expect(state.chatModelCatalogRefreshFailed).toBeUndefined();
   });
 
   it("keeps fallback slash commands when chat metadata omits commands", async () => {

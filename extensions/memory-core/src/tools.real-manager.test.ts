@@ -17,7 +17,7 @@ import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./memory/manager-index.test-support.js";
-import { createMemorySearchTool, testing } from "./tools.js";
+import { createMemoryGetTool, createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
 const { MemoryIndexManager } = await import("./memory/manager.js");
@@ -131,6 +131,64 @@ describe("memory_search real manager", () => {
     expect(await fs.readFile(filePath, "utf8")).toBe(testCase.text);
     expect(fixture.provider.embedBatchCalls).toBe(0);
     expect(fixture.provider.embedQueryCalls).toBe(0);
+  });
+
+  it("rejects a real session search hit as an unsupported file without disabling memory", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      vectorEnabled: false,
+      minScore: 0,
+    });
+    const sessionKey = "agent:main:telegram:direct:excerpt-proof";
+    await fixture.seedSessionTranscript({
+      sessionId: "excerpt-proof",
+      sessionKey,
+      messages: [
+        { role: "user", content: "The excerpt marker is cobalt orchid.", timestamp: Date.now() },
+      ],
+    });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+    const options = { config: cfg, agentId: "main", agentSessionKey: sessionKey };
+    const search = createMemorySearchTool(options)!;
+    const get = createMemoryGetTool(options)!;
+    const found = await search.execute("session-search", {
+      query: "cobalt orchid",
+      corpus: "sessions",
+    });
+    const { results } = found.details as {
+      results: Array<{ path: string; startLine: number; source: string }>;
+    };
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      source: "sessions",
+      path: "sessions/main/excerpt-proof.jsonl",
+    });
+    const excerpt = await get.execute("session-excerpt", {
+      path: results[0]!.path,
+      from: results[0]!.startLine,
+      lines: 3,
+    });
+    expect(excerpt.details).toMatchObject({
+      status: "error",
+      code: "MEMORY_PATH_NOT_ALLOWED",
+      text: "",
+    });
+    expect(excerpt.details).not.toHaveProperty("disabled");
+    expect(excerpt.details).not.toHaveProperty("error", "path required");
+    const memory = await get.execute("memory-excerpt", {
+      path: "memory/2026-01-12.md",
+      from: 2,
+      lines: 1,
+    });
+    expect(memory.details).toMatchObject({
+      status: "ok",
+      text: expect.stringContaining("Alpha memory line."),
+      from: 2,
+      lines: 1,
+    });
   });
 
   it("reports current invalid config after replacing the config of a retained tool", async () => {

@@ -4,11 +4,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
-import {
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-} from "../../infra/update-run-ledger.js";
+import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
@@ -245,16 +241,7 @@ export function publishUpdateCommandTerminalResult(
   outcome: { rolledBack: boolean; downtimeMs?: number },
 ): UpdateRunResult {
   const nextAction = recordUpdateResultNextAction(params, input);
-  const run = params.opts.run;
-  const { downtimeMs } = outcome;
-  if (run && outcome.rolledBack) {
-    finishUpdateRun(
-      run.runId,
-      { status: "rolled-back", reason: input.reason, after: input.after, downtimeMs },
-      { env: run.env },
-    );
-  }
-  const result = completeUpdateCommandRun(input, run, downtimeMs);
+  const result = completeUpdateCommandRun(input, params.opts.run, outcome);
   printResult(result, params.opts, { nextAction });
   return result;
 }

@@ -234,6 +234,11 @@ Configured endpoint providers after that:
 
 11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
+If an auto-detected provider fails, OpenClaw tries the next eligible provider.
+If all attempts fail, it reports the first provider's error to help you diagnose
+the primary failure. An explicitly selected provider does not use automatic
+fallback.
+
 Key-free providers such as **Parallel Search (Free)**, **DuckDuckGo**,
 **Ollama Web Search**, and **Codex Hosted Search** never win auto-detection,
 even though they have an internal order value. They are used only when you

@@ -191,6 +191,16 @@ function registerCodexHealthChecks(
       pluginIds: ["codex"],
     });
     const owner = registry.plugins.find((plugin) => plugin.id === "codex");
+    if (!owner) {
+      // Implicit preferences may use OpenClaw while plugin provisioning is deferred.
+      // Authored runtime requirements still fail closed, matching harness selection.
+      const requiredRuntimes = collectConfiguredAgentHarnessRuntimes(params.cfg, {
+        includeImplicitRuntimePreferences: false,
+      });
+      if (!requiredRuntimes.includes("codex")) {
+        return;
+      }
+    }
     // Doctor must inspect the selected runtime's artifact, including official external installs.
     // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
     if (!owner || (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true)) {

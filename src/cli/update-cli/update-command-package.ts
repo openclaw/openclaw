@@ -204,6 +204,7 @@ export async function prepareGitPackageExposure(
 }
 
 export type PackageInstallUpdateParams = {
+  reapplyLocalOverrides?: boolean;
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
@@ -270,6 +271,13 @@ export async function runPackageInstallUpdate(
   }
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
+    localOverrides: {
+      reapply: params.reapplyLocalOverrides === true,
+      env: resolveUpdateTargetEnv({
+        serviceEnv: params.managedServiceEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    },
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
@@ -315,6 +323,7 @@ export async function runPackageInstallUpdate(
     },
     steps: packageUpdate.steps,
     recovery: packageUpdate.recovery,
+    localOverrides: packageUpdate.localOverrides,
     durationMs: Date.now() - params.startedAt,
   };
 }

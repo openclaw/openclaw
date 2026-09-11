@@ -131,7 +131,6 @@ function preparePromptProjectionStateForTest(params: {
     },
     replaceSessionMessages: () => {},
     sessionAgentId: "main",
-    setActiveSessionSystemPrompt: () => {},
     systemPromptText: params.raw ? "" : "system",
     toolResultPromptProjectionState: params.state,
   });

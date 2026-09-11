@@ -3,7 +3,11 @@ import { z } from "zod";
 import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
+import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
+import {
+  workerProjectSeedKey,
+  type RepositoryWorkerProjectSnapshot,
+} from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -142,9 +146,9 @@ describe("prepared project retention compatibility", () => {
     expect(fixture.store.list()).toEqual(before);
   });
 
-  it("keeps initially private repository metadata on ordinary cold provisioning", async () => {
+  it("keeps providers without project preparation on ordinary cold provisioning", async () => {
     const { owner, project } = setup();
-    sourceAdmission.mockResolvedValue(undefined);
+    fixture.provider.supportsProjectPreparation = () => false;
     const options = {
       executionMode: "worker-turn" as const,
       repository: { agentId: "main", url: project.source.url },
@@ -157,7 +161,46 @@ describe("prepared project retention compatibility", () => {
     const cold = await owner.createWithProfile("development", "private-cold", options, intent);
     expect(cold.profileSnapshot).not.toHaveProperty("project");
     expect(cold.preparation).toBeNull();
-    expect(sourceAdmission).toHaveBeenCalledOnce();
+    expect(sourceAdmission).not.toHaveBeenCalled();
+  });
+
+  it("passes private pack production through the provisioning owner instead of worker fetch", async () => {
+    const { project, record } = setup();
+    const stopped = new Error("Private pack producer stopped before transfer");
+    const prepareGitPack = vi.fn(async () => {
+      throw stopped;
+    });
+    sourceAdmission.mockResolvedValue({
+      project,
+      setupRecipe: undefined,
+      assertCurrent: () => {},
+      revalidate: async () => {},
+      prepareGitPack,
+    });
+    const operation = await prepareWorkerProviderProject({
+      project,
+      preparation: undefined,
+      record,
+      namespace: "gateway",
+      getConfig: () => fixture.config,
+      requireCurrent: () => {},
+      signal: fixture.abort.signal,
+    });
+    const runScript = vi.fn(async () =>
+      JSON.stringify({
+        ready: false,
+        directory: `/node/.openclaw-worker/git-seeds/gateway/.tmp-${workerProjectSeedKey(project)}-fixture`,
+      }),
+    );
+    const upload = vi.fn();
+    try {
+      await expect(operation.project.prepare({ runScript, upload })).rejects.toBe(stopped);
+      expect(prepareGitPack).toHaveBeenCalledOnce();
+      expect(runScript).toHaveBeenCalledOnce();
+      expect(upload).not.toHaveBeenCalled();
+    } finally {
+      operation.close();
+    }
   });
 
   it("checks canonical retained contents without source admission or an allocation authority", async () => {

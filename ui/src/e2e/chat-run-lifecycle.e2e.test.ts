@@ -60,7 +60,7 @@ suite.define(() => {
     page = undefined;
   });
 
-  it("retires failed history released after clicking Send", async () => {
+  it("keeps a failed session's draft until history is ready for an explicit retry", async () => {
     const context = await suite.newBrowserContext({});
     const currentPage = await context.newPage();
     page = currentPage;
@@ -86,28 +86,34 @@ suite.define(() => {
     const startup = await gateway.waitForRequest("chat.startup");
     expect(startup.params).toMatchObject({ sessionKey });
     await currentPage.locator(".agent-chat__input textarea").fill("Try again");
-    await currentPage.getByRole("button", { name: "Send message" }).click();
+    expect(await currentPage.locator(".chat-send-btn--send").isDisabled()).toBe(true);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
     // Fault injection controls only WebSocket delivery, never application state.
     await gateway.resolveDeferred("chat.startup");
+    const sendButton = currentPage.getByRole("button", { name: "Send message" });
     await expect
-      .poll(async () =>
-        (await gateway.getRequests()).some(
-          ({ method }) => method === "chat.history" || method === "chat.send",
-        ),
+      .poll(
+        async () =>
+          (await gateway.getRequests("chat.history")).length > 0 ||
+          ((await sendButton.count()) > 0 && (await sendButton.isEnabled())),
       )
       .toBe(true);
     if ((await gateway.getRequests("chat.history")).length > 0) {
       await gateway.resolveDeferred("chat.history");
     }
-    const send = await gateway.waitForRequest("chat.send");
-    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
-    expect(runId).toEqual(expect.any(String));
+    await sendButton.waitFor();
+    expect(await currentPage.locator(".agent-chat__input textarea").inputValue()).toBe("Try again");
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     const alert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await alert.waitFor();
     await alert.locator(".chat-error__content > strong").getByText(renderedDiagnostic).waitFor();
     expect(await alert.locator("details").count()).toBe(0);
+    await sendButton.click();
+    const send = await gateway.waitForRequest("chat.send");
+    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
+    expect(runId).toEqual(expect.any(String));
+    expect(await alert.count()).toBe(0);
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });

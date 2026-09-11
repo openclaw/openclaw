@@ -97,19 +97,20 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    // Admission must not load native units or turn unavailable ownership into
-    // an absent service and a write to the caller's unrelated profile.
-    const command = await resolveGatewayService()
-      .readCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      })
-      .catch((cause: unknown) => {
-        throw new GatewayServiceUpdateOwnershipError(
-          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
-          cause,
-        );
-      });
+    // Admission needs only the command owner. Leave runtime/status inspection to
+    // the safety preflight, after persisted service selectors have been validated.
+    const service = resolveGatewayService();
+    const absent = await service.isAbsent?.({ env }).catch(() => false);
+    const command = absent
+      ? null
+      : await service
+          .readCommand(env, { requireEffective: true, requireLoaded: true })
+          .catch((cause: unknown) => {
+            throw new GatewayServiceUpdateOwnershipError(
+              "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+              cause,
+            );
+          });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {
@@ -337,7 +338,7 @@ export function createUpdateRunProgress(
 export function completeUpdateCommandRun(
   result: UpdateRunResult,
   run: UpdateCommandOptions["run"],
-  downtimeMs?: number,
+  completion: { rolledBack?: boolean; downtimeMs?: number } = {},
 ): UpdateRunResult {
   if (!run) {
     return result;
@@ -402,15 +403,16 @@ export function completeUpdateCommandRun(
     finishUpdateRun(
       run.runId,
       {
-        status:
-          normalized.status === "ok"
+        status: completion.rolledBack
+          ? "rolled-back"
+          : normalized.status === "ok"
             ? "succeeded"
             : normalized.status === "error"
               ? "failed"
               : "skipped",
         reason: normalized.reason,
         after: normalized.after,
-        downtimeMs,
+        downtimeMs: completion.downtimeMs,
       },
       recordOptions,
     );

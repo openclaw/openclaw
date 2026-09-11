@@ -164,7 +164,7 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
 | DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
 | Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |

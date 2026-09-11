@@ -17,7 +17,10 @@ vi.mock("./cli.runtime.js", () => ({
 
 import { registerQaLabCli } from "./cli.js";
 import { resolveQaRunProfileMembership } from "./profile-planning.js";
-import type { QaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+import {
+  qaMaturityTaxonomyIdentity,
+  type QaScorecardTaxonomyReport,
+} from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -60,7 +63,16 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
           const scorecardReport = {
             taxonomyPath: "taxonomy.yaml",
             title: "Selection fixture",
-            taxonomy: { sourcePath: "taxonomy.yaml" },
+            taxonomy: {
+              sourcePath: "taxonomy.yaml",
+              identity: qaMaturityTaxonomyIdentity({
+                version: 1,
+                title: "Selection fixture",
+                profiles: [],
+                levels: [],
+                surfaces: [],
+              }),
+            },
             profileCount: 1,
             profiles: [
               {

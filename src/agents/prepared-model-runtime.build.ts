@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
@@ -19,6 +18,7 @@ import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
+  hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
@@ -196,6 +196,8 @@ function createFullModelCatalogAccess(params: {
     params.agentFacts.env,
   );
   const previousInventory = params.inventoryOwner.catalogInventory;
+  const previousAuth =
+    previousInventory && getPreparedModelFullCatalogAuth(previousInventory.catalog);
   const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
     params.pluginGeneration.pluginMetadataSnapshot.index,
   );
@@ -207,12 +209,17 @@ function createFullModelCatalogAccess(params: {
   let inventory =
     previousInventory?.key === inventoryKey &&
     previousInventory.pluginFingerprint === pluginFingerprint &&
-    isDeepStrictEqual(
-      getPreparedModelFullCatalogAuth(previousInventory.catalog)?.credentials,
-      params.agentFacts.credentials,
-    )
-      ? previousInventory
+    hasSamePreparedModelCatalogAuth(previousAuth, params.agentFacts)
+      ? { ...previousInventory, catalog: { ...previousInventory.catalog } }
       : undefined;
+  if (inventory && previousAuth) {
+    setPreparedModelFullCatalogAuth(inventory.catalog, {
+      ...previousAuth,
+      authStore: params.agentFacts.authStore,
+      credentials: params.agentFacts.credentials,
+      authModes: resolveUsableAgentCredentialModes(params.agentFacts.credentials),
+    });
+  }
   let fullCatalog = inventory ? project(inventory.catalog) : undefined;
   if (fullCatalog) {
     if (

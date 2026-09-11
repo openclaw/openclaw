@@ -31,7 +31,7 @@ import org.robolectric.RobolectricTestRunner
 class ChatControllerStreamReplayTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request, gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" })
 
   @OptIn(ExperimentalCoroutinesApi::class)
   private fun TestScope.loadController(gateway: ScriptedGateway): ChatController {

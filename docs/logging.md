@@ -332,6 +332,48 @@ for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
 retention, principal attribution or admission authority.
 
+### Slow worktree cleanup
+
+With process diagnostics and info-level logging enabled, two subsystems log
+operations lasting at least one second after they return or throw:
+
+- `agents/worktrees`: `slow managed worktree removal` measures removal through
+  allocation-lease settlement. `admissionMs` covers acquisition attempts,
+  backoff, setup, and scheduling before the removal callback starts. `bodyMs`
+  covers that callback; `finalizeMs` covers drainage, final authority checks,
+  lease release, and completion delivery. Create and restore operations do not
+  emit this record.
+- `git/ref-mutation`: `slow Git ref mutation` measures shared Git-ref queue
+  operations. `resolveMs` covers common-directory resolution; `queueWaitMs`
+  covers time from enqueue to callback entry; `queuedOperationMs` covers the
+  callback and delivery of its settlement. It can include multiple Git commands
+  and does not identify a queue holder or every predecessor.
+
+Both records include `durationMs` in integer milliseconds, `callbackEntered`, and
+`outcome` (`returned` or `threw`). Removal that never enters its callback reports
+all elapsed time as `admissionMs` and omits `bodyMs` and `finalizeMs`. Git directory
+resolution failure reports `resolveMs` and omits unreached queue and operation
+durations. Phase durations partition each record's interval before rounding.
+These intervals include asynchronous waits: admission is not pure lock wait,
+and queued operation time is not child-process CPU time. They nest within
+broader operations such as session-patch `worktreeCleanup`; do not add nested
+durations to the enclosing total.
+
+Each subsystem has a separate fixed budget of 60 records per 60-second window
+per JavaScript runtime isolate. Bursts across window boundaries remain possible.
+`omittedObservations` reports suppressed records on the next emitted record,
+then resets. Pending operations emit nothing until they settle; disabled
+diagnostics, log levels, thresholds, and budgets can also leave no record.
+Missing records never prove there was no delay.
+
+The added fields are fixed scalar timings, outcomes, counts, `pid`, `threadId`,
+and `isMainThread`. They omit repository paths, refs, arguments, raw errors, and
+command output. Records preserve an existing valid diagnostic trace when
+available; they create no trace, operation identity, or private-identity hash.
+Use the trace to associate nested records, without treating elapsed time as CPU
+attribution. These diagnostics measure cleanup without changing its ordering or
+completion behavior.
+
 ### Slow agent database opens
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
@@ -359,6 +401,16 @@ the actual `sync` or `async` open driver. Async admission offloads its initial
 integrity check; resumed validation and repair can still run on the opener.
 Correlate the process ID with the log timestamp and current process; PIDs can be
 reused after exit.
+
+`integrityGateMs` covers the initial integrity check through admission
+revalidation and resumption. When the driver measures its synchronous integrity
+and foreign-key callback, `integrityCheckSyncMs` reports that callback's elapsed
+time and `integrityOutsideCheckMs` reports the remaining gate time. The two
+integer fields partition `integrityGateMs`; the remainder includes admission,
+IPC, scheduling, and revalidation, not just a parent queue wait. These are wall
+durations, not CPU time. A reclamation Worker can report this synchronous check
+while its `admissionMode` is `async`. An asynchronous child-process check leaves
+both fields absent because its parent cannot measure the callback itself.
 
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is

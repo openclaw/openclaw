@@ -61,6 +61,13 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+// This suite replaces the provider registry. Supply its official OpenAI route
+// preference so implicit and explicit health ownership remain distinct.
+vi.mock("../agents/openai-routing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/openai-routing.js")>()),
+  resolveOpenAIImplicitAgentRuntime: ({ provider }: { provider?: string }) =>
+    provider === "openai" ? "codex" : null,
+}));
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
 }));
@@ -381,6 +388,19 @@ describe("registerBundledHealthChecks", () => {
     },
   };
 
+  const implicitCodexConfig: OpenClawConfig = {
+    agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+    plugins: { entries: { codex: { enabled: true }, policy: { enabled: true } } },
+  };
+
+  it("continues Doctor when an implicit Codex preference has no installed owner", () => {
+    registerBundledHealthChecks({ cfg: implicitCodexConfig, cwd: workspaceDir });
+
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
+    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledOnce();
+    expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
+  });
+
   it("registers update readiness without loading unselected runtime health APIs", () => {
     registerBundledHealthChecks({
       cfg: {
@@ -507,9 +527,15 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
   });
 
-  it.each(["bundled", "global"] as const)(
-    "registers and runs health from the selected %s Codex public artifact",
-    async (origin) => {
+  it.each([
+    ["bundled", "implicit"],
+    ["bundled", "explicit"],
+    ["global", "implicit"],
+    ["global", "explicit"],
+  ] as const)(
+    "registers and runs health from the selected %s Codex public artifact with %s routing",
+    async (origin, routing) => {
+      const cfg = routing === "implicit" ? implicitCodexConfig : codexConfig;
       mkdirSync(join(workspaceDir, "dist"));
       writeFileSync(
         join(workspaceDir, "dist", "api.js"),
@@ -533,20 +559,20 @@ describe("registerBundledHealthChecks", () => {
       });
       const env = { ...process.env, OPENCLAW_STATE_DIR: join(workspaceDir, "state") };
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir, env });
+        registerBundledHealthChecks({ cfg, cwd: workspaceDir, env });
       }
       const check = getHealthCheck("codex/managed-app-server");
       expect(check?.description).toBe("Selected artifact check");
       await expect(
         check?.detect({
-          cfg: codexConfig,
+          cfg,
           env,
           mode: "lint",
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         }),
       ).resolves.toEqual([]);
       expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
-        config: codexConfig,
+        config: cfg,
         workspaceDir,
         env,
         pluginIds: ["codex"],

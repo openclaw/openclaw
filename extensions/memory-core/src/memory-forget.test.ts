@@ -29,6 +29,7 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
+import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 
 describe("memory forget", () => {
@@ -541,6 +542,14 @@ describe("memory forget", () => {
           },
         ],
       });
+      await writePhaseSignalStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        entries: {
+          "mixed-entry": { key: "mixed-entry", lightHits: 1, remHits: 0 },
+          "clean-entry": { key: "clean-entry", lightHits: 0, remHits: 1 },
+        },
+      });
       await writeSessionIngestionState(workspaceDir, {
         version: 3,
         files: {
@@ -838,6 +847,9 @@ describe("memory forget", () => {
             workspaceDir,
           })
         ).map((entry) => entry.key),
+      ).toEqual(["clean-entry"]);
+      expect(
+        Object.keys((await readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries),
       ).toEqual(["clean-entry"]);
       expect((await readSessionIngestionState(workspaceDir)).seenMessages).toEqual({
         "main:sessions/main/survivor": ["survivor-hash"],

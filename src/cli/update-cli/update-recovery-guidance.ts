@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { formatCliCommand } from "../command-format.js";
 
@@ -48,7 +49,20 @@ export function resolveUpdateResultNextAction(params: {
     const configRefusal = result.steps.findLast(
       (step) => step.name === "config rollback",
     )?.stderrTail;
-    return `${configRefusal ? `${configRefusal} ` : ""}${state}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
+    const failedStep = result.steps.findLast((step) => step.exitCode !== 0 && !step.advisory);
+    const containerPermissionFailure =
+      (result.mode === "npm" || result.mode === "pnpm" || result.mode === "bun") &&
+      failedStep !== undefined &&
+      (failedStep.name.startsWith("global update") ||
+        failedStep.name.startsWith("global install")) &&
+      /\beacces\b/i.test(failedStep.stderrTail ?? "") &&
+      isContainerEnvironment();
+    // Record deployment-specific advice here so CLI output and later reports agree.
+    // Keep the recovery constraints: an image change must not roll back migrated state.
+    const deployment = containerPermissionFailure
+      ? "Detected package update permission failure (EACCES) inside a container. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container with the same state/config mounts. In-container package changes are not durable. "
+      : "";
+    return `${configRefusal ? `${configRefusal} ` : ""}${state}${deployment}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
   }
   const command = (value: string) => formatCliCommand(value, env);
   if (result.reason === "dirty") {

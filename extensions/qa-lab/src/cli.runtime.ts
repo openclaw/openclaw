@@ -688,6 +688,12 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   if (!profileReport) {
     throw new Error(`taxonomy.yaml does not define QA run profile ${profile}.`);
   }
+  if (!scorecardReport.taxonomy) {
+    throw new Error("QA profile evidence requires a taxonomy identity.");
+  }
+  // Capture before the suite runs so later taxonomy reads cannot rebind its evidence.
+  const taxonomyIdentity = { ...scorecardReport.taxonomy.identity };
+  const evidenceMode = opts.evidenceMode ?? profileReport.evidenceMode;
   const membership = resolveQaRunProfileMembership(
     {
       profile,
@@ -775,7 +781,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
       outputDir: opts.outputDir,
-      evidenceMode: opts.evidenceMode,
+      evidenceMode,
       transportId: opts.transportId,
       providerMode,
       primaryModel: opts.primaryModel,
@@ -799,6 +805,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   const profilePlan = qaProfileEvidencePlan.build({
     profile,
+    taxonomyIdentity,
     membershipScenarios: taxonomyScenarios,
     selectedScenarios: scenarios,
     excludedScenarios: executionSelection.excludedScenarios,
@@ -807,7 +814,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   });
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
-    evidenceMode: opts.evidenceMode,
+    evidenceMode,
     profile,
     profilePlan,
     filters: {

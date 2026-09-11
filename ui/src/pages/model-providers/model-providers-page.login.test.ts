@@ -6,13 +6,13 @@ import type {
   WizardNextParams,
 } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   appendPage,
   createHarness,
-  deferred,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
@@ -187,7 +187,7 @@ describe("Models provider login", () => {
     const initialAuth = await client.request<ModelAuthStatusResult>("models.authStatus");
     const originalRequest = request.getMockImplementation()!;
     const cancelled = deferred<{ status: "running" }>();
-    const cancelReceived = deferred<void>();
+    const cancelReceived = deferred();
     const sessions = new Map<string, WizardSession>();
     const profiles = new Set<string>();
     request.mockImplementation(

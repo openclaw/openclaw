@@ -2,6 +2,7 @@
 
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -10,7 +11,6 @@ import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
   createHarness,
-  deferred,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
