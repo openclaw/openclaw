@@ -427,6 +427,34 @@ describe("sendHostedFileUrl", () => {
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
+  it("paces each incoming webhook endpoint independently", async () => {
+    mockSuccessResponse();
+    const accountA = "https://nas-a.example.com/incoming";
+    const accountB = "https://nas-b.example.com/incoming";
+    const requestedUrls = () =>
+      vi.mocked(https.request).mock.calls.map(([url]) => (url instanceof URL ? url.href : url));
+
+    const sends = [
+      sendMessage(accountA, "a1"),
+      sendMessage(accountA, "a2"),
+      sendMessage(accountA, "a3"),
+      sendMessage(accountB, "b1"),
+    ];
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(498);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA]);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA, accountA]);
+    await expect(Promise.all(sends)).resolves.toEqual([true, true, true, true]);
+  });
+
   it("rejects malformed file URLs before making a request", async () => {
     const result = await settleTimers(
       sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("not-a-url")),
