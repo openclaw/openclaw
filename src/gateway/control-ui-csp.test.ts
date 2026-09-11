@@ -30,6 +30,18 @@ describe("buildControlUiCspHeader", () => {
     expect(imgSrc).not.toContain("file:");
   });
 
+  it("preserves trailing-dot browser origin identity", () => {
+    const csp = buildControlUiCspHeader({
+      remoteImageOrigins: ["HTTPS://Images.Example.test.:443"],
+    });
+    const sources = csp
+      .split("; ")
+      .find((directive) => directive.startsWith("img-src "))
+      ?.split(" ");
+    expect(sources).toContain("https://images.example.test.");
+    expect(sources).not.toContain("https://images.example.test");
+  });
+
   it("deduplicates canonical remote image origins in deterministic order", () => {
     const csp = buildControlUiCspHeader({
       remoteImageOrigins: [

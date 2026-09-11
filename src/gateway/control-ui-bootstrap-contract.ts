@@ -12,6 +12,9 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
 
+/** Exact remote image origins permitted by the served document CSP. */
+export const CONTROL_UI_REMOTE_IMAGE_ORIGINS_ATTRIBUTE = "data-openclaw-remote-image-origins";
+
 export const CONTROL_UI_ENVIRONMENT_ATTRIBUTE = "data-openclaw-environment";
 export const CONTROL_UI_ENVIRONMENT_COLORS = [
   "teal",

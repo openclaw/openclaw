@@ -3,7 +3,9 @@
 /** Normalizes one bare HTTP(S) origin, or rejects it when it carries extra URL state. */
 export function normalizeControlUiRemoteImageOrigin(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   try {
     const url = new URL(trimmed);
     if (
@@ -19,9 +21,7 @@ export function normalizeControlUiRemoteImageOrigin(value: string): string | und
     ) {
       return undefined;
     }
-    // URL canonicalizes case, IDNs, and default ports; trailing DNS dots are
-    // equivalent but would otherwise make an avoidable second policy spelling.
-    url.hostname = url.hostname.replace(/\.+$/, "");
+    // Preserve browser origin identity, including trailing hostname dots.
     return url.hostname && url.port !== "0" ? url.origin : undefined;
   } catch {
     return undefined;

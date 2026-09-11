@@ -38,6 +38,7 @@ function bootstrapResponse(
 }
 
 afterEach(() => {
+  document.documentElement.removeAttribute("data-openclaw-remote-image-origins");
   vi.unstubAllGlobals();
 });
 
@@ -136,6 +137,34 @@ describe("createApplicationConfigCapability", () => {
     await expect(config.refresh()).resolves.toMatchObject({
       remoteImageOrigins: ["https://images.example.test"],
     });
+  });
+
+  it.each([
+    [[], ["https://images.example.test"]],
+    [["https://images.example.test"], []],
+  ])("reloads an open document before publishing image policy %j -> %j", async (initial, next) => {
+    document.documentElement.setAttribute(
+      "data-openclaw-remote-image-origins",
+      JSON.stringify(initial),
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("window", { location: { origin: "https://ui.example.test", reload } });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, true, initial))
+        .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, true, next)),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    await config.refresh();
+    expect(config.current.remoteImageOrigins).toEqual(initial);
+    const listener = vi.fn();
+    config.subscribe(listener);
+    await config.refresh();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(listener).not.toHaveBeenCalled();
+    expect(config.current.remoteImageOrigins).toEqual(initial);
   });
 
   it.each([null, { pluginFrameGrants: {} }])(

@@ -13,7 +13,7 @@ How the Control UI restricts the browser and authenticates its own routes.
 
 ## Content security policy
 
-The Control UI ships a tight `img-src` policy: **same-origin** assets, `data:` URLs, locally generated `blob:` URLs, and the fixed GitHub avatar and Gravatar hosts are allowed. Other remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
+By default, the Control UI ships a tight `img-src` policy: **same-origin** assets, `data:` URLs, locally generated `blob:` URLs, and the fixed GitHub avatar and Gravatar hosts are allowed. Other remote `http(s)` and protocol-relative image URLs are rejected by the browser and never issue network fetches.
 
 In practice:
 
@@ -26,7 +26,32 @@ In practice:
 - Animated PNG (APNG) icons are accepted as PNG images. Workspace icons and managed channel avatars retain their animation; remote plugin, catalog, and link icons use a resized PNG preview.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
-The browser-side CSP restriction itself is always on and not configurable.
+CSP is always enforced. Operators can optionally add a browser-direct exact-origin
+image allowlist with `gateway.controlUi.remoteImageOrigins`, for example
+`["https://images.example.com"]`. Omitted or empty lists preserve default deny
+for additional remote origins; existing configurations need no migration. Older
+versions that do not recognize this key require removing it before downgrade.
+
+Entries must be bare HTTP(S) origins, without credentials, paths, queries,
+fragments, or wildcards. Scheme, hostname, and port must match the browser origin;
+a trailing hostname dot remains significant. Chat Markdown automatically loads
+images only from allowed origins (alongside local and inline sources).
+
+The allowance extends the **page-wide** `img-src` CSP, including document previews
+such as plugin READMEs and expanded chat content. On bootstrap refresh after a
+Gateway reconnect, an already-open page reloads before publishing a changed image
+policy, for both additions and removals. If unsaved work prevents automatic reload,
+the page retains its previous policy until it can reload; finish that work and
+reload to apply a revocation. Fresh pages receive the current policy immediately.
+
+These requests go directly from the operator browser to the image host, exposing
+the browser's network address to that host. HTTPS pages remain subject to browser
+mixed-content rules for HTTP images. Redirects can still fail if their destination
+is outside the page CSP; allowing an initial origin does not allow arbitrary
+redirect destinations. Browser policy may further restrict requests.
+
+This option makes **no Gateway SSRF behavior change**: it adds no image proxy,
+Gateway fetch, or exception to server-side URL and DNS checks.
 
 ## Public transcript boundary
 

@@ -3,6 +3,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  CONTROL_UI_REMOTE_IMAGE_ORIGINS_ATTRIBUTE,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
   type ControlUiEnvironment,
@@ -116,9 +117,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
-    remoteImageOrigins: Array.isArray(parsed.remoteImageOrigins)
-      ? parsed.remoteImageOrigins.filter((origin): origin is string => typeof origin === "string")
-      : [],
+    remoteImageOrigins: parsed.remoteImageOrigins ?? [],
     communityInvite: parsed.communityInvite === true,
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
@@ -182,6 +181,9 @@ export function createApplicationConfigCapability(params: {
   getAuth?: () => ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
+  const documentImageOrigins = document.documentElement.getAttribute(
+    CONTROL_UI_REMOTE_IMAGE_ORIGINS_ATTRIBUTE,
+  );
   let authVersion = 0;
   let refreshVersion = 0;
   let publishedVersion = 0;
@@ -260,9 +262,13 @@ export function createApplicationConfigCapability(params: {
           () => isCurrent() && version === publishedVersion,
         );
         const documentTerminalEnabled = readDocumentTerminalEnabled();
-        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
+        if (
+          (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) ||
+          (documentImageOrigins !== null &&
+            JSON.stringify(next.remoteImageOrigins) !== documentImageOrigins)
+        ) {
           // CSP headers cannot change on a live document. Reload in either
-          // direction so the document and accepted terminal state stay aligned.
+          // direction so the document and accepted browser permissions stay aligned.
           if (canReloadControlUiDocument()) {
             window.location.reload();
           }

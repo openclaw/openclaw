@@ -66,6 +66,7 @@ import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  CONTROL_UI_REMOTE_IMAGE_ORIGINS_ATTRIBUTE,
   isControlUiRootPublicAsset,
   isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
@@ -857,12 +858,13 @@ async function serveResolvedIndexHtml(
   const buildAttribute = buildId
     ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtml(buildId)}"`
     : "";
+  const imageOriginsAttribute = ` ${CONTROL_UI_REMOTE_IMAGE_ORIGINS_ATTRIBUTE}="${escapeHtml(JSON.stringify(normalizeControlUiRemoteImageOrigins(remoteImageOrigins)))}"`;
   const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
     tag
       .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
       .replace(
         /<html\b/i,
-        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${imageOriginsAttribute}${environmentAttributes}${buildAttribute}`,
       ),
   );
   const hashes = computeInlineScriptHashes(prepared);

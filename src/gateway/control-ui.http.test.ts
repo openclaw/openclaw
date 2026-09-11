@@ -614,6 +614,44 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each([undefined, [], ["HTTPS://Images.Example.test.:443"]])(
+    "serves matching document, CSP, and bootstrap image policies: %j",
+    async (remoteImageOrigins) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const options = {
+            root: { kind: "resolved" as const, path: tmp },
+            config: { gateway: { controlUi: { remoteImageOrigins } } },
+          };
+          const page = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            { url: "/", method: "GET", headers: { host: "ui.example.test" } } as IncomingMessage,
+            page.res,
+            options,
+          );
+          const expected = remoteImageOrigins?.length ? ["https://images.example.test."] : [];
+          const attribute = responseBody(page.end).match(
+            /data-openclaw-remote-image-origins="([^"]*)"/,
+          )?.[1];
+          expect(JSON.parse(attribute!.replaceAll("&quot;", '"'))).toEqual(expected);
+          const csp = String(
+            page.setHeader.mock.calls.findLast(
+              (call) => call[0] === "Content-Security-Policy",
+            )?.[1],
+          );
+          expect(csp.includes("https://images.example.test.")).toBe(expected.length > 0);
+          const bootstrap = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            bootstrap.res,
+            options,
+          );
+          expect(JSON.parse(responseBody(bootstrap.end)).remoteImageOrigins).toEqual(expected);
+        },
+      });
+    },
+  );
+
   it("uses effective terminal availability instead of raw restart-pending config", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1434,7 +1472,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(end).toHaveBeenCalledWith(
           html.replace(
             "<html",
-            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true"',
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true" data-openclaw-remote-image-origins="[]"',
           ),
         );
       },
@@ -3673,7 +3711,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
+            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true" data-openclaw-remote-image-origins="[]">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
