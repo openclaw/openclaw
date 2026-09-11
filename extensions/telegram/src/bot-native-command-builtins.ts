@@ -342,7 +342,7 @@ export async function executeTelegramBuiltinCommand(
         cfg: dispatch.runtimeCfg,
         session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
         ...menuModelContext,
-        ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+        catalog: menuModelCatalog,
       })
     : null;
   if (menu && commandDefinition) {

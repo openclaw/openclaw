@@ -2,8 +2,10 @@
 import { ServerResponse, type IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
 type BuildPreparedModelsProviderData =
@@ -295,7 +297,23 @@ describe("slash-http cfg threading", () => {
       text: "replacement provider picker",
     },
   ] as const)("sends recovered data for $commandText initial render", async (testCase) => {
-    const cfg = {} as OpenClawConfig;
+    const state = await createOpenClawTestState({ label: "mattermost-menu-pin", applyEnv: false });
+    onTestFinished(() => state.cleanup());
+    const storePath = state.path("sessions.json");
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "openai",
+      authProfileOverride: "openai:previous",
+      authProfileOverrideSource: "user",
+      agentRuntimeOverride: "openclaw",
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "mattermost:session:1",
+      entry: sessionEntry,
+    });
     const buttons = [{ text: "OpenAI", value: "openai" }];
     mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
     mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(testCase.entry);
@@ -328,6 +346,12 @@ describe("slash-http cfg threading", () => {
     });
     const response = createResponse();
 
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "mattermost:session:1",
+      entry: { ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 },
+    });
+
     await handler(createRequest(), response.res);
 
     expect(response.res.statusCode).toBe(200);
@@ -335,6 +359,14 @@ describe("slash-http cfg threading", () => {
     expect(mockState.buildPreparedModelsProviderData).toHaveBeenCalledExactlyOnceWith(
       cfg,
       "agent-1",
+      {
+        sessionEntry: expect.objectContaining({
+          providerOverride: "openai",
+          authProfileOverride: "openai:current",
+          authProfileOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
+        }),
+      },
     );
     expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
       "channel:chan-1",
