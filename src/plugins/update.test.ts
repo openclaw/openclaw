@@ -3863,6 +3863,75 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it.each<{
+    name: string;
+    slots?: NonNullable<OpenClawConfig["plugins"]>["slots"];
+    expectedSlots?: NonNullable<OpenClawConfig["plugins"]>["slots"];
+    entryId?: string;
+    enabled?: boolean;
+    changed: boolean;
+  }>([
+    { name: "already disabled without slots", changed: false },
+    {
+      name: "already disabled with unrelated slots",
+      slots: { memory: "other" },
+      expectedSlots: { memory: "other" },
+      changed: false,
+    },
+    {
+      name: "already disabled with a slot to reset",
+      slots: { memory: "feishu", contextEngine: "other" },
+      expectedSlots: { contextEngine: "other" },
+      changed: true,
+    },
+    { name: "already disabled with an alias to normalize", entryId: "FEISHU", changed: true },
+    { name: "enabled before the failed update", enabled: true, changed: true },
+  ])("reports actual mutation after incompatible update: $name", async (scenario) => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/feishu",
+      version: "2026.9.3",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/feishu", version: "2026.9.4" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      code: "incompatible_plugin_api",
+      error: "plugin API requires a newer OpenClaw runtime",
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          [scenario.entryId ?? "feishu"]: {
+            enabled: scenario.enabled ?? false,
+            config: { preserved: true },
+          },
+        },
+        ...(scenario.slots ? { slots: scenario.slots } : {}),
+        installs: {
+          feishu: { source: "npm", spec: "@openclaw/feishu@beta", installPath },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledOnce();
+    expect(result.changed).toBe(scenario.changed);
+    expect(result.config === config).toBe(!scenario.changed);
+    expect(result.config.plugins?.entries).toEqual({
+      feishu: { enabled: false, config: { preserved: true } },
+    });
+    expect(result.config.plugins?.slots).toEqual(scenario.expectedSlots);
+    expect(result.config.plugins?.installs).toEqual(config.plugins?.installs);
+    expect(result.outcomes).toMatchObject([
+      { pluginId: "feishu", status: "skipped", message: expect.stringContaining("plugin API") },
+    ]);
+  });
+
   it("does not create trust policy when disabling a failed plugin", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,

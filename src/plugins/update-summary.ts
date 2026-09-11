@@ -47,10 +47,8 @@ export function recordPluginUpdateFailure(params: {
       message,
       ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
     });
-    return {
-      config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
-      changed: true,
-    };
+    const config = disablePluginAfterUpdateFailure(params.config, params.pluginId);
+    return { config, changed: config !== params.config };
   }
   params.outcomes.push({
     pluginId: params.pluginId,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
@@ -348,14 +349,13 @@ export function disablePluginAfterUpdateFailure(
     updateChannelConfig: false,
   });
   const pluginsConfig = disabled.plugins ?? {};
-  return {
-    ...disabled,
-    plugins: {
-      ...pluginsConfig,
-      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
-    },
-  };
+  // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
+  const slots = resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId);
+  const next =
+    slots === pluginsConfig.slots
+      ? disabled
+      : { ...disabled, plugins: { ...pluginsConfig, slots } };
+  return isDeepStrictEqual(next, config) ? config : next;
 }
 
 /** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
