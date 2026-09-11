@@ -54,8 +54,31 @@ const recoveryEntry = z.discriminatedUnion("kind", [
 
 const updateRecoveryManifestSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     kind: z.literal("update-recovery"),
+    generation: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("baseline") }).strict(),
+        z.object({ kind: z.literal("candidate"), baselineSha256: recoveryDigest }).strict(),
+        z
+          .object({
+            kind: z.literal("prepared"),
+            baselineSha256: recoveryDigest,
+            candidateSha256: recoveryDigest,
+          })
+          .strict(),
+      ])
+      .optional(),
+    databases: z
+      .array(
+        z.discriminatedUnion("role", [
+          z.object({ path: recoveryPath, role: z.literal("global") }).strict(),
+          z
+            .object({ path: recoveryPath, role: z.literal("agent"), agentId: z.string().min(1) })
+            .strict(),
+        ]),
+      )
+      .optional(),
     runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u),
     installRoot: recoveryPath,
     stateDir: recoveryPath,
@@ -76,6 +99,22 @@ export type UpdateRecoveryBackupManifest = z.infer<typeof updateRecoveryManifest
 /** Update recovery binds every payload; ordinary archive manifests retain their existing contract. */
 export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBackupManifest {
   const manifest = updateRecoveryManifestSchema.parse(JSON.parse(raw));
+  if (
+    (manifest.schemaVersion === 1 && (manifest.generation || manifest.databases)) ||
+    (manifest.schemaVersion === 2 && (!manifest.generation || !manifest.databases))
+  ) {
+    throw new Error("Update recovery generation metadata does not match its format version.");
+  }
+  const databasePaths = new Set<string>();
+  for (const database of manifest.databases ?? []) {
+    if (
+      databasePaths.has(database.path) ||
+      (database.role === "agent" && normalizeAgentId(database.agentId) !== database.agentId)
+    ) {
+      throw new Error(`Invalid update recovery database identity: ${database.path}`);
+    }
+    databasePaths.add(database.path);
+  }
   const sources = new Set<string>();
   const payloads = new Set<string>();
   for (const entry of manifest.entries) {
@@ -97,6 +136,12 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
         throw new Error(`Duplicate update recovery payload: ${entry.archivePath}`);
       }
       payloads.add(entry.archivePath);
+    }
+  }
+  for (const database of manifest.databases ?? []) {
+    const entry = manifest.entries.find((item) => item.sourcePath === database.path);
+    if (!entry || !((entry.kind === "file" || entry.kind === "missing") && entry.sqlite)) {
+      throw new Error(`Update recovery database is missing its SQLite inventory: ${database.path}`);
     }
   }
   if (manifest.roots.some((root) => !sources.has(root))) {

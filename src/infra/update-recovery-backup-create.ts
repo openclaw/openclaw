@@ -16,15 +16,18 @@ import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repositor
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { pinDirectory, requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { copyFileHandle, sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
+import { resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "./update-capture-paths.js";
 import {
@@ -117,6 +120,7 @@ type CaptureParams = {
   runId: string;
   installRoot: string;
   drivers?: UpdateRunDriver[];
+  baseline?: { ref: UpdateRecoveryBackupRef; manifest: UpdateRecoveryBackupManifest };
 };
 
 async function inspectUpdateRecoveryBackup(params: CaptureParams) {
@@ -139,7 +143,19 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
   const config = await readConfigFileSnapshot({ observe: false });
   const stateDir = resolvePathViaExistingAncestorSync(plan.stateDir);
   const installRoot = path.resolve(params.installRoot);
-  const directory = captureDirectory(params.runId, stateDir);
+  const directory = params.baseline
+    ? path.join(captureDirectory(params.runId, stateDir), "candidate")
+    : captureDirectory(params.runId, stateDir);
+  if (
+    params.baseline &&
+    (params.baseline.ref.directory !== captureDirectory(params.runId, stateDir) ||
+      params.baseline.manifest.runId !== params.runId ||
+      params.baseline.manifest.installRoot !== installRoot ||
+      params.baseline.manifest.schemaVersion !== 2 ||
+      params.baseline.manifest.generation?.kind !== "baseline")
+  ) {
+    throw new Error("Candidate capture requires the original v2 baseline for this installation.");
+  }
   const registry = inspectOpenClawRegisteredAgentDatabases({
     includeIncompatibleSchemaVersions: true,
   });
@@ -160,8 +176,23 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
       collectDoctorSkillWorkshopBackupResources({ config: resourceConfig, env: process.env }),
     ])
   ).flat();
+  // Removed declarations still belong to this operation. Capture their current
+  // bytes/absence as well as the newly discovered closure, never just B or C.
+  const retainedResources = (params.baseline?.manifest.entries ?? []).flatMap<{
+    path: string;
+    kind: "directory" | "sqlite";
+  }>((entry) =>
+    entry.kind === "directory" || (entry.kind === "missing" && entry.directory)
+      ? [{ path: entry.sourcePath, kind: "directory" as const }]
+      : (entry.kind === "file" || entry.kind === "missing") && entry.sqlite
+        ? [{ path: entry.sourcePath, kind: "sqlite" as const }]
+        : [],
+  );
   const declaredKinds = new Map(
-    resources.map((resource) => [canonicalEntryPath(resource.path), resource.kind]),
+    [...retainedResources, ...resources].map((resource) => [
+      canonicalEntryPath(resource.path),
+      resource.kind,
+    ]),
   );
   const resourcePaths = [...declaredKinds.keys()];
   const directoryResources = [...declaredKinds].flatMap(([pathname, kind]) =>
@@ -184,6 +215,24 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
     }
     databaseOwners.set(pathname, { role: "agent", agentId: database.agentId });
   }
+  for (const retained of params.baseline?.manifest.databases ?? []) {
+    const current = databaseOwners.get(retained.path);
+    if (
+      current &&
+      (current.role !== retained.role ||
+        (current.role === "agent" &&
+          retained.role === "agent" &&
+          current.agentId !== retained.agentId))
+    ) {
+      throw new Error(`Update recovery database changed owners: ${retained.path}`);
+    }
+    databaseOwners.set(
+      retained.path,
+      retained.role === "global"
+        ? { role: "global" }
+        : { role: "agent", agentId: retained.agentId },
+    );
+  }
   for (const pathname of databaseOwners.keys()) {
     declaredKinds.set(pathname, "sqlite");
   }
@@ -198,10 +247,18 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
     ...registry.map((database) => database.path),
     ...configuredDatabases.map((database) => database.path),
     ...resources.map((resource) => resource.path),
+    ...(params.baseline?.manifest.entries.map((entry) => entry.sourcePath) ?? []),
   ].map(canonicalEntryPath);
-  const configFiles = new Set([plan.configPath, ...includePaths].map(canonicalEntryPath));
+  const configFiles = new Set(
+    [plan.configPath, ...includePaths, ...(params.baseline?.manifest.configPaths ?? [])].map(
+      canonicalEntryPath,
+    ),
+  );
   const rawFiles = new Set([
     ...configFiles,
+    ...(params.baseline?.manifest.entries.flatMap((entry) =>
+      entry.kind === "file" && !entry.sqlite ? [entry.sourcePath] : [],
+    ) ?? []),
     ...resources
       .filter((resource) => resource.kind === "file")
       .map((resource) => canonicalEntryPath(resource.path)),
@@ -221,8 +278,12 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
     assertNotUpdateCapturePath(root, stateDir);
   }
   const manifest: UpdateRecoveryBackupManifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "update-recovery",
+    generation: params.baseline
+      ? { kind: "candidate", baselineSha256: params.baseline.ref.manifestSha256 }
+      : { kind: "baseline" },
+    databases: [],
     runId: params.runId,
     installRoot,
     stateDir,
@@ -254,7 +315,12 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
       roots.map(async (pathname) => [pathname, await statOrMissing(pathname)] as const),
     ),
   );
-  const files: { pathname: string; before: Stats; sqlite: boolean }[] = [];
+  const files: {
+    pathname: string;
+    before: Stats;
+    sqlite: boolean;
+    sidecars: Array<Stats | undefined>;
+  }[] = [];
   const visit = async (pathname: string): Promise<void> => {
     if (seen.has(pathname) || !traversable(manifest, pathname)) {
       return;
@@ -356,6 +422,19 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
         explicitPaths.push(target);
         const owner = databaseOwners.get(pathname);
         if (owner) {
+          const existing = databaseOwners.get(target);
+          if (
+            existing &&
+            (existing.role !== owner.role ||
+              (existing.role === "agent" &&
+                owner.role === "agent" &&
+                existing.agentId !== owner.agentId))
+          ) {
+            throw new Error(`Update recovery database has conflicting owners: ${target}`);
+          }
+          // The link is an authored resource; the database identity belongs to
+          // its canonical file. Never record the alias as a second database.
+          databaseOwners.delete(pathname);
           databaseOwners.set(target, owner);
         }
         if (!manifest.roots.some((root) => within(target, root))) {
@@ -367,6 +446,11 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
       return;
     }
     if (!before.isFile()) {
+      if (declaredPath) {
+        throw new Error(
+          `Update recovery cannot preserve an unknown declared resource type: ${pathname}`,
+        );
+      }
       manifest.excludedRoots.push(pathname);
       return;
     }
@@ -399,7 +483,12 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
     if (!manifest.roots.some((root) => within(pathname, root))) {
       manifest.roots.push(pathname);
     }
-    files.push({ pathname, before, sqlite });
+    const sidecars = sqlite
+      ? await Promise.all(
+          SQLITE_SIDECAR_SUFFIXES.map((suffix) => statOrMissing(`${pathname}${suffix}`)),
+        )
+      : [];
+    files.push({ pathname, before, sqlite, sidecars });
   };
   for (const root of scanRoots) {
     await visit(root);
@@ -421,14 +510,14 @@ async function inspectUpdateRecoveryBackup(params: CaptureParams) {
 
 /** Read-only admission precedes service shutdown; capture repeats it under maintenance. */
 export async function preflightUpdateRecoveryBackup(params: CaptureParams): Promise<void> {
-  await inspectUpdateRecoveryBackup(params);
+  await withArtifactPreservingStateReads(() => inspectUpdateRecoveryBackup(params));
 }
 
 export async function captureUpdateRecoveryBackup(
   params: CaptureParams,
 ): Promise<UpdateRecoveryBackupRef> {
   const { manifest, directory, stateDir, files, databaseOwners, configFiles } =
-    await inspectUpdateRecoveryBackup(params);
+    await withArtifactPreservingStateReads(() => inspectUpdateRecoveryBackup(params));
   params.assertOwned();
   const store = backupStore(stateDir);
   await ensurePrivateSnapshotRepositoryRoot(store);
@@ -449,24 +538,42 @@ export async function captureUpdateRecoveryBackup(
       await directoryPin.assertCurrent();
       if (sqlite) {
         const owner = databaseOwners.get(pathname);
-        await createVerifiedSqliteSnapshot({
-          sourcePath: pathname,
-          targetPath,
-          preserveRowIds: true,
-          sourceStagingRoot: directory,
-          beforePublish: params.assertOwned,
-          validate:
-            owner?.role === "global"
-              ? (database, label) => assertOpenClawStateDatabaseOwner(database, { pathname: label })
-              : owner?.role === "agent"
-                ? (database, label) => {
-                    assertOpenClawAgentDatabaseOwner(database, {
-                      agentId: owner.agentId,
-                      pathname: label,
-                    });
-                  }
-                : undefined,
+        // Even a read-only SQLite connection may create/change live WAL/SHM
+        // artifacts. Freeze those bytes with the existing preserving reader,
+        // then run SQLite validation/backup only against its private copy.
+        const frozen = await prepareSqliteReadOnlyLocation(pathname, {
+          preserveSourceArtifacts: true,
+          stagingRoot: directory,
         });
+        let cleanupFailed = false;
+        try {
+          await createVerifiedSqliteSnapshot({
+            sourcePath: resolveSqliteFilesystemPath(frozen.location),
+            targetPath,
+            preserveRowIds: true,
+            sourceStagingRoot: directory,
+            beforePublish: params.assertOwned,
+            validate:
+              owner?.role === "global"
+                ? (database, label) =>
+                    assertOpenClawStateDatabaseOwner(database, { pathname: label })
+                : owner?.role === "agent"
+                  ? (database, label) => {
+                      assertOpenClawAgentDatabaseOwner(database, {
+                        agentId: owner.agentId,
+                        pathname: label,
+                      });
+                    }
+                  : undefined,
+          });
+        } catch (cause) {
+          throw new Error(`SQLite recovery input could not be captured: ${pathname}`, { cause });
+        } finally {
+          cleanupFailed = !frozen.cleanup();
+        }
+        if (cleanupFailed) {
+          throw new Error(`Update recovery source staging could not be closed: ${pathname}`);
+        }
       } else {
         const source = await (
           await safeRoot(path.dirname(pathname))
@@ -509,7 +616,55 @@ export async function captureUpdateRecoveryBackup(
         mode: before.mode & 0o777,
       });
     }
+    // Capture is valid only for one closed generation. Re-inventory after all
+    // awaited snapshots, including WAL identities, removed includes and agents.
+    const current = await withArtifactPreservingStateReads(() =>
+      inspectUpdateRecoveryBackup(params),
+    );
+    const identity = (entry: Stats | undefined) =>
+      entry ? [entry.dev, entry.ino, entry.mode, entry.size, entry.mtimeMs, entry.ctimeMs] : null;
+    const inventory = (entries: typeof files) =>
+      entries
+        .map((entry) => [
+          entry.pathname,
+          entry.sqlite,
+          identity(entry.before),
+          entry.sidecars.map(identity),
+        ])
+        .toSorted((left, right) => String(left[0]).localeCompare(String(right[0])));
+    const nonFiles = (entries: UpdateRecoveryBackupManifest["entries"]) =>
+      entries
+        .filter((entry) => entry.kind !== "file")
+        .toSorted((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+    const previousInputs = new Map(inventory(files).map((entry) => [String(entry[0]), entry]));
+    const currentInputs = new Map(
+      inventory(current.files).map((entry) => [String(entry[0]), entry]),
+    );
+    const changedInputs = [...new Set([...previousInputs.keys(), ...currentInputs.keys()])].filter(
+      (pathname) =>
+        JSON.stringify(previousInputs.get(pathname)) !==
+        JSON.stringify(currentInputs.get(pathname)),
+    );
+    if (
+      changedInputs.length > 0 ||
+      JSON.stringify(nonFiles(manifest.entries)) !==
+        JSON.stringify(nonFiles(current.manifest.entries)) ||
+      JSON.stringify([...configFiles].toSorted()) !==
+        JSON.stringify([...current.configFiles].toSorted()) ||
+      JSON.stringify([...databaseOwners].toSorted(([a], [b]) => a.localeCompare(b))) !==
+        JSON.stringify([...current.databaseOwners].toSorted(([a], [b]) => a.localeCompare(b)))
+    ) {
+      throw new Error(
+        `Update recovery resource closure or physical input changed during capture; no replacement is permitted. Changed inputs: ${changedInputs.slice(0, 5).join(", ") || "directory/config/database inventory"}.`,
+      );
+    }
+    params.assertOwned();
     manifest.configPaths = [...configFiles].toSorted();
+    manifest.databases = [...databaseOwners].map(([pathname, owner]) =>
+      owner.role === "global"
+        ? { path: pathname, role: "global" }
+        : { path: pathname, role: "agent", agentId: owner.agentId },
+    );
     const raw = `${JSON.stringify(manifest)}\n`;
     if (Buffer.byteLength(raw) > MAX_MANIFEST_BYTES) {
       throw new Error("Update recovery inventory exceeds its manifest size bound.");
@@ -534,7 +689,7 @@ export async function captureUpdateRecoveryBackup(
     return ref;
   } catch (error) {
     throw new Error(
-      `Update recovery backup failed before migrations; retained partial backup: ${directory}`,
+      `Update recovery ${params.baseline ? "candidate preservation" : "backup before migrations"} failed; retained partial backup: ${directory}`,
       { cause: error },
     );
   } finally {

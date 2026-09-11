@@ -28,6 +28,7 @@ const doctorDiagnostics = [
 ];
 const scenarios = [
   "json",
+  "commonjs-state",
   "inherited-json",
   "doctor-error",
   "plugin-error",

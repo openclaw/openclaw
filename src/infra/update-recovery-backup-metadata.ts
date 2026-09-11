@@ -35,7 +35,10 @@ export function assertManifestLocation(
   if (
     manifest.stateDir !== resolvePathViaExistingAncestorSync(resolveStateDir()) ||
     manifest.configPath !== canonicalEntryPath(resolveConfigPath()) ||
-    ref.directory !== captureDirectory(manifest.runId, manifest.stateDir)
+    ref.directory !==
+      (manifest.generation && manifest.generation.kind !== "baseline"
+        ? path.join(captureDirectory(manifest.runId, manifest.stateDir), manifest.generation.kind)
+        : captureDirectory(manifest.runId, manifest.stateDir))
   ) {
     throw new Error("Update recovery backup belongs to another state directory or update run.");
   }

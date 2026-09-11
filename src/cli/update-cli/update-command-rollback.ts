@@ -50,7 +50,7 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
-import { restoreUpdateRecoveryState } from "./update-command-rollback-state.js";
+import * as recovery from "./update-command-rollback-state.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
@@ -122,8 +122,7 @@ export async function rollbackFailedUpdate(params: {
     let recoveryDetail = `${detail} Retained update-recovery set: ${params.updateRecoveryBackup.manifestPath}. Keep the Gateway stopped and run \`npx openclaw@latest doctor --fix\`.`;
     try {
       assertCurrent();
-      // Until state is restored, the backup outcome is the safe durable report;
-      // the previous runtime cannot write a forward-migrated run ledger.
+      // Report through the backup; the older runtime cannot write the migrated ledger.
       await writeUpdateRecoveryBackupOutcome(
         params.updateRecoveryBackup,
         { status: "restore-failed", error: recoveryDetail },
@@ -242,8 +241,7 @@ export async function rollbackFailedUpdate(params: {
       if (version === null || baselineVersions.get(entry.path) != null) {
         continue;
       }
-      // First-use creation is not migration, but the retained runtime must still
-      // support that new store before replacing a reachable candidate.
+      // The retained runtime must support first-use stores before replacing the candidate.
       const kind = entry.path === sharedPath ? "state" : "agent";
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
@@ -394,12 +392,12 @@ export async function rollbackFailedUpdate(params: {
       if (!params.updateRecoveryBackup && !(await stateUnchanged())) {
         return failed("state-migrated-no-rollback");
       }
+      await recovery.prepareUpdateRecoveryRollback(params.updateRecoveryBackup, assertCurrent);
       failureReason = "source-rollback-failed";
       if (packageTransaction) {
         assertCurrent();
         const { activePackageRoot, ...restored } = await packageTransaction.rollback(assertCurrent);
-        // Restoration changes the active runtime before any later reporting or
-        // restart can fail. Carry that identity through every recovery outcome.
+        // Carry restored runtime identity through later reporting and restart failures.
         result = {
           ...result,
           root: activePackageRoot ?? undefined,
@@ -408,8 +406,7 @@ export async function rollbackFailedUpdate(params: {
         };
         assertCurrent();
         if (restored.exitCode === 0) {
-          // The transaction verified the previous package. Do not gate its restart
-          // on an extra diagnostic read whose result would be discarded.
+          // Prior package verification authorizes restart without another discarded diagnostic read.
           result.after = result.before;
           result.recovery = {
             serviceRestartSafe: false,
@@ -474,12 +471,12 @@ export async function rollbackFailedUpdate(params: {
       }
       failureReason = "rollback-state-unverified";
       if (params.updateRecoveryBackup) {
-        const restoredState = await restoreUpdateRecoveryState(params.updateRecoveryBackup, {
+        const restored = await recovery.restoreUpdateRecoveryState(params.updateRecoveryBackup, {
           assertOwned: assertCurrent,
         });
         assertCurrent();
         stateRestored = true;
-        for (const warning of restoredState.warnings) {
+        for (const warning of restored.warnings) {
           defaultRuntime.error(`Warning: ${warning}`);
           result.steps.push({
             name: "backup outcome warning",
@@ -534,9 +531,7 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent();
       return undefined;
     };
-    // Unchanged config needs only the legacy read checks, including read-only
-    // installs. Doctor-owned replacement must exclude config writers before
-    // package rollback and retain that owner until config restoration settles.
+    // Unchanged config needs legacy read checks only. Hold its writer lock across package/state restore.
     const restoreWithLocks = async () => {
       if (params.updateRecoveryBackup) {
         if (!recoveryManifest) {
@@ -565,8 +560,7 @@ export async function rollbackFailedUpdate(params: {
       return { result, rolledBack: false, stateRestored };
     }
     if ((!params.previousVerified && !params.unchangedCore) || !result.before?.version) {
-      // Restoring retained bytes is safe after the schema fence. Starting the
-      // previous runtime additionally requires its pre-activation verification.
+      // Restart additionally requires verification of the retained runtime.
       return failed("previous-version-unverified");
     }
     failureReason = "service-revalidation-failed";
@@ -661,8 +655,7 @@ export async function rollbackFailedUpdate(params: {
       gatewayPort: port,
       requireRunningServiceAfterRestart: true,
       timeoutMs: params.timeoutMs,
-      // Prior verification covers this executable too; refreshing with the
-      // candidate's newer Node would not restore the previously serving runtime.
+      // Prior verification covers this executable, not the candidate's newer Node.
       nodeRunner,
       invocationCwd: params.invocationCwd,
       onVerified: (at) => {
@@ -700,9 +693,7 @@ export async function rollbackFailedUpdate(params: {
         pendingRecoveryReason: formatErrorMessage(cause),
       };
     }
-    if (error instanceof NativePackageRollbackError) {
-      failureReason = error.reason;
-    }
+    failureReason = error instanceof NativePackageRollbackError ? error.reason : failureReason;
     if (
       failureReason === "rollback-state-unverified" ||
       failureReason === "state-migrated-no-rollback" ||

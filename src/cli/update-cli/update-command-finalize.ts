@@ -6,6 +6,9 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { copyErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
@@ -21,6 +24,7 @@ import {
   persistUpdateRecoveryConfigWrites,
   withUpdateRecoveryConfigWrites,
 } from "../../infra/update-recovery-config-writes.js";
+import { UpdateRecoveryPublicationUnavailableError } from "../../infra/update-recovery-publication.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
@@ -32,6 +36,7 @@ import {
   bindUnprotectedGatewayUpdateFinalizer,
   readUnprotectedGatewayUpdateParent,
 } from "../../infra/update-run-recovery-admission.js";
+import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -65,7 +70,11 @@ import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import {
   hasUnsettledUpdateProcesses,
   restoreUpdateRecoveryState,
@@ -188,7 +197,16 @@ export async function updateFinalizeCommand(
               );
             }
           } catch (error) {
-            if (error instanceof UpdateCommandFailure) {
+            // Executor and child settlement sit outside recovery's catch. Never
+            // let their pending authority enter ordinary failure/triage reporting.
+            const pending = asPendingFinalizationFailure(error, root, run.runId);
+            if (pending) {
+              throw pending;
+            }
+            if (
+              error instanceof UpdateCommandFailure &&
+              !(error instanceof UpdateCommandPendingRecoveryFailure)
+            ) {
               lifecycle.complete(error.exitCode);
               if (finalResult) {
                 if (opts.json) {
@@ -211,6 +229,42 @@ export async function updateFinalizeCommand(
       lifecycle.finishRecovery();
     }
   });
+}
+
+function asPendingFinalizationFailure(error: unknown, root: string, runId: string) {
+  if (error instanceof UpdateCommandPendingRecoveryFailure) {
+    return error;
+  }
+  const causes = collectNestedErrorCandidates(error);
+  if (
+    !hasUnsettledUpdateProcesses(error) &&
+    !causes.some(
+      (cause) =>
+        cause instanceof UpdateCommandRecoveryPendingError ||
+        cause instanceof UpdateRecoveryRequiredError ||
+        cause instanceof UpdateCommandPendingRecoveryFailure,
+    )
+  ) {
+    return undefined;
+  }
+  // Nested results supply failure facts only. The pending owner clears restart
+  // safety and never recovers the nested ordinary exception's triage policy.
+  const primary = causes.find((cause) => cause instanceof UpdateCommandFailure);
+  return new UpdateCommandPendingRecoveryFailure(
+    primary instanceof UpdateCommandFailure
+      ? primary.result
+      : {
+          status: "error",
+          mode: "unknown",
+          root,
+          runId,
+          reason: "finalization-settlement-pending",
+          steps: [],
+          durationMs: 0,
+        },
+    formatErrorMessage(error),
+    { cause: error },
+  );
 }
 
 type FinalizationRecovery = {
@@ -261,8 +315,9 @@ async function withFinalizationRecovery<T>(
       return result;
     } catch (error) {
       report();
-      if (hasUnsettledUpdateProcesses(error)) {
-        throw error;
+      const pending = asPendingFinalizationFailure(error, root, run.runId);
+      if (pending) {
+        throw pending;
       }
       try {
         authority.assertOwned();
@@ -276,6 +331,7 @@ async function withFinalizationRecovery<T>(
             cause: error,
           });
         }
+        let reverseFailure: { error: unknown } | undefined;
         try {
           await recoveryMaintenance.closeStores();
           const { warnings } = await restoreUpdateRecoveryState(backup, {
@@ -287,16 +343,56 @@ async function withFinalizationRecovery<T>(
           for (const warning of warnings) {
             defaultRuntime.error(`Warning: ${warning}`);
           }
-        } finally {
+        } catch (cause) {
+          reverseFailure = { error: cause };
+        }
+        try {
           await recoveryMaintenance.release();
+          authority.assertOwned();
+        } catch (cause) {
+          throw new AggregateError(
+            [...(reverseFailure ? [reverseFailure.error] : []), cause],
+            "Finalization recovery settlement failed.",
+            { cause },
+          );
+        }
+        if (reverseFailure) {
+          throw reverseFailure.error;
         }
       } catch (cause) {
-        throw new AggregateError(
+        const combined = new AggregateError(
           [error, cause],
           `Update finalization recovery failed. ${guidance}`,
-          {
-            cause,
-          },
+          { cause },
+        );
+        if (cause instanceof UpdateRecoveryPublicationUnavailableError) {
+          // Only a cleanly released, no-publication refusal preserves ordinary
+          // failure policy. The enclosing executor must still settle before reporting.
+          defaultRuntime.error(formatErrorMessage(cause));
+          const failure =
+            error instanceof UpdateCommandFailure
+              ? new UpdateCommandFailure(error.result, error.exitCode, error.detail, {
+                  cause: combined,
+                  automaticTriage: error.automaticTriage,
+                })
+              : new Error(formatErrorMessage(error), { cause: combined });
+          copyErrorDiagnostic(error, failure);
+          throw failure;
+        }
+        throw new UpdateCommandPendingRecoveryFailure(
+          error instanceof UpdateCommandFailure
+            ? error.result
+            : {
+                status: "error",
+                mode: "unknown",
+                root,
+                runId: run.runId,
+                reason: "finalization-recovery-pending",
+                steps: [],
+                durationMs: 0,
+              },
+          `${formatErrorMessage(error)}; ${formatErrorMessage(cause)} ${guidance}`,
+          { cause: combined },
         );
       }
       throw error;

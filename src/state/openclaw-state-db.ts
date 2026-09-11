@@ -62,7 +62,10 @@ import {
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
@@ -448,12 +451,12 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     return undefined;
   }
   assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const prepared = await prepareSqliteReadOnlyLocation(pathname);
+  const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+    preserveSourceArtifacts: isArtifactPreservingStateRead(),
+  });
   let db: DatabaseSync;
   try {
-    db = openNodeSqliteDatabase(prepared.location, {
-      readOnly: true,
-    });
+    db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
   } catch (error) {
     prepared.cleanup();
     throw error;

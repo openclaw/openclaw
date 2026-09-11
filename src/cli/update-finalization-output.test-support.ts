@@ -185,18 +185,35 @@ export async function runInteractiveUpdateFailureAction({ runtime }) {
 }`,
   );
 }
+// TSX's CommonJS loader reads resolved module paths from disk. Data URLs work
+// for ESM but fail that path; keep identical fixture source in owned .mjs files.
+const stubDirectory = path.join(root, "fixture-modules");
+await fs.mkdir(stubDirectory);
+const stubUrls = new Map<string, string>();
+for (const [url, source] of stubs) {
+  const stubPath = path.join(stubDirectory, `${stubUrls.size}.mjs`);
+  await fs.writeFile(stubPath, source);
+  stubUrls.set(url, pathToFileURL(stubPath).href);
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
       const url = new URL(specifier, context.parentURL).href.replace(/\.js$/, ".ts");
-      const source = stubs.get(url);
-      if (source !== undefined) {
-        return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
+      const stubUrl = stubUrls.get(url);
+      if (stubUrl !== undefined) {
+        return { url: stubUrl, shortCircuit: true };
       }
     }
     return nextResolve(specifier, context);
   },
 });
+
+// CI can reach plugin state through TSX's CommonJS loader as well as ESM.
+// Exercise that real import before running the same registered update action.
+if (scenario === "commonjs-state") {
+  require("../plugin-state/plugin-state-store.ts");
+}
 
 const { Command } = await import("commander");
 const { registerUpdateCli } = await import("./update-cli.js");

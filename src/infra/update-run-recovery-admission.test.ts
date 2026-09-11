@@ -14,6 +14,7 @@ import * as openClawTmpDir from "./tmp-openclaw-dir.js";
 import {
   createUpdateRecoveryBackup,
   inspectUpdateRecoveryRetirements,
+  preserveUpdateRecoveryCandidate,
   restoreUpdateRecoveryBackup,
   retireUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
@@ -148,9 +149,9 @@ async function restoreCaptureFixture(state: OpenClawTestState) {
 
 const hash = (raw: string) => createHash("sha256").update(raw).digest("hex");
 
-describe("update capture recovery across shared-ledger restoration", () => {
+describe("update capture recovery without rewinding the active ledger", () => {
   it.each(["running", "failed"] as const)(
-    "preserves %s run receipts when restore fails after rewinding the shared database",
+    "preserves %s run receipts and authored includes across repeated publication refusal",
     async (status) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
         const { include, original, run, ref } = await restoreCaptureFixture(state);
@@ -163,33 +164,18 @@ describe("update capture recovery across shared-ledger restoration", () => {
           finishUpdateRun(run.runId, { status, reason: "synthetic-post-migration-failure" });
         }
         const receipts = getUpdateRun(run.runId)?.origin.updateRecoveryCapture;
-        const rename = fs.rename;
-        const failure = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-          if (String(to) === include && String(from).includes(".update-recovery-")) {
-            throw new Error("synthetic included-config restore failure");
-          }
-          await rename(from, to);
-        });
-        try {
+        const baselineBytes = await fs.readFile(ref.manifestPath);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
           await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
-            "synthetic included-config restore failure",
+            /Rollback publication is unavailable/,
           );
-        } finally {
-          failure.mockRestore();
+          expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture).toEqual(receipts);
+          expect(getUpdateRun(run.runId)?.status).toBe(status);
+          expect(await fs.readFile(include, "utf8")).toBe(migrated);
+          expect(await fs.readFile(ref.manifestPath)).toEqual(baselineBytes);
+          await verifyUpdateRecoveryBackup(ref);
+          await verifyUpdateRecoveryBackup(await preserveUpdateRecoveryCandidate(ref, authority));
         }
-        expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture).toEqual(receipts);
-        expect(getUpdateRun(run.runId)?.status).toBe(status);
-        expect(await fs.readFile(include, "utf8")).toBe(migrated);
-        await restoreUpdateRecoveryBackup(ref, authority);
-        expect(await fs.readFile(include, "utf8")).toBe(original);
-        expect(getUpdateRun(run.runId)?.origin.updateRecoveryCapture?.configWrites).toEqual([
-          {
-            path: include,
-            beforeHash: hash(original),
-            afterHash: hash(original),
-            contiguous: true,
-          },
-        ]);
         expect(getUpdateRun(run.runId)?.reason).toBe(
           status === "failed" ? "synthetic-post-migration-failure" : null,
         );

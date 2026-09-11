@@ -64,6 +64,21 @@ const updateRecoveryRetirementSchema = z
     configPath: z.string().min(1).max(4096),
     identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }).strict(),
     outcome: z.enum(["committed", "restored"]),
+    // Present only after every retained generation has passed terminal verification.
+    generations: z
+      .array(
+        z
+          .object({
+            kind: z.enum(["candidate", "prepared"]),
+            manifestSha256: sha256,
+            identity: z
+              .object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() })
+              .strict(),
+          })
+          .strict(),
+      )
+      .max(2)
+      .optional(),
   })
   .strict();
 export type UpdateRecoveryRetirement = z.infer<typeof updateRecoveryRetirementSchema>;

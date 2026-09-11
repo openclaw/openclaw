@@ -595,23 +595,32 @@ function migrateSkillWorkshopDirectoryOwnership(
 
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
+  version: number;
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
   applied: string;
 }> = [
-  { migrate: migrateJsonCanonicalWideRowsV13, applied: "Consolidated shared state tables (v13)" },
   {
+    version: 13,
+    migrate: migrateJsonCanonicalWideRowsV13,
+    applied: "Consolidated shared state tables (v13)",
+  },
+  {
+    version: 14,
     migrate: migrateCronCreatorNamespaces,
     applied: "Qualified historical cron creator attribution as unknown (v14)",
   },
   {
+    version: 15,
     migrate: migrateConversationBindingTargets,
     applied: "Removed redundant conversation binding target projections (v15)",
   },
   {
+    version: 16,
     migrate: migrateSkillWorkshopDirectoryOwnership,
     applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
   },
   {
+    version: 17,
     migrate: migratePreparedWorkerOwnership,
     applied: "Recorded prepared worker ownership and one-use lifecycle (v17)",
   },

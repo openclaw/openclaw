@@ -19,6 +19,11 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 
 const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
+  preserve: vi.fn(),
+  admit: vi.fn(),
+  maintenance: vi.fn(),
+  maintenanceCurrent: vi.fn(),
+  maintenanceRelease: vi.fn(),
   restore: vi.fn(),
   stop: vi.fn(),
   restart: vi.fn(),
@@ -32,8 +37,18 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../../infra/update-recovery-backup.js", () => ({
   verifyUpdateRecoveryBackup: mocks.verify,
+  preserveUpdateRecoveryCandidate: mocks.preserve,
   restoreUpdateRecoveryBackup: mocks.restore,
   writeUpdateRecoveryBackupOutcome: mocks.outcome,
+}));
+// This caller unit models an already-qualified publication owner; production
+// capture/preparation and refusal are exercised by the real recovery API tests.
+vi.mock("../../infra/update-recovery-publication.js", async (original) => ({
+  ...(await original<typeof import("../../infra/update-recovery-publication.js")>()),
+  assertUpdateRecoveryPublicationPrepared: mocks.admit,
+}));
+vi.mock("../../commands/doctor-maintenance.js", () => ({
+  beginDoctorMaintenance: mocks.maintenance,
 }));
 vi.mock("../../infra/update-run-ledger.js", () => ({
   recordUpdateRunStep: mocks.record,
@@ -62,6 +77,15 @@ afterEach(closeOpenClawStateDatabaseForTest);
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.maintenance.mockResolvedValue({
+    assertCurrent: mocks.maintenanceCurrent,
+    release: mocks.maintenanceRelease,
+  });
+  mocks.preserve.mockImplementation(async (ref, authority) => {
+    authority.assertOwned();
+    return ref;
+  });
+  mocks.admit.mockResolvedValue(undefined);
   mocks.stop.mockResolvedValue({ stopped: true });
   mocks.restart.mockResolvedValue("ok");
   mocks.outcome.mockImplementation(async (_ref, _outcome, authority) => authority.assertOwned());
@@ -71,7 +95,15 @@ type RollbackCase = {
   corrupt: boolean;
   stateOnly?: boolean;
   state: "absent" | "newer" | "pending" | "malformed" | "publication";
-  failure?: "package" | "restore" | "metadata" | "lost authority" | "config" | "core identity";
+  failure?:
+    | "package"
+    | "restore"
+    | "metadata"
+    | "lost authority"
+    | "config"
+    | "core identity"
+    | "admission"
+    | "maintenance";
 };
 const cases: RollbackCase[] = [
   { corrupt: false, state: "absent", stateOnly: true },
@@ -84,6 +116,8 @@ const cases: RollbackCase[] = [
   { corrupt: false, state: "pending" },
   { corrupt: false, state: "malformed" },
   { corrupt: false, state: "publication" },
+  { corrupt: false, state: "newer", failure: "admission" },
+  { corrupt: false, state: "newer", failure: "maintenance" },
   { corrupt: false, state: "newer", failure: "package" },
   { corrupt: false, state: "newer", failure: "restore" },
   { corrupt: false, state: "newer", failure: "metadata" },
@@ -177,6 +211,16 @@ it.each(cases)(
     if (failure === "metadata") {
       mocks.outcome.mockRejectedValue(new Error("Outcome metadata unavailable"));
     }
+    if (failure === "maintenance") {
+      mocks.maintenance.mockRejectedValue(
+        new Error("Physical maintenance is held by another writer"),
+      );
+    }
+    if (failure === "admission") {
+      mocks.admit.mockRejectedValue(
+        new Error("Publication admission refused; generations retained"),
+      );
+    }
     if (failure === "config") {
       mocks.configCurrent.mockRejectedValue(
         new Error("Included configuration changed outside the update"),
@@ -250,12 +294,25 @@ it.each(cases)(
       expect(result.pendingRecoveryReason).not.toMatch(/newer schema version/);
     } else if (corrupt || failure) {
       expect(result.rolledBack).toBe(false);
-      if (corrupt || failure === "config" || stateOnly) {
+      if (
+        corrupt ||
+        failure === "config" ||
+        failure === "admission" ||
+        failure === "maintenance" ||
+        stateOnly
+      ) {
         expect(rollback).not.toHaveBeenCalled();
       } else {
         expect(rollback).toHaveBeenCalledOnce();
       }
-      if (corrupt || failure === "package" || failure === "config" || failure === "core identity") {
+      if (
+        corrupt ||
+        failure === "package" ||
+        failure === "config" ||
+        failure === "core identity" ||
+        failure === "admission" ||
+        failure === "maintenance"
+      ) {
         expect(mocks.restore).not.toHaveBeenCalled();
       }
       expect(mocks.restart).not.toHaveBeenCalled();
@@ -270,6 +327,13 @@ it.each(cases)(
       expect(mocks.restore).toHaveBeenCalledWith(ref, { assertOwned: expect.any(Function) });
       if (stateOnly) {
         expect(rollback).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.preserve.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.admit.mock.invocationCallOrder[0]!,
+        );
+        expect(mocks.admit.mock.invocationCallOrder[0]).toBeLessThan(
+          rollback.mock.invocationCallOrder[0]!,
+        );
       }
       expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restore.mock.invocationCallOrder[0]!,
@@ -290,6 +354,18 @@ it.each(cases)(
           /newer schema version/,
         );
       }
+    }
+    if (failure === "maintenance") {
+      expect(mocks.preserve).not.toHaveBeenCalled();
+      expect(mocks.maintenanceRelease).not.toHaveBeenCalled();
+    } else if (mocks.preserve.mock.calls.length > 0) {
+      expect(mocks.maintenance.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.preserve.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.maintenanceRelease).toHaveBeenCalledOnce();
+      expect(mocks.admit.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.maintenanceRelease.mock.invocationCallOrder[0]!,
+      );
     }
     if (!result.stateRestored) {
       expect(result.pendingRecoveryReason).toContain(ref.manifestPath);
@@ -312,7 +388,14 @@ it.each(cases)(
           { assertOwned: expect.any(Function) },
         );
       }
-      if (failure && failure !== "package" && failure !== "config" && failure !== "core identity") {
+      if (
+        failure &&
+        failure !== "package" &&
+        failure !== "config" &&
+        failure !== "core identity" &&
+        failure !== "admission" &&
+        failure !== "maintenance"
+      ) {
         expect(result.pendingRecoveryReason).toContain("State restore could not finish");
       }
       if (failure === "config") {

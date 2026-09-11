@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
@@ -12,16 +10,10 @@ import {
 import { resolveConfigPath } from "../config/config.js";
 import { withConfigMutationLock } from "../config/mutate.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
-import { pinDirectory, requireDirectorySync, sha256File } from "./directory-durability.js";
+import { requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { copyFileHandle, sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
-import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
-  updateRecoveryBackupRefSchema,
   updateRecoveryTerminalOutcomeSchema,
   type UpdateRecoveryConfigWrite,
   type UpdateRecoveryBackupRef,
@@ -39,7 +31,9 @@ import {
   MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
 } from "./update-recovery-backup-metadata.js";
 import { restorePreparedUpdateRecoveryBackup } from "./update-recovery-backup-restore.js";
+import { prepareVerifiedBackup } from "./update-recovery-backup-verify.js";
 import {
+  persistUpdateRecoveryConfigWrites,
   withUpdateRecoveryConfigValidation,
   withUpdateRecoveryConfigWrites,
 } from "./update-recovery-config-writes.js";
@@ -94,102 +88,84 @@ export async function verifyUpdateRecoveryBackup(
   }
 }
 
-async function prepareVerifiedBackup(ref: UpdateRecoveryBackupRef) {
-  updateRecoveryBackupRefSchema.parse(ref);
-  if (
-    path.resolve(ref.directory) !== ref.directory ||
-    ref.manifestPath !== path.join(ref.directory, "manifest.json")
-  ) {
-    throw new Error("Invalid update recovery manifest locator.");
-  }
-  if (!(await fs.lstat(ref.directory)).isDirectory()) {
-    throw new Error("Update recovery backup is not a directory.");
-  }
-  await ensurePrivateSnapshotRepositoryRoot(ref.directory);
-  const directoryPin = await pinDirectory(ref.directory);
-  let staging: string | undefined;
-  const close = async () => {
+/** Seal the stopped candidate once. A retry never replaces either source generation. */
+export async function preserveUpdateRecoveryCandidate(
+  ref: UpdateRecoveryBackupRef,
+  authority: Authority,
+): Promise<UpdateRecoveryBackupRef> {
+  return await withConfigMutationLock({}, async () => {
+    const baseline = await prepareVerifiedBackup(ref);
     try {
-      await directoryPin.assertCurrent();
-      if (staging) {
-        await fs.rm(staging, { recursive: true });
+      if (
+        baseline.manifest.schemaVersion !== 2 ||
+        baseline.manifest.generation?.kind !== "baseline"
+      ) {
+        throw new Error(
+          `Legacy update recovery set is inspection-only: ${ref.manifestPath}. It has no lossless candidate/publication contract; no package or state replacement is permitted. Inspect openclaw update status --json.`,
+        );
       }
-    } finally {
-      await directoryPin.close();
-    }
-  };
-  try {
-    const sourceRoot = await safeRoot(ref.directory);
-    const raw = (
-      await sourceRoot.read("manifest.json", {
-        maxBytes: MAX_MANIFEST_BYTES,
-        symlinks: "reject",
-        hardlinks: "reject",
-      })
-    ).buffer.toString("utf8");
-    if (digest(raw) !== ref.manifestSha256) {
-      throw new Error("Update recovery manifest hash mismatch.");
-    }
-    const manifest = parseUpdateRecoveryBackupManifest(raw);
-    assertManifestLocation(ref, manifest);
-    staging = await createPrivateSqliteTempDirectory(ref.directory, ".verify-");
-    const payloads = new Map<string, string>();
-    for (const entry of manifest.entries) {
-      if (entry.kind !== "file") {
-        continue;
-      }
-      await directoryPin.assertCurrent();
-      const source = await sourceRoot.open(entry.archivePath, {
-        symlinks: "reject",
-        hardlinks: "reject",
-      });
-      const targetPath = path.join(staging, path.basename(entry.archivePath));
-      const target = await fs.open(targetPath, "wx+", 0o600);
-      try {
-        const before = await source.handle.stat({ bigint: true });
-        await copyFileHandle(source.handle, target, {
-          noProgressMessage: "Update recovery staging copy made no progress.",
-        });
-        const actual = await sha256File(target);
-        if (
-          !sameFileMutationFingerprint(before, await source.handle.stat({ bigint: true })) ||
-          actual.bytes !== entry.size ||
-          actual.digest !== entry.sha256
-        ) {
-          throw new Error(`Update recovery payload hash or size mismatch: ${entry.archivePath}`);
-        }
-        await target.sync();
-      } finally {
-        await target.close();
-        await source.handle.close();
-      }
-      if (entry.sqlite) {
-        const database = openNodeSqliteDatabase(targetPath, {
-          readOnly: true,
-          allowExtension: true,
-        });
+      // Flush the active authored-byte suffix before sealing C: T must use the
+      // same complete receipt chain, including writes from this parent scope.
+      await persistUpdateRecoveryConfigWrites(ref, authority);
+      await baseline.assertCurrent();
+      authority.assertOwned();
+      const directory = path.join(ref.directory, "candidate");
+      let candidate: UpdateRecoveryBackupRef;
+      if (await statOrMissing(directory)) {
+        const source = await safeRoot(directory);
+        let raw: Buffer;
         try {
-          await loadSqliteVecExtension({ db: database });
-          assertSqliteIntegrity(database, targetPath);
-        } finally {
-          database.close();
+          raw = (
+            await source.read("manifest.json", {
+              maxBytes: MAX_MANIFEST_BYTES,
+              symlinks: "reject",
+              hardlinks: "reject",
+            })
+          ).buffer;
+        } catch (cause) {
+          throw new Error(
+            `Candidate preservation is incomplete at ${directory}; baseline and partial candidate retained. Do not overwrite or remove either generation. Inspect openclaw update status --json.`,
+            { cause },
+          );
         }
+        candidate = {
+          directory,
+          manifestPath: path.join(directory, "manifest.json"),
+          manifestSha256: digest(raw),
+        };
+      } else {
+        candidate = await captureUpdateRecoveryBackup({
+          ...authority,
+          runId: baseline.manifest.runId,
+          installRoot: baseline.manifest.installRoot,
+          drivers: baseline.manifest.drivers,
+          baseline: { ref, manifest: baseline.manifest },
+        });
       }
-      payloads.set(entry.archivePath, targetPath);
+      const manifest = await verifyUpdateRecoveryBackup(candidate);
+      await baseline.assertCurrent();
+      authority.assertOwned();
+      if (
+        manifest.generation?.kind !== "candidate" ||
+        manifest.generation.baselineSha256 !== ref.manifestSha256
+      ) {
+        throw new Error(
+          `Candidate generation belongs to another baseline: ${candidate.manifestPath}`,
+        );
+      }
+      return candidate;
+    } finally {
+      await baseline.close();
     }
-    await directoryPin.assertCurrent();
-    return { manifest, payloads, close, assertCurrent: () => directoryPin.assertCurrent() };
-  } catch (error) {
-    await close();
-    throw error;
-  }
+  });
 }
 
-/** Restore captured files and declared database directories, preserving unrelated paths. */
+/** Restore only a migration-owner-prepared generation; raw B is never a rollback plan. */
 export async function restoreUpdateRecoveryBackup(
   ref: UpdateRecoveryBackupRef,
   authority: Authority,
 ): Promise<void> {
+  const candidate = await preserveUpdateRecoveryCandidate(ref, authority);
   const prepared = await prepareVerifiedBackup(ref);
   let restored = false;
   try {
@@ -208,6 +184,11 @@ export async function restoreUpdateRecoveryBackup(
           ) {
             throw new Error("Update recovery run ownership is missing before restoration.");
           }
+          // Stopping writers proves custody, not ownership of their committed
+          // writes. Never use the baseline as a prepared generation.
+          const { assertUpdateRecoveryPublicationPrepared } =
+            await import("./update-recovery-publication.js");
+          await assertUpdateRecoveryPublicationPrepared(ref, candidate, authority);
           let restoreFailure: { error: unknown } | undefined;
           try {
             await restorePreparedUpdateRecoveryBackup(
@@ -598,115 +579,10 @@ export async function retireUpdateRecoveryBackup(
   ref: UpdateRecoveryBackupRef,
   authority: Authority,
 ): Promise<void> {
+  const { retireUpdateRecoveryBackupOwned } = await import("./update-recovery-retirement.js");
   return await withConfigMutationLock({ lockPath: resolveConfigPath() }, () =>
     retireUpdateRecoveryBackupOwned(ref, authority),
   );
-}
-
-async function retireUpdateRecoveryBackupOwned(
-  ref: UpdateRecoveryBackupRef,
-  authority: Authority,
-): Promise<void> {
-  const { resumeUpdateRecoveryRetirement } = await import("./update-recovery-retirement.js");
-  if (await resumeUpdateRecoveryRetirement(ref, authority)) {
-    return;
-  }
-  await withRecoveryMetadata(ref, authority, async ({ outcome, pin, source, manifest }) => {
-    if (!outcome) {
-      throw new Error(`Update capture has no durable terminal outcome: ${ref.manifestPath}`);
-    }
-    const { UPDATE_CAPTURE_PRIVACY_MARKER } = await import("./update-capture-privacy-marker.js");
-    const allowed = new Set([
-      "manifest.json",
-      "outcome.json",
-      "payload",
-      UPDATE_CAPTURE_PRIVACY_MARKER,
-    ]);
-    for (const entry of await source.list("", { withFileTypes: true })) {
-      if (!allowed.has(entry.name)) {
-        throw new Error(`Update capture contains unowned retirement input: ${entry.name}`);
-      }
-    }
-    const captured = manifest.entries.filter((entry) => entry.kind === "file");
-    const payload = await statOrMissing(path.join(ref.directory, "payload"));
-    if (payload) {
-      if (!payload.isDirectory()) {
-        throw new Error("Update capture payload directory changed.");
-      }
-      const expected = new Set(captured.map((entry) => path.basename(entry.archivePath)));
-      for (const entry of await source.list("payload", { withFileTypes: true })) {
-        if (!expected.has(entry.name) || !entry.isFile) {
-          throw new Error(`Update capture contains unowned retirement payload: ${entry.name}`);
-        }
-      }
-      const identities = new Map<string, BigIntStats>();
-      // Missing entries are already obsolete only because a write-once terminal outcome exists.
-      for (const entry of captured) {
-        if (!(await statOrMissing(path.join(ref.directory, entry.archivePath)))) {
-          continue;
-        }
-        const opened = await source.open(entry.archivePath, {
-          symlinks: "reject",
-          hardlinks: "reject",
-        });
-        try {
-          const before = await opened.handle.stat({ bigint: true });
-          const actual = await sha256File(opened.handle);
-          if (
-            !sameFileMutationFingerprint(before, await opened.handle.stat({ bigint: true })) ||
-            actual.bytes !== entry.size ||
-            actual.digest !== entry.sha256
-          ) {
-            throw new Error(`Update retirement payload changed: ${entry.archivePath}`);
-          }
-          identities.set(entry.archivePath, before);
-        } finally {
-          await opened.handle.close();
-        }
-      }
-      for (const entry of captured) {
-        await pin.assertCurrent();
-        authority.assertOwned();
-        const identity = identities.get(entry.archivePath);
-        if (identity) {
-          const current = await fs.lstat(path.join(ref.directory, entry.archivePath), {
-            bigint: true,
-          });
-          if (!sameFileMutationFingerprint(identity, current)) {
-            throw new Error(
-              `Update retirement payload changed before removal: ${entry.archivePath}`,
-            );
-          }
-          authority.assertOwned();
-          await source.remove(entry.archivePath);
-        }
-      }
-      await pin.assertCurrent();
-      authority.assertOwned();
-      await source.remove("payload");
-    }
-    requireDirectorySync(await pin.sync(), "Update capture payload retirement");
-    await pin.assertCurrent();
-    authority.assertOwned();
-    const { recordUpdateRunRecoveryCapture } = await import("./update-run-ledger.js");
-    const identity = pin.receipt.identity;
-    recordUpdateRunRecoveryCapture(
-      manifest.runId,
-      {
-        manifestSha256: ref.manifestSha256,
-        retirement: {
-          directory: ref.directory,
-          installRoot: manifest.installRoot,
-          stateDir: manifest.stateDir,
-          configPath: manifest.configPath,
-          identity: { dev: identity.dev, ino: identity.ino, birthtimeMs: identity.birthtimeMs },
-          outcome: outcome.status,
-        },
-      },
-      authority.assertOwned,
-    );
-  });
-  await resumeUpdateRecoveryRetirement(ref, authority);
 }
 
 export { inspectUpdateRecoveryRetirements } from "./update-recovery-retirement.js";
@@ -715,3 +591,5 @@ export {
   readUpdateRecoveryBackupManifest,
   readUpdateRecoveryBackupRef,
 } from "./update-recovery-backup-metadata.js";
+
+export { prepareUpdateRecoveryGeneration } from "./update-recovery-preparation.js";

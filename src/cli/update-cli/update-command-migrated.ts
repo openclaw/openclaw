@@ -16,11 +16,9 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { retireCommandProcessJobForHandoff } from "../../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
-import { printResult } from "./progress.js";
 import { readPackageVersion, resolveNodeRunner } from "./shared.js";
 import { completeUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
 import {
@@ -39,14 +37,12 @@ import {
   UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
 import {
-  recordUpdateResultNextAction,
   resolveCompletedUpdateResult,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
 import { inspectUpdateRuntimeCapability } from "./update-command-runtime-capability.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -54,7 +50,12 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import { recordVerifiedUpdatePackageCleanup } from "./update-command-terminal.js";
+import {
+  deferUpdateCommandTerminalResult,
+  publishUpdateCommandTerminalResult,
+  recordVerifiedUpdatePackageCleanup,
+  resolveSettledUpdateCommandResult,
+} from "./update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 export type {
@@ -213,38 +214,45 @@ async function recoverMigratedUpdateInParent(
       recordUpdateRunStep(run.runId, step, { env: run.env });
     }
   }
-  const nextAction = recordUpdateResultNextAction(params, finalResult);
   const stoppedAtMs =
     params.preManagedServiceStop?.stoppedAtMs ?? rollback.stoppedForRollback?.stoppedAtMs;
   const downtimeMs =
     stoppedAtMs !== undefined && rollback.verifiedAtMs !== undefined
       ? Math.max(0, rollback.verifiedAtMs - stoppedAtMs)
       : undefined;
-  assertCurrent();
-  const completed = completeUpdateCommandRun(finalResult, run, {
-    rolledBack: rollback.rolledBack,
-    downtimeMs,
-  });
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result: completed,
-    jsonMode: Boolean(params.opts.json),
-  });
-  assertCurrent();
-  printResult(completed, params.opts, { nextAction });
-  const retained = await params.packageTransaction
-    ?.complete({ activationVerified: false }, assertCurrent)
-    .catch((error: unknown) => {
-      assertCurrent();
-      defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
-    });
-  if (retained) {
-    completed.steps.push(retained);
-    if (retained.stderrTail) {
-      defaultRuntime.error(retained.stderrTail);
+  let pendingResult = finalResult;
+  const publishFinalResult = async (failure?: unknown) => {
+    const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
+    if (settled.settlementFailed) {
+      // This caller's restored-runtime observation no longer qualifies a recovery
+      // claim after its executor loses ownership or fails to settle.
+      delete settled.result.recovery;
     }
-  }
-  return { result: completed, exitCode: 1 };
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result: settled.result,
+      jsonMode: Boolean(params.opts.json),
+    });
+    return publishUpdateCommandTerminalResult(params, settled.result, {
+      rolledBack: rollback.rolledBack && !settled.settlementFailed,
+      downtimeMs: settled.settlementFailed ? undefined : downtimeMs,
+    });
+  };
+  // Register before awaited cleanup so its failure reaches the enclosing
+  // publisher only after executor settlement. The closure holds no live fence.
+  const deferred = deferUpdateCommandTerminalResult(run, publishFinalResult);
+  assertCurrent();
+  const cleanupFailure = await recordVerifiedUpdatePackageCleanup(
+    params,
+    finalResult,
+    assertCurrent,
+  );
+  assertCurrent();
+  pendingResult = cleanupFailure?.result ?? finalResult;
+  const reported = deferred ? pendingResult : await publishFinalResult();
+  // Return known cleanup failures so the caller can acknowledge the completed
+  // migrated handoff before throwing. Ownership failures above remain pending.
+  return { result: reported, exitCode: 1 };
 }
 
 /** Candidate code owns migrated state until verified restoration returns it to the parent. */

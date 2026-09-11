@@ -28,6 +28,8 @@ import { restorePreparedUpdateRecoveryBackup } from "./update-recovery-backup-re
 import {
   appendUpdateRecoveryConfigWrites,
   createUpdateRecoveryBackup,
+  preserveUpdateRecoveryCandidate,
+  prepareUpdateRecoveryGeneration,
   restoreUpdateRecoveryBackup,
   verifyUpdateRecoveryBackup,
   writeUpdateRecoveryBackupOutcome,
@@ -83,6 +85,131 @@ async function fixture(state: OpenClawTestState, legacySchema = true) {
 }
 
 describe("update recovery backup", () => {
+  it("refuses unclassified post-capture database writes without losing committed WAL data", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        database.exec(`
+          ALTER TABLE workshop RENAME COLUMN workspace_dir TO owner_agent_id;
+          PRAGMA user_version = 16;
+          UPDATE schema_meta SET schema_version = 16 WHERE meta_key = 'primary';
+          INSERT INTO workshop(rowid, owner_agent_id) VALUES (10, 'newer-user-write');
+          DELETE FROM delivery_queue_entries WHERE id = 'pending-delivery';
+        `);
+        expect(
+          database.prepare("SELECT owner_agent_id FROM workshop WHERE rowid = 10").get(),
+        ).toEqual({ owner_agent_id: "newer-user-write" });
+        let refusal: unknown;
+        try {
+          await restoreUpdateRecoveryBackup(ref, authority);
+        } catch (error) {
+          refusal = error;
+        }
+        expect.soft(refusal, "unknown database writes require safe refusal").toBeInstanceOf(Error);
+        expect
+          .soft(database.prepare("SELECT COUNT(*) AS count FROM workshop WHERE rowid = 10").get())
+          .toEqual({ count: 1 });
+        expect.soft(database.prepare("SELECT id FROM delivery_queue_entries").all()).toEqual([]);
+        expect.soft(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId });
+      } finally {
+        database.close();
+      }
+    });
+  });
+
+  it("refuses unclassified plugin-directory changes before replacing or pruning user data", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state);
+      const directory = state.path("plugin-data");
+      await fs.mkdir(directory);
+      const original = path.join(directory, "records");
+      const newer = path.join(directory, "new-user-record");
+      await fs.writeFile(original, "captured record\n");
+      const declaration = vi
+        .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+        .mockResolvedValue([{ path: directory, kind: "directory" }]);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        await fs.writeFile(original, "newer user edit\n");
+        await fs.writeFile(newer, "newer user record\n");
+        let refusal: unknown;
+        try {
+          await restoreUpdateRecoveryBackup(ref, authority);
+        } catch (error) {
+          refusal = error;
+        }
+        expect
+          .soft(refusal, "directory ownership is not per-write migration provenance")
+          .toBeInstanceOf(Error);
+        expect.soft(await fs.readFile(original, "utf8")).toBe("newer user edit\n");
+        expect
+          .soft(await fs.readFile(newer, "utf8").catch(() => "MISSING"))
+          .toBe("newer user record\n");
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId });
+      } finally {
+        declaration.mockRestore();
+        database.close();
+      }
+    });
+  });
+
+  it("retains both generations when publication fails after one resource was restored", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state);
+      const directory = state.path("plugin-data");
+      await fs.mkdir(directory);
+      const first = path.join(directory, "a");
+      const second = path.join(directory, "b");
+      await fs.writeFile(first, "captured-a\n");
+      await fs.writeFile(second, "captured-b\n");
+      const declaration = vi
+        .spyOn(pluginBackupResources, "collectPluginDoctorMigrationBackupResources")
+        .mockResolvedValue([{ path: directory, kind: "directory" }]);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        const firstCandidate = "candidate-generation-first-user-write\n";
+        const secondCandidate = "candidate-generation-second-user-write\n";
+        await fs.writeFile(first, firstCandidate);
+        await fs.writeFile(second, secondCandidate);
+        const rename = fs.rename;
+        const publicationFailure = vi
+          .spyOn(fs, "rename")
+          .mockImplementation(async (source, target) => {
+            if (target === second) {
+              throw Object.assign(new Error("Synthetic second-resource publication failure"), {
+                code: "EIO",
+              });
+            }
+            return await rename(source, target);
+          });
+        try {
+          await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow();
+        } finally {
+          publicationFailure.mockRestore();
+        }
+        const files = (
+          await fs.readdir(state.root, { recursive: true, withFileTypes: true })
+        ).filter((entry) => entry.isFile());
+        const contents = await Promise.all(
+          files.map((entry) => fs.readFile(path.join(entry.parentPath, entry.name))),
+        );
+        expect
+          .soft(
+            contents.some((bytes) => bytes.includes(firstCandidate)),
+            "the first candidate resource must survive somewhere, even after partial publication",
+          )
+          .toBe(true);
+        expect.soft(contents.some((bytes) => bytes.includes(secondCandidate))).toBe(true);
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId });
+      } finally {
+        declaration.mockRestore();
+        database.close();
+      }
+    });
+  });
+
   it("waits for native agent closure before closing shared state or restoring files", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       const coordinatorDir = state.path("coordinator");
@@ -168,7 +295,7 @@ describe("update recovery backup", () => {
     { cleanupFailure: true, directory: false },
     { cleanupFailure: false, directory: true },
   ])(
-    "restores the original WAL schema and rows through an old updater's open connection (cleanup failure=$cleanupFailure, directory=$directory)",
+    "refuses raw rollback through an old updater's open connection without losing candidate data (cleanup failure=$cleanupFailure, directory=$directory)",
     async ({ cleanupFailure, directory }) => {
       await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
         const { database, databasePath, installRoot, runId } = await fixture(state);
@@ -265,31 +392,35 @@ describe("update recovery backup", () => {
               })
             : undefined;
           try {
-            await restoreUpdateRecoveryBackup(ref, authority);
+            await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+              /candidate preservation failed|Synthetic verification staging cleanup failure/,
+            );
           } finally {
             cleanup?.mockRestore();
           }
           expect(cleanupFailed).toBe(cleanupFailure);
-          expect(database.prepare("SELECT rowid,workspace_dir FROM workshop").get()).toEqual({
+          expect(database.prepare("SELECT rowid,owner_agent_id FROM workshop").get()).toEqual({
             rowid: 9,
-            workspace_dir: "original-workspace",
+            owner_agent_id: "original-workspace",
           });
-          expect(database.prepare("SELECT id FROM delivery_queue_entries").all()).toEqual([
-            { id: "pending-delivery" },
+          expect(database.prepare("SELECT id FROM delivery_queue_entries").all()).toEqual([]);
+          expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([
+            { lease_key: "retained" },
           ]);
-          expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([]);
-          expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
-          expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+          expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
+            { lease_id: "source-agent" },
+          ]);
+          expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 16 });
           expect((await fs.stat(databasePath)).ino).toBe(inode);
-          expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(nextConfig);
           expect(await fs.readFile(ordinaryFile, "utf8")).toBe("changed by migration\n");
           expect(await fs.readFile(newerNote, "utf8")).toBe("written after the backup\n");
-          await expect(fs.lstat(missingDatabase.sourcePath)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-          await expect(fs.lstat(`${missingDatabase.sourcePath}-wal`)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          expect(await fs.readFile(missingDatabase.sourcePath, "utf8")).toBe(
+            "new database placeholder",
+          );
+          expect(await fs.readFile(`${missingDatabase.sourcePath}-wal`, "utf8")).toBe(
+            "new sidecar",
+          );
           await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({
             runId,
           });
@@ -301,7 +432,7 @@ describe("update recovery backup", () => {
     },
   );
 
-  it("keeps a held plugin lease in capture but permits immediate acquisition after restore", async () => {
+  it("retains captured plugin leases as evidence without resurrecting deleted plugin records", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       const { database, databasePath, installRoot, runId } = await fixture(state, false);
       const pluginPath = state.path("plugin.sqlite");
@@ -352,23 +483,25 @@ describe("update recovery backup", () => {
         database.exec("UPDATE workshop SET workspace_dir='migrated'");
         plugin.exec("DELETE FROM state_leases; DELETE FROM agent_database_leases");
 
-        await restoreUpdateRecoveryBackup(ref, authority);
+        await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+          /no migration-owner reverse contract/,
+        );
 
         await expect(
           withPluginLifecycleLease({ waitMs: 0 }, async (lease) => lease.assertOwned()),
         ).resolves.toBeUndefined();
-        expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([]);
-        expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+        expect(database.prepare("SELECT lease_key FROM state_leases").all()).toEqual([
+          { lease_key: "retained" },
+        ]);
+        expect(database.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
+          { lease_id: "source-agent" },
+        ]);
         expect(database.prepare("SELECT rowid,workspace_dir FROM workshop").get()).toEqual({
           rowid: 9,
-          workspace_dir: "original-workspace",
+          workspace_dir: "migrated",
         });
-        expect(plugin.prepare("SELECT * FROM state_leases").all()).toEqual([
-          { lease_key: "plugin-data" },
-        ]);
-        expect(plugin.prepare("SELECT * FROM agent_database_leases").all()).toEqual([
-          { lease_id: "plugin-agent-data" },
-        ]);
+        expect(plugin.prepare("SELECT * FROM state_leases").all()).toEqual([]);
+        expect(plugin.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
         await expect(verifyUpdateRecoveryBackup(ref)).resolves.toEqual(manifest);
       } finally {
         declaration.mockRestore();
@@ -483,33 +616,31 @@ describe("update recovery backup", () => {
           }
           await assertUpdateRecoveryConfigUnchanged(ref, authority);
           if (change === "owned repair" || change === "parent-child-parent") {
-            await restoreUpdateRecoveryBackup(ref, authority);
+            await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+              /Rollback publication is unavailable/,
+            );
           }
         });
         expect(owned).not.toBe(original);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(rootBefore);
         await writeUpdateRecoveryBackupOutcome(ref, { status: "pending" }, authority);
-        if (change === "owned repair") {
-          // Receipt publication can fail after restoration, leaving the Doctor after-image.
-          await appendUpdateRecoveryConfigWrites(
-            ref,
-            [
-              {
-                path: await fs.realpath(includePath),
-                beforeHash: createHash("sha256").update(original).digest("hex"),
-                afterHash: createHash("sha256").update(owned).digest("hex"),
-                contiguous: true,
-              },
-            ],
-            authority,
-          );
+        if (change === "owned repair" || change === "parent-child-parent") {
           await expect(
             assertUpdateRecoveryConfigUnchanged(ref, authority),
           ).resolves.toBeUndefined();
-          await restoreUpdateRecoveryBackup(ref, authority);
-          expect(await fs.readFile(includePath, "utf8")).toBe(original);
-        } else if (change === "parent-child-parent") {
-          expect(await fs.readFile(includePath, "utf8")).toBe(original);
+          const candidate = await preserveUpdateRecoveryCandidate(ref, authority);
+          const prepared = await prepareUpdateRecoveryGeneration(ref, candidate, authority);
+          const preparedManifest = await verifyUpdateRecoveryBackup(prepared);
+          const include = preparedManifest.entries.find(
+            (entry) => entry.sourcePath === includePath,
+          );
+          if (include?.kind !== "file") {
+            throw new Error("Prepared generation lost its included config");
+          }
+          expect(
+            await fs.readFile(path.join(prepared.directory, include.archivePath), "utf8"),
+          ).toBe(original);
+          expect(await fs.readFile(includePath, "utf8")).toBe(owned);
         } else {
           const operatorBytes =
             change === "operator comment"
@@ -616,7 +747,7 @@ describe("update recovery backup", () => {
       });
       await fs.writeFile(state.configPath, "");
       await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
-        /changed outside the recorded update writes/,
+        /config ownership is unresolved/,
       );
       expect(await fs.readFile(state.configPath, "utf8")).toBe("");
     });
@@ -683,7 +814,7 @@ try {
 }
 
 describe("update recovery database directories", () => {
-  it("refuses a directory replaced by an outside symlink during pruning", async () => {
+  it("refuses a directory replaced by an outside symlink during candidate capture", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       const coordinatorDir = state.path("coordinator");
       await fs.mkdir(coordinatorDir, { mode: 0o700 });
@@ -721,7 +852,7 @@ describe("update recovery database directories", () => {
         });
         try {
           await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
-            /changed|alias/,
+            /candidate preservation failed/,
           );
           expect(swapped).toBe(true);
           expect(await fs.readFile(path.join(outsidePath, "original"), "utf8")).toBe(
@@ -739,7 +870,7 @@ describe("update recovery database directories", () => {
     });
   });
 
-  it("restores captured LanceDB schema and rows without newer manifests or changes outside its directory", async () => {
+  it("refuses unowned LanceDB reversal without deleting newer rows, manifests or local files", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       const coordinatorDir = state.path("coordinator");
       await fs.mkdir(coordinatorDir, { mode: 0o700 });
@@ -808,7 +939,10 @@ try {
         await fs.mkdir(path.join(databasePath, "new-directory"));
         await fs.writeFile(path.join(databasePath, "new-directory", "new-data"), "migration data");
 
-        await restoreUpdateRecoveryBackup(ref, authority);
+        const candidateManifests = (await fs.readdir(versionsPath)).toSorted();
+        await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
+          /no migration-owner reverse contract/,
+        );
 
         const restored = JSON.parse(
           await runLanceDb(
@@ -826,21 +960,22 @@ try {
           ),
         );
         expect(restored).toEqual({
-          columns: ["id", "text"],
-          rows: [{ id: "original", text: "captured memory" }],
-          version: 1,
+          columns: ["id", "text", "agentId"],
+          rows: [
+            { id: "original", text: "captured memory", agentId: "main" },
+            { id: "new", text: "migration memory", agentId: "main" },
+          ],
+          version: 3,
         });
-        expect((await fs.readdir(versionsPath)).toSorted()).toEqual(capturedManifests);
+        expect((await fs.readdir(versionsPath)).toSorted()).toEqual(candidateManifests);
         expect(await fs.readFile(retainedFile, "utf8")).toBe("retained original recovery state");
         expect(
           await fs.readFile(path.join(retainedCapture, UPDATE_CAPTURE_PRIVACY_MARKER), "utf8"),
         ).toBe(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
-        await expect(fs.lstat(path.join(databasePath, "new-directory"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        await expect(fs.lstat(path.join(databasePath, "new-link"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        expect(
+          await fs.readFile(path.join(databasePath, "new-directory", "new-data"), "utf8"),
+        ).toBe("migration data");
+        expect(await fs.readlink(path.join(databasePath, "new-link"))).toBe(outsidePath);
         expect(await fs.readFile(unrelatedPath, "utf8")).toBe("new sibling data");
         expect(await fs.readFile(path.join(outsidePath, "keep.txt"), "utf8")).toBe(
           "outside link target",

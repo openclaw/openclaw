@@ -56,6 +56,7 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
   suspendScheduledTaskAutoStartForUpdate: vi.fn(),
 }));
 vi.mock("../../infra/update-run-ledger.js", () => ({
+  getUpdateRun: vi.fn(() => undefined),
   recordUpdateRunStep: vi.fn(() => state.events.push("step")),
 }));
 vi.mock("./update-command-run.js", () => ({

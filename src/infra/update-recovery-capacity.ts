@@ -79,12 +79,14 @@ export async function assertUpdateRecoveryCapacity(params: {
     captureBytes += bytes;
     await add(file.pathname, bytes * 2); // One restore copy plus 100% migration growth.
   }
-  await add(params.directory, captureBytes * 2); // Retained capture plus verification copy.
+  // B, stopped C and prepared T coexist until terminal readiness. Each can
+  // need a private verification/preparation copy; none is pressure-prunable.
+  await add(params.directory, captureBytes * 6);
   await add(params.installRoot, (await packageBytes(params.installRoot)) * 2);
   for (const volume of volumes.values()) {
     if (volume.available < volume.required) {
       throw new Error(
-        `Insufficient update recovery capacity on ${volume.pathname}: ${formatDiskSpaceBytes(volume.required)} required (${volume.required} bytes), ${formatDiskSpaceBytes(volume.available)} available (${volume.available} bytes), including capture, verification/restore staging, package staging, growth, and reserve. Protected mutation refused; live data and earlier captures are unchanged. Free unrelated space, then retry; inspect openclaw update status --json.`,
+        `Insufficient update recovery capacity on ${volume.pathname}: ${formatDiskSpaceBytes(volume.required)} required (${volume.required} bytes), ${formatDiskSpaceBytes(volume.available)} available (${volume.available} bytes), including retained baseline/candidate/prepared generations, verification/restore staging, package staging, growth, and reserve. Protected mutation refused; live data and earlier captures are unchanged. Free unrelated space, then retry; inspect openclaw update status --json.`,
       );
     }
   }
