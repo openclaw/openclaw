@@ -4,7 +4,6 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
 import "./chat-question-card.ts";
 
 type AsyncQuestions = {
@@ -24,14 +23,17 @@ export type AsyncQuestionPresentation = {
 };
 
 export function createAsyncQuestionPresentation(
-  state: Pick<
-    ChatThreadState,
-    "asyncQuestionScope" | "asyncQuestionDrafts" | "transcriptRenderContext"
-  >,
-  props: Pick<
-    ChatThreadProps,
-    "sessionKey" | "currentAgentId" | "connectionEpoch" | "onAsyncQuestionSubmit"
-  >,
+  state: {
+    asyncQuestionScope?: string;
+    asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+    transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
+  },
+  props: {
+    sessionKey: string;
+    currentAgentId?: string;
+    connectionEpoch?: number;
+    onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
+  },
 ): AsyncQuestionPresentation {
   const scope = JSON.stringify([props.sessionKey, props.currentAgentId, props.connectionEpoch]);
   if (state.asyncQuestionScope !== scope) {
