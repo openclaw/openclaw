@@ -23,6 +23,12 @@ openclaw-chat-pane {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+
+  /* Theme surfaces captured here so a tinted cell can re-derive them without a cycle. */
+  --pane-base-bg: var(--bg);
+  --pane-base-bg-content: var(--bg-content, var(--bg));
+  --pane-base-card: var(--card);
+  --pane-base-bg-elevated: var(--bg-elevated);
 }
 
 .chat-split-view__column {
@@ -1036,15 +1042,21 @@ html.openclaw-native-macos
   min-width: calc(308px + var(--shell-titlebar-inset));
 }
 
-/* Session colour carried onto the pane so split panes read apart at a glance:
-   a coloured top edge, a tinted header, and a faint wash on the pane surface. */
+/* Session colour carried onto the whole pane so split panes read apart at a glance.
+   The pane body paints the theme surfaces (--bg, --bg-content, --card, --bg-elevated), so the
+   tint is applied by re-deriving those variables inside the cell from aliases captured on the
+   split view, which keeps the custom properties acyclic. */
 .chat-split-view__cell--tinted {
-  --chat-surface: color-mix(in srgb, var(--pane-session-color) 6%, var(--bg-content, var(--bg)));
+  --bg: color-mix(in srgb, var(--pane-session-color) 12%, var(--pane-base-bg));
+  --bg-content: color-mix(in srgb, var(--pane-session-color) 12%, var(--pane-base-bg-content));
+  --card: color-mix(in srgb, var(--pane-session-color) 10%, var(--pane-base-card));
+  --bg-elevated: color-mix(in srgb, var(--pane-session-color) 10%, var(--pane-base-bg-elevated));
+  --chat-surface: var(--bg-content);
 
   border-top: 3px solid var(--pane-session-color);
-  background: var(--chat-surface);
+  background: var(--bg-content);
 }
 
 .chat-split-view__cell--tinted .chat-pane__header {
-  background: color-mix(in srgb, var(--pane-session-color) 14%, var(--bg-content, var(--bg)));
+  background: color-mix(in srgb, var(--pane-session-color) 22%, var(--pane-base-bg-content));
 }
