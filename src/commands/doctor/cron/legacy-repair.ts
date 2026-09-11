@@ -16,6 +16,7 @@ import {
   loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
   saveCronJobsStore,
+  saveCronJobsStoreChanges,
   saveCronJobsStoreWithMetadata,
   saveCronQuarantinedJobs,
   type CronQuarantinedJob,
@@ -30,6 +31,7 @@ import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.j
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredModelSlots,
+  repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
@@ -234,7 +236,10 @@ export async function applyLegacyCronStoreRepair(params: {
           authProfileIdMap: params.authProfileIdMap,
           warnings,
         })
-      : undefined;
+      : params.authProfileIdMap?.size
+        ? ({ modelRef }: { modelRef: string }) =>
+            repairModelRefAuthProfile(modelRef, params.authProfileIdMap)
+        : undefined;
   const quarantineEntriesToRevalidate =
     params.recoverQuarantinedScheduleJobs === true
       ? [...state.persistedQuarantine, ...(state.legacyQuarantine?.jobs ?? [])]
@@ -303,7 +308,7 @@ export async function applyLegacyCronStoreRepair(params: {
         (projectedOwner && projectedOwner.kind !== "unresolved"
           ? projectedOwner.agentId
           : tryResolveAmbientOwnerAgentId(params.cfg));
-      if (!agentId) {
+      if (!agentId && params.repairRetiredModelRefs) {
         warnings.push(
           `Skipped retired model repair for cron job "${jobId}": select its owning agent, then rerun openclaw doctor --fix.`,
         );
@@ -553,6 +558,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
 /** Commit Codex cron refs only after their model-scoped config policy is durable. */
 export async function repairCronCodexModelRefsAfterConfigWrite(params: {
   cfg: OpenClawConfig;
+  migrateCodexModelRefs: boolean;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   authProfileIdMap?: ReadonlyMap<string, string>;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
@@ -562,6 +568,37 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
     normalizeOptionalString(readLegacyCronStorePath(params.cfg)),
   );
   try {
+    if (!params.migrateCodexModelRefs && !params.repairRetiredModelRefs) {
+      const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath);
+      const { store } = loaded;
+      const repaired = structuredClone(store);
+      const changes: string[] = [];
+      for (const [index, job] of repaired.jobs.entries()) {
+        const {
+          runtimeAuthority: _embeddedAuthority,
+          runtimeAuthorityRecoveryRequired: _embeddedRecovery,
+          ...config
+        } = loaded.configJobs[index]!;
+        const candidate = Object.assign(
+          structuredClone(job),
+          mergeRuntimeEntryIntoConfigJob({
+            job: structuredClone(config),
+            runtimeEntry: loaded.configJobRuntimeEntries[index],
+          }),
+        );
+        const before = changes.length;
+        repairRetiredModelSlots({
+          owner: candidate.payload,
+          path: `cron.${job.id}.payload`,
+          authProfileOnly: true,
+          resolve: ({ modelRef }) => repairModelRefAuthProfile(modelRef, params.authProfileIdMap),
+          changes,
+        });
+        if (changes.length > before) repaired.jobs[index] = candidate;
+      }
+      await saveCronJobsStoreChanges(storePath, store, repaired);
+      return { changes, warnings: [] };
+    }
     const state = await loadLegacyCronRepairState({ cfg: params.cfg });
     return state
       ? await applyLegacyCronStoreRepair({
@@ -569,7 +606,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
           retiredModelRefConfig: params.retiredModelRefConfig,
           authProfileIdMap: params.authProfileIdMap,
           state,
-          migrateCodexModelRefs: true,
+          migrateCodexModelRefs: params.migrateCodexModelRefs,
           repairRetiredModelRefs: params.repairRetiredModelRefs,
           blockedModelIdentities: params.blockedModelIdentities,
         })

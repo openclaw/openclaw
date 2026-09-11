@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "@lydell/node-pty";
 import { afterEach, describe, expect, it } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
@@ -10,6 +12,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -37,6 +40,73 @@ function runDoctor(env: NodeJS.ProcessEnv) {
   clearRuntimeAuthProfileStoreSnapshots();
 }
 
+async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
+  const child = spawn(process.execPath, ["openclaw.mjs", "doctor"], {
+    cwd: fileURLToPath(new URL("../../", import.meta.url)),
+    cols: 240,
+    rows: 40,
+    name: "xterm-256color",
+    env: {
+      ...env,
+      NODE_ENV: undefined,
+      VITEST: undefined,
+      OPENCLAW_NO_RESPAWN: "1",
+      TERM: "xterm-256color",
+      NO_COLOR: "1",
+    },
+  });
+  let output = "";
+  let answeredThrough = 0;
+  let importsAccepted = 0;
+  let failure: string | undefined;
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      failure = "Interactive Doctor did not exit";
+      child.kill();
+    }, 60_000);
+    child.onData((data) => {
+      output += data;
+      if (failure) {
+        return;
+      }
+      const pending = stripAnsi(output).slice(answeredThrough);
+      const prompt = /◆\s+([^\r\n]+)\r?\n[│\s]*[●○]\s+Yes\s*\/\s*[●○]\s+No/.exec(pending);
+      if (!prompt) {
+        return;
+      }
+      answeredThrough += prompt.index + prompt[0].length;
+      const question = prompt[1]!.trim();
+      if (
+        question === "Migrate auth profile JSON files into SQLite now?" ||
+        question === "Apply recommended config repairs now?"
+      ) {
+        if (question.startsWith("Migrate auth")) importsAccepted++;
+        child.write("y");
+      } else if (
+        /^(?:Rebuild stale Control UI assets now|Build Control UI assets now|Update OpenClaw from git before running doctor|Migrate generated provider model catalogs into agent SQLite now|Repair model credentials in agent SQLite now|Tighten permissions on .+ to (?:700|600)|Disable \d+ unavailable skills in config|Enable \w+ shell completion for openclaw|Create .+ at .+)\?$/.test(
+          question,
+        )
+      ) {
+        child.write("n");
+      } else {
+        failure = `Unexpected Doctor prompt: ${question}`;
+        child.kill();
+      }
+    });
+    child.onExit((event) => {
+      clearTimeout(timeout);
+      if (failure) {
+        reject(new Error(`${failure}\n${stripAnsi(output)}`));
+      } else {
+        resolve(event.exitCode);
+      }
+    });
+  });
+  expect(exitCode, stripAnsi(output)).toBe(0);
+  expect(importsAccepted, stripAnsi(output)).toBe(expectImport ? 1 : 0);
+  clearRuntimeAuthProfileStoreSnapshots();
+}
+
 function readStoredLinks(profileId: string): unknown {
   const { db } = openOpenClawStateDatabase();
   const row = executeSqliteQueryTakeFirstSync(
@@ -61,19 +131,28 @@ describe("doctor auth-profile consumers", () => {
   it.each([
     {
       name: "unoccupied destination and padded references",
+      interactive: false,
       occupied: false,
       renamed: "anthropic:work",
       reference: " claude-cli:work ",
     },
     {
       name: "occupied destination",
+      interactive: false,
       occupied: true,
       renamed: "anthropic:cli-work",
       reference: "claude-cli:work",
     },
+    {
+      name: "interactive Doctor command",
+      interactive: true,
+      occupied: false,
+      renamed: "anthropic:work",
+      reference: "claude-cli:work",
+    },
   ])(
     "preserves selected accounts with an $name, an older installed plugin, and on repeat",
-    async ({ occupied, renamed, reference }) => {
+    async ({ interactive, occupied, renamed, reference }) => {
       await withOpenClawTestState(
         {
           prefix: "openclaw-doctor-auth-consumers-",
@@ -212,6 +291,42 @@ describe("doctor auth-profile consumers", () => {
             messages: { responsePrefix: "literal anthropic/test-model@claude-cli:work" },
           };
           await state.writeConfig(config);
+          const cronStorePath = resolveCronJobsStorePath();
+          await saveCronJobsStore(cronStorePath, {
+            version: 1,
+            jobs: [
+              {
+                id: "profile-consumer",
+                agentId: "main",
+                name: "Synthetic reminder",
+                enabled: false,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                schedule: { kind: "every", everyMs: 60000 },
+                sessionTarget: "isolated",
+                wakeMode: "now",
+                state: {},
+                payload: {
+                  kind: "agentTurn",
+                  message: "Synthetic reminder",
+                  model: "anthropic/test-model@claude-cli:work",
+                  fallbacks: ["anthropic/test-model@20260101@claude-cli:work"],
+                },
+              },
+            ],
+          });
+          if (interactive) {
+            await state.writeJson("agents/main/agent/auth-profiles.json", {
+              version: 1,
+              profiles: {
+                "claude-cli:work": {
+                  type: "api_key",
+                  provider: "anthropic",
+                  key: "synthetic-work-key",
+                },
+              },
+            });
+          }
           runAuthProfileWriteTransaction(
             undefined,
             (database) =>
@@ -219,10 +334,10 @@ describe("doctor auth-profile consumers", () => {
                 {
                   version: 1,
                   profiles: {
-                    "claude-cli:work": {
+                    [interactive ? "anthropic:control" : "claude-cli:work"]: {
                       type: "api_key",
                       provider: "anthropic",
-                      key: "synthetic-work-key",
+                      key: interactive ? "synthetic-control-key" : "synthetic-work-key",
                     },
                     ...(occupied
                       ? {
@@ -248,7 +363,7 @@ describe("doctor auth-profile consumers", () => {
           });
           clearUserProfileAuthLink({ profileId: person.id, provider: "openai" });
           const linkedAt = listUserProfileAuthLinks(person.id)[0]!.updatedAt;
-          runDoctor(state.env);
+          await (interactive ? runInteractiveDoctor(state.env, true) : runDoctor(state.env));
 
           const snapshot = await readConfigFileSnapshot();
           expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
@@ -296,9 +411,17 @@ describe("doctor auth-profile consumers", () => {
             version: 1,
             links: { anthropic: { authProfileId: renamed, updatedAt: linkedAt }, openai: null },
           });
+          const savedPayload = (await loadCronJobsStore(cronStorePath)).jobs[0]?.payload;
+          expect(savedPayload).toEqual({
+            kind: "agentTurn",
+            message: "Synthetic reminder",
+            model: `anthropic/test-model@${renamed}`,
+            fallbacks: [`anthropic/test-model@20260101@${renamed}`],
+          });
 
-          runDoctor(state.env);
+          await (interactive ? runInteractiveDoctor(state.env, false) : runDoctor(state.env));
 
+          expect((await loadCronJobsStore(cronStorePath)).jobs[0]?.payload).toEqual(savedPayload);
           expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual(profiles);
           expect(readStoredLinks(person.id)).toEqual(links);
           const repeated = (await readConfigFileSnapshot()).config;
