@@ -65,6 +65,11 @@ import {
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
+import {
+  recordCliModelCompleted,
+  recordCliTrajectoryEvent,
+  type CliTrajectoryRecorder,
+} from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function normalizeCliBackendThinkingLevel(
@@ -119,6 +124,7 @@ function assertExactToolAvailabilityRuntimeVersion(params: {
 
 type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+  trajectoryRecorder?: CliTrajectoryRecorder;
 };
 
 type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
@@ -583,6 +589,11 @@ export async function executePreparedCliRun(
       if (!useManagedClaudeLiveSession) {
         toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
       }
+      recordCliTrajectoryEvent(options?.trajectoryRecorder ?? null, "prompt.submitted", {
+        prompt: composeCliPromptContext(prompt, promptContext),
+        systemPrompt: systemPromptArg ?? undefined,
+        imagesCount: imagePayload.imagePaths?.length ?? 0,
+      });
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
@@ -718,5 +729,6 @@ export async function executePreparedCliRun(
   // Success stays provisional until persistence and cleanup finish; otherwise
   // a rejected turn would be exported as completed.
   diagnostics?.emitCompleted(completedOutput);
+  recordCliModelCompleted(options?.trajectoryRecorder ?? null, completedOutput);
   return completedOutput;
 }
