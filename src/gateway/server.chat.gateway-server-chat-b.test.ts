@@ -56,6 +56,7 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -549,6 +550,8 @@ function captureChatResponse(responses: CapturedChatResponse[]): RespondFn {
 }
 
 async function sendControlUiChat(params: {
+  agentId?: string;
+  sessionKey?: string;
   authenticatedUserId?: string;
   authenticatedUserProfile?: {
     profileId: string;
@@ -564,6 +567,8 @@ async function sendControlUiChat(params: {
   localClient?: boolean;
 }): Promise<void> {
   const requestParams = makeChatSendParams({
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     message: params.message,
     idempotencyKey: params.idempotencyKey,
     ...(params.expectedSessionRoutingContract
@@ -4830,6 +4835,241 @@ describe("gateway server chat", () => {
       expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
       expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
     } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test.each([
+    { agentId: "main", wireAgentId: "main", allowed: true },
+    { agentId: "research", wireAgentId: "research", allowed: true },
+    { agentId: "research", wireAgentId: undefined, allowed: true },
+    { agentId: "research", wireAgentId: undefined, allowed: false },
+  ])(
+    "chat.send checks fresh canonical legacy routing and role permission ($agentId/$wireAgentId/$allowed)",
+    async ({ agentId, wireAgentId, allowed }) => {
+      const { storePath } = openDirectChatSession();
+      const sessionKey = `agent:${agentId}:main`;
+      const runId = `legacy-fresh-${agentId}-${wireAgentId ?? "derived"}-${allowed}`;
+      const profile = ensureProfileForEmail("routing-writer@example.com");
+      const config: OpenClawConfig = {
+        session: { scope: "per-sender", mainKey: "main" },
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        gateway: {
+          roles: {
+            default: "writer",
+            definitions: {
+              writer: {
+                sessions: { others: "none" },
+                agents: allowed ? [agentId] : ["main"],
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+      try {
+        await writeGatewayConfig(config);
+        testState.agentsConfig = config.agents;
+        expect(loadSessionEntry({ agentId, sessionKey, storePath })).toBeUndefined();
+        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const responses: CapturedChatResponse[] = [];
+        dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+        await sendControlUiChat({
+          context,
+          sessionKey,
+          agentId: wireAgentId,
+          authenticatedUserProfile: {
+            profileId: profile.id,
+            displayName: "Routing Writer",
+            hasAvatar: false,
+          },
+          expectedSessionRoutingContract: "per-sender|main|main",
+          idempotencyKey: runId,
+          message: "send through the selected explicit agent",
+          respond: captureChatResponse(responses),
+        });
+        if (allowed) {
+          expect(responses).toEqual([
+            {
+              ok: true,
+              payload: expect.objectContaining({ runId, status: "started" }),
+              error: undefined,
+            },
+          ]);
+          await waitForFast(
+            () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+            FAST_WAIT_OPTS,
+          );
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+          expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+            ctx: { SessionKey: sessionKey },
+          });
+          expect(context.addChatRun).toHaveBeenCalledWith(
+            runId,
+            expect.objectContaining({ sessionKey, agentId }),
+          );
+        } else {
+          expect(responses).toEqual([
+            {
+              ok: false,
+              payload: undefined,
+              error: expect.objectContaining({
+                code: "FORBIDDEN",
+                message: expect.stringContaining('agent "research"'),
+              }),
+            },
+          ]);
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(context.addChatRun).not.toHaveBeenCalled();
+          expect(loadSessionEntry({ agentId, sessionKey, storePath })).toBeUndefined();
+        }
+      } finally {
+        testState.agentsConfig = undefined;
+        if (process.env.OPENCLAW_CONFIG_PATH) {
+          await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+        }
+        resetDirectChatSession();
+      }
+    },
+  );
+
+  test.each(["PER-SENDER|main|unowned", " per-sender|main|unowned "])(
+    "chat.send compares authoritative routing tokens exactly (%s)",
+    async (expectedSessionRoutingContract) => {
+      openDirectChatSession();
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+      };
+      try {
+        await writeGatewayConfig(config);
+        testState.agentsConfig = config.agents;
+        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const responses: CapturedChatResponse[] = [];
+        await sendControlUiChat({
+          context,
+          sessionKey: "agent:research:main",
+          expectedSessionRoutingContract,
+          idempotencyKey: "exact-routing-token",
+          message: "do not normalize the token",
+          respond: captureChatResponse(responses),
+        });
+        expect(responses).toEqual([
+          {
+            ok: false,
+            payload: undefined,
+            error: expect.objectContaining({ details: { reason: "session-routing-changed" } }),
+          },
+        ]);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } finally {
+        testState.agentsConfig = undefined;
+        if (process.env.OPENCLAW_CONFIG_PATH) {
+          await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+        }
+        resetDirectChatSession();
+      }
+    },
+  );
+
+  test.each(["main", "global"])(
+    "chat.send does not extend legacy routing compatibility to the %s alias",
+    async (sessionKey) => {
+      openDirectChatSession();
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+      };
+      try {
+        await writeGatewayConfig(config);
+        testState.agentsConfig = config.agents;
+        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const responses: CapturedChatResponse[] = [];
+        await sendControlUiChat({
+          context,
+          sessionKey,
+          agentId: "main",
+          expectedSessionRoutingContract: "per-sender|main|main",
+          idempotencyKey: "legacy-alias-rejection",
+          message: "do not broaden the adapter",
+          respond: captureChatResponse(responses),
+        });
+        expect(responses).toEqual([
+          {
+            ok: false,
+            payload: undefined,
+            error: expect.objectContaining({ details: { reason: "session-routing-changed" } }),
+          },
+        ]);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } finally {
+        testState.agentsConfig = undefined;
+        if (process.env.OPENCLAW_CONFIG_PATH) {
+          await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+        }
+        resetDirectChatSession();
+      }
+    },
+  );
+
+  test("chat.send revalidates legacy-compatible routing after admission and permits retry", async () => {
+    const { storePath } = openDirectChatSession();
+    const config: OpenClawConfig = {
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+    };
+    const runId = "legacy-routing-admitted-drift";
+    try {
+      await writeGatewayConfig(config);
+      testState.agentsConfig = config.agents;
+      await writeStoredMainSession(makeDoneSessionEntry());
+      let currentConfig = config;
+      const context = createDirectChatContext({ getRuntimeConfig: () => currentConfig });
+      const responses: CapturedChatResponse[] = [];
+      const onAdmissionOwned = vi.fn(async () => {
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+        currentConfig = { ...config, session: { scope: "per-sender", mainKey: "next" } };
+        return true;
+      });
+      const request = {
+        context,
+        sessionKey: "agent:main:main",
+        expectedSessionRoutingContract: "per-sender|main|main",
+        idempotencyKey: runId,
+        message: "retry this legacy route",
+        respond: captureChatResponse(responses),
+      };
+      await sendControlUiChat({ ...request, onAdmissionOwned });
+      expect(onAdmissionOwned).toHaveBeenCalledOnce();
+      expect(responses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({ details: { reason: "session-routing-changed" } }),
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
+      currentConfig = config;
+      responses.length = 0;
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      await sendControlUiChat(request);
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+          error: undefined,
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      testState.agentsConfig = undefined;
+      if (process.env.OPENCLAW_CONFIG_PATH) {
+        await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+      }
       resetDirectChatSession();
     }
   });

@@ -15,6 +15,7 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { matchesLegacyGatewaySessionRoutingContract } from "../agent-list.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -120,14 +121,20 @@ function loadChatSendSessionContext(params: {
   );
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
-  const expectedSessionRoutingContract = normalizeOptionalChatText(
-    p.expectedSessionRoutingContract,
-  );
+  // The server-issued contract is opaque; only the released projection adapter
+  // may normalize it. Every admission/dispatch recheck shares this closure.
+  const expectedSessionRoutingContract = p.expectedSessionRoutingContract;
   const expectedLeafEntryId =
     p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
-    expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
+    expectedSessionRoutingContract !== resolveSessionRoutingContract(candidateConfig) &&
+    !matchesLegacyGatewaySessionRoutingContract({
+      cfg: candidateConfig,
+      expectedContract: expectedSessionRoutingContract,
+      agentId: requestedAgentId,
+      sessionKey: rawSessionKey,
+    });
   return {
     ok: true as const,
     value: {

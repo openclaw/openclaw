@@ -172,6 +172,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",
+    sessionRoutingContract: "per-sender|main|main",
     agents: [{ id: "main" }],
   })),
 }));
@@ -288,6 +289,7 @@ describe("getStatusSummary", () => {
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      sessionRoutingContract: "per-sender|main|main",
       ownership: "sole",
       selectionRequired: false,
       mainKey: "main",
@@ -311,6 +313,7 @@ describe("getStatusSummary", () => {
       const agents = [{ id: "research" }, { id: "ops" }];
       vi.mocked(listGatewayAgentsBasic).mockReturnValue({
         defaultId: "research",
+        sessionRoutingContract: `${scope}|inbox|unowned`,
         mainKey: "inbox",
         scope,
         agents,
@@ -823,6 +826,7 @@ describe("getStatusSummary", () => {
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      sessionRoutingContract: "per-sender|main|main",
       ownership: "sole",
       selectionRequired: false,
       mainKey: "main",

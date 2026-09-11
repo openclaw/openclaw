@@ -349,6 +349,7 @@ export function listAgentsForGateway(
   defaultId: string;
   ownership: GatewayAgentOwnership;
   selectionRequired: boolean;
+  sessionRoutingContract: string;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
@@ -464,6 +465,7 @@ export function listAgentsForGateway(
     defaultId: basic.defaultId,
     ownership: basic.ownership,
     selectionRequired: basic.selectionRequired,
+    sessionRoutingContract: basic.sessionRoutingContract,
     mainKey: basic.mainKey,
     scope: basic.scope,
     agents,
