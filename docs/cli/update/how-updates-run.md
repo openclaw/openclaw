@@ -396,9 +396,8 @@ the sentinel.
 
 On stable updates, a configured OpenClaw-owned official plugin with no install
 record is repaired from the selected core release cohort. This also applies to
-`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
-checks that package target before stopping the Gateway; post-core reconciliation
-installs it before restart. Existing install records retain their source and
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Post-core
+reconciliation installs it before restart. Existing install records retain their source and
 selector policy. Verified official packages use the existing
 [capability-consent exemption](/plugins/manage-plugins#capability-consent).
 
@@ -428,6 +427,25 @@ advisory and reports `postUpdate.plugins.status: "warning"` in JSON. The warning
 includes the observed installed and available versions and an explicit command
 to replace the pin. Keep the pin if intentional. This advisory does not establish
 incompatibility, change the pin, or fail an otherwise successful core update.
+
+An unavailable npm target or unreachable registry does not block the core update
+when a compatible, runnable plugin is already installed. Plugin sync retains that
+installed version and its recorded selector. The summary, warning log, and run
+history name the plugin, requested target, resolution failure, and
+`openclaw plugins update <id>` next action. JSON keeps top-level `status: "ok"`
+with a `plugin-target-unavailable` advisory under `postUpdate.plugins.warnings`.
+
+Before mutation, an installed plugin whose declared `openclaw.compat.pluginApi`
+range or `openclaw.install.minHostVersion` excludes the target core can block the
+update if the requested replacement is unavailable or also incompatible. The
+`plugin-incompatible` refusal names the installed version and requirement.
+Install a compatible plugin version, explicitly disable the plugin, or wait for
+a compatible release. A registry outage alone never establishes this refusal;
+candidate validation and post-core convergence still check activation safety.
+
+Older updaters may still refuse with `plugin-target-unavailable` before candidate
+code runs. Use your installation's [manual update method](/install/updating/update-methods),
+then run `openclaw update repair` from the updated installation.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.

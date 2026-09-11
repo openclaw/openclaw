@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   maybeStopService: vi.fn(),
   prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
   pluginPreflight: vi.fn(),
+  pluginTargets: vi.fn(),
+  pluginRecords: vi.fn(),
+  npmMetadata: vi.fn(),
   readGitRecovery: vi.fn(),
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
@@ -45,6 +48,18 @@ vi.mock("../../infra/update-candidate-canary.js", () => ({
 
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,
+}));
+
+vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.targets.js", () => ({
+  collectConfiguredNpmPluginTargets: mocks.pluginTargets,
+}));
+vi.mock("../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index-records.js")>()),
+  loadInstalledPluginIndexInstallRecords: mocks.pluginRecords,
+}));
+vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata: mocks.npmMetadata,
 }));
 
 vi.mock("../../infra/update-runner-git-recovery.js", () => ({
@@ -229,7 +244,7 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
   });
 
-  it.each(["available", "unavailable", "changed-owner"] as const)(
+  it.each(["available", "incompatible", "changed-owner"] as const)(
     "admits local artifacts from the staged version before rehearsal: %s",
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-staged-plugin-admission-" }, async (stage) => {
@@ -242,10 +257,10 @@ describe("mutable update execution", () => {
           events.push("preflight");
           expect(targetVersion).toBe("1.0.7");
           expect(mocks.serviceStopped).toBe(false);
-          if (outcome === "unavailable") {
+          if (outcome === "incompatible") {
             throw new UpdatePreMutationError(
-              "plugin-target-unavailable",
-              "fixture plugin is unavailable",
+              "plugin-incompatible",
+              "fixture installed plugin is incompatible",
             );
           }
         });
@@ -288,7 +303,7 @@ describe("mutable update execution", () => {
           expect(mocks.validateCanary).not.toHaveBeenCalled();
           expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
           expect(execution?.result.reason).toBe(
-            outcome === "unavailable" ? "plugin-target-unavailable" : "database-schema-preflight",
+            outcome === "incompatible" ? "plugin-incompatible" : "database-schema-preflight",
           );
         }
       });
@@ -314,27 +329,57 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    "@openclaw/example@1.0.1: Package not found on npm",
-    "@openclaw/example@1.0.1: npm view failed: ECONNRESET",
-  ])("keeps the serving package unchanged when plugin admission fails: %s", async (detail) => {
-    mocks.pluginPreflight.mockRejectedValue(
-      new UpdatePreMutationError("plugin-target-unavailable", detail),
-    );
+    { category: undefined, range: ">=1.0.0", refused: false },
+    { category: "metadata-env", range: ">=1.0.0", refused: false },
+    { category: undefined, range: ">=1.0.0 <1.0.1", refused: true },
+    { category: "metadata-env", range: ">=1.0.0 <1.0.1", refused: false },
+  ])(
+    "admits only known plugin compatibility risks ($category, $range)",
+    async ({ category, range, refused }) => {
+      await withTestDir({ prefix: "openclaw-plugin-admission-" }, async (installPath) => {
+        await fs.writeFile(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: "@example/demo",
+            version: "1.0.0",
+            openclaw: { compat: { pluginApi: range } },
+          }),
+        );
+        mocks.pluginRecords.mockResolvedValue({
+          demo: { source: "npm", spec: "@example/demo@1.0.1", version: "1.0.0", installPath },
+        });
+        mocks.pluginTargets.mockResolvedValue([{ pluginId: "demo", spec: "@example/demo@1.0.1" }]);
+        mocks.npmMetadata.mockResolvedValue({
+          ok: false,
+          category,
+          error:
+            category === "metadata-env"
+              ? "registry unreachable: ECONNRESET"
+              : "No matching version found",
+        });
+        const actual = await vi.importActual<typeof import("./update-command-plugin-preflight.js")>(
+          "./update-command-plugin-preflight.js",
+        );
+        mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+        const execution = await executeMutableUpdate(executionParams("package"));
 
-    expect(execution).toMatchObject({
-      mutationStarted: false,
-      result: {
-        status: "error",
-        reason: "plugin-target-unavailable",
-        steps: [expect.objectContaining({ stderrTail: detail })],
-      },
-    });
-    expect(mocks.serviceStopped).toBe(false);
-    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
-  });
+        expect(execution?.result.status).toBe(refused ? "error" : "ok");
+        if (refused) {
+          expect(execution?.result.reason).toBe("plugin-incompatible");
+          expect(execution?.failure?.detail).toContain('Plugin "demo" (installed 1.0.0)');
+          expect(execution?.failure?.detail).toContain(range);
+          expect(execution?.failure?.detail).toContain("@example/demo@1.0.1");
+          expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+          expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+          expect(mocks.serviceStopped).toBe(false);
+        } else {
+          expect(execution?.result.reason).toBeUndefined();
+          expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
+        }
+      });
+    },
+  );
 
   it("waits for plugin availability before preparing a package update", async () => {
     const available = createDeferred();
