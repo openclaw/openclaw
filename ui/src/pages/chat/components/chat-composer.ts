@@ -177,14 +177,16 @@ export function renderChatComposer(props: ChatComposerProps) {
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => void props.onSend(),
-    canRun: (inline, command) =>
+    canRun: (inline, command, args = "") =>
       canCompose &&
       state.slashCommandDispatchConnected &&
       !(inline && !props.onSlashCommand) &&
       (!props.modelRequiredReason ||
-        isModelIndependentChatCommand(command ? `/${command.name}` : skillMenuHost.getDraft())) &&
+        isModelIndependentChatCommand(
+          command ? `/${command.name} ${args}` : skillMenuHost.getDraft(),
+        )) &&
       (!props.submitDisabledReason ||
-        isChatControlCommand(command ? `/${command.name}` : skillMenuHost.getDraft())),
+        isChatControlCommand(command ? `/${command.name} ${args}` : skillMenuHost.getDraft())),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),

@@ -84,8 +84,8 @@ export type ChatCommandDefinition = {
   tier?: CommandTier;
   /** Handler is safe to resolve while another run owns the session execution slot. */
   activeRunSafe?: true;
-  /** Forms handled without model inference; command authorization still applies. */
-  modelIndependent?: "always" | "no-args";
+  /** Browser command forms that do not need the selected chat model; authorization still applies. */
+  modelIndependent?: "always" | "no-args" | ((args: string) => boolean);
 };
 
 /** Provider-facing native command registration shape. */

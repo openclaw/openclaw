@@ -6530,6 +6530,7 @@ describe("createTelegramBot", () => {
           providers: ["xai"],
           resolvedDefault: { provider: "xai", model: "grok-test" },
           modelNames: new Map([["xai/grok-test", "Grok Test"]]),
+          loginProviders: new Set(["xai"]),
           modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
           modelAvailability: new Map([
             [

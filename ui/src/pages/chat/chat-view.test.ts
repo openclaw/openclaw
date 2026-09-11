@@ -4713,6 +4713,36 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { args: "example/model", allowed: true },
+    { args: "example/model explain this", allowed: false },
+  ])("checks the complete inline model command before sending $args", ({ args, allowed }) => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({
+      onDraftChange,
+      onSend,
+      onSlashCommand,
+      modelRequiredReason: "Connect a provider to send messages.",
+    });
+    inputDraftAtEnd(container, "retained draft /model");
+    keydownComposer(container, "Enter");
+    inputDraftAtEnd(container, `retained draft /model ${args}`);
+    keydownComposer(container, "Enter");
+    if (allowed) {
+      expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/model ${args}`);
+      expect(draft).toBe("retained draft ");
+    } else {
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(draft).toBe(`retained draft /model ${args}`);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("preserves a typed inline command alias when dispatching its argument", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -6880,11 +6910,19 @@ describe("chat welcome", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("keeps model-free commands usable beside empty model setup", () => {
+  it.each([
+    "/models",
+    "/model",
+    "/model example/model",
+    "/clear",
+    "/export-session",
+    "/new",
+    "/think high",
+  ])("keeps %s usable beside empty model setup", (draft) => {
     const onModelSetup = vi.fn();
     const onSend = vi.fn();
     const container = renderChatView({
-      draft: "/models",
+      draft,
       modelRequiredReason: "Connect a provider to send messages.",
       disabledBanner: createChatModelSetupBanner(onModelSetup),
       modelSetupRequired: true,
@@ -6903,7 +6941,7 @@ describe("chat welcome", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it.each(["Hello", "/compact", "/help explain this"])(
+  it.each(["Hello", "/compact", "/reset", "/model example/model explain this"])(
     "keeps %s editable but prevents submission without model access",
     (draft) => {
       const onSend = vi.fn();

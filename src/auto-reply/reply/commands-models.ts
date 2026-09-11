@@ -49,6 +49,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderChannelLoginChoice } from "../../plugins/provider-login-options.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -59,6 +60,8 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+const CUSTOM_MODEL_SETUP_GUIDANCE =
+  "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";
 
 type ModelsCommandSessionEntry = Partial<
   Pick<
@@ -82,6 +85,7 @@ export type ModelsProviderData = {
     string,
     Pick<ModelAuthAvailabilityEvaluation, "availability" | "unavailableReason">
   >;
+  loginProviders?: ReadonlySet<string>;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
   isCurrent?: () => boolean;
@@ -424,6 +428,16 @@ async function projectPreparedModelsProviderData(
   addModelConfigEntries();
 
   const providers = [...byProvider.keys()].toSorted();
+  const loginProviders = new Set(
+    providers.filter(
+      (provider) =>
+        resolveProviderChannelLoginChoice(provider, {
+          config: cfg,
+          workspaceDir,
+          metadataSnapshot: owner.metadataSnapshot,
+        }).status !== "unsupported",
+    ),
+  );
 
   const modelNames = new Map<string, string>();
   for (const entry of [...catalog, ...visibleCatalog]) {
@@ -483,6 +497,7 @@ async function projectPreparedModelsProviderData(
     resolvedDefault,
     modelNames,
     modelAvailability,
+    loginProviders,
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
@@ -605,6 +620,7 @@ export function formatModelsAvailability(data: ModelsProviderData, provider?: st
     if (provider && id !== provider) {
       continue;
     }
+    const loginSupported = data.loginProviders?.has(id) === true;
     for (const model of models) {
       const key = `${id}/${model}`;
       const state = data.modelAvailability?.get(key);
@@ -617,11 +633,13 @@ export function formatModelsAvailability(data: ModelsProviderData, provider?: st
       switch (state.unavailableReason) {
         case "missing-auth":
           label = "Sign-in needed";
-          recovery = `Connect with /login ${id}.`;
+          recovery = loginSupported ? `Connect with /login ${id}.` : CUSTOM_MODEL_SETUP_GUIDANCE;
           break;
         case "auth-failed":
           label = "Sign-in failed";
-          recovery = `Sign in again with /login ${id}.`;
+          recovery = loginSupported
+            ? `Sign in again with /login ${id}.`
+            : CUSTOM_MODEL_SETUP_GUIDANCE;
           break;
         case "cooldown":
           label = "Temporarily unavailable";
@@ -632,7 +650,9 @@ export function formatModelsAvailability(data: ModelsProviderData, provider?: st
           recovery =
             state.availability === false
               ? "Run /models again or choose another model."
-              : `Connect with /login ${id}, or choose another model.`;
+              : loginSupported
+                ? `Connect with /login ${id}, or choose another model.`
+                : CUSTOM_MODEL_SETUP_GUIDANCE;
       }
       modelNames.set(key, `${label} — ${data.modelNames.get(key) ?? model}`);
       notices.add(`${id}: ${label}. ${recovery}`);

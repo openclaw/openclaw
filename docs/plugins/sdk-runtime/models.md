@@ -154,6 +154,9 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
 for channel model menus. Pass the published `ModelsProviderData` to get ready
 counts, display labels, and recovery notices from its paired readiness facts.
 The helper does not refresh the catalog or change model names or selection IDs.
+Its optional `loginProviders` set identifies connections supported by the login
+owner. Other connections receive a link to the custom-provider guide instead of
+a login command.
 Pass its result to `formatModelsAvailableHeader` as `availability` and use its
 `modelNames` for button labels. Older SDK producers can omit readiness facts.
 

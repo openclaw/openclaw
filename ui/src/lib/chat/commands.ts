@@ -129,6 +129,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    modelIndependent: "always",
     tier: "standard",
   },
   {
@@ -140,6 +141,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    modelIndependent: "no-args",
     tier: "power",
   },
 ];
@@ -699,8 +701,14 @@ export function isChatControlCommand(text: string): boolean {
 
 export function isModelIndependentChatCommand(text: string): boolean {
   const parsed = parseSlashCommand(text);
+  if (!parsed) {
+    return false;
+  }
+  const policy = parsed.command.modelIndependent;
   return (
-    parsed?.command.modelIndependent === "always" ||
-    (parsed?.command.modelIndependent === "no-args" && parsed.args === "")
+    policy === "always" ||
+    (policy === "no-args"
+      ? parsed.args === ""
+      : typeof policy === "function" && policy(parsed.args))
   );
 }
