@@ -3162,9 +3162,15 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 400;
   white-space: nowrap;
+}
+
+.chat-controls__auth-meta-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-controls__model-menu .chat-controls__auth-meta [aria-hidden] svg {

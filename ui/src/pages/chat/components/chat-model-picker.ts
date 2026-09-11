@@ -364,7 +364,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                       <span class="chat-controls__provider-label"
                                         >${providerDisplayLabel(provider)}</span
                                       >
-                                      ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__model-option-name">${authLabel}</span></span>` : nothing}
+                                      ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
                                       ${
                                         params.onModelSetup
                                           ? html`<button
