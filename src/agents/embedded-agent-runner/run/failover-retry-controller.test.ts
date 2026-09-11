@@ -44,13 +44,16 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runParams"]["onRetryWait"],
+  timeoutMs = 360_000,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runParams: {
       runId: "run:failover-retry-controller-test",
       abortSignal,
       onRetryWait,
+      timeoutMs,
     } as ControllerInput["runParams"],
+    startedAtMs: Date.now(),
     provider: "openai",
     modelId: "gpt-5.6-luna",
     globalLane: "test",
@@ -77,6 +80,107 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     mocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
     mocks.warn.mockClear();
     rateLimitContext.logFallbackDecision.mockClear();
+  });
+
+  it("declines a multi-day numeric Retry-After within a six-minute run", async () => {
+    const onRetryWait = vi.fn();
+    const controller = createController(
+      vi.fn(async () => false),
+      false,
+      undefined,
+      onRetryWait,
+    );
+    const onRetry = vi.fn();
+    const retryAfterMs = resolveRetryAfterMs(undefined, Date.now(), {
+      headers: { "retry-after": "219217" },
+    });
+    expect(retryAfterMs).toBe(219_217_000);
+    await expect(
+      controller.maybeRetryTransient({
+        reason: "rate_limit",
+        message: "HTTP 429",
+        retryAfterMs,
+        onRetry,
+      }),
+    ).resolves.toBe(false);
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(onRetryWait).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
+  });
+
+  it("counts provider request time and refuses rather than shortening its floor", async () => {
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_000_000);
+    try {
+      const controller = createController(
+        vi.fn(async () => false),
+        false,
+        undefined,
+        undefined,
+        5_000,
+      );
+      clock.mockReturnValue(1_004_001);
+      await expect(
+        controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 1_000 }),
+      ).resolves.toBe(false);
+      expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not share one run's exhausted budget with another run", async () => {
+    const short = createController(
+      vi.fn(async () => false),
+      false,
+      undefined,
+      undefined,
+      1_000,
+    );
+    const long = createController(
+      vi.fn(async () => false),
+      false,
+      undefined,
+      undefined,
+      360_000,
+    );
+    await expect(
+      short.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 2_000 }),
+    ).resolves.toBe(false);
+    await expect(
+      long.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 2_000 }),
+    ).resolves.toBe(true);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(1);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledWith(2_000, undefined);
+  });
+
+  it("revalidates the deadline after an asynchronous retry observer", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const onRetryWait = vi.fn();
+    try {
+      const controller = createController(
+        vi.fn(async () => false),
+        false,
+        undefined,
+        onRetryWait,
+        5_000,
+      );
+      await expect(
+        controller.maybeRetryTransient({
+          reason: "rate_limit",
+          retryAfterMs: 2_000,
+          onRetry: async () => {
+            now += 4_000;
+          },
+        }),
+      ).resolves.toBe(false);
+      expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+      expect(onRetryWait).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("retries rate limits for ten attempts with capped backoff and transient status", async () => {
@@ -237,6 +341,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
           false,
           cancellation.signal,
           lifecycle.beginRetryWait,
+          31 * dayMs,
         );
         let retried = false;
         const retry = controller

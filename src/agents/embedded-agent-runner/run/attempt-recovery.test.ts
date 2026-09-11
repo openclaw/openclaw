@@ -18,6 +18,7 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 type TransportDropScenario = {
   errorMessage?: string;
+  timeoutMs?: number;
   errorBody?: string;
   errorCode?: string;
   errorType?: string;
@@ -116,9 +117,11 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop" } as Parameters<
-      typeof createEmbeddedRunFailoverRetryController
-    >[0]["runParams"],
+    runParams: {
+      runId: "run:transport-drop",
+      timeoutMs: scenario.timeoutMs ?? 7_200_000,
+    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
+    startedAtMs: Date.now(),
     provider: "openai",
     modelId: "gpt-5.6-luna",
     globalLane: "test",
@@ -358,6 +361,25 @@ describe("recoverEmbeddedRunAttempt", () => {
     const { recovery } = await recoverAfterTransportDrop(projection);
     expect(recovery.action).toBe("retry");
     expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(7000, undefined);
+  });
+
+  it("returns a numeric long-floor HTTP429 to failure handling without a retry", async () => {
+    vi.mocked(sleepWithAbort).mockClear();
+    const projection = projectProviderError(
+      new APIError(
+        429,
+        { message: "Too many requests" },
+        undefined,
+        new Headers({ "retry-after": "219217" }),
+      ),
+    );
+    const fixture = await recoverAfterTransportDrop({ ...projection, timeoutMs: 360_000 });
+    expect(fixture.recovery).toEqual({ action: "proceed" });
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
+    expect(fixture.erroredAssistant.errorMessage).toBe(projection.errorMessage);
+    expect(fixture.erroredAssistant.errorMessage).toContain("429");
   });
 
   it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {

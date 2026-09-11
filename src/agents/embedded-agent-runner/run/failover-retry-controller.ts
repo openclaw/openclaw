@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import {
@@ -40,6 +41,7 @@ type RateLimitAuthProfileContext = {
 
 export function createEmbeddedRunFailoverRetryController(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
+  startedAtMs: PreparedEmbeddedRunInput["startedAtMs"];
   provider: string;
   modelId: string;
   globalLane: string;
@@ -257,6 +259,23 @@ export function createEmbeddedRunFailoverRetryController(input: {
         );
         return false;
       }
+      // A Retry-After value is a floor, so waiting only until the run deadline and
+      // retrying early is invalid. Anchor the budget to run admission so provider
+      // request time also consumes it.
+      const runBudgetMs = params.timeoutMs >= MAX_TIMER_TIMEOUT_MS ? Infinity : params.timeoutMs;
+      const remainingRunBudget = () => runBudgetMs - Math.max(0, Date.now() - input.startedAtMs);
+      const remainingRunMs = remainingRunBudget();
+      if (
+        !Number.isFinite(input.startedAtMs) ||
+        Number.isNaN(remainingRunMs) ||
+        remainingRunMs <= 0 ||
+        delayMs >= remainingRunMs
+      ) {
+        log.warn(
+          `transient retry exceeds remaining run deadline for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}, remainingMs=${remainingRunMs}; failing over`,
+        );
+        return false;
+      }
       log.warn(
         `transient same-model retry ${retryCount + 1}/${retryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
@@ -266,6 +285,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
         delayMs,
         reason: retry.reason,
       });
+      // The asynchronous observer may consume the remaining run budget. Refuse
+      // before opening retry-wait lifecycle state when the full floor no longer fits.
+      if (delayMs >= remainingRunBudget()) {
+        return false;
+      }
       const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
       let completed = false;
       try {
@@ -279,6 +303,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
         completed = true;
       } finally {
         closeRetryWait?.(completed);
+      }
+      if (remainingRunBudget() <= 0) {
+        return false;
       }
       transientRetryCount += 1;
       return true;

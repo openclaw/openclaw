@@ -252,6 +252,7 @@ export async function runPreparedEmbeddedLoop(
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runParams: { ...params, abortSignal: input.laneController.abortSignal },
+    startedAtMs: started,
     provider,
     modelId,
     globalLane,
