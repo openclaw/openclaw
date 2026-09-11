@@ -5013,7 +5013,7 @@ describe("agent event handler", () => {
 
   it.each([
     {
-      name: "keeps tool output for Control UI recipients when verbose is on",
+      name: "keeps tool output only for Control UI recipients when verbose is on",
       runId: "run-tool-on",
       toolCallId: "t3",
       verboseLevel: "on",
@@ -5027,7 +5027,7 @@ describe("agent event handler", () => {
       partialResult: undefined,
     },
   ] as const)("$name", ({ runId, toolCallId, verboseLevel, partialResult }) => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
     const result = { content: [{ type: "text", text: "secret" }] };
@@ -5047,6 +5047,10 @@ describe("agent event handler", () => {
     };
     expect(payload.data?.result).toEqual(result);
     expect(payload.data?.partialResult).toEqual(partialResult);
+    const nodePayload = requireMockPayload(nodeSendToSession, 0, 2, "node tool output payload");
+    const nodeData = requireRecord(nodePayload.data, "node tool output data");
+    expect(nodeData.result).toEqual(verboseLevel === "full" ? result : undefined);
+    expect(nodeData.partialResult).toBeUndefined();
   });
 
   it("preserves sanitized outcome-unknown exec details for Control UI recipients", () => {
