@@ -42,6 +42,7 @@ import {
   worktreePathExists,
   requireGit,
   requireGitBuffer,
+  resolveGitRepositoryPaths,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
@@ -346,14 +347,7 @@ async function resolveRepositoryFromRealPath(
       `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
     );
   }
-  const commonRaw = normalizeGitPathForFilesystem(
-    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
-  );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
-  const primary = (await listGitWorktrees(sourceRoot))[0]?.path ?? sourceRoot;
-  const canonicalRoot = await fs.realpath(primary);
+  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
   const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
   const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
   const fingerprint = createHash("sha256")

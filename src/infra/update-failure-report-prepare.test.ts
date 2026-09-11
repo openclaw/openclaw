@@ -14,6 +14,39 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it("does not imply rollback when candidate repair stops before activation", async () => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "candidate-repair-refused",
+        target: "version 2026.9.4",
+        result: {
+          mode: "npm",
+          status: "error",
+          reason: "repair-requires-config-change",
+          before: { version: "2026.9.3" },
+          after: { version: "2026.9.3" },
+          steps: [
+            {
+              name: "repairing",
+              command: "repair staged candidate",
+              cwd: "/candidate",
+              durationMs: 1,
+              exitCode: 1,
+            },
+          ],
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          durationMs: 1,
+        },
+      },
+      context,
+    );
+
+    expect(report.body).toContain("Failed phase: repairing");
+    expect(report.body).toContain("After version: 2026.9.3");
+    expect(report.body).toContain("Recovery outcome: not verified (runtime-verification-failed)");
+    expect(report.body.toLowerCase()).not.toContain("rollback");
+  });
+
   it("records the running Node version in the reviewed report", async () => {
     const report = await prepareDiagnosticReport("node-runtime-preflight");
     expect(report.body).toContain(`- Node version: ${process.versions.node}\n`);
@@ -90,7 +123,7 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).not.toContain("private-customer-text");
     expect(report.body).toContain("exit 7");
     expect(report.body).toContain("Update mode: npm");
-    expect(report.body).toContain("Rollback outcome: not verified");
+    expect(report.body).toContain("Recovery outcome: not verified");
   });
 
   it.each([

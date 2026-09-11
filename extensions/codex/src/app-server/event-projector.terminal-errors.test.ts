@@ -247,32 +247,40 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it.each([
-    {
-      label: "biological-risk",
-      message: "This content was flagged for possible biological risk. Try rephrasing it.",
-      codexErrorInfo: "other",
-      category: "bio",
-    },
-    {
-      label: "typed cyber",
-      message: "This request was blocked by the provider's cyber policy.",
-      codexErrorInfo: "cyberPolicy",
-      category: "cyber",
-    },
-    {
-      label: "typed misalignment",
-      message: "This request was blocked due to a misalignment policy violation.",
-      codexErrorInfo: "misalignmentPolicyViolation",
-      category: "misalignment",
-    },
-  ])(
-    "keeps $label refusals terminal when error is followed by failed turn completion",
-    async ({ message, codexErrorInfo, category }) => {
-      const projector = await createProjector();
+  it.each(
+    [
+      {
+        label: "biological-risk",
+        message: "This content was flagged for possible biological risk. Try rephrasing it.",
+        codexErrorInfo: "other",
+        category: "bio",
+      },
+      {
+        label: "typed cyber",
+        message: "This request was blocked by the provider's cyber policy.",
+        codexErrorInfo: "cyberPolicy",
+        category: "cyber",
+      },
+      {
+        label: "typed misalignment",
+        message: "This request was blocked due to a misalignment policy violation.",
+        codexErrorInfo: "misalignmentPolicyViolation",
+        category: "misalignment",
+      },
+    ].flatMap((testCase) => [
+      { ...testCase, completionOnly: false },
+      { ...testCase, completionOnly: true },
+    ]),
+  )(
+    "keeps $label refusals terminal (completion only: $completionOnly)",
+    async ({ message, codexErrorInfo, category, completionOnly }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
       const error = { message, codexErrorInfo };
 
-      await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      if (!completionOnly) {
+        await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+      }
       await projector.handleNotification(
         forCurrentTurn("turn/completed", {
           turn: { id: TURN_ID, status: "failed", items: [], error },
@@ -298,6 +306,25 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       });
       expect(result.lastAssistant).toBe(terminalAssistant);
       expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      const policyNotices = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "notice" && event.data.phase === "provider_policy");
+      expect(policyNotices).toEqual(
+        category === "cyber"
+          ? [
+              {
+                stream: "notice",
+                data: {
+                  phase: "provider_policy",
+                  category: "cyber",
+                  state: "blocked",
+                  provider: "openai",
+                  model: "gpt-5.4-codex",
+                },
+              },
+            ]
+          : [],
+      );
       expect(
         result.messagesSnapshot.filter(
           (candidate) =>

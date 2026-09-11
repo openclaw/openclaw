@@ -61,6 +61,17 @@ plugin behavior. For the native tool and permission bridge, OpenClaw injects
 per-thread Codex config for `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 and `Stop`.
 
+Before starting or resuming a thread, OpenClaw waits for the native relay's
+direct publication attempt and rechecks the current run's authority. If the
+listener or SQLite locator is unavailable, hook commands can use the existing
+Gateway fallback. A relay without a listening direct bridge can still renew its
+logical expiry; a listening bridge updates its stored locator before extending
+the visible expiry. Unregistering invalidates foreground access
+immediately. Cleanup drains accepted locator writes and, once the relay is
+retired, listener closure. Existing grace windows for late hooks and direct
+children retained after a successful yield are preserved; draining pending
+storage work does not close those children.
+
 When Codex app-server approvals are enabled (`approvalPolicy` is not
 `"never"`), the default injected native hook config omits `PermissionRequest`
 so Codex's app-server reviewer and OpenClaw's approval bridge handle real

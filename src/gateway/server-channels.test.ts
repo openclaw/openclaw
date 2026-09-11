@@ -2,7 +2,7 @@
  * Server channel lifecycle tests.
  */
 import fs from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -27,6 +27,7 @@ import {
   runtimeForLogger,
 } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginRegistry,
@@ -717,6 +718,113 @@ describe("server-channels auto restart", () => {
     // (e.g. a reconnect loop). The replacement must never overlap that lifetime.
     expect(signals[0]?.aborted).toBe(true);
     expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it("binds and rebinds a channel port after concurrent native SDK imports", async () => {
+    const root = channelTempDirs.make("openclaw-channel-sdk-restart-");
+    const files = {
+      "package.json": JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        bin: { openclaw: "./openclaw.mjs" },
+        exports: { "./plugin-sdk/used": "./dist/plugin-sdk/used.js" },
+      }),
+      "dist/plugin-sdk/leaf.js": 'export const value = "ready";',
+      "dist/plugin-sdk/used.js": 'export { value } from "./leaf.js";',
+      "dist/extensions/demo/esm-plugin.mjs": 'export { value } from "openclaw/plugin-sdk/used";',
+      "dist/extensions/demo/cjs-plugin.cjs":
+        'module.exports = require("openclaw/plugin-sdk/used");',
+      "dist/extensions/demo/index.cjs": `module.exports = { load: () => Promise.all([
+        import("./esm-plugin.mjs"), import("./cjs-plugin.cjs")
+      ]).then(([esm, cjs]) => esm.value + ":" + cjs.default.value) };`,
+    };
+    for (const [relative, contents] of Object.entries(files)) {
+      const target = path.join(root, relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, contents);
+    }
+    fs.mkdirSync(path.join(root, "extensions"));
+    const load = createPluginModuleLoader({ devSourceRoot: root });
+    const plugin = load(path.join(root, "dist/extensions/demo/index.cjs")) as {
+      load: () => Promise<string>;
+    };
+    const firstStarted = createDeferred<Server>();
+    const secondStarted = createDeferred<Server>();
+    const crash = createDeferred();
+    const closed = createDeferred();
+    let generation = 0;
+    let port = 0;
+    installTestRegistry(
+      createTestPlugin({
+        startAccount: async ({ abortSignal }) => {
+          const current = generation++;
+          const ready = current === 0 ? firstStarted : secondStarted;
+          let server: Server | undefined;
+          try {
+            const value = await plugin.load();
+            server = createServer((_req, res) => res.end(`${value}:${current + 1}`));
+            const listener = server;
+            await new Promise<void>((resolve, reject) => {
+              listener.once("error", reject);
+              listener.listen(port, "127.0.0.1", resolve);
+            });
+            const address = listener.address();
+            if (!address || typeof address === "string") {
+              throw new Error("expected channel TCP listener");
+            }
+            port = address.port;
+            ready.resolve(listener);
+            await new Promise<void>((resolve, reject) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+              if (current === 0) {
+                void crash.promise.then(() => reject(new Error("channel worker crashed")));
+              }
+            });
+          } catch (error) {
+            // Surface native import failures directly instead of waiting for a port timeout.
+            ready.reject(error);
+            throw error;
+          } finally {
+            const listener = server;
+            if (listener) {
+              await new Promise<void>((resolve) => {
+                listener.close(() => resolve());
+              });
+            }
+            if (current === 0) {
+              closed.resolve();
+            }
+          }
+        },
+      }),
+    );
+    const manager = createManager();
+    const read = async () => {
+      const response = await fetch(`http://127.0.0.1:${port}`, {
+        headers: { Connection: "close" },
+      });
+      return response.text();
+    };
+    try {
+      await manager.startChannels();
+      const first = await firstStarted.promise;
+      const firstPort = port;
+      expect(await read()).toBe("ready:ready:1");
+      crash.resolve();
+      await closed.promise;
+      expect(first.listening).toBe(false);
+      await waitForMicrotaskCondition(
+        () => manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID),
+        "expected automatic channel restart after worker crash",
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      const second = await secondStarted.promise;
+      expect(second).not.toBe(first);
+      expect(port).toBe(firstPort);
+      expect(await read()).toBe("ready:ready:2");
+    } finally {
+      await manager.stopChannel("discord");
+    }
   });
 
   it.each(["resolve", "reject"] as const)(

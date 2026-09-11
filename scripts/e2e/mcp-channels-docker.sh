@@ -16,11 +16,7 @@ TOKEN="mcp-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-mcp-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-mcp-client-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$CLIENT_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$CLIENT_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"

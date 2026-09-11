@@ -509,7 +509,10 @@ describe("readGatewayServiceState", () => {
 
     const state = await readGatewayServiceState(service, { timeoutMs: 100 });
 
-    expect(readCommand).toHaveBeenCalledWith(process.env, { timeoutMs: 100 });
+    expect(readCommand).toHaveBeenCalledWith(process.env, {
+      timeoutMs: 100,
+      onInspectionFailure: expect.any(Function),
+    });
     expect(state.running).toBe(false);
     expect(state.runtime).toEqual({
       status: "unknown",

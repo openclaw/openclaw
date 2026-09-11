@@ -155,6 +155,8 @@ extension DashboardWindowController {
         case .computerControlEnabled:
             defaults.set(enabled, forKey: computerControlEnabledKey)
             state.applyComputerControlHostState()
+        case .unattendedDesktopEnabled:
+            MacDesktopAvailabilityCoordinator.shared.setUnattendedEnabled(enabled)
         case .locationPrecise:
             defaults.set(enabled, forKey: locationPreciseKey)
         case .triggerChime:

@@ -117,6 +117,7 @@ export abstract class CodexTurnProjection {
       },
     );
     this.eventProjection = new CodexEventProjection(
+      params.provider,
       threadId,
       turnId,
       (event) => this.emitAgentEvent(event),

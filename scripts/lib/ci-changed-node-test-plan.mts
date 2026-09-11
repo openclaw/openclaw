@@ -613,6 +613,7 @@ export function createChangedNodeTestShards(
     runnerBackend?: string;
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
     dedicatedUiE2e?: boolean;
+    dedicatedMaxLinesRatchet?: boolean;
   } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -649,6 +650,10 @@ export function createChangedNodeTestShards(
   const regularLivePaths = livePaths.filter(
     (changedPath) =>
       (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      // The emitted ratchet checks this data against the exact tested merge tree.
+      !(
+        options.dedicatedMaxLinesRatchet === true && changedPath === "config/max-lines-baseline.txt"
+      ) &&
       !isPolicyTestOwnedPath(changedPath),
   );
 

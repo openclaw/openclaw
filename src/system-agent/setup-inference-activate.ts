@@ -13,6 +13,7 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
 } from "../commands/onboard-inference.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import {
@@ -471,8 +472,14 @@ async function verifyAndActivateCandidate(
     loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
+  // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
   const project = (config: OpenClawConfig, sourceConfig: OpenClawConfig) =>
-    projectInferenceRoute(config, requestedAgentId, routeDeps, sourceConfig);
+    projectInferenceRoute(
+      materializeRuntimeConfig(config, { manifestRegistry: { plugins: [...metadata.plugins] } }),
+      requestedAgentId,
+      routeDeps,
+      sourceConfig,
+    );
   const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
     resolveSystemAgentConfiguredRouteFromConfig(
       config,
@@ -532,12 +539,12 @@ async function verifyAndActivateCandidate(
   const savedCredential = staged.authProfileId
     ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir).profiles[staged.authProfileId]
     : undefined;
-  if (savedCredential?.setup?.replacement) {
+  if (savedCredential?.setup?.replacement && !params.activationConfirmed) {
     if (
       !params.prompter ||
       !(await params.prompter.confirm({
         message: "Connection verified. Activate this saved sign-in?",
-        initialValue: false,
+        initialValue: true,
       }))
     ) {
       return failure({

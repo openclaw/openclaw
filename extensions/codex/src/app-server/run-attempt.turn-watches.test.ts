@@ -39,12 +39,6 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-
-const testing = {
-  flushPendingCodexNativeHookRelayUnregistersForTests(): void {
-    nativeHookRelayUnregisterQueue.flush();
-  },
-};
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -1300,7 +1294,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         },
       }),
     ).rejects.toThrow("native hook relay not found");
-    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -1330,7 +1324,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         },
       }),
     ).rejects.toThrow("native hook relay not found");
-    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+    await nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 

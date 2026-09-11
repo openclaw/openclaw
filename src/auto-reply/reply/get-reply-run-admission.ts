@@ -441,6 +441,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       cfg,
       provider,
       modelId: model,
+      agentId,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       sessionEntry: authSessionEntry,

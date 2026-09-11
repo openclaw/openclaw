@@ -34,6 +34,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
+import type { AsyncQuestionDraft } from "./chat-async-question.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
@@ -48,6 +49,8 @@ import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-s
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
 export type ChatThreadState = {
+  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+  asyncQuestionScope?: string;
   turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
@@ -58,6 +61,7 @@ export type ChatThreadState = {
   transcriptRenderContext: {
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
+    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
   };
 };
 
@@ -98,6 +102,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runUsageById?: ReadonlyMap<string, RunOutputUsage>;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;
@@ -107,6 +112,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   startupLabel?: string;
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
+  onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -178,6 +184,7 @@ type TranscriptInteractionProps = Pick<
 
 function createTranscriptState(): ChatThreadState {
   return {
+    asyncQuestionDrafts: new Map(),
     turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
@@ -217,6 +224,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
+    state.asyncQuestionDrafts = new Map();
     // Search input belongs to the outgoing transcript. Other fields are pane
     // preferences or dependency memos and invalidate themselves on new props.
     state.searchOpen = false;

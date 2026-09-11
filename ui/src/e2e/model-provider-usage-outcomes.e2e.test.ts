@@ -275,7 +275,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const openaiCard = page.locator('[data-provider-id="openai"]');
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
-        await openaiCard.getByRole("button", { name: "Replace key" }).click();
+        await openaiCard.getByRole("button", { name: "Set API key" }).click();
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await page.screenshot({

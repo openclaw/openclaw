@@ -39,8 +39,10 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 // "terminal" wording); Mistral/Google keep the longer form. Plugin lifecycle
 // strings such as `opencode-go stream ended without a terminal event` must not
 // match — those are not assistant-stream contracts.
+// Responses EOF can leave a tool call open; a completed response with unresolved
+// calls instead indicates an inconsistent terminal payload, not a disconnect.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)[.!]?$/i;
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;

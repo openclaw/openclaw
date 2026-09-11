@@ -31,6 +31,11 @@ do not start a second CLI node for the same Mac. Its native camera, screen, and
 desktop capabilities remain on that identity. If the shared runtime cannot
 start, native capabilities remain available, but session hosting is unavailable.
 
+Approving an updated capability surface on a connected host automatically
+refreshes its session-hosting declaration and current worker slots. The Gateway
+waits for that fresh declaration before making the host available again; the
+app or node-host process does not need to restart.
+
 When a session first needs the current worker build, the Gateway sends its sealed
 worker artifact to the paired host. The node verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.

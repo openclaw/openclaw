@@ -296,13 +296,90 @@ export function createCodexAppServerAgentHarness(
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
-      return runCodexAppServerAttempt(params, {
-        bindingStore: options.bindingStore,
-        pluginConfig: resolveAttemptPluginConfig(params.config),
-        runtime: sessionRuntime,
-        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
-        nativeHookRelay: { enabled: true },
+      const {
+        planCodexCyberEscalation,
+        readCodexCyberAttemptVerdict,
+        recordCodexCyberTargetUnavailable,
+        reserveCodexCyberProbe,
+        resolveCodexCyberFailoverConfig,
+      } = await import("./src/app-server/cyber-failover.js");
+      const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
+      const pluginConfig = resolveAttemptPluginConfig(params.config);
+      // The attempt resolves its turn model from runtimeModelId, so escalation
+      // reroutes one turn without touching the session's stored selection.
+      const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
+      const runAttemptOnModel = (model: string, isRetry = false) =>
+        runCodexAppServerAttempt(
+          // The refused attempt already mirrored this prompt; a retry must not
+          // write a second copy of it into the transcript.
+          isRetry ? { ...params, suppressNextUserMessagePersistence: true } : params,
+          {
+            bindingStore: options.bindingStore,
+            pluginConfig,
+            runtime: sessionRuntime,
+            runtimeModelId: model,
+            nativeHookRelay: { enabled: true },
+          },
+        );
+
+      const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
+      // Authorization is per authenticated workspace, so every lookup and record
+      // below is scoped to this attempt's agent and auth profile.
+      const workspace = { agentId: params.agentId, authProfileId: params.authProfileId };
+      const result = await runAttemptOnModel(attemptModel);
+      const refusal = readCodexCyberAttemptVerdict(result);
+      if (!refusal.cyberRefused) {
+        return result;
+      }
+      const plan = planCodexCyberEscalation({
+        config: cyberFailover,
+        currentModel: attemptModel,
+        replaySafe: refusal.replaySafe,
+        workspace,
       });
+      if (plan.kind !== "escalate") {
+        // A known workspace-level denial is worth stating; without it these
+        // turns show only the generic block and never learn why nothing helped.
+        if (plan.reason === "target_unavailable") {
+          await emitCodexCyberNotice(params, {
+            state: "unavailable",
+            model: attemptModel,
+            fallbackModel: cyberFailover.model,
+          });
+        }
+        return result;
+      }
+      const releaseProbe = reserveCodexCyberProbe({ model: plan.model, workspace });
+      let escalated: Awaited<ReturnType<typeof runCodexAppServerAttempt>>;
+      try {
+        escalated = await runAttemptOnModel(plan.model, /*isRetry*/ true);
+      } finally {
+        releaseProbe();
+      }
+      // Catalog presence never proves entitlement, so the retry itself is the
+      // only evidence. Remember a denial for the workspace: each repeat costs
+      // the transport's full reconnect ladder.
+      const outcome = readCodexCyberAttemptVerdict(escalated);
+      if (outcome.unavailable) {
+        recordCodexCyberTargetUnavailable({
+          model: plan.model,
+          workspace,
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+      }
+      // Announce only the two outcomes this owner can state truthfully. A turn
+      // Daybreak also refused keeps the projector's own block, and any other
+      // failure surfaces through its normal terminal error.
+      if (outcome.answered || outcome.unavailable) {
+        await emitCodexCyberNotice(params, {
+          state: outcome.answered ? "escalated" : "unavailable",
+          model: attemptModel,
+          fallbackModel: plan.model,
+        });
+      }
+      // A Daybreak target the workspace cannot use leaves the original refusal
+      // as the honest outcome for this turn.
+      return outcome.unavailable ? result : escalated;
     },
     runIsolatedCompletionV2: async (params) => {
       if (params.authorization.owner === "host") {

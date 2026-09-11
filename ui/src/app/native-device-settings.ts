@@ -54,8 +54,10 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       cuaDriverBundled: z.boolean().optional(),
       peekabooBridgeEnabled: z.boolean().optional(),
       activeComputerPresenceEnabled: z.boolean().optional(),
+      unattendedDesktopEnabled: z.boolean().optional(),
     })
     .optional(),
+  desktopAvailability: z.object({ state: z.enum(["locked", "unlocked", "unknown"]) }).optional(),
   browser: z
     .object({
       importAvailable: z.boolean(), // local mode with Chrome-family cookies available
@@ -141,6 +143,7 @@ export type SettingKey =
   | "capabilities.computerControlProvider"
   | "capabilities.peekabooBridgeEnabled"
   | "capabilities.activeComputerPresenceEnabled"
+  | "capabilities.unattendedDesktopEnabled"
   | "browser.cookieSync.enabled"
   | "browser.cookieSync.domains"
   | "browser.cookieSync.targetProfile"

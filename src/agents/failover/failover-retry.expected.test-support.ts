@@ -6,6 +6,8 @@ export const failoverRetryExpectations = {
   "mistral-incomplete-terminal-stream": true,
   "openai-completions-incomplete-terminal-stream": true,
   "openai-responses-incomplete-terminal-stream": true,
+  "openai-responses-eof-with-unresolved-tools": true,
+  "openai-responses-completed-with-unresolved-tools": false,
   "proxy-incomplete-terminal-stream": true,
   "billing-context-input-length-model-limit": false,
   "retry-go-usage-limit": false,

@@ -134,6 +134,26 @@ describe("native plugin alias preparation", () => {
     },
   );
 
+  it("evaluates shared SDK imports before concurrent lazy CJS plugins require them", async () => {
+    const f = fixture();
+    writeFile(f.root, "dist/plugin-sdk/leaf.js", 'export const value = "dist";');
+    writeFile(f.root, "dist/plugin-sdk/used.js", 'export { value } from "./leaf.js";');
+    const pluginDir = path.dirname(f.entry);
+    writeFile(pluginDir, "esm-plugin.mjs", 'export { value } from "openclaw/plugin-sdk/used";');
+    writeFile(pluginDir, "cjs-plugin.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
+    const entry = writeFile(
+      pluginDir,
+      "index.cjs",
+      `module.exports = { start: () => Promise.all([
+        import("./esm-plugin.mjs"), import("./cjs-plugin.cjs")
+      ]).then(modules => modules.map(module => module.value ?? module.default.value)) };`,
+    );
+    const load = createPluginModuleLoader({ devSourceRoot: f.root });
+    const plugin = load(entry) as { start: () => Promise<string[]> };
+    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
+    await expect(plugin.start()).resolves.toEqual(["dist", "dist"]);
+  });
+
   it.each([
     { specifier: "@openclaw/retry", target: "dist/retry/index.js" },
     {

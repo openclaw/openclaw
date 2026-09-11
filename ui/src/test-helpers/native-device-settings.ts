@@ -41,7 +41,9 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
       cuaDriverBundled: false,
       peekabooBridgeEnabled: true,
       activeComputerPresenceEnabled: false,
+      unattendedDesktopEnabled: false,
     },
+    desktopAvailability: { state: "unlocked" },
     browser: {
       importAvailable: true,
       cookieSync: {

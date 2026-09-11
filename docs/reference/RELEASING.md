@@ -51,8 +51,9 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish
 `.33+` from that branch. Tag, branch, checkout, package version, preflight, and
 validation must identify one commit. Before `.33`, protected `main` must contain
-a later month's final version below patch `33`; later maintenance patches remain
-eligible.
+a final version below patch `33` exactly one calendar month later, making the
+release the trailing completed month. Maintenance patches remain eligible only
+while that holds; the older line retires when `main` advances another month.
 
 ### Prepare and stabilize the candidate
 
@@ -1140,7 +1141,7 @@ SHA-256, and npm integrity. A mismatch requires a new package version.
 - `release_publish_run_id`: approved `OpenClaw Release Publish` run id; required when this workflow is dispatched by that parent (bot-actor real-publish calls)
 - `plugin_npm_run_id`: successful exact-head `Plugin NPM Release` run id; required for a real `extended-stable` core publish
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`, `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always rejects non-final tags.
-- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility while preserving release identity, artifact, approval, and readback checks.
+- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility, including the trailing-completed-month rule, while preserving release identity, artifact, approval, and readback checks.
 
 `Plugin NPM Release` accepts `npm_dist_tag=default` for existing release
 behavior or `npm_dist_tag=extended-stable` for the guarded monthly path. The

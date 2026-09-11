@@ -42,13 +42,12 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
 }
 
 describe("chat task suggestions", () => {
-  it("starts a new session without asking for an execution mode", () => {
+  it("starts a new session from the primary action", () => {
     const { container, onAccept, onDismiss } = renderSuggestion();
 
     expect(container.querySelector(".task-suggestion__start")?.textContent).toContain(
       "Start in a new session",
     );
-    expect(container.querySelector("wa-dropdown")).toBeNull();
 
     expect(container.querySelector(".task-suggestion__eyebrow")?.textContent).toContain(
       "Suggested task · in project",
@@ -71,7 +70,7 @@ describe("chat task suggestions", () => {
 
     container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.click();
     container.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
-    expect(onAccept).toHaveBeenCalledWith(suggestion);
+    expect(onAccept).toHaveBeenCalledWith(suggestion, "local");
     expect(onDismiss).toHaveBeenCalledWith(suggestion);
   });
 
