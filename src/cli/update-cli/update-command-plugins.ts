@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
+import { getLogger } from "../../logging/logger.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
@@ -278,11 +279,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
   // Convergence checks activation before restart. Seed it from the current
   // sync/npm records so repair cannot overwrite them with an older disk snapshot.
   const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
-  // Keep the observed selectors stable if convergence replaces their records.
-  const probedNpmSpecs = new Map(
+  // Keep the observed records stable if convergence replaces them.
+  const probedNpmRecords = new Map(
     cohort.updateOutcomes.map(({ pluginId }) => {
       const record = convergenceBaselineRecords[pluginId];
-      return [pluginId, record?.source === "npm" ? record.spec : undefined];
+      return [pluginId, record?.source === "npm" ? { ...record } : undefined];
     }),
   );
   const convergence = await runPostCorePluginConvergence({
@@ -320,35 +321,53 @@ export async function updatePluginsAfterCoreUpdate(params: {
   // Repair already persisted this authoritative map; the commit below must not
   // restore the pre-convergence records and discard successful repairs.
   pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
-  // An unchanged npm outcome can report a newer registry release without replacing
-  // its pin. Do not retain that advisory if convergence repaired or removed the pin.
+  // Report retention only while the probed install survives convergence.
   for (const outcome of cohort.updateOutcomes) {
     const record = convergence.installRecords[outcome.pluginId];
+    const probed = probedNpmRecords.get(outcome.pluginId);
     if (
       outcome.status !== "unchanged" ||
       !outcome.currentVersion ||
-      !outcome.nextVersion ||
-      comparePackageUpdateVersions(outcome.nextVersion, outcome.currentVersion) <= 0 ||
       record?.source !== "npm" ||
-      (record.resolvedVersion ?? record.version) !== outcome.currentVersion ||
-      record.spec !== probedNpmSpecs.get(outcome.pluginId) ||
-      resolveExactNpmSpecVersion(record.spec) !== outcome.currentVersion ||
-      !isTrustedOfficialPluginInstallRecord({
-        pluginId: outcome.pluginId,
-        packageName: resolveNpmSpecPackageName(record.spec),
-        record,
-      })
+      record.spec !== probed?.spec
     ) {
       continue;
     }
-    const message = `Plugin update retained an official plugin pin: ${outcome.message}`;
+    const unavailable = outcome.code === "plugin-target-unavailable";
+    if (
+      unavailable
+        ? record.installPath !== probed?.installPath ||
+          record.version !== probed?.version ||
+          record.resolvedVersion !== probed?.resolvedVersion
+        : !outcome.nextVersion ||
+          comparePackageUpdateVersions(outcome.nextVersion, outcome.currentVersion) <= 0 ||
+          (record.resolvedVersion ?? record.version) !== outcome.currentVersion ||
+          resolveExactNpmSpecVersion(record.spec) !== outcome.currentVersion ||
+          !isTrustedOfficialPluginInstallRecord({
+            pluginId: outcome.pluginId,
+            packageName: resolveNpmSpecPackageName(record.spec),
+            record,
+          })
+    ) {
+      continue;
+    }
+    const message = unavailable
+      ? outcome.message
+      : `Plugin update retained an official plugin pin: ${outcome.message}`;
     warnings.push({
       pluginId: outcome.pluginId,
-      reason: "retained-plugin-pin",
+      reason: unavailable ? "plugin-target-unavailable" : "retained-plugin-pin",
       message,
-      guidance: ["Keep the pin if intentional; replacing it is an explicit operator choice."],
+      guidance: [
+        unavailable
+          ? `Run openclaw plugins update ${outcome.pluginId} when the target is available.`
+          : "Keep the pin if intentional; replacing it is an explicit operator choice.",
+      ],
     });
-    if (!params.json) {
+    if (unavailable) {
+      getLogger().warn(message);
+    }
+    if (!params.json && !loggedPluginWarnings.has(stripAnsi(message))) {
       runtime.log(theme.warn(message));
     }
   }

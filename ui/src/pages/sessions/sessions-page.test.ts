@@ -679,10 +679,9 @@ describe("sessions page lifecycle", () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
     const managed = createManagedSessions();
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const page = await createPage(createContext(gateway, managed.sessions));
-    managed.refreshList.mockClear();
     const row = {
       key: "agent:main:cloud",
+      kind: "direct",
       label: "Cloud task",
       placement: {
         state: "provisioning",
@@ -693,7 +692,18 @@ describe("sessions page lifecycle", () => {
         environmentId: "environment-1",
       },
       hasActiveRun: true,
-    } as GatewaySessionRow;
+    } satisfies GatewaySessionRow;
+    const page = await createRenderedPage(
+      createContext(gateway, managed.sessions),
+      sessionsResult([row], 1),
+    );
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.textContent).toContain("Stop cloud worker…");
+    managed.refreshList.mockClear();
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.stopCloudWorker(row);

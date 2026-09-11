@@ -17,7 +17,7 @@ import {
   rememberManagerReplayKey,
   reserveRejectedProviderCall,
 } from "./replay-keys.js";
-import { addTranscriptEntry, transitionState } from "./state.js";
+import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
 import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
@@ -35,10 +35,14 @@ type EventContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "notifyHangupTimers"
   | "endCallOperations"
   | "onCallAnswered"
   | "onCallerSpeech"
   | "streamSessionIssuer"
+  | "mutationQueue"
+  | "trackCallWork"
+  | "isStopping"
 >;
 
 export type ProcessEventResult =
@@ -81,13 +85,13 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-function createWebhookCall(params: {
+async function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
   direction: "inbound" | "outbound";
   from: string;
   to: string;
-}): CallRecord {
+}): Promise<CallRecord> {
   const callId = crypto.randomUUID();
   const effective = resolveVoiceCallEffectiveConfig(
     params.ctx.config,
@@ -122,7 +126,7 @@ function createWebhookCall(params: {
     },
   };
 
-  persistCallRecord(params.ctx.storePath, callRecord);
+  await persistCallRecord(params.ctx.storePath, callRecord);
   params.ctx.activeCalls.set(callId, callRecord);
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
 
@@ -132,12 +136,12 @@ function createWebhookCall(params: {
   return callRecord;
 }
 
-function persistRejectedInboundCall(params: {
+async function persistRejectedInboundCall(params: {
   ctx: EventContext;
   event: NormalizedEvent;
   dedupeKey: string;
   providerCallId: string;
-}): void {
+}): Promise<void> {
   const callId = params.event.callId || params.providerCallId;
   const now = Date.now();
   const rejectedCall: CallRecord = {
@@ -155,10 +159,20 @@ function persistRejectedInboundCall(params: {
     processedEventIds: [params.dedupeKey],
     metadata: { rejectionReason: "inbound-policy" },
   };
-  persistCallRecord(params.ctx.storePath, rejectedCall);
+  await persistCallRecord(params.ctx.storePath, rejectedCall);
 }
 
-export function processEvent(ctx: EventContext, event: NormalizedEvent): ProcessEventResult {
+export function processEvent(
+  ctx: EventContext,
+  event: NormalizedEvent,
+): Promise<ProcessEventResult> {
+  return ctx.mutationQueue.enqueue("state", () => processEventInQueue(ctx, event));
+}
+
+async function processEventInQueue(
+  ctx: EventContext,
+  event: NormalizedEvent,
+): Promise<ProcessEventResult> {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
     return { kind: "ignored" };
@@ -173,9 +187,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
   let providerCallId = event.providerCallId;
   let retained: CallRecord | undefined;
   if (!call) {
-    retained = findCallInStore(ctx.storePath, event.callId);
+    retained = await findCallInStore(ctx.storePath, event.callId);
     if (!retained && providerCallId && providerCallId !== event.callId) {
-      retained = findCallInStore(ctx.storePath, providerCallId);
+      retained = await findCallInStore(ctx.storePath, providerCallId);
     }
     // A policy rejection records an attempt, not confirmed carrier termination.
     if (retained && retained.metadata?.rejectionReason !== "inbound-policy") {
@@ -191,7 +205,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     const providerOwner =
       providerCallId === event.callId && retained
         ? retained
-        : findCallInStore(ctx.storePath, providerCallId);
+        : await findCallInStore(ctx.storePath, providerCallId);
     // Known aliases cannot replace the live owner's newer provider ID.
     if (providerOwner?.callId === call.callId) {
       providerCallId = call.providerCallId;
@@ -218,28 +232,33 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         return { kind: "ignored" };
       }
       const callId = event.callId ?? pid;
-      persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
+      await persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
+      if (ctx.isStopping()) {
+        return { kind: "processed" };
+      }
       const rejectionReservation = reserveRejectedProviderCall(ctx.rejectedProviderCallIds, pid);
       if (rejectionReservation === undefined) {
         return { kind: "ignored" };
       }
       rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
       log.info(`Rejecting inbound call by policy: ${pid}`);
-      void ctx.provider
-        .hangupCall({
-          callId,
-          providerCallId: pid,
-          reason: "hangup-bot",
-        })
-        .catch((err: unknown) => {
-          releaseRejectedProviderCall(ctx.rejectedProviderCallIds, pid, rejectionReservation);
-          const message = formatErrorMessage(err);
-          log.warn(`Failed to reject inbound call ${pid}: ${message}`);
-        });
+      ctx.trackCallWork(
+        ctx.provider
+          .hangupCall({
+            callId,
+            providerCallId: pid,
+            reason: "hangup-bot",
+          })
+          .catch((err: unknown) => {
+            releaseRejectedProviderCall(ctx.rejectedProviderCallIds, pid, rejectionReservation);
+            const message = formatErrorMessage(err);
+            log.warn(`Failed to reject inbound call ${pid}: ${message}`);
+          }),
+      );
       return { kind: "processed" };
     }
 
-    call = createWebhookCall({
+    call = await createWebhookCall({
       ctx,
       providerCallId,
       direction: eventDirection === "outbound" ? "outbound" : "inbound",
@@ -255,16 +274,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     return { kind: "ignored", replayable: true };
   }
 
-  const activeCall = call;
-  const previousCall = {
-    state: activeCall.state,
-    providerCallId: activeCall.providerCallId,
-    answeredAt: activeCall.answeredAt,
-    endedAt: activeCall.endedAt,
-    endReason: activeCall.endReason,
-    transcriptLength: activeCall.transcript.length,
-    processedEventIds: [...activeCall.processedEventIds],
-  };
+  const activeCall = copyCallRecord(call);
+  const previousCall = { providerCallId: call.providerCallId };
   const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
   const effects: Array<() => void> = [];
   let result: ProcessEventResult = { kind: "processed" };
@@ -296,35 +307,35 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     }
   };
 
-  try {
-    if (providerCallId && providerCallId !== activeCall.providerCallId) {
-      activeCall.providerCallId = providerCallId;
-    }
-    if (shouldCommitReplayKey) {
-      appendCallReplayKey(activeCall.processedEventIds, dedupeKey);
-    }
+  if (providerCallId && providerCallId !== activeCall.providerCallId) {
+    activeCall.providerCallId = providerCallId;
+  }
+  if (shouldCommitReplayKey) {
+    appendCallReplayKey(activeCall.processedEventIds, dedupeKey);
+  }
 
-    switch (event.type) {
-      case "call.initiated": {
-        transitionState(activeCall, "initiated");
-        const inboundProvider = ctx.provider;
-        const inboundProviderCallId = activeCall.providerCallId;
-        const answerInboundCall = inboundProvider?.answerCall?.bind(inboundProvider);
-        if (activeCall.direction === "inbound" && inboundProviderCallId && answerInboundCall) {
-          effects.push(() => {
-            const inboundStreamSession =
-              ctx.config.realtime?.enabled &&
-              inboundProvider?.name === "telnyx" &&
-              ctx.streamSessionIssuer
-                ? ctx.streamSessionIssuer({
-                    providerName: "telnyx",
-                    callId: activeCall.callId,
-                    from: activeCall.from,
-                    to: activeCall.to,
-                    direction: "inbound",
-                  })
-                : undefined;
-            void answerInboundCall({
+  switch (event.type) {
+    case "call.initiated": {
+      transitionState(activeCall, "initiated");
+      const inboundProvider = ctx.provider;
+      const inboundProviderCallId = activeCall.providerCallId;
+      const answerInboundCall = inboundProvider?.answerCall?.bind(inboundProvider);
+      if (activeCall.direction === "inbound" && inboundProviderCallId && answerInboundCall) {
+        effects.push(() => {
+          const inboundStreamSession =
+            ctx.config.realtime?.enabled &&
+            inboundProvider?.name === "telnyx" &&
+            ctx.streamSessionIssuer
+              ? ctx.streamSessionIssuer({
+                  providerName: "telnyx",
+                  callId: activeCall.callId,
+                  from: activeCall.from,
+                  to: activeCall.to,
+                  direction: "inbound",
+                })
+              : undefined;
+          ctx.trackCallWork(
+            answerInboundCall({
               callId: activeCall.callId,
               providerCallId: inboundProviderCallId,
               ...(inboundStreamSession
@@ -336,120 +347,118 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
             }).catch((err: unknown) => {
               const message = formatErrorMessage(err);
               log.warn(`Failed to answer inbound call ${activeCall.providerCallId}: ${message}`);
-            });
+            }),
+          );
+        });
+      }
+      break;
+    }
+
+    case "call.ringing":
+      transitionState(activeCall, "ringing");
+      break;
+
+    case "call.answered":
+      activeCall.answeredAt = event.timestamp;
+      transitionState(activeCall, "answered");
+      effects.push(startDurationTimer, () => ctx.onCallAnswered?.(call));
+      break;
+
+    case "call.active":
+      transitionState(activeCall, "active");
+      break;
+
+    case "call.speaking":
+    case "call.assistant-speech":
+      prepareLiveDurationTimer();
+      transitionState(activeCall, "speaking");
+      if (event.type === "call.assistant-speech" && event.transcript.trim()) {
+        addTranscriptEntry(activeCall, "bot", event.transcript);
+      }
+      break;
+
+    case "call.speech":
+      if (event.isFinal && event.transcript.trim()) {
+        const waiter = ctx.transcriptWaiters.get(activeCall.callId);
+        if (waiter?.turnToken && waiter.turnToken !== event.turnToken) {
+          log.warn(`Ignoring speech event with mismatched turn token for ${activeCall.callId}`);
+          result = { kind: "ignored" };
+          break;
+        }
+        addTranscriptEntry(activeCall, "user", event.transcript);
+        const speechResult: Extract<ProcessEventResult, { kind: "final-speech" }> = {
+          kind: "final-speech",
+          call,
+          transcript: event.transcript,
+          waiterResolved: false,
+        };
+        result = speechResult;
+        if (waiter) {
+          effects.push(() => {
+            if (ctx.transcriptWaiters.get(activeCall.callId) === waiter) {
+              speechResult.waiterResolved = resolveTranscriptWaiter(
+                ctx,
+                activeCall.callId,
+                event.transcript,
+                event.turnToken,
+              );
+            }
           });
         }
-        break;
       }
+      if (event.transcript.trim()) {
+        effects.push(() => ctx.onCallerSpeech?.(call));
+      }
+      prepareLiveDurationTimer();
+      transitionState(activeCall, "listening");
+      break;
 
-      case "call.ringing":
-        transitionState(activeCall, "ringing");
-        break;
+    case "call.silence":
+    case "call.dtmf":
+      break;
 
-      case "call.answered":
-        activeCall.answeredAt = event.timestamp;
-        transitionState(activeCall, "answered");
-        effects.push(startDurationTimer, () => ctx.onCallAnswered?.(activeCall));
-        break;
+    case "call.ended":
+      await finalizeCall({
+        ctx,
+        call,
+        preparedCall: activeCall,
+        endReason: event.reason,
+        endedAt: event.timestamp,
+      });
+      publishProviderCallId(true);
+      rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+      return { kind: "processed" };
 
-      case "call.active":
-        transitionState(activeCall, "active");
-        break;
-
-      case "call.speaking":
-      case "call.assistant-speech":
-        prepareLiveDurationTimer();
-        transitionState(activeCall, "speaking");
-        if (event.type === "call.assistant-speech" && event.transcript.trim()) {
-          addTranscriptEntry(activeCall, "bot", event.transcript);
-        }
-        break;
-
-      case "call.speech":
-        if (event.isFinal && event.transcript.trim()) {
-          const waiter = ctx.transcriptWaiters.get(activeCall.callId);
-          if (waiter?.turnToken && waiter.turnToken !== event.turnToken) {
-            log.warn(`Ignoring speech event with mismatched turn token for ${activeCall.callId}`);
-            result = { kind: "ignored" };
-            break;
-          }
-          addTranscriptEntry(activeCall, "user", event.transcript);
-          result = {
-            kind: "final-speech",
-            call: activeCall,
-            transcript: event.transcript,
-            waiterResolved: Boolean(waiter),
-          };
-          if (waiter) {
-            effects.push(() => {
-              resolveTranscriptWaiter(ctx, activeCall.callId, event.transcript, event.turnToken);
-            });
-          }
-        }
-        if (event.transcript.trim()) {
-          effects.push(() => ctx.onCallerSpeech?.(activeCall));
-        }
-        prepareLiveDurationTimer();
-        transitionState(activeCall, "listening");
-        break;
-
-      case "call.silence":
-      case "call.dtmf":
-        break;
-
-      case "call.ended":
-        finalizeCall({
+    case "call.error":
+      if (!event.retryable) {
+        await finalizeCall({
           ctx,
-          call: activeCall,
-          endReason: event.reason,
+          call,
+          preparedCall: activeCall,
+          endReason: "error",
           endedAt: event.timestamp,
+          transcriptRejectReason: `Call error: ${event.error}`,
         });
         publishProviderCallId(true);
         rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
         return { kind: "processed" };
-
-      case "call.error":
-        if (!event.retryable) {
-          finalizeCall({
-            ctx,
-            call: activeCall,
-            endReason: "error",
-            endedAt: event.timestamp,
-            transcriptRejectReason: `Call error: ${event.error}`,
-          });
-          publishProviderCallId(true);
-          rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
-          return { kind: "processed" };
-        }
-        // Retryable provider errors remain uncommitted for a later redelivery.
-        result = { kind: "processed", replayable: true };
-        break;
-    }
-
-    // Persist reversible call mutations before publishing dedupe, timers, or waiters.
-    persistCallRecord(ctx.storePath, activeCall);
-    publishProviderCallId();
-    if (shouldCommitReplayKey) {
-      rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
-    }
-  } catch (err) {
-    Object.assign(activeCall, {
-      state: previousCall.state,
-      providerCallId: previousCall.providerCallId,
-      answeredAt: previousCall.answeredAt,
-      endedAt: previousCall.endedAt,
-      endReason: previousCall.endReason,
-    });
-    activeCall.transcript.length = previousCall.transcriptLength;
-    activeCall.processedEventIds.splice(
-      0,
-      activeCall.processedEventIds.length,
-      ...previousCall.processedEventIds,
-    );
-    throw err;
+      }
+      // Retryable provider errors remain uncommitted for a later redelivery.
+      result = { kind: "processed", replayable: true };
+      break;
   }
-  for (const effect of effects) {
-    effect();
+
+  // Persist reversible call mutations before publishing dedupe, timers, or waiters.
+  await persistCallRecord(ctx.storePath, activeCall);
+  Object.assign(call, activeCall);
+  publishProviderCallId();
+  if (shouldCommitReplayKey) {
+    rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
+  }
+  if (!ctx.isStopping()) {
+    for (const effect of effects) {
+      effect();
+    }
   }
   return result;
 }

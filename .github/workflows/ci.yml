@@ -5626,6 +5626,18 @@ jobs:
               ;;
           esac
 
+      - name: Upload Android test reports
+        if: ${{ !cancelled() && startsWith(matrix.task, 'test-') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-test-reports-${{ matrix.task }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: |
+            apps/android/app/build/test-results/test*UnitTest/TEST-*.xml
+            apps/android/wear/build/test-results/test*UnitTest/TEST-*.xml
+            apps/android/wear-shared/build/test-results/test*UnitTest/TEST-*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Save Robolectric Maven cache
         if: success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

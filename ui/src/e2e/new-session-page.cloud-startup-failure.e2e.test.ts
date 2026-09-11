@@ -87,7 +87,7 @@ suite.define(() => {
         await page.locator("#new-session-where-trigger").click();
         await page
           .locator("wa-popover.new-session-page__where-popover")
-          .getByRole("button", { name: "Cloud · aws" })
+          .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);

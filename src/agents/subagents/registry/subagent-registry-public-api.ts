@@ -7,6 +7,7 @@ import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
+  listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
@@ -146,15 +147,11 @@ export function createSubagentRegistryPublicApi(config: {
     requesterSessionKey?: string,
     requesterAgentId?: string,
   ): SubagentRunRecord[] {
-    const key = groupId.trim();
-    const requesterKey = requesterSessionKey?.trim();
-    return [...readRuns().values()].filter(
-      (entry) =>
-        entry.collect === true &&
-        entry.groupId === key &&
-        (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+    return listSwarmRunsForGroupFromRuns(
+      readRuns(),
+      groupId,
+      requesterSessionKey,
+      requesterAgentId,
     );
   }
 

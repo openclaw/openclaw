@@ -249,14 +249,11 @@ export async function reclaimChatPanePlacement(params: {
     reclaiming ||
     deviceOffline ||
     (action?.blocksActiveRun && params.row.hasActiveRun === true) ||
-    action?.method !== "sessions.reclaim"
+    !action
   ) {
     return;
   }
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
+  const access = readSessionMethodAccess(params.gatewaySnapshot, action);
   if (!access.allowed) {
     params.publishError(access.reason);
     return;

@@ -387,6 +387,19 @@ suite.define(() => {
       await expect
         .poll(() => environmentSearch.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      const localEnvironment = whereSelect.locator('[data-value="gateway"]');
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
+      await environmentSearch.fill("no-such-environment");
+      await whereSelect
+        .getByRole("status")
+        .getByText("No matching environments", { exact: true })
+        .waitFor();
+      expect(await whereTrigger.locator(".new-session-page__trigger-label").textContent()).toBe(
+        "Local",
+      );
+      await environmentSearch.fill("");
+      await expect.poll(() => localEnvironment.isVisible()).toBe(true);
+      expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
       await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
         surface: whereSelect.locator('wa-popup [part="popup"]'),
         content: [environmentSearch],

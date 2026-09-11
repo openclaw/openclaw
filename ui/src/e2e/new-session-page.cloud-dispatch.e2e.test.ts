@@ -72,16 +72,16 @@ suite.define(() => {
       const trigger = page.locator("#new-session-where-trigger");
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       await trigger.click();
       await place.getByRole("button", { name: "Fast", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
-      await place.getByRole("button", { name: "Cloud · machine0" }).click();
+      await place.getByRole("button", { name: "machine0", exact: true }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("machine0");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBeNull();
       await trigger.click();
       await expect
-        .poll(() => place.getByRole("button", { name: "Cloud · machine0" }).isDisabled())
+        .poll(() => place.getByRole("button", { name: "machine0", exact: true }).isDisabled())
         .toBe(false);
       expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
       expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
@@ -229,7 +229,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await place.getByRole("button", { name: "aws", exact: true }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await trigger.click();
@@ -366,7 +366,7 @@ suite.define(() => {
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "01-before-refresh.png"),
           await takeControlUiViewportScreenshot(page, place.locator('wa-popup [part="popup"]'), [
-            place.getByRole("button", { name: "Cloud · aws" }),
+            place.getByRole("button", { name: "aws", exact: true }),
           ]),
         );
         await page.keyboard.press("Escape");
@@ -414,7 +414,7 @@ suite.define(() => {
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       await trigger.click();
-      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      const retainedCloudProfile = place.getByRole("button", { name: "aws", exact: true });
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
       await expect
         .poll(() => tooltipTitleText(retainedCloudProfile))

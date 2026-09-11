@@ -751,13 +751,13 @@ wa-popover.new-session-page__project-popover::part(body) {
   overflow-y: auto;
 }
 
-/* Destination search and mode controls stay visible while the flat inventory scrolls. */
+/* Search and Connect a machine stay visible while the inventory scrolls. */
 wa-popover.new-session-page__where-popover {
-  --max-width: min(420px, calc(100vw - 24px));
+  --max-width: min(360px, calc(100vw - 24px));
 }
 
 wa-popover.new-session-page__where-popover::part(body) {
-  width: min(420px, calc(100vw - 24px));
+  width: min(360px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
@@ -771,24 +771,21 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-search {
-  margin-bottom: var(--space-2);
+  margin-bottom: 4px;
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 0 32px;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
   color: var(--muted);
-  border-radius: var(--menu-item-radius);
-}
-
-.new-session-page__environment-search:focus-within {
-  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
 }
 
 .new-session-page__environment-search svg {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
 .new-session-page__environment-search input {
@@ -808,22 +805,22 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-height: 0;
   overflow-y: auto;
 }
 
 .new-session-page__environment-option,
-.new-session-page__auto-device,
 .new-session-page__connect-machine {
-  min-height: 60px;
-  gap: 12px;
-  padding: 12px;
+  min-height: 32px;
+  gap: 8px;
+  padding: 4px 8px;
 }
 
-.new-session-page__environment-option,
-.new-session-page__connect-machine {
-  min-height: 56px;
-  padding-block: 8px;
+.new-session-page__environment-list > .session-menu__item {
+  flex-shrink: 0;
 }
 
 /* Reserve the selection column even when empty so labels and meters never move. */
@@ -833,11 +830,14 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option[aria-pressed="true"] {
-  background: var(--bg-hover);
+  background: var(--menu-selected);
 }
 
-.new-session-page__environment-list--automatic .new-session-page__environment-option {
-  opacity: 0.5;
+.new-session-page__environment-option .session-menu__description {
+  display: inline;
+  margin-top: 0;
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
 }
 
 .new-session-page__device-icon {
@@ -845,16 +845,14 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option .session-menu__icon,
-.new-session-page__auto-device .session-menu__icon,
 .new-session-page__connect-machine .session-menu__icon,
 .new-session-page__environment-option .session-menu__icon svg,
-.new-session-page__auto-device .session-menu__icon svg,
 .new-session-page__connect-machine .session-menu__icon svg {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
 }
 
-.new-session-page__environment-option > .session-context-meter {
+.new-session-page__environment-option > .new-session-page__menu-meta {
   flex: 0 0 84px;
 }
 
@@ -863,56 +861,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   color: var(--muted);
   text-align: center;
   font-size: var(--control-ui-text-sm);
-}
-
-.new-session-page__environment-auto {
-  flex: 0 0 auto;
-  margin: var(--space-2) 12px 0;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-
-.new-session-page__auto-device {
-  padding-inline: 0;
-}
-
-.new-session-page__auto-device .session-menu__icon {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--accent);
-}
-
-.new-session-page__auto-device .session-menu__text {
-  white-space: normal;
-}
-
-.new-session-page__auto-switch {
-  flex: 0 0 32px;
-  width: 32px;
-  height: 20px;
-  padding: 3px;
-  border-radius: var(--radius-full);
-  background: var(--border-strong);
-}
-
-.new-session-page__auto-switch::after {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border-radius: var(--radius-full);
-  background: var(--text);
-  content: "";
-}
-
-.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch {
-  background: var(--accent);
-}
-
-.new-session-page__auto-device[aria-checked="true"] .new-session-page__auto-switch::after {
-  transform: translateX(12px);
 }
 
 .new-session-page__environment-picker > .session-menu__separator,

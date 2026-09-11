@@ -40,13 +40,25 @@ export async function readTranscriptSummary(params: {
 }
 
 export async function persistTranscriptSummary(
-  params: Parameters<typeof readTranscriptSummary>[0],
+  params: Parameters<typeof readTranscriptSummary>[0] & {
+    expectedInputRevision?: string;
+    assertCurrent?: () => void;
+  },
 ) {
-  const revision = params.store.readSummaryInputRevision(params.session);
-  if (revision === undefined) {
+  const revision = await params.store.readSummaryInputRevision(params.session);
+  params.assertCurrent?.();
+  if (
+    revision === undefined ||
+    (params.expectedInputRevision !== undefined && revision !== params.expectedInputRevision)
+  ) {
     throw new TranscriptsSummaryChangedError();
   }
   const summary = await readTranscriptSummary(params);
-  const intendedSummaryPath = await params.store.writeSummary(summary, params.session, revision);
+  const intendedSummaryPath = await params.store.writeSummary(
+    summary,
+    params.session,
+    params.expectedInputRevision ?? revision,
+    params.assertCurrent,
+  );
   return { summary, intendedSummaryPath };
 }
