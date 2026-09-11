@@ -39,6 +39,7 @@ import type {
   WorkerPlacementMoveDestination,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
+  WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -388,28 +389,31 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaim = async (
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
     serialize: (
       run: () => Promise<WorkerReclaimPlacement>,
     ) => Promise<WorkerReclaimPlacement> = async (run) => await run(),
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    beforeDrain?.();
     const initial = placements.get(request.sessionId);
     if (initial) {
       reportPlacementTransition(onTransition, initial);
     }
+    const checkSource = () => beforeDrain?.(pendingOperations?.currentPlacement());
     return await options.runReclaimPreparation({
       ...request,
       authorize,
-      beforeDrain,
+      beforeDrain: checkSource,
       pendingOperations,
       run: (reauthorize) =>
         serialize(() =>
           reclaimCurrent(
             request,
             reauthorize,
-            beforeDrain,
+            checkSource,
             initial,
             pendingOperations?.completedPlacement(),
             onTransition,

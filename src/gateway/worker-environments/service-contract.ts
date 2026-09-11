@@ -12,6 +12,7 @@ import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-reclaim-contract.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
@@ -162,6 +163,11 @@ export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
 export type WorkerPlacementAuthorization = () => void;
 
+/** Exact source eligibility may follow only transitions published by captured predecessors. */
+export type WorkerPlacementReclaimSourceCheck = (
+  predecessor?: WorkerPlacementCancellationTarget,
+) => void;
+
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
@@ -178,7 +184,7 @@ export type WorkerPlacementDispatchContract = {
   reclaim?(
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,
