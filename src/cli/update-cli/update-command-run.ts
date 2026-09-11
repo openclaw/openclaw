@@ -337,7 +337,7 @@ export function createUpdateRunProgress(
 export function completeUpdateCommandRun(
   result: UpdateRunResult,
   run: UpdateCommandOptions["run"],
-  downtimeMs?: number,
+  completion: { rolledBack?: boolean; downtimeMs?: number } = {},
 ): UpdateRunResult {
   if (!run) {
     return result;
@@ -402,15 +402,16 @@ export function completeUpdateCommandRun(
     finishUpdateRun(
       run.runId,
       {
-        status:
-          normalized.status === "ok"
+        status: completion.rolledBack
+          ? "rolled-back"
+          : normalized.status === "ok"
             ? "succeeded"
             : normalized.status === "error"
               ? "failed"
               : "skipped",
         reason: normalized.reason,
         after: normalized.after,
-        downtimeMs,
+        downtimeMs: completion.downtimeMs,
       },
       recordOptions,
     );

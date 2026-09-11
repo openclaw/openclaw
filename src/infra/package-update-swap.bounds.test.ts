@@ -58,7 +58,7 @@ describe("package verification bounds", () => {
             },
           });
           expect(entered).toBe(true);
-          expect(result.status).toBe("committed");
+          expect(result.status, result.step.stderrTail ?? "").toBe("committed");
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",

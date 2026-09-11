@@ -32,6 +32,7 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
+import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
@@ -92,6 +93,60 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it("persists fingerprint warnings before closing a rolled-back run", () => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-fingerprint-warning-") };
+  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const warnings = [
+    "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy",
+    "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
+  ];
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const result = publishUpdateCommandTerminalResult(
+    { opts: { json: true, run }, ownedManagedUpdateEnv: env },
+    {
+      status: "error",
+      mode: "npm",
+      reason: "doctor-failed",
+      before: { version: "1.0.0" },
+      after: { version: "1.0.0" },
+      recovery: {
+        serviceRestartSafe: true,
+        packageRollbackVerified: true,
+        service: "healthy",
+        version: "1.0.0",
+      },
+      durationMs: 50,
+      steps: [
+        {
+          name: "global install rollback",
+          command: "restore",
+          cwd: env.OPENCLAW_STATE_DIR,
+          durationMs: 1,
+          exitCode: 0,
+          advisory: { kind: "recoverable-maintenance", message: warnings.join("\n") },
+          warnings,
+        },
+      ],
+    },
+    { rolledBack: true, downtimeMs: 25 },
+  );
+  expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
+  const recorded = getUpdateRun(run.runId, { env })!;
+  expect(recorded).toMatchObject({
+    status: "rolled-back",
+    reason: "doctor-failed",
+    downtimeMs: 25,
+  });
+  expect(recorded.steps).toEqual(
+    expect.arrayContaining(
+      warnings.map((detail) => expect.objectContaining({ status: "completed", detail })),
+    ),
+  );
+  for (const warning of warnings) {
+    expect(renderUpdateRunReport(recorded).markdown).toContain(warning);
+  }
 });
 
 it("presents committed steps without reopening the ledger for display", () => {
