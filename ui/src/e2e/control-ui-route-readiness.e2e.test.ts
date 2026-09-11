@@ -51,7 +51,9 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           let pendingDraft = await composer.inputValue();
           expect(pendingDraft.trim()).toBe("Draft written before history arrives.");
-          await composer.evaluate((element) => element.setSelectionRange(6, 13, "backward"));
+          await composer.evaluate((element: HTMLTextAreaElement) =>
+            element.setSelectionRange(6, 13, "backward"),
+          );
           const cdp = ime ? await context.newCDPSession(page) : null;
           if (cdp) {
             await cdp.send("Input.imeSetComposition", {
@@ -62,7 +64,7 @@ suite.define(() => {
             pendingDraft = await composer.inputValue();
             expect(pendingDraft).toContain("編集中");
           }
-          const selection = await composer.evaluate((element) => ({
+          const selection = await composer.evaluate((element: HTMLTextAreaElement) => ({
             start: element.selectionStart,
             end: element.selectionEnd,
             direction: element.selectionDirection,
@@ -86,7 +88,7 @@ suite.define(() => {
           ).toBe(true);
           expect(await composer.inputValue()).toBe(pendingDraft);
           expect(
-            await composer.evaluate((element) => ({
+            await composer.evaluate((element: HTMLTextAreaElement) => ({
               start: element.selectionStart,
               end: element.selectionEnd,
               direction: element.selectionDirection,
