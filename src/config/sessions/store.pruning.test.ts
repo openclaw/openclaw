@@ -158,6 +158,24 @@ describe("pruneStaleEntries", () => {
     );
   });
 
+  it("preserves a stale dashboard child pin", () => {
+    const key = "agent:main:dashboard:child";
+    const store = makeStore([
+      [
+        key,
+        {
+          ...makeEntry(Date.now() - 31 * DAY_MS),
+          pinnedAt: 1,
+          boardFace: "dashboard",
+          spawnedBy: "agent:main:main",
+        },
+      ],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store[key]).toMatchObject({ pinnedAt: 1, boardFace: "dashboard" });
+  });
+
   it.each(["archivedAt", "pinnedAt"] as const)(
     "preserves %s until protection is removed, then archives the same identity",
     (field) => {

@@ -486,8 +486,8 @@ describe("gateway sessions patch", () => {
   });
 
   test.each([
-    ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
-    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:main:chat:child", { spawnedBy: MAIN_SESSION_KEY }],
+    ["agent:main:chat:child", { parentSessionKey: MAIN_SESSION_KEY }],
     ["agent:main:subagent:child", {}],
   ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
     const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
@@ -499,6 +499,22 @@ describe("gateway sessions patch", () => {
       }),
       "cannot pin a child session; pin its parent session instead",
     );
+  });
+
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+  ] as const)("allows pins on dashboard children on %s with %j", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: {
+          [key]: { sessionId: "dashboard-child", updatedAt: 1, boardFace: "dashboard", ...lineage },
+        },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
   });
 
   test.each([{ pinned: false }, { label: "Child task" }] as const)(

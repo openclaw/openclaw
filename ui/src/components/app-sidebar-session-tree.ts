@@ -29,6 +29,10 @@ export function projectSessionTree(params: {
   const childKeysByParent = new Map<string, string[]>();
   const hasExplicitCategory = (row: GatewaySessionRow | undefined) =>
     typeof row?.category === "string" && row.category.trim().length > 0;
+  const isPromotedPinnedDashboardChild = (row: GatewaySessionRow | undefined) =>
+    row?.pinned === true &&
+    row.boardFace === "dashboard" &&
+    resolveUiSessionNavigationParentKey(row) != null;
   const appendChild = (parentKey: string, childKey: string) => {
     const keys = childKeysByParent.get(parentKey) ?? [];
     if (!keys.includes(childKey)) {
@@ -42,7 +46,7 @@ export function projectSessionTree(params: {
       // Manual category placement is a first-class sidebar destination. Once
       // a child is explicitly categorized, render it as a section root rather
       // than hiding it behind its lineage parent.
-      if (hasExplicitCategory(child)) {
+      if (hasExplicitCategory(child) || isPromotedPinnedDashboardChild(child)) {
         continue;
       }
       const navigationParentKey = resolveUiSessionNavigationParentKey(child);
@@ -55,7 +59,7 @@ export function projectSessionTree(params: {
   }
   for (const row of rowsByKey.values()) {
     const parentKey = resolveUiSessionNavigationParentKey(row);
-    if (parentKey && !hasExplicitCategory(row)) {
+    if (parentKey && !hasExplicitCategory(row) && !isPromotedPinnedDashboardChild(row)) {
       appendChild(parentKey, row.key);
     }
   }
@@ -139,6 +143,9 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
+      if (isPromotedPinnedDashboardChild(row)) {
+        return true;
+      }
       if (hasExplicitCategory(row)) {
         return true;
       }

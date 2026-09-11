@@ -59,10 +59,14 @@ export function resolveUiSessionNavigationParentKey(
 // Mirrors the Gateway policy in src/config/sessions/session-pin-policy.ts.
 export function isPinnableUiSessionRow(row: {
   key: string;
+  boardFace?: "chat" | "dashboard";
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
 }): boolean {
-  return resolveUiSessionNavigationParentKey(row) == null && !isSubagentSessionKey(row.key);
+  return (
+    !isSubagentSessionKey(row.key) &&
+    (row.boardFace === "dashboard" || resolveUiSessionNavigationParentKey(row) == null)
+  );
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {

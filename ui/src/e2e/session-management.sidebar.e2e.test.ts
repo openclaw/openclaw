@@ -210,6 +210,68 @@ suite.define(() => {
     }
   });
 
+  it("pins a dashboard child into the global pinned shelf after refresh", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(parentKey, "Dashboard parent", Date.parse("2026-07-01T16:01:00.000Z"), {
+            childSessions: [childKey],
+          }),
+          sessionRow(childKey, "Dashboard task", Date.parse("2026-07-01T16:00:00.000Z"), {
+            boardFace: "dashboard",
+            parentSessionKey: parentKey,
+            spawnedBy: parentKey,
+          }),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: childKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
+      const row = page.locator(`[data-session-key="${childKey}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.getByRole("button", { name: "Open session menu" }).focus();
+      await page.keyboard.press("Enter");
+      const menu = page.getByRole("menu", { name: "Actions for Dashboard task" });
+      await menu.waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Pin session" }).waitFor();
+      await captureUiProof(suite, page, "dashboard-child-pin-menu.png", page.locator(".shell"), [
+        menu,
+      ]);
+      await page.getByRole("menuitem", { name: "Pin session" }).click();
+      await waitForPatch(gateway, (params) => params.key === childKey && params.pinned === true);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        reason: "update",
+        sessionKey: childKey,
+      });
+      const pinnedEntry = page.locator(`[data-sidebar-entry="session:${childKey}"]`);
+      await expect
+        .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
+        .toEqual(["Dashboard task"]);
+      expect(await page.locator(`[data-session-key="${childKey}"]`).count()).toBe(1);
+      await captureUiProof(
+        suite,
+        page,
+        "dashboard-child-pinned-shelf.png",
+        page.locator(".shell"),
+        [pinnedEntry],
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("dismisses fixed session menus before the sidebar or drawer hides", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

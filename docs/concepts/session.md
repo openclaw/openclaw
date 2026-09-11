@@ -273,9 +273,11 @@ removed. Pinned root sessions, active or admitted work, model-locked sessions, a
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
 
-Only root sessions can be pinned; child/subagent sessions live in their parent's
-tree and reject pin requests. Existing child pins disappear and no longer protect
-the session from maintenance.
+Root sessions and user-facing dashboard sessions can be pinned. Ordinary
+child/subagent sessions live in their parent's tree and reject pin requests;
+dashboard children remain eligible so a durable dashboard destination can be
+placed in the global pinned shelf. Existing non-dashboard child pins disappear
+and no longer protect the session from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is

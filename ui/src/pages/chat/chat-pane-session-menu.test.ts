@@ -89,9 +89,9 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each([
-    { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
+    { key: "agent:main:chat:fork", parentSessionKey: "agent:main:parent" },
     { key: "agent:main:subagent:child" },
-  ])("hides pinning a lineage child $key in the header menu", async (lineage) => {
+  ])("hides pinning a non-dashboard lineage child $key in the header menu", async (lineage) => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
@@ -120,6 +120,43 @@ describe("chat pane session menu boundary", () => {
     expect(menu).not.toBeNull();
     await menu?.updateComplete;
     expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
+  });
+
+  it("keeps pinning available for a dashboard child in the header menu", async () => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    state.settings = loadSettings();
+    const session = {
+      key: "agent:main:dashboard:child",
+      parentSessionKey: "agent:main:parent",
+      boardFace: "dashboard",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        session,
+        false,
+        undefined,
+        false,
+        null,
+      ),
+      container,
+    );
+
+    const menu = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-chat-header-session-menu",
+    );
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).not.toBeNull();
   });
 
   it("uses the refreshed category when deciding whether a header group move is a no-op", async () => {

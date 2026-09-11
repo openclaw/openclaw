@@ -2,14 +2,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { SessionEntry } from "./types.js";
 
-// Pins are root-session facts; children live in their parent's tree.
+// Pins are root-session facts, except for user-facing dashboard sessions.
 export function isPinnableSessionEntry(
   storeKey: string,
-  entry: Pick<SessionEntry, "spawnedBy" | "parentSessionKey"> | undefined,
+  entry: Pick<SessionEntry, "boardFace" | "spawnedBy" | "parentSessionKey"> | undefined,
 ): boolean {
+  const isDashboardSession = entry?.boardFace === "dashboard";
   return (
     !isSubagentSessionKey(storeKey) &&
-    !normalizeOptionalString(entry?.spawnedBy) &&
-    !normalizeOptionalString(entry?.parentSessionKey)
+    (isDashboardSession ||
+      (!normalizeOptionalString(entry?.spawnedBy) &&
+        !normalizeOptionalString(entry?.parentSessionKey)))
   );
 }

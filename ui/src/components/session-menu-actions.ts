@@ -142,7 +142,12 @@ export class SessionMenuActions {
       case "copy-session-id":
         return batch || !session.sessionId;
       case "toggle-pin":
-        return batch || session.pinnable === false || session.isChild === true || session.archived;
+        return (
+          batch ||
+          session.pinnable === false ||
+          (session.isChild === true && session.pinnable !== true) ||
+          session.archived
+        );
       case "rename":
       case "set-icon":
       case "set-color":
@@ -351,7 +356,9 @@ export class SessionMenuActions {
     const count = String(selectionCount);
     return html`
       ${
-        batch || session.pinnable === false || session.isChild
+        batch ||
+        session.pinnable === false ||
+        (session.isChild === true && session.pinnable !== true)
           ? nothing
           : this.renderItem(
               "toggle-pin",

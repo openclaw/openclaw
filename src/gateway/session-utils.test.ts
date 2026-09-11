@@ -797,6 +797,25 @@ describe("gateway session utils", () => {
     },
   );
 
+  test("projects and orders a pinned dashboard child like a pinned root", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store: Record<string, SessionEntry> = {
+      root: { sessionId: "root", updatedAt: 30 },
+      dashboardChild: {
+        sessionId: "dashboard-child",
+        updatedAt: 10,
+        pinnedAt: 40,
+        boardFace: "dashboard",
+        parentSessionKey: "root",
+      },
+    };
+
+    const listed = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
+
+    expect(listed.sessions.map((row) => row.key)).toEqual(["dashboardChild", "root"]);
+    expect(listed.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40 });
+  });
+
   test("session lists page from an offset after filtering and sorting", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(

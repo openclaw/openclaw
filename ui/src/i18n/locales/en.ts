@@ -1308,7 +1308,8 @@ export const en: TranslationMap & {
     customEmojiHintNoShortcut: "Any emoji works.",
     removeIcon: "Remove icon",
     pinSession: "Pin session",
-    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
+    pinRootSessionsOnly:
+      "Only root or dashboard sessions can be pinned; pin the parent session for other child sessions.",
     unpinSession: "Unpin session",
     markUnread: "Mark as unread",
     markRead: "Mark as read",
