@@ -1201,6 +1201,61 @@ describe("runHeartbeatOnce", () => {
     expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
   });
 
+  it("does not let an event-driven owner delivery consume the first heartbeat alert", async () => {
+    const tmpDir = await createCaseDir("hb-owner-event-no-preamble");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
+      },
+      commands: { ownerAllowFrom: ["+15555550166"] },
+      channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedWhatsAppSession(storePath, sessionKey);
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+    const replySpy = vi
+      .fn()
+      .mockResolvedValueOnce({ text: "Backup completed" })
+      .mockResolvedValueOnce({ text: "Service needs attention" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    await runHeartbeatOnce({
+      cfg,
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey,
+      deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 1, getReplyFromConfig: replySpy }),
+    });
+
+    expectWhatsAppSendCall(sendWhatsApp, 0, {
+      to: "+15555550166",
+      text: "Backup completed",
+    });
+    let store = readSessionStoreForTest(storePath);
+    expect(store[sessionKey]?.lastHeartbeatSentAt).toBeUndefined();
+
+    await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 2, getReplyFromConfig: replySpy }),
+    });
+
+    expectWhatsAppSendCall(sendWhatsApp, 1, {
+      to: "+15555550166",
+      text: 'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.\nService needs attention',
+    });
+    store = readSessionStoreForTest(storePath);
+    expect(store[sessionKey]).toMatchObject({
+      lastHeartbeatText: "Service needs attention",
+      lastHeartbeatSentAt: 2,
+    });
+  });
+
   it("uses per-agent heartbeat overrides and session keys", async () => {
     const tmpDir = await createCaseDir("hb-agent-overrides");
     const storePath = path.join(tmpDir, "sessions.json");

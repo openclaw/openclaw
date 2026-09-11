@@ -468,8 +468,12 @@ async function prepareHeartbeatDispatchReply(
   }
   policy.deliverySilent = normalized.silent;
   policy.projectTarget = !failed;
+  const isScheduledHeartbeat = wakeSource === undefined || wakeSource === "interval";
   const deliveryText =
-    !failed && delivery.implicitDefaultRoute && stateEntry?.lastHeartbeatSentAt === undefined
+    !failed &&
+    isScheduledHeartbeat &&
+    delivery.implicitDefaultRoute &&
+    stateEntry?.lastHeartbeatSentAt === undefined
       ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${text}`
       : text;
   const payload = copyReplyPayloadMetadata(selected ?? {}, {
@@ -486,7 +490,7 @@ async function prepareHeartbeatDispatchReply(
       if (!sent) {
         unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
-      if (sent && !failed && deliveryText.trim()) {
+      if (sent && !failed && isScheduledHeartbeat && deliveryText.trim()) {
         await patchSessionEntryCore(
           { agentId, storePath, sessionKey: stateKey },
           (current, context) =>
