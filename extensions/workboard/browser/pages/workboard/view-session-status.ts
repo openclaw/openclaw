@@ -65,7 +65,7 @@ export function getSessionStatus(
   };
 }
 
-export function renderSessionStatusBadge(presentation: SessionStatusPresentation) {
+function renderSessionStatusBadge(presentation: SessionStatusPresentation) {
   return presentation.visible
     ? html`<span
         class="workboard-session-badge workboard-session-badge--${presentation.tone}"

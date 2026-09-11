@@ -194,7 +194,7 @@ export function renderCardCounts(card: WorkboardCard) {
     : nothing;
 }
 
-export function renderAgentChip(props: WorkboardProps, card: WorkboardCard) {
+function renderAgentChip(props: WorkboardProps, card: WorkboardCard) {
   const label = cardAgentLabel(card, props.agentsList);
   return html`<span
     class="workboard-agent-chip workboard-agent-avatar"

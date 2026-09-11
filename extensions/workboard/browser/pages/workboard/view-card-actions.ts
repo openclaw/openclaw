@@ -32,7 +32,7 @@ import {
   type WorkboardProps,
 } from "./view-helpers.ts";
 
-export async function moveCardToStatus(
+async function moveCardToStatus(
   props: WorkboardProps,
   card: WorkboardCard,
   status: WorkboardStatus,

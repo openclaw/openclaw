@@ -179,7 +179,7 @@ export function resetDraftState(state: WorkboardUiState) {
   }
 }
 
-export function normalizeDraftLabels(value: string): string[] {
+function normalizeDraftLabels(value: string): string[] {
   const labels: string[] = [];
   for (const label of value.split(",")) {
     const trimmed = label.trim();
