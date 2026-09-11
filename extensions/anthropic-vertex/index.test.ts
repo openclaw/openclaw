@@ -16,6 +16,7 @@ vi.mock("./api.js", async (importOriginal) => {
 
 import anthropicVertexPlugin from "./index.js";
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
+import { anthropicVertexProviderDiscovery } from "./provider-discovery.js";
 
 describe("anthropic-vertex provider plugin", () => {
   beforeEach(() => {
@@ -42,6 +43,44 @@ describe("anthropic-vertex provider plugin", () => {
         } as NodeJS.ProcessEnv,
       } as never),
     ).toBe("gcp-vertex-credentials");
+  });
+
+  it.each([
+    { region: "global", baseUrl: "https://aiplatform.googleapis.com" },
+    { region: "us-east5", baseUrl: "https://us-east5-aiplatform.googleapis.com" },
+  ])("publishes the $region static catalog without authenticating", async ({ region, baseUrl }) => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(false);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+    const resolveProviderAuth = vi.fn(() => ({
+      apiKey: undefined,
+      mode: "none" as const,
+      source: "none" as const,
+    }));
+    const context = {
+      config: {},
+      env: { GOOGLE_CLOUD_LOCATION: region },
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth,
+    };
+    const result = await provider.staticCatalog?.run(context);
+    expect(result).toMatchObject({
+      provider: {
+        api: "anthropic-messages",
+        baseUrl,
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            id: "claude-sonnet-4-6",
+            input: ["text", "image"],
+            contextWindow: 1_000_000,
+          }),
+        ]),
+      },
+    });
+    expect(await anthropicVertexProviderDiscovery.staticCatalog.run(context)).toEqual(result);
+    expect(resolveProviderAuth).not.toHaveBeenCalled();
+    expect(
+      provider.resolveSyntheticAuth?.({ config: {}, provider: "anthropic-vertex" }),
+    ).toBeUndefined();
   });
 
   it("returns raw discovery for the host to merge with explicit provider overrides", async () => {

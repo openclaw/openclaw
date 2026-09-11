@@ -111,7 +111,7 @@ export function resolveStartupProviderUseBindingConflict(params: {
 }): ProviderAuthError | undefined {
   const config = authConfig.resolveProviderSourceConfig(params.cfg, params.provider);
   if (!getConfigProviderUseBindings(config)[normalizeProviderId(params.provider)]) {
-    return;
+    return undefined;
   }
   const env = params.env ?? process.env;
   const owner = captureRuntimeAuthSharedOwner(env);

@@ -1,5 +1,6 @@
-/** Cron partition path resolution without loading the store writer. */
 import path from "node:path";
+/** Cron partition path resolution without loading the store writer. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expandHomePrefix } from "../../infra/home-dir.js";
 import { resolveConfigDir } from "../../utils.js";
 import { readCronStoreStatePath } from "./config-state.js";
@@ -30,6 +31,6 @@ export function resolveCronJobsStorePathFromConfig(
   cfg: { cron?: unknown },
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
+  const store = isRecord(cfg.cron) ? cfg.cron.store : undefined;
   return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
 }

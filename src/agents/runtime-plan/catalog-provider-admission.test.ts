@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cloneConfigWithResolutionFacts,
   resolveConfigProviderUseBindings,
   setConfigProviderUseBindings,
 } from "../../config/resolution-facts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildOpenAICompatibleProviderFamilyCatalog } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -15,6 +20,8 @@ import {
 import { setRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { MODELS_CONFIG_IMPLICIT_ENV_VARS } from "../models-config.e2e-harness.js";
+import { planOpenClawModelsJsonSource } from "../models-config.js";
+import { planModelsJsonForTest } from "../models-config.plan.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
@@ -73,6 +80,7 @@ describe("catalog destination credential admission", () => {
     });
   });
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
     await state.cleanup();
   });
   it("revokes earlier provisional output after a later order saves an account while retaining authored and static rows", async () => {
@@ -165,67 +173,104 @@ describe("catalog destination credential admission", () => {
     ]);
   });
 
-  it("does not refresh an authenticated startup catalog after a saved account conflicts", async () => {
-    const provider = "fixture-startup";
-    const env = { ...state.env, FIXTURE_API_KEY: "environment-account" };
-    const source = {};
-    setConfigProviderUseBindings(source, {
-      [provider]: { apiKey: { source: "env", provider: "default", id: "FIXTURE_API_KEY" } },
-    });
-    const config = resolveConfigProviderUseBindings(source);
-    const store = ensureAuthProfileStore(state.agentDir(), { config, syncExternalCli: false });
-    setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "fixture-startup-plugin",
-          providers: [provider],
-          setup: { providers: [{ id: provider, envVars: ["FIXTURE_API_KEY"] }] },
-        },
-      ],
-    });
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      { ...createProvider(provider), pluginId: "fixture-startup-plugin" },
-    ]);
-    mocks.runProviderCatalog.mockImplementation((params) => {
-      expect(params.resolveProviderApiKey(provider).discoveryApiKey).toBe("environment-account");
-      return {
-        providers: {
-          [provider]: {
-            baseUrl: "https://fixture.invalid/v1",
-            api: "openai-completions",
-            models: [createTextModel("fixture", "Fixture")],
+  it.each(["implicit", "provider projection", "runtime source projection"] as const)(
+    "does not refresh an authenticated startup catalog after a saved account conflicts through %s",
+    async (entryPoint) => {
+      const provider = "fixture-startup";
+      const env = { ...state.env, FIXTURE_API_KEY: "environment-account" };
+      const source = {};
+      setConfigProviderUseBindings(source, {
+        [provider]: { apiKey: { source: "env", provider: "default", id: "FIXTURE_API_KEY" } },
+      });
+      const config = resolveConfigProviderUseBindings(source);
+      const store = ensureAuthProfileStore(state.agentDir(), { config, syncExternalCli: false });
+      setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture-startup-plugin",
+            providers: [provider],
+            setup: { providers: [{ id: provider, envVars: ["FIXTURE_API_KEY"] }] },
           },
-        },
-      };
-    });
-    const discover = () =>
-      resolveImplicitProviders({
-        config,
+        ],
+      });
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+        { ...createProvider(provider), pluginId: "fixture-startup-plugin" },
+      ]);
+      mocks.runProviderCatalog.mockImplementation((params) => {
+        expect(params.resolveProviderApiKey(provider).discoveryApiKey).toBe("environment-account");
+        params.reportCatalogOutcome?.({ provider, status: "ready" });
+        return {
+          providers: {
+            [provider]: {
+              baseUrl: "https://fixture.invalid/v1",
+              api: "openai-completions",
+              models: [createTextModel("live-startup-model", "Fixture")],
+            },
+          },
+        };
+      });
+      if (entryPoint === "runtime source projection") {
+        setRuntimeConfigSnapshot(config, source);
+      }
+      const outcomes: Array<{ provider: string; status: string }> = [];
+      const options = {
         env,
         authStore: store,
-        agentDir: state.agentDir(),
         pluginMetadataSnapshot: metadata,
         providerDiscoveryProviderIds: [provider],
+        onProviderCatalogOutcome: (outcome: { provider: string; status: string }) =>
+          outcomes.push(outcome),
+      };
+      const discover = () =>
+        entryPoint === "runtime source projection"
+          ? planOpenClawModelsJsonSource(
+              cloneConfigWithResolutionFacts(config),
+              state.agentDir(),
+              options,
+            )
+          : entryPoint === "provider projection"
+            ? planModelsJsonForTest({ cfg: config, agentDir: state.agentDir(), ...options })
+            : resolveImplicitProviders({
+                config,
+                agentDir: state.agentDir(),
+                ...options,
+              });
+      const initial = await discover();
+      if (entryPoint === "implicit") {
+        expect(initial).toMatchObject({
+          [provider]: { models: [expect.objectContaining({ id: "live-startup-model" })] },
+        });
+      } else {
+        expect(JSON.stringify(initial)).toContain("live-startup-model");
+      }
+      expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
+      expect(outcomes).toEqual([{ provider, status: "ready" }]);
+      const retained = mocks.runProviderCatalog.mock.lastCall?.[0];
+      if (!retained) {
+        throw new Error("Expected the initial catalog owner to run");
+      }
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "fixture-startup:late": { type: "api_key", provider, key: "saved-account" },
+        },
       });
-    expect((await discover())?.[provider]?.models).toHaveLength(1);
-    const retained = mocks.runProviderCatalog.mock.lastCall?.[0];
-    if (!retained) {
-      throw new Error("Expected the initial catalog owner to run");
-    }
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "fixture-startup:late": { type: "api_key", provider, key: "saved-account" },
-      },
-    });
-    expect(() => retained.resolveProviderApiKey(provider)).toThrow("conflicts with saved profile");
-    expect(() => retained.resolveProviderAuth(provider)).toThrow("conflicts with saved profile");
-    mocks.runProviderCatalog.mockClear();
-    expect(await discover()).toEqual({});
-    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
-    expect(source).toEqual({});
-  });
+      expect(() => retained.resolveProviderApiKey(provider)).toThrow(
+        "conflicts with saved profile",
+      );
+      expect(() => retained.resolveProviderAuth(provider)).toThrow("conflicts with saved profile");
+      mocks.runProviderCatalog.mockClear();
+      outcomes.length = 0;
+      const refreshed = await discover();
+      if (entryPoint === "implicit") {
+        expect(refreshed).toEqual({});
+      }
+      expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([{ provider, status: "unavailable" }]);
+      expect(source).toEqual({});
+    },
+  );
   it.each([
     { sibling: "none", configured: true },
     { sibling: "environment", configured: true },

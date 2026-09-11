@@ -14,6 +14,10 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import {
+  getConfigProviderUseBindings,
+  setConfigProviderUseBindings,
+} from "../config/resolution-facts.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -218,6 +222,7 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
     };
   }
   const projected = projectConfigOntoRuntimeSourceSnapshot(config);
+  setConfigProviderUseBindings(projected, getConfigProviderUseBindings(config));
   return {
     config: projected,
     discoveryAuthConfig: config,

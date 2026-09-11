@@ -11,6 +11,7 @@ import {
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexConfigApiKey } from "./api.js";
 import { runAnthropicVertexCatalog } from "./provider-catalog-runtime.js";
 import { normalizeAnthropicVertexResolvedModel } from "./provider-catalog.js";
+import { anthropicVertexProviderDiscovery } from "./provider-discovery.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -26,6 +27,7 @@ export default definePluginEntry({
       label: "Anthropic Vertex",
       docsPath: "/providers/models",
       auth: [],
+      staticCatalog: anthropicVertexProviderDiscovery.staticCatalog,
       catalog: {
         order: "simple",
         run: runAnthropicVertexCatalog,

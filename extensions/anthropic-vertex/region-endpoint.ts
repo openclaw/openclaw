@@ -1,4 +1,4 @@
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAnthropicVertexRegion } from "./region.js";
 
 /** Extract a Vertex region from a provider base URL when possible. */

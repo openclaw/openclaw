@@ -240,7 +240,7 @@ export function buildPluginCatalogConfig(
   return config;
 }
 
-export async function prepareProviderCatalogRun(
+async function prepareProviderCatalogRun(
   params: Parameters<typeof runProviderCatalog>[0] & {
     agentDir: string;
     authStore: AuthProfileStore;
@@ -324,7 +324,7 @@ export async function prepareProviderCatalogRun(
   };
 }
 
-export async function reportProviderCatalogSecretFailure(
+async function reportProviderCatalogSecretFailure(
   error: unknown,
   params: {
     provider: { id: string };
