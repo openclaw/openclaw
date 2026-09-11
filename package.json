@@ -22,6 +22,14 @@
   "bin": {
     "openclaw": "openclaw.mjs"
   },
+  "publishConfig": {
+    "executableFiles": [
+      "dist/crabbox-wrapper.js",
+      "dist/entry.js",
+      "dist/index.js",
+      "dist/native-hook-relay/entry.js"
+    ]
+  },
   "directories": {
     "doc": "docs",
     "test": "test"
