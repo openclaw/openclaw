@@ -6068,6 +6068,30 @@ describe("update-cli", () => {
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
   });
 
+  it("previews a same-version package override as an explicit artifact update", async () => {
+    await mockPackageInstallAtCaseDir("openclaw-same-version-override-preview");
+    readPackageVersion.mockResolvedValue("1.0.0");
+    primeNpmChannelTag("latest", "1.0.0");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ target: "1.0.0", version: "1.0.0" }),
+    );
+    const packageSpec = "file:/owned/openclaw-current.tgz";
+
+    await withEnvAsync({ OPENCLAW_UPDATE_PACKAGE_SPEC: packageSpec }, async () => {
+      await updateCommand({ dryRun: true, json: true, restart: false });
+    });
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      dryRun: true,
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      tag: packageSpec,
+      actions: expect.arrayContaining([
+        `Run global package manager update with spec ${packageSpec}`,
+      ]),
+    });
+  });
+
   it("previews the resolved package owner without probing for another manager", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-dry-run-owner"));
     resolveGlobalManager.mockResolvedValueOnce("npm").mockResolvedValue("bun");

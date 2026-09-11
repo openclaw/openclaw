@@ -74,6 +74,31 @@ describe("native device settings wire contract", () => {
   });
 
   it.each([
+    { state: "locked", enabled: true },
+    { state: "unlocked", enabled: false },
+    { state: "unknown", enabled: true },
+    { state: undefined, enabled: undefined },
+  ] as const)(
+    "preserves published desktop state $state and hosting $enabled",
+    ({ state, enabled }) => {
+      installBridge();
+      const listener = vi.fn();
+      capability?.subscribe(listener);
+      const snapshot = createNativeDeviceSettingsSnapshot();
+      if (state === undefined) {
+        delete snapshot.desktopAvailability;
+        delete snapshot.capabilities.unattendedDesktopEnabled;
+      } else {
+        snapshot.desktopAvailability = { state };
+        snapshot.capabilities.unattendedDesktopEnabled = enabled;
+      }
+      publish(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+      expect(listener).toHaveBeenCalledWith(snapshot);
+    },
+  );
+
+  it.each([
     { name: "empty", entries: [] },
     { name: "single", entries: [{ id: "camera", status: "granted" }] },
     {

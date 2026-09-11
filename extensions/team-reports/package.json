@@ -38,6 +38,9 @@
     "build": {
       "openclawVersion": "2026.9.4",
       "bundledDist": false,
+      "workerEntries": [
+        "./src/store.worker.ts"
+      ],
       "staticAssets": [
         {
           "source": "./assets/crab.avif",

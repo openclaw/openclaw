@@ -7,6 +7,7 @@ import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -364,12 +365,6 @@ function parseFirstJsonLog(runtimeLike: { log: Mock }) {
 }
 
 const requireRecord = createRequireRecord("object", "label-not-object");
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value)).toBe(true);
@@ -1791,7 +1786,7 @@ describe("modelsStatusCommand auth overview", () => {
         .map(([arg]) => (arg as { provider: string }).provider);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       const codexProvider = requireProvider(providers, "codex");
-      expectRecordFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
+      expectObjectFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
         value: "plugin-owned",
         source: "codex-app-server",
       });
@@ -1802,7 +1797,7 @@ describe("modelsStatusCommand auth overview", () => {
         Object.keys(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth")),
       ).toStrictEqual(["value", "source"]);
       expect(JSON.stringify(payload)).not.toContain("codex-runtime-token");
-      expectRecordFields(requireRecord(codexProvider.effective, "codex effective auth"), {
+      expectObjectFields(requireRecord(codexProvider.effective, "codex effective auth"), {
         kind: "synthetic",
         detail: "codex-app-server",
       });

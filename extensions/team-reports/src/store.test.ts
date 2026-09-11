@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,11 +9,12 @@ import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
 
 const DAY_MS = 86_400_000;
+const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
 
 async function openStore() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-store-"));
-  const store = await createTeamReportsStore({ stateDir: directory });
+  const store = await createTeamReportsStore({ stateDir: directory, workerModuleUrl });
   resources.push({ directory, store });
   return { store, dbPath: path.join(directory, "plugins", "team-reports", "team-reports.sqlite") };
 }
@@ -85,7 +87,7 @@ describe("Team Reports storage", () => {
       database.close();
     }
     await store.close();
-    const reopened = await createTeamReportsStore({ dbPath });
+    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
     try {
       expect(await reopened.getPeriod("day", "2026-08-20")).toEqual({
         report: report(),
@@ -96,6 +98,40 @@ describe("Team Reports storage", () => {
       await reopened.close();
     }
     await expect(store.listPeriods()).rejects.toThrow("store is closed");
+  });
+
+  it("keeps timers responsive during lock contention and drains admitted writes before closing", async () => {
+    const { store, dbPath } = await openStore();
+    const retained = await createTeamReportsStore({ dbPath, workerModuleUrl });
+    const blocker = openNodeSqliteDatabase(dbPath);
+    let released = false;
+    blocker.exec("BEGIN IMMEDIATE");
+    const release = setTimeout(() => {
+      blocker.exec("ROLLBACK");
+      released = true;
+    }, 20);
+    try {
+      const write = store.upsertPeriod({ report: report(), markdown: "drained before close" });
+      const closing = store.close().then(() => expect(released).toBe(true));
+      await expect(store.listPeriods()).rejects.toThrow("store is closed");
+      await Promise.all([write, closing]);
+      expect(released).toBe(true);
+    } finally {
+      clearTimeout(release);
+      if (!released) {
+        blocker.exec("ROLLBACK");
+      }
+      blocker.close();
+      await retained.close();
+    }
+    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
+    try {
+      expect((await reopened.getPeriod("day", "2026-08-20"))?.markdown).toBe(
+        "drained before close",
+      );
+    } finally {
+      await reopened.close();
+    }
   });
 
   it("replaces the document, summary, markdown, and person-day counts as one unit", async () => {
@@ -218,6 +254,35 @@ describe("Team Reports storage", () => {
       discordMessages: 2,
     });
     expect(await store.listPersonDaysSince("2026-08-21")).toEqual([]);
+  });
+
+  it("reads a complete month of individually valid reports across the worker boundary", async () => {
+    const { store } = await openStore();
+    const titlePrefix = "x".repeat(1_100_000);
+    const expected: Array<{ key: string; titleLength: number; titleHash: string }> = [];
+    for (let day = 1; day <= 31; day++) {
+      const key = `2026-08-${String(day).padStart(2, "0")}`;
+      const document = report(key);
+      document.period.title = `${titlePrefix}:${key}`;
+      expected.push({
+        key,
+        titleLength: document.period.title.length,
+        titleHash: createHash("sha256").update(document.period.title).digest("hex"),
+      });
+      await store.upsertPeriod({ report: document, markdown: key });
+    }
+    const days = await store.getDayReports(
+      Date.parse("2026-08-01T00:00:00Z"),
+      Date.parse("2026-09-01T00:00:00Z"),
+    );
+    expect(days).toHaveLength(31);
+    expect(
+      days.map(({ period }) => ({
+        key: period.key,
+        titleLength: period.title.length,
+        titleHash: createHash("sha256").update(period.title).digest("hex"),
+      })),
+    ).toEqual(expected);
   });
 
   it("reads half-open day ranges and indexes newest first without projecting week rows onto people", async () => {

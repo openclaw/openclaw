@@ -18,6 +18,7 @@ import {
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
+  isPackageTargetAlreadyCurrent,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
@@ -365,22 +366,24 @@ async function updateCommandInternal(
     }
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
-    packageAlreadyCurrent =
-      updateInstallKind === "package" &&
-      !switchToPackage &&
-      currentVersion != null &&
-      targetVersion != null &&
-      currentVersion === targetVersion;
-    downgradeRisk =
-      canResolveRegistryVersionForPackageTarget(tag) &&
-      !fallbackToLatest &&
-      currentVersion != null &&
-      (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
     packageInstallSpec ??= resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
       env: packageInstallEnv,
     });
+    packageAlreadyCurrent =
+      updateInstallKind === "package" &&
+      !switchToPackage &&
+      isPackageTargetAlreadyCurrent({
+        currentVersion,
+        targetVersion,
+        target: packageInstallSpec,
+      });
+    downgradeRisk =
+      canResolveRegistryVersionForPackageTarget(tag) &&
+      !fallbackToLatest &&
+      currentVersion != null &&
+      (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
     if (targetVersion) {
       const targetMetadata = await fetchNpmPackageTargetStatus({
         target: targetVersion,

@@ -48,17 +48,24 @@ export function extractText(message: unknown): string | null {
   return processMessageText(raw, role);
 }
 
-export function extractTextCached(message: unknown): string | null {
+function readCachedMessageExtraction(
+  message: unknown,
+  cache: WeakMap<object, string | null>,
+  extract: (message: unknown) => string | null,
+): string | null {
   if (!message || typeof message !== "object") {
-    return extractText(message);
+    return extract(message);
   }
-  const obj = message;
-  if (textCache.has(obj)) {
-    return textCache.get(obj) ?? null;
+  if (cache.has(message)) {
+    return cache.get(message) ?? null;
   }
-  const value = extractText(message);
-  textCache.set(obj, value);
+  const value = extract(message);
+  cache.set(message, value);
   return value;
+}
+
+export function extractTextCached(message: unknown): string | null {
+  return readCachedMessageExtraction(message, textCache, extractText);
 }
 
 function extractThinking(message: unknown): string | null {
@@ -83,16 +90,7 @@ function extractThinking(message: unknown): string | null {
 }
 
 export function extractThinkingCached(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return extractThinking(message);
-  }
-  const obj = message;
-  if (thinkingCache.has(obj)) {
-    return thinkingCache.get(obj) ?? null;
-  }
-  const value = extractThinking(message);
-  thinkingCache.set(obj, value);
-  return value;
+  return readCachedMessageExtraction(message, thinkingCache, extractThinking);
 }
 
 function extractRawText(message: unknown): string | null {

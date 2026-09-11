@@ -295,7 +295,7 @@ export default definePluginEntry({
           config,
           agentId: ctx.agentId,
         });
-        const intents = module.matchStandingIntents({
+        const intents = await module.matchStandingIntents({
           agentId,
           prompt: event.prompt,
           ...((ctx.channelId ?? ctx.chatId)
@@ -331,7 +331,7 @@ export default definePluginEntry({
             config,
             agentId: ctx.agentId,
           });
-          module.sweepStandingIntents({ agentId });
+          await module.sweepStandingIntents({ agentId });
         } catch (error) {
           api.logger.warn?.(
             `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,

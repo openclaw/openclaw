@@ -8,7 +8,9 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import {
+  assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
+  cliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
 import { isStartupTraceDuration } from "./lib/gateway-startup-trace-ranking.js";
@@ -303,6 +305,7 @@ function validateStartupArtifact(startup: JsonValue, filePath: string) {
 }
 
 function validateCliArtifact(cli: JsonValue, filePath: string) {
+  cliStartupExecutionMode(valueAt(cli, "primary"));
   cliStartupMemoryMetric(valueAt(cli, "primary"));
   const cases = objectArray(valueAt(cli, "primary", "cases"));
   if (cases.length === 0) {
@@ -639,6 +642,10 @@ function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
   if (!current || !baseline) {
     return [];
   }
+  assertCompatibleCliStartupExecutionModes(
+    valueAt(baseline, "primary"),
+    valueAt(current, "primary"),
+  );
   assertCompatibleCliStartupMemoryMetrics(
     valueAt(baseline, "primary"),
     valueAt(current, "primary"),
