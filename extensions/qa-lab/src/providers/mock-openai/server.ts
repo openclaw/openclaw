@@ -213,6 +213,9 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER = "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
+  "C3PLQA reply with only these words Matrix QA voice pre-flight OK.";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -274,6 +277,9 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.includes(QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER)) {
+    return QA_MATRIX_VOICE_TRANSCRIPTION_TEXT;
+  }
   if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }

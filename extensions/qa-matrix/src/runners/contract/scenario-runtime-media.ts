@@ -67,14 +67,13 @@ function buildMatrixQaMediaTypeCoveragePrompt(params: {
 }
 
 function normalizeMatrixQaVoiceReply(value: string | undefined) {
-  return (value ?? "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .trim();
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
 
 function hasMatrixQaVoicePreflightReply(body: string | undefined) {
-  return normalizeMatrixQaVoiceReply(body).includes(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
+  return normalizeMatrixQaVoiceReply(body).includes(
+    normalizeMatrixQaVoiceReply(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER),
+  );
 }
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {

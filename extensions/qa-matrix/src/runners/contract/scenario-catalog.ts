@@ -444,11 +444,15 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: {
       audio: {
         enabled: true,
+        echoTranscript: true,
+        models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+        prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
       },
-      groupMentionPatterns: ["\\S"],
+      groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],
+      requiredPluginIds: ["openai"],
     },
-    providerMode: "live-frontier",
-    timeoutMs: 180_000,
+    providerMode: "mock-openai",
+    timeoutMs: 90_000,
     title: "Matrix voice notes can trigger mention gating through transcription",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },

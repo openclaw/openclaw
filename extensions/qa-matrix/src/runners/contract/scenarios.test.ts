@@ -4068,7 +4068,7 @@ describe("matrix live qa scenarios", () => {
           eventId: "$voice-reply",
           sender: "@sut:matrix-qa.test",
           type: "m.room.message",
-          body: `Sure: ${MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER}.`,
+          body: '📝 "C3PLQA reply with only these words Matrix QA voice pre-flight OK."',
         },
         since: "driver-sync-reply",
       };
@@ -4081,8 +4081,18 @@ describe("matrix live qa scenarios", () => {
     });
 
     const scenario = requireMatrixQaScenario("matrix-voice-preflight-mention");
-    expect(scenario.configOverrides?.audio?.enabled).toBe(true);
-    expect(scenario.configOverrides?.groupMentionPatterns).toEqual(["\\S"]);
+    expect(scenario.providerMode).toBe("mock-openai");
+    expect(scenario.timeoutMs).toBe(90_000);
+    expect(scenario.configOverrides).toMatchObject({
+      audio: {
+        enabled: true,
+        echoTranscript: true,
+        models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+        prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
+      },
+      groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],
+      requiredPluginIds: ["openai"],
+    });
 
     const result = await runMatrixQaScenario(scenario, {
       baseUrl: "http://127.0.0.1:28008/",
@@ -4146,7 +4156,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$voice-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: ` ${MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER.toLowerCase()}!\n`,
+        body: '📝 "C3PLQA reply with only these words Matrix QA voice pre-flight OK."',
       }),
     ).toBe(true);
 
