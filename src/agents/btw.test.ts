@@ -1026,6 +1026,9 @@ describe("runBtwSideQuestion", () => {
         agentId: "work",
         allowGatewaySubagentBinding: true,
       });
+      expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work" }),
+      );
       if (sideQuestion) {
         expect(sideQuestion).toHaveBeenCalledWith(
           expect.objectContaining({ agentId: "work", sessionKey: "global" }),
