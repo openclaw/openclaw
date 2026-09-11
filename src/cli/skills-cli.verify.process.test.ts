@@ -34,7 +34,7 @@ describe("skills verify process output", () => {
               analysis_completeness: { is_complete: pass, coverage_percent: pass ? 100 : 99.1 },
               components: Array.from({ length: 235 }, (_, index) => ({
                 path: `references/service-${index}.md`,
-                upstreamDetails: { context: "  report detail\n".repeat(160) },
+                upstreamDetails: { context: "  report detail\n".repeat(5500) },
               })),
             }
           : null,
@@ -52,7 +52,7 @@ describe("skills verify process output", () => {
       };
       const body = JSON.stringify(verification);
       if (reportsAvailable) {
-        expect(Buffer.byteLength(body)).toBeGreaterThan(520 * 1024);
+        expect(Buffer.byteLength(body)).toBeGreaterThan(18 * 1024 * 1024);
       }
       const requests: string[] = [];
       const server = createServer((request, response) => {
@@ -94,7 +94,9 @@ describe("skills verify process output", () => {
 
         expect(result.signal, result.stderr).toBeNull();
         expect(result.code, result.stderr).toBe(pass ? 0 : 1);
-        expect(JSON.parse(result.stdout)).toEqual({
+        const output = JSON.parse(result.stdout);
+        expect(output.security).toBeDefined();
+        expect(output).toEqual({
           ...verification,
           openclaw: expect.any(Object),
         });
