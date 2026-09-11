@@ -3271,7 +3271,6 @@ describe("renderWorkboard", () => {
       const popup = owner.querySelector<HTMLElement>("[popover]");
       if (popup) {
         popup.showPopover = vi.fn();
-        popup.hidePopover = vi.fn();
       }
       trigger.click();
       const input = await waitForFast(() =>
