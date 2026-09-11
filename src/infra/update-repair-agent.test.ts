@@ -5,7 +5,7 @@ import type { UpdateRepairValidation } from "./update-repair-protocol.js";
 type UpdateRepairParams = Parameters<typeof runUpdateRepairLoop>[0];
 
 const runtime = vi.hoisted(() => ({
-  withUpdateRepairTargetConfig: vi.fn((run) => run()),
+  withUpdateRepairTargetConfig: vi.fn((_target, run) => run()),
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));

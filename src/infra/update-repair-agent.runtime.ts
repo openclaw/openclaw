@@ -7,10 +7,12 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-p
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import {
+  installationTargetEnv,
   withInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
 import type { UpdateRepairTarget } from "./update-repair-protocol.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const repairRuntime = {
   log: () => {},
@@ -20,19 +22,39 @@ const repairRuntime = {
   },
 };
 
-/**
- * Reload config from the launcher-pinned target for each repair step. The launcher
- * fixes this process's installation selectors, so only the cached config snapshot
- * has to be cleared and restored around the step.
- */
-export async function withUpdateRepairTargetConfig<T>(run: () => Promise<T>): Promise<T> {
+/** Pin manual and worker repair steps to their target without granting Doctor service ownership. */
+export async function withUpdateRepairTargetConfig<T>(
+  target: UpdateRepairTarget,
+  run: () => Promise<T>,
+): Promise<T> {
   const [io, paths] = await Promise.all([import("../config/io.js"), import("../config/paths.js")]);
   const previousConfig = io.getRuntimeConfigSnapshot();
+  const previousEnv = io.snapshotEnv(process.env);
+  // Manual triage shares this loop but has no worker launcher to install these
+  // restrictions. Rehearsal HOME/cache isolation remains exclusively child-owned.
+  Object.assign(
+    process.env,
+    installationTargetEnv({
+      stateDir: target.stateDir,
+      configPath: target.configPath,
+      defaultWorkspaceDir: target.workspaceDir,
+    }),
+    buildUpdateDoctorEnv({
+      allowGatewayServiceRepair: false,
+      allowGatewayActivation: false,
+      serviceRepairPolicy: "external",
+    }),
+  );
   io.clearRuntimeConfigSnapshot();
   paths.pinRuntimePaths();
   try {
     return await run();
   } finally {
+    io.restoreEnvChangesIfUnchanged({
+      env: process.env,
+      before: previousEnv,
+      after: io.snapshotEnv(process.env),
+    });
     if (previousConfig) {
       io.setRuntimeConfigSnapshot(previousConfig);
     } else {

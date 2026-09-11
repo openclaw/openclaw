@@ -161,7 +161,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       return stop("aborted", "tool-call-budget");
     }
     const baselineScore = finalValidation.score;
-    const selected = await runtime.withUpdateRepairTargetConfig(() =>
+    const selected = await runtime.withUpdateRepairTargetConfig(params.target, () =>
       runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
     );
     assertCurrent();
@@ -194,7 +194,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       let outcome;
       try {
         outcome = await cleanup.run(() =>
-          runtime.withUpdateRepairTargetConfig(() =>
+          runtime.withUpdateRepairTargetConfig(params.target, () =>
             runtime.runUpdateRepairTurn({
               target: params.target,
               route,
