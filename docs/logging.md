@@ -402,6 +402,16 @@ integrity check; resumed validation and repair can still run on the opener.
 Correlate the process ID with the log timestamp and current process; PIDs can be
 reused after exit.
 
+`integrityGateMs` covers the initial integrity check through admission
+revalidation and resumption. When the driver measures its synchronous integrity
+and foreign-key callback, `integrityCheckSyncMs` reports that callback's elapsed
+time and `integrityOutsideCheckMs` reports the remaining gate time. The two
+integer fields partition `integrityGateMs`; the remainder includes admission,
+IPC, scheduling, and revalidation, not just a parent queue wait. These are wall
+durations, not CPU time. A reclamation Worker can report this synchronous check
+while its `admissionMode` is `async`. An asynchronous child-process check leaves
+both fields absent because its parent cannot measure the callback itself.
+
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
 emitted after Worker exit and parent admission settlement. It includes the
