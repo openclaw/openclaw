@@ -403,7 +403,7 @@ describe("nodes-cli coverage", () => {
     expect(lastNodeInvokeCall).toBeNull();
   });
 
-  it("forwards a caller-supplied idempotency key and generates one when omitted", async () => {
+  it("forwards a caller-supplied idempotency key verbatim and generates one when omitted", async () => {
     const supplied = await runNodesCommand([
       "nodes",
       "invoke",
@@ -414,7 +414,9 @@ describe("nodes-cli coverage", () => {
       "--idempotency-key",
       "  caller-key  ",
     ]);
-    expect(supplied.params?.idempotencyKey).toBe("caller-key");
+    // The Gateway deduplicates pending actions by exact key equality, so a padded
+    // key must reach it byte-for-byte instead of being trimmed to a new identity.
+    expect(supplied.params?.idempotencyKey).toBe("  caller-key  ");
     expect(randomIdempotencyKey).not.toHaveBeenCalled();
 
     lastNodeInvokeCall = null;

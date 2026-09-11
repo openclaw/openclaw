@@ -2,6 +2,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
@@ -30,16 +31,20 @@ function parseNodeInvokeParams(value = "{}"): unknown {
  * key, but an explicitly blank value is operator error: forwarding "" or "   "
  * reaches the Gateway as a real key, where node.invoke requires a non-empty
  * string, so the whole request is rejected with a cryptic schema error.
+ *
+ * A nonblank key is returned byte-for-byte: the Gateway deduplicates pending node
+ * actions by exact key equality, so trimming a caller-supplied key would change
+ * its identity and let a retry queue a second action.
  */
 function resolveIdempotencyKey(value: unknown): string {
   if (value === undefined) {
     return randomIdempotencyKey();
   }
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
+  const nonBlank = readNonBlankString(value);
+  if (nonBlank === undefined) {
     throw new Error("--idempotency-key must not be blank.");
   }
-  return normalized;
+  return nonBlank;
 }
 
 /** Register direct node command invocation. */
