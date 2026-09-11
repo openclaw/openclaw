@@ -31,8 +31,10 @@ import { captureEnv } from "../test-utils/env.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   runSessionsSendAuthorityScenario,
+  runSessionsSendAnnounceAuthorityScenario,
   sessionSendAuthorityCases,
 } from "./server.sessions-send-authority.test-support.js";
+import { runSessionsSendNodeAuthorityScenario } from "./server.sessions-send-node-authority.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -192,6 +194,28 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it.each([true, false])(
+    "keeps node-only execution from becoming receiving local file I/O (node only: %s)",
+    async (nodeOnly) => {
+      await runSessionsSendNodeAuthorityScenario({
+        nodeOnly,
+        gatewayContext,
+        gatewayPort,
+        gatewayToken,
+        makeTempDir: (prefix) => tempDirs.make(prefix),
+      });
+    },
+  );
+  it.each([false, true])(
+    "guards direct-announcement file I/O after target admission (request cancelled: %s)",
+    async (cancelRequest) => {
+      await runSessionsSendAnnounceAuthorityScenario({
+        cancelRequest,
+        gatewayContext,
+        makeTempDir: (prefix) => tempDirs.make(prefix),
+      });
+    },
+  );
   it.each(sessionSendAuthorityCases)(
     "keeps a $mode source cap through Gateway admission to file I/O",
     async (testCase) => {
