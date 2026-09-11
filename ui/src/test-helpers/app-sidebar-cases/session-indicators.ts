@@ -398,6 +398,7 @@ describe("AppSidebar session indicators", () => {
           label: "Queued child",
           updatedAt: 2,
           hasActiveRun: true,
+          hasActiveSubagentRun: true,
           status: "queued",
         },
         {
