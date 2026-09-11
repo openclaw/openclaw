@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
@@ -295,6 +296,119 @@ describe("prepared GitHub read authority", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each(["refresh", "credential", "probe", "delivery"] as const)(
+    "awaits caller authority before %s during identity preparation",
+    async (stage) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let phase = "refresh";
+      let allowed = true;
+      const refresh = vi.fn(async () => {
+        phase = "credential";
+      });
+      mocks.runCommandBuffered.mockImplementation(async () => {
+        phase = "probe";
+        return commandResult(`native-authority-${stage}`);
+      });
+      vi.mocked(fetch).mockImplementation(async () => {
+        phase = "delivery";
+        return new Response(JSON.stringify({ id: 101, login: "native-user", avatar_url: null }));
+      });
+      const options = {
+        config: {},
+        agentId: "main",
+        env: {},
+        getCurrentConfig: () => ({}),
+        assertActive: () => {},
+        revalidateActive: async () => {
+          if (phase === stage) {
+            entered.resolve();
+            await release.promise;
+          }
+          if (!allowed) {
+            throw new Error("grant revoked");
+          }
+        },
+        refresh,
+      };
+      const preparing = prepareGitHubReadIdentity(options);
+      const outcome = preparing.then(
+        () => "delivered",
+        () => "refused",
+      );
+      try {
+        expect(await Promise.race([entered.promise.then(() => "checking"), outcome])).toBe(
+          "checking",
+        );
+        expect(refresh).toHaveBeenCalledTimes(stage === "refresh" ? 0 : 1);
+        expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(
+          stage === "refresh" || stage === "credential" ? 0 : 1,
+        );
+        expect(fetch).toHaveBeenCalledTimes(stage === "delivery" ? 1 : 0);
+        allowed = false;
+        release.resolve();
+        await expect(preparing).rejects.toThrow("grant revoked");
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "rechecks live selection after delayed caller authority %s a retained credential read",
+    async (stage) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let phase = "preparing";
+      let active = true;
+      const config = {};
+      mocks.runCommandBuffered.mockImplementation(async () => {
+        if (phase === "before") {
+          phase = "after";
+        }
+        return commandResult(`native-retained-${stage}`);
+      });
+      const identity = await prepareGitHubReadIdentity({
+        config,
+        agentId: "main",
+        env: {},
+        getCurrentConfig: () => config,
+        assertActive: () => {
+          if (!active) {
+            throw new Error("caller closed");
+          }
+        },
+        revalidateActive: async () => {
+          if (phase === stage) {
+            entered.resolve();
+            await release.promise;
+          }
+        },
+        refresh: async () => {},
+      });
+      mocks.runCommandBuffered.mockClear();
+      phase = "before";
+      const checking = identity.revalidate();
+      const outcome = checking.then(
+        () => "delivered",
+        () => "refused",
+      );
+      try {
+        expect(await Promise.race([entered.promise.then(() => "checking"), outcome])).toBe(
+          "checking",
+        );
+        expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
+        active = false;
+        release.resolve();
+        await expect(checking).rejects.toThrow("caller closed");
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+    },
+  );
 
   it("refreshes before read credential verification and fences native rotation without changing publication snapshots", async () => {
     const config = { gateway: { controlUi: { github: { token: "resolved-preview-token" } } } };

@@ -493,6 +493,7 @@ export function matchesPreparedGitHubPublicationIdentity(params: {
 async function prepareSharedGitHubIdentity(
   params: GitHubIdentityPreparation & {
     assertCurrent?: () => void;
+    revalidateCurrent?: () => Promise<void>;
     allowAnonymous?: boolean;
   },
 ) {
@@ -508,8 +509,16 @@ async function prepareSharedGitHubIdentity(
       ? readManagedGitHubToken(identity.profileDir)
       : readNativeGitHubToken(currentEnvironment(), params.allowAnonymous === true);
   params.assertCurrent?.();
+  if (params.revalidateCurrent) {
+    await params.revalidateCurrent();
+    params.assertCurrent?.();
+  }
   const token = await readToken();
   params.assertCurrent?.();
+  if (params.revalidateCurrent) {
+    await params.revalidateCurrent();
+    params.assertCurrent?.();
+  }
   if (!token) {
     if (!managed && params.allowAnonymous) {
       return { prepared: undefined, token: undefined, readToken };
@@ -518,6 +527,10 @@ async function prepareSharedGitHubIdentity(
   }
   const probe = await verifyGitHubCredential(token);
   params.assertCurrent?.();
+  if (params.revalidateCurrent) {
+    await params.revalidateCurrent();
+    params.assertCurrent?.();
+  }
   if (probe.status !== "available") {
     throw new GitHubIdentityError(probe.status);
   }
@@ -568,15 +581,21 @@ export async function prepareGitHubReadIdentity(
     }
   };
   assertSelected();
+  if (params.revalidateActive) {
+    await params.revalidateActive();
+    assertSelected();
+  }
   await params.refresh();
   assertSelected();
   const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
     ...params,
     assertCurrent: assertSelected,
+    revalidateCurrent: params.revalidateActive,
   });
   assertSelected();
   return createGitHubReadIdentity({
     assertSelected,
+    revalidateActive: params.revalidateActive,
     readToken,
     ...(!prepared || token === undefined
       ? { token: undefined, selection: { source: "anonymous" as const } }

@@ -168,6 +168,7 @@ export type GitHubIdentityPreparation = {
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
+  revalidateActive?: () => Promise<void>;
   refresh: () => Promise<void>;
 };
 
@@ -206,13 +207,14 @@ export type PreparedGitHubSourceReadIdentity =
 export function createGitHubReadIdentity(
   params: {
     assertSelected: () => void;
+    revalidateActive?: () => Promise<void>;
     readToken: () => Promise<string | undefined>;
   } & (
     | { token: string; selection: GitHubReadIdentitySelection }
     | { token: undefined; selection: Readonly<{ source: "anonymous" }> }
   ),
 ): PreparedGitHubSourceReadIdentity {
-  const { token, selection, assertSelected, readToken } = params;
+  const { token, selection, assertSelected, revalidateActive, readToken } = params;
   const authority: GitHubReadAuthority = {
     cacheScope:
       selection.source === "anonymous"
@@ -225,8 +227,16 @@ export function createGitHubReadIdentity(
     assertSelected,
     revalidate: async () => {
       assertSelected();
+      if (revalidateActive) {
+        await revalidateActive();
+        assertSelected();
+      }
       const current = await readToken();
       assertSelected();
+      if (revalidateActive) {
+        await revalidateActive();
+        assertSelected();
+      }
       if (current !== token) {
         throw new GitHubIdentityError("changed");
       }
