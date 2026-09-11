@@ -7268,6 +7268,38 @@ describe("chat model controls", () => {
     ).toBe(expected);
   });
 
+  it("keeps an env API key visible when a CLI alias is missing", () => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gemini", name: "Gemini", provider: "google" }],
+    });
+    const container = renderModelControls(state, {
+      accountSelection: { kind: "automatic", label: "Automatic" },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "google",
+            displayName: "Google",
+            status: "static",
+            profiles: [],
+            apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+          },
+          {
+            provider: "google-gemini-cli",
+            displayName: "Gemini CLI",
+            status: "missing",
+            profiles: [],
+          },
+        ],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="google"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe("API");
+  });
+
   it.each([false, true])("does not duplicate a row sign-in warning (%s)", (rowWarning) => {
     const { state } = createChatHeaderState({
       models: [
