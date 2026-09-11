@@ -8,6 +8,7 @@ import {
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   readSessionProjectionFinalMessageIdentity,
+  withTentativeRecovery,
 } from "./session-projection-final-identity.js";
 import {
   hasDisplayableSessionMessage,
@@ -413,7 +414,9 @@ export function projectLiveSessionMessage(
   if (!existing.pending && existing.identity?.id && !incoming.identity.id) {
     // A terminal projection carries no transcript identity; adopting it over the
     // durable row would lose the ID every later snapshot reconciles against.
-    return state;
+    const runId = incoming.identity?.runId ?? null;
+    const recovered = runId ? withTentativeRecovery(state.runs[runId], incoming, existing) : null;
+    return runId && recovered ? { ...state, runs: { ...state.runs, [runId]: recovered } } : state;
   }
   if (
     incoming.identity.sequence !== null &&
@@ -476,13 +479,8 @@ export function reconcileSessionProjectionSnapshot(
         run
       ) {
         // Tentative history matches retain their original live ordering until confirmed.
-        runs[current.identity.runId] = {
-          ...run,
-          inferredSnapshotTerminal: {
-            entry: current,
-            matchedIdentity: terminalMatch.entry.identity,
-          },
-        };
+        runs[current.identity.runId] =
+          withTentativeRecovery(run, current, terminalMatch.entry) ?? run;
       }
       continue;
     }

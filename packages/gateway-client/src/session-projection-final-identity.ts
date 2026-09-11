@@ -141,6 +141,12 @@ function hasTerminalProjectionEvidence(
   );
 }
 
+/** Explicit terminal markers that later history cannot contradict. */
+export function hasExplicitTerminalEvidence(entry: TerminalProjectionEntry): boolean {
+  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
+  return metadata?.runTerminal === true || hasTerminalStopReason(entry.message);
+}
+
 /** Read stable persisted identity first, falling back to canonical display content. */
 export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
   if (!hasDisplayableSessionMessage(message)) {
@@ -207,10 +213,9 @@ export function findUniqueSnapshotTerminalMatch(
   if (!entry) {
     return null;
   }
-  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
   return {
     entry,
-    inferred: metadata?.runTerminal !== true && !hasTerminalStopReason(entry.message),
+    inferred: !hasExplicitTerminalEvidence(entry),
   };
 }
 
@@ -229,7 +234,7 @@ function findUniqueTerminalContentMatch<T extends TerminalProjectionEntry>(
       hasTerminalProjectionEvidence(entry, snapshot, runId) &&
       readFinalContentIdentity(entry.message) === content,
   );
-  return candidates.length === 1 ? candidates[0] : null;
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
 }
 
 /**
@@ -262,4 +267,24 @@ export function isUnsequencedLiveTerminal(
     run.status !== "streaming" &&
     readFinalContentIdentity(current.message) === readFinalContentIdentity(run.message),
   );
+}
+
+/**
+ * Keep a position-inferred live match recoverable until later history confirms
+ * it; shared with snapshot reconciliation's tentative recovery record.
+ */
+export function withTentativeRecovery<TRun extends { message?: unknown; status: string }>(
+  run: TRun | undefined,
+  entry: TerminalProjectionEntry,
+  matched: TerminalProjectionEntry,
+): TRun | null {
+  if (
+    !run ||
+    !matched.identity ||
+    !isUnsequencedLiveTerminal(entry, run) ||
+    hasExplicitTerminalEvidence(matched)
+  ) {
+    return null;
+  }
+  return { ...run, inferredSnapshotTerminal: { entry, matchedIdentity: matched.identity } };
 }

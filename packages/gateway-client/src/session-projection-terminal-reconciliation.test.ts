@@ -351,6 +351,56 @@ describe("live terminal reconciliation", () => {
     expect(state.messages).toEqual([user, earlier, laterToolBoundary, synthetic]);
   });
 
+  it("restores a suppressed replay when later history contradicts its position match", () => {
+    const runId = "position-recovery-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const synthetic = createAssistantMessage("Still working.");
+    const unmarkedReply = createAssistantMessage("Still working.", {
+      id: "assistant-unmarked",
+      seq: 3,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary-2", seq: 4, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = reconcileSessionProjectionSnapshot(state, [user, toolBoundary, unmarkedReply], scope);
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedReply]);
+
+    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+    expect(state.messages).toEqual([user, toolBoundary, unmarkedReply]);
+
+    expect(
+      reconcileSessionProjectionSnapshot(
+        state,
+        [user, toolBoundary, unmarkedReply, laterToolBoundary],
+        scope,
+      ).messages,
+    ).toEqual([user, toolBoundary, unmarkedReply, laterToolBoundary, synthetic]);
+  });
+
   it("keeps a same-caption reply with a distinct attachment and still deduplicates exact replays", () => {
     const runId = "attachment-run";
     const attachment = (data: string) => ({
