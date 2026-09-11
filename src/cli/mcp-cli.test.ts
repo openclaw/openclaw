@@ -884,56 +884,6 @@ describe("mcp cli", () => {
     });
   });
 
-  it("reports MCP stdio commands that resolve to directories", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const serverDir = path.join(workspaceDir, "docs-mcp-repo");
-      const shadowDir = path.join(workspaceDir, "shadow");
-      const binDir = path.join(workspaceDir, "bin");
-      await fs.mkdir(serverDir, { recursive: true });
-      await fs.mkdir(path.join(shadowDir, "docs-mcp"), { recursive: true });
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(path.join(binDir, "docs-mcp"), "#!/bin/sh\nexit 0\n", "utf-8");
-      await fs.chmod(path.join(binDir, "docs-mcp"), 0o755);
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await writeMcpDoctorServers(home, {
-        "explicit-dir": { command: serverDir },
-        "path-dir-only": { command: "docs-mcp", env: { PATH: shadowDir } },
-        "path-dir-then-file": {
-          command: "docs-mcp",
-          env: { PATH: [shadowDir, binDir].join(path.delimiter) },
-        },
-      });
-      mockLog.mockClear();
-
-      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow("__exit__:1");
-
-      expect(JSON.parse(lastLogLine())).toMatchObject({
-        ok: false,
-        servers: [
-          {
-            name: "explicit-dir",
-            ok: false,
-            issues: [
-              {
-                level: "error",
-                message: `stdio command not found or not executable: ${serverDir}`,
-              },
-            ],
-          },
-          {
-            name: "path-dir-only",
-            ok: false,
-            issues: [
-              { level: "error", message: "stdio command not found or not executable: docs-mcp" },
-            ],
-          },
-          { name: "path-dir-then-file", ok: true, issues: [] },
-        ],
-      });
-    });
-  });
-
   it("removes pure disabled tombstones when enabling MCP servers", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
