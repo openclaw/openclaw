@@ -273,8 +273,10 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
         let request = OpenClawChatGatewayRequests.modelsList(agentID: agentID, sessionKey: sessionKey)
         let data = try await self.connection.request(
-            method: request.method, params: request.params,
-            timeoutMs: request.timeoutMs, ifCurrentServerLease: lease)
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentServerLease: lease)
         return try OpenClawChatGatewayPayloadCodec.decodeModelCatalog(data)
     }
 
