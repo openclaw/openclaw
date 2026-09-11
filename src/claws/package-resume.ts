@@ -11,6 +11,11 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import type { ClawPackage, ClawPackagePreflightResult } from "./types.js";
+import {
+  readClawWorkspaceAdoptionFromDatabase,
+  type ClawWorkspaceAdoption,
+} from "./workspace-origin.js";
+import { readClawWorkspaceFiles, type PersistedClawWorkspaceFile } from "./workspace.js";
 
 function ownerInstallIsNewerThanRef(
   installedAt: string | undefined,
@@ -89,6 +94,8 @@ export async function readClawResumeStateReadOnly(
   | {
       record: PersistedClawInstall;
       packageRefs: PersistedClawPackageRef[];
+      workspaceAdoption: ClawWorkspaceAdoption;
+      workspaceFiles: PersistedClawWorkspaceFile[];
     }
   | undefined
 > {
@@ -110,6 +117,12 @@ export async function readClawResumeStateReadOnly(
     return {
       record,
       packageRefs: readClawPackageRefs({ ...options, database, readOnly: true, agentId }),
+      workspaceAdoption: readClawWorkspaceAdoptionFromDatabase(
+        database.db,
+        agentId,
+        record.workspace,
+      ),
+      workspaceFiles: readClawWorkspaceFiles(agentId, { ...options, database, readOnly: true }),
     };
   } finally {
     database.walMaintenance.close();

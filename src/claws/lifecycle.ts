@@ -4,6 +4,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { workspacePathsOverlap } from "../agents/agent-delete-safety.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
@@ -247,10 +248,13 @@ export async function buildClawAddPlan(params: {
     capabilityChanges.push(capabilityChange(agentPlan.capabilityChange));
   }
 
-  const configuredWorkspacePaths = new Set(
-    [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
+  // Ancestor/descendant overlap, not just an exact match: adopting a subdirectory of another
+  // agent's configured workspace (or a directory that contains one) is the same collision
+  // applyClawAddPlan's commit-time findOverlappingWorkspaceAgentIds check guards against.
+  const configuredWorkspacePaths = [...(context.existingWorkspacePaths ?? [])];
+  const configuredWorkspaceConflict = configuredWorkspacePaths.some((path) =>
+    workspacePathsOverlap(workspace, path),
   );
-  const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;

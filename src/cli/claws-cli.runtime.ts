@@ -5,11 +5,8 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope-config.js";
-import {
-  applyClawAddPlan,
-  CLAW_ADD_RESULT_SCHEMA_VERSION,
-  ClawAddMutationError,
-} from "../claws/add.js";
+import { ClawAddMutationError } from "../claws/add-errors.js";
+import { applyClawAddPlan, CLAW_ADD_RESULT_SCHEMA_VERSION } from "../claws/add.js";
 import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
@@ -141,6 +138,12 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
   return {
     record,
     packageRefs: readOnlyState?.packageRefs ?? readClawPackageRefs({ agentId: plan.agent.finalId }),
+    // Mirrors packageRefs above: a dry-run preview reuses the read-only snapshot and never opens
+    // the writable state database; a real apply (which is about to write anyway) reads fresh.
+    workspaceAdoption:
+      readOnlyState?.workspaceAdoption ??
+      readClawWorkspaceAdoption(plan.agent.finalId, record.workspace),
+    workspaceFiles: readOnlyState?.workspaceFiles ?? readClawWorkspaceFiles(plan.agent.finalId),
   };
 }
 
@@ -337,7 +340,12 @@ export async function runClawsAddCommand(
     };
   }
   if (resumeState) {
-    const { record: resumeRecord, packageRefs: resumePackageRefs } = resumeState;
+    const {
+      record: resumeRecord,
+      packageRefs: resumePackageRefs,
+      workspaceAdoption: resumeWorkspaceAdoption,
+      workspaceFiles: resumeWorkspaceFiles,
+    } = resumeState;
     resumableInstallRecord = resumeRecord;
     const packagePreflight = async (
       pkg: Parameters<typeof preflightClawPackage>[0],
@@ -370,10 +378,10 @@ export async function runClawsAddCommand(
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
     // A resumed adoption re-plans by the operator's original consent, not disk presence: the
     // consented adopted-file ids and this install's already-written files must round-trip to the
-    // same actions even though a prior attempt left them existing on disk.
-    const workspaceOrigin = canResumeWorkspace
-      ? readClawWorkspaceAdoption(resumeRecord.agentId, resumeRecord.workspace)
-      : undefined;
+    // same actions even though a prior attempt left them existing on disk. The marker row is
+    // written at "pending" (before workspace_ready), so gate on canResumeWorkspace here rather
+    // than trusting `.adopted` alone, or an abandoned pending attempt would look resumable.
+    const workspaceOrigin = canResumeWorkspace ? resumeWorkspaceAdoption : undefined;
     const resumePlanContext = {
       ...basePlanContext,
       packagePreflight,
@@ -390,8 +398,8 @@ export async function runClawsAddCommand(
         ? {
             resumableWorkspaceOwnership: {
               adoptedFiles: workspaceOrigin.adoptedFiles,
-              ownedFiles: readClawWorkspaceFiles(resumeRecord.agentId),
-              bootstrapDigest: resumeRecord.bootstrap?.contentDigest,
+              ownedFiles: resumeWorkspaceFiles,
+              bootstrapSeeded: workspaceOrigin.bootstrapSeeded,
             },
           }
         : {}),
