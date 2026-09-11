@@ -366,6 +366,7 @@ async function resolveSlackOutboundSessionRoute(params: {
       accountId: params.accountId,
       channelId: apiTargetId,
       teamId: parsed.teamId,
+      signal: params.signal,
     });
     if (channelType === "group") {
       peerKind = "group";

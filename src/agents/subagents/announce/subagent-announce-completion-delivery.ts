@@ -371,40 +371,61 @@ export async function resolveMessagingToolDeliveryEvidence(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, verificationDeadline.signal])
     : verificationDeadline.signal;
-  try {
-    const equivalentTargetResolver =
-      params.resolveEquivalentTarget ??
-      ((
-        target: MessagingToolDeliveryTarget,
-        deliveryTarget: SourceDeliveryTarget,
-        callbackSignal?: AbortSignal,
-      ) =>
-        resolveEquivalentMessagingToolTarget(
-          {
-            cfg: params.cfg,
-            requesterSessionKey: params.requesterSessionKey,
-            requesterAgentId: params.requesterAgentId,
-            signal: callbackSignal ?? signal,
-          },
-          target,
-          deliveryTarget,
-        ));
-    const matchOptions = { resolveEquivalentTarget: equivalentTargetResolver, signal };
-    const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
-      params.result,
-      params.deliveryTarget,
-      { ...matchOptions, requireFinalReply: true },
-    );
-    return {
-      hasFinalMessagingToolDelivery,
-      hasMessagingToolDelivery:
-        hasFinalMessagingToolDelivery ||
-        (await hasMessagingToolDeliveryToSource(
-          params.result,
-          params.deliveryTarget,
-          matchOptions,
-        )),
+  const noDelivery = {
+    hasFinalMessagingToolDelivery: false,
+    hasMessagingToolDelivery: false,
+  } as const;
+  const verificationAborted = new Promise<typeof noDelivery>((resolve) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(noDelivery);
     };
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+  try {
+    const verification = (async () => {
+      const equivalentTargetResolver =
+        params.resolveEquivalentTarget ??
+        ((
+          target: MessagingToolDeliveryTarget,
+          deliveryTarget: SourceDeliveryTarget,
+          callbackSignal?: AbortSignal,
+        ) =>
+          resolveEquivalentMessagingToolTarget(
+            {
+              cfg: params.cfg,
+              requesterSessionKey: params.requesterSessionKey,
+              requesterAgentId: params.requesterAgentId,
+              signal: callbackSignal ?? signal,
+            },
+            target,
+            deliveryTarget,
+          ));
+      const matchOptions = { resolveEquivalentTarget: equivalentTargetResolver, signal };
+      const hasFinalMessagingToolDelivery = await hasMessagingToolDeliveryToSource(
+        params.result,
+        params.deliveryTarget,
+        { ...matchOptions, requireFinalReply: true },
+      );
+      return {
+        hasFinalMessagingToolDelivery,
+        hasMessagingToolDelivery:
+          hasFinalMessagingToolDelivery ||
+          (await hasMessagingToolDeliveryToSource(
+            params.result,
+            params.deliveryTarget,
+            matchOptions,
+          )),
+      };
+    })();
+    // The provider callback is cooperative, but completion settlement must not
+    // inherit that implementation detail. Abort the callback when possible and
+    // independently release the completion owner when it ignores the signal.
+    return await Promise.race([verification, verificationAborted]);
   } finally {
     clearTimeout(timer);
   }

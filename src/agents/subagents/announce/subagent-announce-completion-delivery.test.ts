@@ -171,4 +171,24 @@ describe("resolveMessagingToolDeliveryEvidence", () => {
     );
     expect(resolveEquivalentTarget.mock.calls[0]?.[2]?.aborted).toBe(true);
   });
+
+  it("bounds verification when a provider resolver ignores cancellation", async () => {
+    const startedAt = Date.now();
+
+    await expect(
+      resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "test-requester",
+        result,
+        deliveryTarget,
+        timeoutMs: 25,
+        resolveEquivalentTarget: async () => await new Promise<string | undefined>(() => {}),
+      }),
+    ).resolves.toEqual({
+      hasFinalMessagingToolDelivery: false,
+      hasMessagingToolDelivery: false,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
 });
