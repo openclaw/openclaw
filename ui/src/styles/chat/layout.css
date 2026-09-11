@@ -1892,7 +1892,7 @@ openclaw-chat-video-player {
   justify-self: end;
 }
 
-.task-suggestion__start,
+.task-suggestion__actions .task-suggestion__start,
 :root[data-theme-mode="light"] .task-suggestion__start {
   display: inline-flex;
   align-items: center;
@@ -1900,7 +1900,7 @@ openclaw-chat-video-player {
   height: 34px;
   padding: 0 12px;
   border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: 11px;
+  border-radius: var(--task-suggestion-start-radius, 11px);
   corner-shape: superellipse(1.5);
   background: var(--task-suggestion-action-bg);
   color: var(--task-suggestion-action-fg);
@@ -1908,6 +1908,16 @@ openclaw-chat-video-player {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
+}
+
+.task-suggestion__start--primary {
+  --task-suggestion-start-radius: 11px 0 0 11px;
+}
+
+.task-suggestion__start--options {
+  --task-suggestion-start-radius: 0 11px 11px 0;
+
+  border-inline-start: 0;
 }
 
 .task-suggestion__start svg {

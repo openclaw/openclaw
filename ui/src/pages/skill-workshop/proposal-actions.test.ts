@@ -813,7 +813,9 @@ describe("Skill Workshop proposal lifecycle actions", () => {
       method === "skills.proposals.inspect" ? detail.promise : Promise.resolve({}),
     );
 
-    const evaluation = runSkillWorkshopEvaluation(state, context, "proposal-1", () => current);
+    const evaluation = runSkillWorkshopEvaluation(state, context, "proposal-1", {
+      isCurrent: () => current,
+    });
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     current = false;
     detail.resolve(inspectResult());
