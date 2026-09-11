@@ -854,59 +854,66 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("uses the default agent embedded model, auth directory, profile, and runtime", async () => {
-    const stateDir = useTempStateDir();
-    const agentDir = path.join(stateDir, "ops-agent");
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-global" },
-          systemAgent: { agentId: "ops" },
-          models: {
-            "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-        list: [
-          {
-            id: "ops",
-            default: true,
-            agentDir,
-            model: { primary: "openai/gpt-5.4@openai:ops" },
-            params: { temperature: 0.2 },
-            tools: { allow: ["read"], deny: ["exec"] },
+  it.each([
+    { owner: "requester", memoryPromptAgentId: "hq", expectedMemoryPromptAgentId: "hq" },
+    { owner: "inference", memoryPromptAgentId: undefined, expectedMemoryPromptAgentId: "ops" },
+  ])(
+    "keeps the verified execution route when memory uses the $owner owner",
+    async ({ memoryPromptAgentId, expectedMemoryPromptAgentId }) => {
+      const stateDir = useTempStateDir();
+      const agentDir = path.join(stateDir, "ops-agent");
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-global" },
+            systemAgent: { agentId: "ops" },
             models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+              "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
             },
           },
-          {
-            id: "openclaw",
-            params: { temperature: 1.7 },
-            tools: { allow: ["exec"] },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({ payloads: [] }));
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [{ text: "ready" }],
-    }));
-    const { session, deps } = await createVerifiedSession(config);
+          list: [
+            {
+              id: "ops",
+              default: true,
+              agentDir,
+              model: { primary: "openai/gpt-5.4@openai:ops" },
+              params: { temperature: 0.2 },
+              tools: { allow: ["read"], deny: ["exec"] },
+              models: {
+                "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+              },
+            },
+            {
+              id: "openclaw",
+              params: { temperature: 1.7 },
+              tools: { allow: ["exec"] },
+            },
+            { id: "hq" },
+          ],
+        },
+      } as OpenClawConfig;
+      const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({ payloads: [] }));
+      const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
+        payloads: [{ text: "ready" }],
+      }));
+      const { session, deps } = await createVerifiedSession(config);
 
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview: { defaultModel: "openai/gpt-5.4" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        session,
-      },
-      {
-        ...deps,
-        runCliAgent: runCliAgent as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
-    );
+      await runSystemAgentTurnWithDeps(
+        {
+          input: "hello",
+          overview: { defaultModel: "openai/gpt-5.4" } as never,
+          surface: "gateway",
+          approvalArmed: false,
+          memoryPromptAgentId,
+          session,
+        },
+        {
+          ...deps,
+          runCliAgent: runCliAgent as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        },
+      );
 
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -917,6 +924,7 @@ describe("runSystemAgentTurn", () => {
       model: "gpt-5.4",
       lane: CommandLane.SystemAgentInference,
       systemAgentTool: { agentId: "ops" },
+      memoryPromptAgentId: expectedMemoryPromptAgentId,
       agentDir,
       authProfileId: "openai:ops",
       authProfileIdSource: "user",
