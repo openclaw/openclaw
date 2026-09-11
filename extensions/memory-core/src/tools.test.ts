@@ -715,6 +715,56 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
+  it("serves keyword results while a chunking upgrade stays pending", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
+      return [
+        {
+          path: "memory/2026-01-12.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "alpha",
+          source: "memory" as const,
+        },
+      ];
+    });
+    const reason = "index chunking implementation changed";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+        code: "chunking_version",
+        owner: "openclaw",
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("upgrade-pending", { query: "alpha" });
+    const details = result.details as {
+      results?: Array<{ path: string }>;
+      mode?: string;
+      stale?: boolean;
+      warning?: string;
+      action?: string;
+    };
+
+    expect(details.results).toEqual([expect.objectContaining({ path: "memory/2026-01-12.md" })]);
+    expect(details.mode).toBe("keyword-only");
+    expect(details.stale).toBe(true);
+    expect(details.warning).toContain("Memory index is stale");
+    expect(details.action).toContain("openclaw memory status --index");
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
   it("includes manager acquisition timing and cache-state debug payload", async () => {
     setMemorySearchManagerImpl(async () => ({
       manager: {

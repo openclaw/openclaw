@@ -106,6 +106,49 @@ describe("memory reindex state", () => {
     });
   });
 
+  it.each([
+    {
+      name: "sources changed",
+      meta: createMeta({ sources: ["memory", "sessions"] }),
+      code: "sources",
+      reason: "index sources changed during a pending chunking upgrade",
+    },
+    {
+      name: "scope changed",
+      meta: createMeta({ scopeHash: "scope-v2" }),
+      code: "scope",
+      reason: "index scope changed during a pending chunking upgrade",
+    },
+    {
+      name: "chunk settings changed",
+      meta: createMeta({ chunkTokens: 3999 }),
+      code: "chunking",
+      reason: "index chunking settings changed during a pending chunking upgrade",
+    },
+    {
+      name: "FTS tokenizer changed",
+      meta: createMeta({ ftsTokenizer: "porter" }),
+      code: "fts_tokenizer",
+      reason: "index FTS tokenizer changed during a pending chunking upgrade",
+    },
+  ])(
+    "classifies a stale chunking version with $name as configuration-owned",
+    ({ meta, code, reason }) => {
+      expect(
+        resolveMemoryIndexIdentityState(
+          createIdentityParams({
+            meta: { ...meta, chunkingVersion: MEMORY_CHUNKING_VERSION - 1 },
+          }),
+        ),
+      ).toEqual({
+        status: "mismatched",
+        reason,
+        code,
+        owner: "configuration",
+      });
+    },
+  );
+
   it("classifies missing metadata as OpenClaw-owned", () => {
     expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
       status: "missing",

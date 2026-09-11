@@ -62,6 +62,7 @@ type ProviderControls = {
   embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
+  embedBatchFailuresRemaining: number;
   embedBatchInputCalls: number;
   embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
@@ -126,6 +127,7 @@ const providerState = vi.hoisted(() => ({
   embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
+  embedBatchFailuresRemaining: 0,
   embedBatchInputCalls: 0,
   embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
@@ -304,6 +306,10 @@ vi.mock("./embeddings.js", async (importOriginal) => {
             const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
             providerState.embedBatchCalls += 1;
             providerState.embeddedBatchTexts.push(...texts);
+            if (providerState.embedBatchFailuresRemaining > 0) {
+              providerState.embedBatchFailuresRemaining -= 1;
+              throw new Error("provider embed batch failed");
+            }
             return texts.map(embedText);
           },
         },
