@@ -526,24 +526,34 @@ function handleWidgetExportAction(
 
 function widgetActionsPlacementRef() {
   let observer: ResizeObserver | undefined;
+  let frame: number | undefined;
   return (element: Element | undefined) => {
     observer?.disconnect();
     observer = undefined;
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+      frame = undefined;
+    }
     if (!(element instanceof HTMLElement) || typeof ResizeObserver === "undefined") {
       return;
     }
-    observer = new ResizeObserver(() => {
+    // Lit refs can run during resize delivery. Register both connected targets
+    // in the next frame so the shallower thread cannot trigger a loop error.
+    frame = requestAnimationFrame(() => {
+      frame = undefined;
       const thread = element.closest<HTMLElement>(".chat-thread");
       if (!thread) {
         return;
       }
-      observer?.observe(thread);
-      const clipRight =
-        thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
-      const availableWidth = clipRight - element.getBoundingClientRect().right;
-      element.toggleAttribute("data-widget-actions-above", availableWidth < 40);
+      observer = new ResizeObserver(() => {
+        const clipRight =
+          thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+        const availableWidth = clipRight - element.getBoundingClientRect().right;
+        element.toggleAttribute("data-widget-actions-above", availableWidth < 40);
+      });
+      observer.observe(element);
+      observer.observe(thread);
     });
-    observer.observe(element);
   };
 }
 
