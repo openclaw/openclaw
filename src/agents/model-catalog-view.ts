@@ -127,11 +127,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
     catalog,
     defaultModel,
     isCurrent,
-    evaluateNative(
+    evaluateNative: (
       entry: ModelCatalogEntry,
       host: ModelAuthAvailabilityEvaluation,
       runtimeId?: string,
-    ): ModelAuthAvailabilityEvaluation {
+    ): ModelAuthAvailabilityEvaluation => {
       const runtime =
         runtimeId ??
         host.requestedRuntimeId ??
