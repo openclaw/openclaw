@@ -157,7 +157,11 @@ import {
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
-import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
+import {
+  createCliRunCurrentAssertion,
+  resolveCliExecutionTarget,
+  retainCliPluginExecutionConsumer,
+} from "./execution-target.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
@@ -1737,13 +1741,21 @@ async function prepareCliRunContextWithinReadFence(
       }
       throw error;
     }
+    const pluginExecutionConsumer = retainCliPluginExecutionConsumer(preparedExecution?.execute);
     const preparedBackendCleanup =
-      cleanupPreparedBackend || preparedExecution?.cleanup
+      cleanupPreparedBackend || preparedExecution?.cleanup || pluginExecutionConsumer
         ? async () => {
             try {
-              await preparedExecution?.cleanup?.();
+              const cleanupExecution = () => preparedExecution?.cleanup?.();
+              await (pluginExecutionConsumer
+                ? pluginExecutionConsumer.run(cleanupExecution)
+                : cleanupExecution());
             } finally {
-              await cleanupPreparedBackend?.();
+              try {
+                await cleanupPreparedBackend?.();
+              } finally {
+                pluginExecutionConsumer?.release();
+              }
             }
           }
         : undefined;
@@ -2243,6 +2255,7 @@ async function prepareCliRunContextWithinReadFence(
         backendResolved,
         preparedBackend: preparedBackendFinal,
         executionTarget,
+        ...(pluginExecutionConsumer ? { pluginExecutionConsumer } : {}),
         reusableCliSession,
         hadSessionFile: false,
         contextEngineConfig: runConfig,
@@ -2396,6 +2409,7 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved,
       preparedBackend: preparedBackendFinal,
       executionTarget,
+      ...(pluginExecutionConsumer ? { pluginExecutionConsumer } : {}),
       reusableCliSession,
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }

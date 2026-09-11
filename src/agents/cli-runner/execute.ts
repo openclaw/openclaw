@@ -669,7 +669,12 @@ export async function executePreparedCliRun(
         // would run inside the source session. Force a fresh spawn.
         await restartCliLiveSession(context);
       }
-      return await executeAttempt();
+      // The prepared context's retained consumer keeps this attempt's plugin calls
+      // admitted while a plugin hot reload retires the backend's previous instance.
+      const pluginExecutionConsumer = context.pluginExecutionConsumer;
+      return await (pluginExecutionConsumer
+        ? pluginExecutionConsumer.run(executeAttempt)
+        : executeAttempt());
     });
     if (completedOutput.sessionId) {
       observeForkSuccessor(completedOutput.sessionId);
