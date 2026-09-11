@@ -290,3 +290,122 @@ describe("terminal snapshot reconciliation", () => {
     ]);
   });
 });
+
+describe("live terminal reconciliation", () => {
+  it("resolves a live replay against several same-run rows when one row carries terminal evidence", () => {
+    const runId = "duplicate-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Answer with a color.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolCall = createAssistantMessage("[toolCall]", { id: "assistant-tool", seq: 2, runId });
+    const reply = createAssistantMessage("answered with red", {
+      id: "assistant-reply",
+      seq: 5,
+      runId,
+    });
+    const replay = createAssistantMessage("answered with red");
+
+    const state = projectLiveSessionMessage(
+      createSessionProjection(scope, [user, toolCall, reply]),
+      replay,
+      { runId },
+    );
+
+    expect(state.messages).toEqual([user, toolCall, reply]);
+  });
+
+  it("retains the live unsequenced terminal when history with a later tool boundary arrives first", () => {
+    const runId = "partial-history-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const synthetic = createAssistantMessage("Still working.");
+    const earlier = createAssistantMessage("Still working.", {
+      id: "assistant-earlier",
+      seq: 2,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 3, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = reconcileSessionProjectionSnapshot(state, [user, earlier, laterToolBoundary], scope);
+    expect(state.messages).toEqual([user, earlier, laterToolBoundary]);
+
+    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+
+    expect(state.messages).toEqual([user, earlier, laterToolBoundary, synthetic]);
+  });
+
+  it("keeps a same-caption reply with a distinct attachment and still deduplicates exact replays", () => {
+    const runId = "attachment-run";
+    const attachment = (data: string) => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data },
+    });
+    const user = {
+      role: "user",
+      content: [{ text: "Export the chart.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const summary = createAssistantMessage("Chart exported.", {
+      id: "assistant-summary",
+      seq: 2,
+      runId,
+    });
+    const captioned = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-a")],
+      __openclaw: { id: "assistant-captioned", seq: 3, runId },
+    };
+    const replay = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-a")],
+    };
+    const distinct = {
+      role: "assistant",
+      content: [{ type: "text", text: "Result" }, attachment("chart-b")],
+    };
+
+    let state = projectLiveSessionMessage(
+      createSessionProjection(scope, [user, summary, captioned]),
+      replay,
+      { runId },
+    );
+    expect(state.messages).toEqual([user, summary, captioned]);
+
+    state = projectLiveSessionMessage(state, distinct, { runId });
+    expect(state.messages).toEqual([user, summary, captioned, distinct]);
+
+    const mediaCaptioned = createAssistantMessage("Result", {
+      id: "assistant-media",
+      seq: 3,
+      runId,
+      media: [{ type: "image", url: "chart-a" }],
+    });
+    const mediaDistinct = createAssistantMessage("Result", {
+      media: [{ type: "image", url: "chart-b" }],
+    });
+    const mediaState = createSessionProjection(scope, [user, summary, mediaCaptioned]);
+    expect(projectLiveSessionMessage(mediaState, mediaDistinct, { runId }).messages).toEqual([
+      user,
+      summary,
+      mediaCaptioned,
+      mediaDistinct,
+    ]);
+  });
+});

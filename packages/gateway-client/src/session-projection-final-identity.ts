@@ -127,6 +127,20 @@ function hasCompletedRunSnapshotContext(
   return hasEarlierUser && !hasLaterAssistant;
 }
 
+/** Terminal evidence shared by snapshot promotion and live replay reconciliation. */
+function hasTerminalProjectionEvidence(
+  entry: TerminalProjectionEntry,
+  snapshot: readonly TerminalProjectionEntry[],
+  runId: string | null,
+): boolean {
+  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
+  return (
+    metadata?.runTerminal === true ||
+    (entry.identity?.runId === runId && hasTerminalStopReason(entry.message)) ||
+    hasCompletedRunSnapshotContext(entry, snapshot, runId)
+  );
+}
+
 /** Read stable persisted identity first, falling back to canonical display content. */
 export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
   if (!hasDisplayableSessionMessage(message)) {
@@ -184,17 +198,12 @@ export function findUniqueSnapshotTerminalMatch(
   if (!terminalContent || readFinalContentIdentity(run.message) !== terminalContent) {
     return null;
   }
-  const durableTerminalMatches = matches.filter((entry) => {
-    const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
-    return (
-      (metadata?.runTerminal === true ||
-        (entry.identity?.runId === current.identity?.runId &&
-          hasTerminalStopReason(entry.message)) ||
-        hasCompletedRunSnapshotContext(entry, snapshot, current.identity?.runId ?? null)) &&
-      readFinalContentIdentity(entry.message) === terminalContent
-    );
-  });
-  const entry = durableTerminalMatches.length === 1 ? durableTerminalMatches[0] : undefined;
+  const entry = findUniqueTerminalContentMatch(
+    matches,
+    terminalContent,
+    snapshot,
+    current.identity?.runId ?? null,
+  );
   if (!entry) {
     return null;
   }
@@ -203,6 +212,40 @@ export function findUniqueSnapshotTerminalMatch(
     entry,
     inferred: metadata?.runTerminal !== true && !hasTerminalStopReason(entry.message),
   };
+}
+
+/**
+ * Pick the unique durable row that carries terminal evidence and matches the
+ * replay content; shared by snapshot promotion and live reconciliation.
+ */
+function findUniqueTerminalContentMatch<T extends TerminalProjectionEntry>(
+  matches: readonly T[],
+  content: string,
+  snapshot: readonly TerminalProjectionEntry[],
+  runId: string | null,
+): T | null {
+  const candidates = matches.filter(
+    (entry) =>
+      hasTerminalProjectionEvidence(entry, snapshot, runId) &&
+      readFinalContentIdentity(entry.message) === content,
+  );
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * Match an unsequenced live replay to exactly one durable row sharing the same
+ * terminal evidence and full display content as snapshot reconciliation.
+ */
+export function findUniqueLiveTerminalMatch<T extends TerminalProjectionEntry>(
+  current: TerminalProjectionEntry,
+  matches: readonly T[],
+  snapshot: readonly TerminalProjectionEntry[],
+): T | null {
+  const content = readFinalContentIdentity(current.message);
+  if (!content) {
+    return null;
+  }
+  return findUniqueTerminalContentMatch(matches, content, snapshot, current.identity?.runId ?? null);
 }
 
 /** Check whether ordinary single-match promotion needs terminal-content verification. */
