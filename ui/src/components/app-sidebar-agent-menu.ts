@@ -412,7 +412,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         </span>
       </wa-dropdown-item>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
         <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
       </wa-dropdown-item>
     </wa-dropdown>
