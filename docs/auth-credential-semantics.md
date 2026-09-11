@@ -60,7 +60,8 @@ another login. Gateway activation waits for config application; a required resta
 keeps the replacement inactive until setup is retried. Ordinary login remains
 immediate. The descriptor retains the selected model and connection settings for retry after
 restart, without caching a verification result. This adds no database schema or
-migration; older runtimes do not enforce the inactive state.
+migration; older runtimes do not enforce the inactive state. Before downgrading,
+remove saved inactive replacements or restore the state from before setup.
 
 Noninteractive setup saves replacement credentials for later activation in Model
 Setup and leaves the current connection unchanged. Reusing an existing credential

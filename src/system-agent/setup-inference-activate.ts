@@ -657,7 +657,7 @@ async function verifyAndActivateCandidate(
         },
       );
     };
-    if (!gatewayRestartRequired) {
+    if (params.surface === "cli" || !gatewayRestartRequired) {
       if (params.onCredentialActivation) {
         params.onCredentialActivation(activate);
       } else {

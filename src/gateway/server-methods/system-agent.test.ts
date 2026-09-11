@@ -618,6 +618,7 @@ describe("openclaw.chat", () => {
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
         onRuntimeApplication: expect.any(Function),
+        onCredentialActivation: expect.any(Function),
       });
       expect(calls).toEqual(
         outcome === "success" ? [{ ok: true, payload: activationResult, error: undefined }] : [],

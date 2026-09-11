@@ -83,15 +83,14 @@ export async function completeSetupModelAuth(params: {
       runtime: params.runtime,
       workspaceDir: verificationTarget.workspaceDir,
       writeConfig: params.writeConfig,
-      required: replacesCredential || (params.usedImportFlow && params.keepExistingModelConfig),
+      required: params.usedImportFlow && params.keepExistingModelConfig,
     });
     let config = verification.config;
     if (!verification.verified && verification.attempted && stagedCandidate) {
       // Keep gateway/roster decisions while removing the unverified model/auth delta.
-      config = applyMergePatch(
-        config,
-        createMergePatch(stagedCandidate.config, baseConfig),
-      ) as OpenClawConfig;
+      const inversePatch = createMergePatch(stagedCandidate.config, baseConfig);
+      // SAFETY: The inverse patch comes from typed configs and restores their model/auth fields.
+      config = applyMergePatch(config, inversePatch) as OpenClawConfig;
     } else if (!verification.verified && stagedCandidate) {
       // Declining an optional probe still saves the user's first sign-in.
       await stagedCandidate.persistAuthProfiles();
@@ -133,18 +132,18 @@ export async function offerLiveModelVerification(params: {
   };
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config, resolveAmbientOwnerAgentId(params.config));
+  const replacesCredential = params.initialCandidate?.authProfiles.some(({ credential }) =>
+    isSetupCredentialReplacement({
+      provider: credential.provider,
+      baseConfig: params.baseConfig ?? params.config,
+      agentDir,
+    }),
+  );
   let required =
     params.required ||
-    params.initialCandidate?.authProfiles.some(({ credential }) =>
-      isSetupCredentialReplacement({
-        provider: credential.provider,
-        baseConfig: params.baseConfig ?? params.config,
-        agentDir,
-      }),
-    ) ||
     (params.initialCandidate !== undefined &&
       requiresCandidateVerification(params.initialCandidate.config));
-  if (!required) {
+  if (!required && !replacesCredential) {
     const shouldTest = await params.prompter.confirm({
       message: t("wizard.setup.testAiAccess"),
       initialValue: true,

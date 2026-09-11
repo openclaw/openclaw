@@ -43,6 +43,7 @@ async function fixture(
     localService?: boolean;
     authMethod?: "oauth" | "api_key";
     profiles?: ProviderAuthResult["profiles"];
+    restartRequired?: boolean;
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -167,6 +168,17 @@ async function fixture(
     runEmbeddedAgent: run,
   };
   const prompter = createWizardPrompter();
+  if (options.restartRequired) {
+    deps.transformConfigWithPendingPluginInstalls = async (params) => {
+      const { transformConfigWithPendingPluginInstalls } =
+        await import("../plugins/install-record-commit.js");
+      const result = await transformConfigWithPendingPluginInstalls(params);
+      return {
+        ...result,
+        followUp: { mode: "restart", requiresRestart: true, reason: "Plugin source changed" },
+      };
+    };
+  }
   const activate = (kind: Parameters<typeof activateSetupInference>[0]["kind"] = "provider-auth") =>
     metadata.run(() =>
       activateSetupInference({
@@ -316,10 +328,14 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
 
-  it.each([true, false])(
-    "keeps a working credential and rotation when a replacement is rejected (configured: %s)",
-    async (explicitProfile) => {
-      const setup = await fixture();
+  it.each([
+    { explicitProfile: true, restartRequired: false },
+    { explicitProfile: false, restartRequired: false },
+    { explicitProfile: true, restartRequired: true },
+  ])(
+    "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, restart: $restartRequired)",
+    async ({ explicitProfile, restartRequired }) => {
+      const setup = await fixture({ restartRequired });
       const originalProfileId = "openai:fixture";
       const originalCredential = { ...credential, key: "working-original-key" };
       const configured: OpenClawConfig = {

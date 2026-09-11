@@ -126,7 +126,7 @@ export function isSetupCredentialReplacement(params: {
   return (
     Object.values(store.profiles).some(
       (credential) =>
-        !credential.setup?.replacement &&
+        !credential.setup &&
         resolveProviderIdForAuth(credential.provider, {
           config: params.baseConfig,
           storedCredential: true,

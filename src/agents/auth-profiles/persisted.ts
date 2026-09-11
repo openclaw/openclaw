@@ -486,6 +486,7 @@ function findMainStoreOAuthReplacement(params: {
       if (
         profileId === params.legacyProfileId ||
         credential.type !== "oauth" ||
+        credential.setup?.replacement ||
         normalizeProviderId(credential.provider) !== providerKey
       ) {
         return [];
